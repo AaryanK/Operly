@@ -54,7 +54,23 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         class Client:
             async def chat(self,messages,tools):return {"content":'{"schemaVersion":1,"application":{"id":"a","name":"Bad"},"components":[{"id":"x","type":"Button","label":"X","properties":{"script":"alert(1)"}}]}'}
         request=ProposalRequest(message="do something",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
-        with self.assertRaisesRegex(ValueError,"failed validation"):await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        with self.assertRaisesRegex(ValueError,"automatic repair attempt"):await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+    async def test_common_module_and_nested_component_shapes_are_normalized(self):
+        class Client:
+            async def chat(self,messages,tools):return {"content":'{"application":{"id":"wrong","name":"Mail"},"theme":{},"modules":["authentication"],"pages":[{"id":"email","name":"Email","route":"/email","protected":true,"components":[{"id":"email-page","type":"Page","label":"Email"}]}],"components":[],"entities":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}'}
+        request=ProposalRequest(message="add an email system",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        self.assertEqual(plan["after"]["application"]["id"],"a");self.assertEqual(plan["after"]["modules"][0]["moduleId"],"authentication");self.assertEqual(plan["after"]["pages"][0]["componentIds"],["email-page"])
+    async def test_invalid_first_response_is_repaired_on_second_attempt(self):
+        class Client:
+            def __init__(self):self.calls=0
+            async def chat(self,messages,tools):
+                self.calls+=1
+                if self.calls==1:return {"content":'{"modules":["not-real"]}'}
+                return {"content":'{"application":{"id":"a","name":"Appointments"},"theme":{},"modules":[],"pages":[{"id":"appointments","name":"Appointments","route":"/appointments","protected":true,"componentIds":["appointments-page"]}],"regions":[],"components":[{"id":"appointments-page","type":"Page","label":"Appointments"}],"entities":[],"permissions":[],"workflows":[],"integrations":[],"routes":[]}'}
+        client=Client();request=ProposalRequest(message="appointments",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(client).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        self.assertEqual(client.calls,2);self.assertEqual(plan["after"]["pages"][0]["id"],"appointments")
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

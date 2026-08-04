@@ -1,7 +1,7 @@
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS
+from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS, MODULES
 
 
 class Strict(BaseModel):
@@ -25,6 +25,18 @@ class EntityDefinition(Strict):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     name: str = Field(max_length=120)
     fields: list[FieldDefinition] = Field(default_factory=list, max_length=50)
+
+
+class ModuleInstallation(Strict):
+    moduleId: str
+    version: int = Field(default=1, ge=1)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def registered(self):
+        if self.moduleId not in MODULES:
+            raise ValueError("Unknown capability module")
+        return self
 
 
 class ComponentDefinition(Strict):
@@ -93,7 +105,7 @@ class ApplicationManifest(Strict):
     schemaVersion: Literal[1] = 1
     application: dict[str, str]
     theme: Theme = Field(default_factory=Theme)
-    modules: list[dict[str, Any]] = Field(default_factory=list)
+    modules: list[ModuleInstallation] = Field(default_factory=list)
     pages: list[PageDefinition] = Field(default_factory=list, max_length=12)
     regions: list[dict[str, Any]] = Field(default_factory=list)
     components: list[ComponentDefinition] = Field(default_factory=list, max_length=400)

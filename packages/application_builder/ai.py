@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS, MODULES
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest
@@ -15,6 +16,35 @@ def _json_content(message: dict) -> dict:
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
     return json.loads(text)
+
+
+def _normalize(raw: dict, current: ApplicationManifest) -> dict:
+    """Repair common model shape mistakes without weakening schema validation."""
+    if not isinstance(raw, dict):
+        return raw
+    result = deepcopy(raw)
+    result["schemaVersion"] = 1
+    application = result.setdefault("application", {})
+    application["id"] = current.application["id"]
+    application.setdefault("name", current.application.get("name", "Application"))
+    normalized_modules = []
+    for module in result.get("modules", []):
+        if isinstance(module, str):
+            module = {"moduleId": module, "version": MODULES.get(module, {}).get("version", 1), "configuration": {}}
+        elif isinstance(module, dict):
+            module = {"moduleId": module.get("moduleId") or module.get("id"), "version": module.get("version", 1), "configuration": module.get("configuration", {})}
+        normalized_modules.append(module)
+    result["modules"] = normalized_modules
+    top_components = list(result.get("components", []))
+    for page in result.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        nested = page.pop("components", None)
+        if isinstance(nested, list):
+            top_components.extend(item for item in nested if isinstance(item, dict))
+            page.setdefault("componentIds", [item.get("id") for item in nested if isinstance(item, dict) and item.get("id") and not item.get("parentId")])
+    result["components"] = top_components
+    return result
 
 
 class ApplicationBuilderAI:
@@ -34,16 +64,30 @@ class ApplicationBuilderAI:
             "context": request.context.model_dump(mode="json"),
             "currentManifest": current.model_dump(mode="json"),
             "ownerRequest": request.message,
+            "outputSchema": ApplicationManifest.model_json_schema(),
         }
         client = self.client or OllamaClient()
-        response = await client.chat([
+        messages = [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": json.dumps(payload, separators=(",", ":"))},
-        ], [])
-        try:
-            manifest = ApplicationManifest.model_validate(_json_content(response))
-        except Exception as exc:
-            raise ValueError(f"AI application plan failed validation: {exc}") from exc
+        ]
+        response = await client.chat(messages, [])
+        first_error = None
+        for attempt in range(2):
+            try:
+                manifest = ApplicationManifest.model_validate(_normalize(_json_content(response), current))
+                break
+            except Exception as exc:
+                first_error = exc
+                if attempt:
+                    raise ValueError("The AI could not produce a valid application plan after an automatic repair attempt. Please retry or describe the required pages, data, and actions more explicitly.") from exc
+                repair = {
+                    "instruction": "Repair the previous output. Return the complete corrected manifest as JSON only.",
+                    "validationErrors": str(exc)[:12000],
+                    "outputSchema": ApplicationManifest.model_json_schema(),
+                }
+                messages.extend([{"role": "assistant", "content": str(response.get("content", ""))[:80000]}, {"role": "user", "content": json.dumps(repair, separators=(",", ":"))}])
+                response = await client.chat(messages, [])
         before = current.model_dump(mode="json")
         after = manifest.model_dump(mode="json")
         if after == before:
