@@ -1,6 +1,3 @@
 [deploy]
-preDeployCommand = "python -m packages.database.migrate deploy-upgrade --allow-production"
-startCommand = "python -m scripts.run_web"
-healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
