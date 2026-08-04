@@ -70,6 +70,12 @@ def release_id(value: str | None = None) -> str:
     return result
 
 
+def development_unbacked_postgres_migration_allowed() -> bool:
+    environment=os.getenv("OPERLY_ENV", "").strip().lower()
+    confirmed=os.getenv("OPERLY_ALLOW_UNBACKED_POSTGRES_MIGRATIONS", "").strip().lower()
+    return environment in {"development", "dev"} and confirmed in {"1", "true", "yes"}
+
+
 def verify_postgres_backup_confirmation(
     intended_release_id: str,
     confirmed_release_id: str | None = None,
@@ -171,11 +177,14 @@ def run(argv=None) -> int:
         if not args.allow_production:raise RuntimeError("deploy-upgrade requires --allow-production")
         state=inspect_supported_schema(url);print(f"recognized schema state: {state}")
         if is_postgres(url):
-            intended_release=release_id(args.release_id)
-            if args.backup_dir:
-                backup=verified_postgres_dump(url,Path(args.backup_dir));print(f"verified PostgreSQL dump created: {backup}")
+            if development_unbacked_postgres_migration_allowed():
+                print("development-only unbacked PostgreSQL migration explicitly authorized")
             else:
-                verify_postgres_backup_confirmation(intended_release,args.postgres_backup_release_id,args.postgres_backup_at)
+                intended_release=release_id(args.release_id)
+                if args.backup_dir:
+                    backup=verified_postgres_dump(url,Path(args.backup_dir));print(f"verified PostgreSQL dump created: {backup}")
+                else:
+                    verify_postgres_backup_confirmation(intended_release,args.postgres_backup_release_id,args.postgres_backup_at)
         else:
             backup=verified_backup(url,Path(args.backup_dir) if args.backup_dir else None);print(f"verified backup created: {backup}")
         command.upgrade(cfg,"head");validate(url);print("controlled production upgrade complete")

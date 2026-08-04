@@ -102,6 +102,12 @@ timestamps more than five minutes in the future. The old reusable
 `OPERLY_POSTGRES_BACKUP_CONFIRMED` boolean is ignored. The connection URL is never
 printed or passed to `pg_dump` as a command-line argument.
 
+For a disposable development service only, unbacked PostgreSQL migrations may be
+enabled by setting both `OPERLY_ENV=development` and
+`OPERLY_ALLOW_UNBACKED_POSTGRES_MIGRATIONS=yes`. The bypass is rejected when the
+environment is `production` or `prod`, and must never be configured on a service
+that contains production data.
+
 ## Local development and Railway
 
 ```powershell

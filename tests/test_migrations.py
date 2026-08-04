@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 from apps.api.security_headers import SecurityHeadersMiddleware
 from packages.database.backup import verified_backup,verified_postgres_dump
 from packages.database.db import assert_schema_current
-from packages.database.migrate import config, release_id, revisions, validate, verify_postgres_backup_confirmation
+from packages.database.migrate import config, development_unbacked_postgres_migration_allowed, release_id, revisions, validate, verify_postgres_backup_confirmation
 
 
 def url(path):return f"sqlite+aiosqlite:///{path.as_posix()}"
@@ -92,6 +92,15 @@ class MigrationTests(unittest.TestCase):
         with patch.dict(os.environ,{"OPERLY_POSTGRES_BACKUP_CONFIRMED":"yes"},clear=True):
             with self.assertRaisesRegex(RuntimeError,"release identifier"):
                 release_id()
+    def test_unbacked_postgres_migrations_require_explicit_development_mode(self):
+        with patch.dict(os.environ,{"OPERLY_ENV":"development","OPERLY_ALLOW_UNBACKED_POSTGRES_MIGRATIONS":"yes"},clear=True):
+            self.assertTrue(development_unbacked_postgres_migration_allowed())
+        for environment in ("production", "prod", ""):
+            with self.subTest(environment=environment):
+                with patch.dict(os.environ,{"OPERLY_ENV":environment,"OPERLY_ALLOW_UNBACKED_POSTGRES_MIGRATIONS":"yes"},clear=True):
+                    self.assertFalse(development_unbacked_postgres_migration_allowed())
+        with patch.dict(os.environ,{"OPERLY_ENV":"development"},clear=True):
+            self.assertFalse(development_unbacked_postgres_migration_allowed())
 
 
 class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
