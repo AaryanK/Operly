@@ -1,0 +1,25 @@
+.ai-layout{display:grid;grid-template-columns:260px 1fr;gap:16px;min-height:650px}
+.ai-history,.ai-chat{background:#fff;border:1px solid var(--line);border-radius:17px;overflow:hidden}
+.ai-history{display:flex;flex-direction:column}
+.ai-history-head,.ai-chat-head{padding:18px;border-bottom:1px solid var(--line)}
+.ai-history-head{display:flex;justify-content:space-between;align-items:center}
+.ai-history-list{padding:10px;display:flex;flex-direction:column;gap:6px;overflow:auto}
+.ai-history-list button{border:0;background:transparent;padding:11px;border-radius:10px;text-align:left;cursor:pointer}
+.ai-history-list button:hover,.ai-history-list button.active{background:#eef4ed}
+.ai-history-list strong{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-history-list span{font-size:9px;color:var(--muted)}
+.ai-chat{display:grid;grid-template-rows:auto 1fr auto}
+.ai-chat-head h3{margin:0}.ai-chat-head p{margin:4px 0 0;color:var(--muted);font-size:10px}
+.ai-messages{padding:22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.ai-message{max-width:78%;padding:13px 15px;border-radius:15px;line-height:1.55;font-size:13px;white-space:pre-wrap}
+.ai-message.user{align-self:flex-end;background:var(--green);color:#fff;border-bottom-right-radius:5px}
+.ai-message.assistant{align-self:flex-start;background:#eff3ef;color:var(--ink);border-bottom-left-radius:5px}
+.ai-welcome{margin:auto;max-width:500px;text-align:center;color:var(--muted)}
+.ai-welcome .brand-mark{margin:0 auto 15px}
+.ai-welcome h2{color:var(--ink);margin:0 0 8px}
+.ai-suggestions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:20px}
+.ai-suggestions button{border:1px solid var(--line);background:#fff;padding:9px 11px;border-radius:99px;font-size:10px;cursor:pointer}
+.ai-composer{display:grid;grid-template-columns:1fr auto;gap:10px;padding:14px;border-top:1px solid var(--line)}
+.ai-composer textarea{min-height:48px;max-height:150px;resize:vertical}
+.ai-security-note{font-size:9px;color:var(--muted);padding:0 15px 12px}
+@media(max-width:850px){.ai-layout{grid-template-columns:1fr}.ai-history{display:none}.ai-message{max-width:92%}}

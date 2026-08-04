@@ -1,0 +1,5 @@
+discord.py
+ollama
+python-dotenv
+aiohttp
+dotenv
