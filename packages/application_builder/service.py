@@ -9,6 +9,7 @@ from packages.database.application_builder_models import ApplicationAuditEvent, 
 
 
 class BuilderError(ValueError): pass
+class UnsupportedRequestError(BuilderError): pass
 
 
 def slugify(value):
@@ -63,7 +64,7 @@ def plan_request(request: ProposalRequest, current: ApplicationManifest):
         op("update_component",changed,{"tokenOverride":{"primary":"orange"}})
     elif "follow-up task" in text and selected:
         _install(after,"workflow");binding={"id":f"follow-up-{selected[0]}","componentId":selected[0],"event":"on_click","action":"create_record","configuration":{"entityId":"task","preset":{"status":"open"}}};after["workflows"].append(binding);op("create_workflow",binding["id"],binding)
-    else: raise BuilderError("This request is not yet available as a tested capability. Select a supported component or ask for authentication, customer management, theme, or follow-up workflow.")
+    else: raise UnsupportedRequestError("The request requires model-driven application synthesis.")
     validated=ApplicationManifest.model_validate(after)
     return {"operations":operations,"after":validated.model_dump(mode="json"),"risk":"high" if any(x["risk"]=="high" for x in operations) else "medium"}
 
@@ -92,7 +93,13 @@ class ApplicationBuilderService:
         if role!="owner":raise PermissionError("Only owners can change managed applications")
         app,version,manifest=await cls.current(db,tenant_id,payload.context.applicationId)
         if payload.context.workspaceId!=tenant_id or payload.context.activeVersionId!=version.id:raise BuilderError("Studio context is stale or belongs to another workspace")
-        plan=plan_request(payload,manifest);row=ApplicationChangeSet(tenant_id=tenant_id,application_id=app.id,base_version_id=version.id,request=payload.message,scope=payload.context.selectionScope,operations_json=json.dumps(plan["operations"]),before_json=manifest.model_dump_json(),after_json=json.dumps(plan["after"]),validation_json=json.dumps({"valid":True,"errors":[]}),risk=plan["risk"],created_by=user_id);db.add(row);await db.flush();db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="change_set_proposed",details_json=json.dumps({"changeSetId":row.id,"scope":row.scope})));await db.commit();return row
+        try:
+            plan=plan_request(payload,manifest)
+        except UnsupportedRequestError:
+            from packages.application_builder.ai import ApplicationBuilderAI
+            try:plan=await ApplicationBuilderAI().plan(payload,manifest)
+            except ValueError as exc:raise BuilderError(str(exc)) from exc
+        row=ApplicationChangeSet(tenant_id=tenant_id,application_id=app.id,base_version_id=version.id,request=payload.message,scope=payload.context.selectionScope,operations_json=json.dumps(plan["operations"]),before_json=manifest.model_dump_json(),after_json=json.dumps(plan["after"]),validation_json=json.dumps({"valid":True,"errors":[]}),risk=plan["risk"],created_by=user_id);db.add(row);await db.flush();db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="change_set_proposed",details_json=json.dumps({"changeSetId":row.id,"scope":row.scope,"planner":"model" if any(x["operation"]=="synthesize_application" for x in plan["operations"]) else "deterministic"})));await db.commit();return row
     @classmethod
     async def change_set(cls,db,tenant_id,change_id):
         row=await db.scalar(select(ApplicationChangeSet).where(ApplicationChangeSet.id==change_id,ApplicationChangeSet.tenant_id==tenant_id))

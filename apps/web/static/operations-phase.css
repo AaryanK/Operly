@@ -48,3 +48,4 @@
 .node-controls button{font-size:8px;padding:6px 7px;border:1px solid var(--line);background:#fff;border-radius:7px}
 @media(max-width:1050px){.induction-grid{grid-template-columns:1fr}.ops-summary{grid-template-columns:repeat(2,1fr)}.finding-grid{grid-template-columns:1fr}}
 @media(max-width:700px){.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.ops-summary{grid-template-columns:1fr 1fr}.alert-card{grid-template-columns:auto 1fr}.alert-card>button{grid-column:1/-1}.audit-hero{grid-template-columns:1fr;text-align:center}.audit-score{margin:auto}.plan-toolbar{flex-direction:column}.plan-canvas{min-width:850px}}
+@media(max-width:480px){.ops-summary{grid-template-columns:1fr}.alert-card{grid-template-columns:1fr}.alert-card>button{grid-column:auto}.plan-board{overflow-x:auto;-webkit-overflow-scrolling:touch}}

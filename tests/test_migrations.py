@@ -120,9 +120,9 @@ class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SecurityHeaderTests(unittest.IsolatedAsyncioTestCase):
-    async def response(self,scheme="http"):
+    async def response(self,scheme="http",path="/"):
         middleware=SecurityHeadersMiddleware(lambda scope,receive,send:None)
-        request=Request({"type":"http","method":"GET","path":"/","headers":[],"scheme":scheme,"server":("operly.example",443 if scheme=="https" else 80),"client":("127.0.0.1",1),"query_string":b""})
+        request=Request({"type":"http","method":"GET","path":path,"headers":[],"scheme":scheme,"server":("operly.example",443 if scheme=="https" else 80),"client":("127.0.0.1",1),"query_string":b""})
         async def next_response(request):return JSONResponse({"ok":True})
         return await middleware.dispatch(request,next_response)
     async def test_standard_headers_and_local_no_hsts(self):
@@ -131,6 +131,11 @@ class SecurityHeaderTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ,{"OPERLY_ENV":"production"}):response=await self.response("https")
         self.assertEqual(response.headers["strict-transport-security"],"max-age=31536000")
         self.assertNotIn("includeSubDomains",response.headers["strict-transport-security"]);self.assertNotIn("preload",response.headers["strict-transport-security"])
+    async def test_authenticated_studio_preview_allows_only_same_origin_framing(self):
+        response=await self.response(path="/apps/application-id/preview")
+        self.assertEqual(response.headers["x-frame-options"],"SAMEORIGIN");self.assertIn("frame-ancestors 'self'",response.headers["content-security-policy"])
+        ordinary=await self.response(path="/apps/application-id/run")
+        self.assertEqual(ordinary.headers["x-frame-options"],"DENY");self.assertIn("frame-ancestors 'none'",ordinary.headers["content-security-policy"])
 
 
 class WebEntrypointTests(unittest.TestCase):

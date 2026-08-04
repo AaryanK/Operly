@@ -9,6 +9,7 @@ from packages.application_builder.catalog import component_catalog, module_catal
 from packages.application_builder.renderer import render_application
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest, RecordInput
 from packages.application_builder.service import ApplicationBuilderService, BuilderError
+from packages.business_brain.ollama_client import OllamaError
 from packages.database.application_builder_models import ApplicationChangeSet, ApplicationVersion, ManagedApplication, ManagedRecord
 
 router=APIRouter(tags=["application-builder"]);service=ApplicationBuilderService()
@@ -33,6 +34,7 @@ async def get_application(application_id:str,auth:AuthContext=Depends(get_auth_c
 @router.post("/api/application-builder/proposals")
 async def propose(payload:ProposalRequest,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     try:return change(await service.propose(db,auth.tenant.id,auth.user.id,auth.role,payload))
+    except OllamaError as e:raise HTTPException(503,e.public_message)
     except (BuilderError,PermissionError,LookupError) as e:raise failure(e)
 @router.get("/api/application-builder/change-sets/{change_id}")
 async def get_change(change_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):

@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="OPERLY business operating platform">
   <title>OPERLY</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/operations-phase.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20260804-responsive2">
+  <link rel="stylesheet" href="/static/operations-phase.css?v=20260804-responsive">
   <link rel="stylesheet" href="/static/ai-assistant.css">
-  <link rel="stylesheet" href="/static/general-business.css">
-  <link rel="stylesheet" href="/static/studio.css">
-  <link rel="stylesheet" href="/static/dashboard-customize.css">
+  <link rel="stylesheet" href="/static/general-business.css?v=20260804-responsive">
+  <link rel="stylesheet" href="/static/studio.css?v=20260804-responsive">
+  <link rel="stylesheet" href="/static/dashboard-customize.css?v=20260804-responsive">
 </head>
 <body>
   <div id="landing" class="screen">
@@ -53,6 +53,10 @@
       <article><span>02</span><h2>Turn language into action</h2><p>Tasks, memory and approvals from natural language.</p></article>
       <article><span>03</span><h2>Keep the owner in control</h2><p>Visible and auditable business operations.</p></article>
     </section>
+    <footer class="public-footer">
+      <span class="brand-mark" aria-hidden="true">O</span>
+      <p>Developed and maintained by <strong>Dragonzpyder Industries</strong></p>
+    </footer>
   </div>
 
   <div id="login" class="screen hidden">
@@ -77,7 +81,8 @@
   </div>
 
   <div id="dashboard" class="screen hidden app-shell">
-    <aside class="sidebar">
+    <button id="mobile-nav-backdrop" class="mobile-nav-backdrop" aria-label="Close navigation" tabindex="-1"></button>
+    <aside class="sidebar" id="sidebar">
       <div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
       <nav id="nav">
         <button data-page="overview" class="active">▦ Overview</button>
@@ -112,6 +117,7 @@
 
     <main class="app-main">
       <header class="topbar">
+        <button id="mobile-nav-toggle" class="mobile-nav-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">☰</button>
         <div>
           <small id="tenant-kicker"></small>
           <h1 id="page-title">Overview</h1>
@@ -136,7 +142,7 @@
     <dialog id="version-dialog" class="builder-dialog" aria-labelledby="version-title"></dialog>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260804-responsive2"></script>
   <script src="/static/operations-phase.js"></script>
   <script src="/static/operations-phase-bridge.js"></script>
   <script src="/static/ai-assistant.js"></script>

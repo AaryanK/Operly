@@ -9,7 +9,8 @@ from packages.database import models,business_models,agent_models,operations_mod
 from packages.database.models import Tenant,AppUser,TenantMember
 from packages.database.application_builder_models import ApplicationVersion
 from packages.application_builder.schema import ApplicationManifest,BuilderContext,ComponentDefinition,ProposalRequest
-from packages.application_builder.service import ApplicationBuilderService,BuilderError,plan_request
+from packages.application_builder.service import ApplicationBuilderService,BuilderError,UnsupportedRequestError,plan_request
+from packages.application_builder.ai import ApplicationBuilderAI
 from packages.application_builder.renderer import render_application
 from apps.api.session import LOGIN_MAX_ATTEMPTS,clear_login_attempts,login_allowed
 
@@ -37,6 +38,23 @@ class SchemaTests(unittest.TestCase):
         manifest=ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="follow-up",type="Button",label="Follow up")]);plan=plan_request(ProposalRequest(message="When this is clicked, create a follow-up task.",context=self.context("component",["follow-up"])),manifest);binding=plan["after"]["workflows"][0];self.assertEqual(binding["event"],"on_click");self.assertEqual(binding["action"],"create_record")
     def test_renderer_uses_structured_ids(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="button",type="Button",label="Go",properties={"text":"Go"})]);html=render_application(manifest,studio=True);self.assertIn('data-operly-component-id="button"',html);self.assertNotIn("eval(",html)
+    def test_unknown_request_is_routed_to_model_planner(self):
+        with self.assertRaises(UnsupportedRequestError):plan_request(ProposalRequest(message="Build a veterinary appointment system",context=self.context()),ApplicationManifest(application={"id":"a","name":"A"}))
+
+class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_arbitrary_business_case_is_validated(self):
+        class Client:
+            async def chat(self,messages,tools):
+                return {"content":'{"schemaVersion":1,"application":{"id":"a","name":"Clinic"},"theme":{},"modules":[{"moduleId":"crud_entity","version":1,"configuration":{}}],"pages":[{"id":"patients","name":"Patients","route":"/patients","protected":true,"componentIds":["patients-page"]}],"regions":[],"components":[{"id":"patients-page","type":"Page","label":"Patients","parentId":null,"regionId":null,"order":0,"properties":{},"overrides":{},"hiddenFor":[],"locked":false},{"id":"patient-form","type":"Form","label":"Patient registration","parentId":"patients-page","regionId":null,"order":0,"properties":{"entityId":"patient"},"overrides":{},"hiddenFor":[],"locked":false}],"entities":[{"id":"patient","name":"Patient","fields":[{"id":"name","name":"Name","type":"text","required":true}]}],"permissions":[],"workflows":[],"integrations":[],"routes":[{"route":"/patients","protected":true}]}'}
+        request=ProposalRequest(message="Build a veterinary appointment system",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        self.assertEqual(plan["operations"][0]["operation"],"synthesize_application");self.assertEqual(plan["after"]["entities"][0]["id"],"patient")
+
+    async def test_model_cannot_inject_code(self):
+        class Client:
+            async def chat(self,messages,tools):return {"content":'{"schemaVersion":1,"application":{"id":"a","name":"Bad"},"components":[{"id":"x","type":"Button","label":"X","properties":{"script":"alert(1)"}}]}'}
+        request=ProposalRequest(message="do something",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        with self.assertRaisesRegex(ValueError,"failed validation"):await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -67,5 +85,14 @@ class FrontendContractTests(unittest.TestCase):
     def test_canvas_layers_scope_and_viewports(self):
         source=Path("apps/web/static/studio.js").read_text(encoding="utf-8")
         for token in ["OPERLY_SELECT","event.data.multi","selectionScope","selectedIds","componentTree","desktop","tablet","mobile","Apply atomically"]:self.assertIn(token,source)
+    def test_application_shell_has_mobile_navigation_and_builder_breakpoints(self):
+        html=Path("apps/web/static/index.html").read_text(encoding="utf-8");app=Path("apps/web/static/app.js").read_text(encoding="utf-8");styles=Path("apps/web/static/styles.css").read_text(encoding="utf-8");studio=Path("apps/web/static/studio.css").read_text(encoding="utf-8")
+        for token in ["mobile-nav-toggle","mobile-nav-backdrop","aria-controls=\"sidebar\""]:self.assertIn(token,html)
+        self.assertIn("setMobileNavigation",app);self.assertIn(".sidebar.open",styles);self.assertIn("@media(max-width:700px)",studio)
+    def test_public_landing_has_developer_credit(self):
+        html=Path("apps/web/static/index.html").read_text(encoding="utf-8")
+        landing=html.split('<div id="login"',1)[0]
+        self.assertIn("Developed and maintained by <strong>Dragonzpyder Industries</strong>",landing)
+        self.assertNotIn("public-footer",html.split('<div id="dashboard"',1)[1])
 
 if __name__=="__main__":unittest.main()

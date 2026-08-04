@@ -14,6 +14,15 @@ function show(id) {
   $(id).classList.remove("hidden");
 }
 
+function setMobileNavigation(open) {
+  const sidebar = $("#sidebar"), toggle = $("#mobile-nav-toggle"), backdrop = $("#mobile-nav-backdrop");
+  if (!sidebar || !toggle || !backdrop) return;
+  sidebar.classList.toggle("open", open); backdrop.classList.toggle("open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  document.body.classList.toggle("mobile-nav-open", open);
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const method = (options.method || "GET").toUpperCase();
@@ -206,8 +215,13 @@ $$("[data-open-login]").forEach((b) => b.addEventListener("click", () => show("#
 $$("[data-home]").forEach((b) => b.addEventListener("click", () => show("#landing")));
 $("#nav").addEventListener("click", (e) => {
   const button = e.target.closest("[data-page]");
-  if (button) renderPage(button.dataset.page);
+  if (button) { setMobileNavigation(false); renderPage(button.dataset.page); }
 });
+$("#mobile-nav-toggle").addEventListener("click", () => setMobileNavigation(!$("#sidebar").classList.contains("open")));
+$("#mobile-nav-backdrop").addEventListener("click", () => setMobileNavigation(false));
+document.addEventListener("click", (event) => { if (event.target.closest("#nav [data-page]")) setMobileNavigation(false); }, true);
+window.addEventListener("keydown", (event) => { if (event.key === "Escape") setMobileNavigation(false); });
+window.addEventListener("resize", () => { if (window.innerWidth > 700) setMobileNavigation(false); });
 $("#logout").addEventListener("click", async () => {
   try {
     await api("/session/logout", { method: "POST" });

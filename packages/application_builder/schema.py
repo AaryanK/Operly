@@ -94,14 +94,14 @@ class ApplicationManifest(Strict):
     application: dict[str, str]
     theme: Theme = Field(default_factory=Theme)
     modules: list[dict[str, Any]] = Field(default_factory=list)
-    pages: list[PageDefinition] = Field(default_factory=list)
+    pages: list[PageDefinition] = Field(default_factory=list, max_length=12)
     regions: list[dict[str, Any]] = Field(default_factory=list)
-    components: list[ComponentDefinition] = Field(default_factory=list)
-    entities: list[EntityDefinition] = Field(default_factory=list)
+    components: list[ComponentDefinition] = Field(default_factory=list, max_length=400)
+    entities: list[EntityDefinition] = Field(default_factory=list, max_length=30)
     permissions: list[dict[str, Any]] = Field(default_factory=list)
-    workflows: list[WorkflowBinding] = Field(default_factory=list)
+    workflows: list[WorkflowBinding] = Field(default_factory=list, max_length=100)
     integrations: list[dict[str, Any]] = Field(default_factory=list)
-    routes: list[dict[str, Any]] = Field(default_factory=list)
+    routes: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def references(self):
