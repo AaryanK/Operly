@@ -87,3 +87,25 @@ class AgentToolAudit(Base):
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     success: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AttachmentAudit(Base):
+    __tablename__ = "attachment_audits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    guild_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    channel_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    message_id: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    attachment_count: Mapped[int] = mapped_column(default=0)
+    filenames_json: Mapped[str] = mapped_column(Text, default="[]")
+    hashes_json: Mapped[str] = mapped_column(Text, default="[]")
+    categories_json: Mapped[str] = mapped_column(Text, default="[]")
+    operation: Mapped[str] = mapped_column(String(60), default="summarize")
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    generated_output_count: Mapped[int] = mapped_column(default=0)
+    error_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_attachment_audit_scope", "tenant_id", "actor_id", "created_at"),)

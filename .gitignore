@@ -20,6 +20,7 @@ dist/
 build/
 
 .pytest_cache/
+.uv-cache/
 .coverage
 htmlcov/
 
@@ -27,3 +28,4 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+.operly_patch_backup/
