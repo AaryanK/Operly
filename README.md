@@ -25,7 +25,15 @@ uv pip install -r requirements.txt
 uv run python -m packages.connectors.discord.bot
 ```
 
-For production, use PostgreSQL in `DATABASE_URL`.
+Production uses the Railway PostgreSQL service reference and revisioned Alembic
+migrations; local development may continue using SQLite. See
+`README_DASHBOARD_STUDIO.md`. Useful commands:
+
+```powershell
+uv run python -m packages.database.migrate upgrade
+uv run python -m packages.database.migrate check
+uv run python -m packages.database.migrate backup
+```
 
 ## Tenant isolation
 

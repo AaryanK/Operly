@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/ai-assistant.css">
   <link rel="stylesheet" href="/static/general-business.css">
   <link rel="stylesheet" href="/static/studio.css">
+  <link rel="stylesheet" href="/static/dashboard-customize.css">
 </head>
 <body>
   <div id="landing" class="screen">
@@ -115,10 +116,24 @@
           <small id="tenant-kicker"></small>
           <h1 id="page-title">Overview</h1>
         </div>
-        <span class="online">● System online</span>
+        <div class="builder-controls">
+          <div class="mode-switch" role="group" aria-label="Dashboard mode"><button id="mode-operate" class="active">Operate</button><button id="mode-customize">Customize</button></div>
+          <button id="version-history" class="button secondary" aria-label="Open version history">History</button>
+          <span class="online">● System online</span>
+        </div>
       </header>
       <div id="content" class="content"></div>
     </main>
+    <section id="operly-chat-dock" class="operly-dock" aria-label="Operly AI chat">
+      <button id="dock-toggle" class="dock-toggle" aria-expanded="true">✦ Operly</button>
+      <div class="dock-panel">
+        <div id="dock-context" class="dock-context" aria-label="Current AI context"></div>
+        <div id="dock-messages" class="dock-messages" aria-live="polite"></div>
+        <form id="dock-form" class="dock-form"><textarea id="dock-input" required placeholder="Ask Operly to change, build, connect, explain, or automate…" aria-label="Message Operly"></textarea><button class="button primary">Send</button></form>
+      </div>
+    </section>
+    <dialog id="change-review" class="builder-dialog" aria-labelledby="change-review-title"></dialog>
+    <dialog id="version-dialog" class="builder-dialog" aria-labelledby="version-title"></dialog>
   </div>
 
   <script src="/static/app.js"></script>
@@ -130,5 +145,6 @@
   <script src="/static/general-business-bridge.js"></script>
   <script src="/static/studio.js"></script>
   <script src="/static/studio-bridge.js"></script>
+  <script src="/static/dashboard-customize.js"></script>
 </body>
 </html>

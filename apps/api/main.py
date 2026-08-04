@@ -2,9 +2,11 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import desc, func, or_, select
@@ -13,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from apps.api.operations_router import router as operations_router
 from apps.api.studio_router import router as studio_router
+from apps.api.dashboard_studio_router import router as dashboard_studio_router
 from apps.api.agent_router import router as agent_router
 from apps.api.csrf import CSRFMiddleware
+from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
 from apps.api.business import router as business_router
 from apps.api.schemas import (
@@ -83,8 +87,19 @@ async def bootstrap_admin() -> None:
         )
 
 
+def validate_runtime_configuration() -> None:
+    if not os.getenv("SESSION_SECRET"):
+        raise RuntimeError("SESSION_SECRET is missing")
+    if production:
+        if not public_base_url.startswith("https://"):
+            raise RuntimeError("PUBLIC_BASE_URL must use HTTPS in production")
+        if public_base_url == "https://operly.example":
+            raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_runtime_configuration()
     await init_db()
     await bootstrap_admin()
     yield
@@ -98,12 +113,17 @@ app = FastAPI(
 
 app.add_middleware(CSRFMiddleware)
 
+public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+production = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
+allowed_origins = [public_base_url]
+if not production:
+    allowed_origins.append("http://localhost:5173")
+trusted_host = urlparse(public_base_url).hostname or "localhost"
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=[trusted_host] if production else [trusted_host,"localhost","127.0.0.1","testserver"])
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        os.getenv("PUBLIC_BASE_URL", "http://localhost:8000"),
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -482,6 +502,7 @@ app.include_router(session_router)
 app.include_router(agent_router)
 app.include_router(operations_router)
 app.include_router(studio_router)
+app.include_router(dashboard_studio_router)
 
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 

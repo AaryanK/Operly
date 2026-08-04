@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy import text
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -53,12 +54,25 @@ async def session_scope():
             raise
 
 
+async def assert_schema_current(connection) -> None:
+    from packages.database.schema import ALEMBIC_HEAD
+    try:
+        current=await connection.scalar(text("SELECT version_num FROM alembic_version"))
+    except Exception as error:
+        raise RuntimeError("Production database is unversioned; run the documented Alembic upgrade before startup") from error
+    if current!=ALEMBIC_HEAD:
+        raise RuntimeError(f"Production database revision is incompatible; expected {ALEMBIC_HEAD}")
+
+
 async def init_db():
-    from packages.database import models  # noqa: F401
-    from packages.database import operations_models  # noqa: F401
-    from packages.database import agent_models  # noqa: F401
-    from packages.database import business_models  # noqa: F401
-    from packages.database import studio_models  # noqa: F401
+    from packages.database.schema import import_all_models
+    import_all_models()
+
+    environment=os.getenv("OPERLY_ENV",os.getenv("APP_ENV","development")).lower()
+    if environment in {"production","prod"}:
+        async with engine.connect() as connection:
+            await assert_schema_current(connection)
+        return
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
