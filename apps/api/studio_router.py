@@ -13,6 +13,7 @@ from packages.studio.renderer import render_site
 from packages.studio.schema import SiteSchema
 from packages.studio.service import StudioService
 from packages.studio.ai import StudioAI
+from packages.business_brain.ollama_client import OllamaError
 
 router=APIRouter(tags=["studio"]); service=StudioService()
 class ProjectInput(BaseModel): name:str=Field(min_length=1,max_length=200); description:str=""
@@ -177,6 +178,7 @@ async def ai_edit(pid:str,x:AIInput,request:Request,auth:AuthContext=Depends(get
         v=await service.save_schema(db,auth.tenant.id,pid,auth.user.id,schema.model_dump(mode="json"),"AI Studio edit")
         return {"version_id":v.id,"version_number":v.version_number,"schema":schema.model_dump(mode="json")}
     except LookupError:raise HTTPException(404,"Project not found")
+    except OllamaError as e:raise HTTPException(503,e.public_message)
     except ValueError as e:raise HTTPException(422,str(e)[:1000])
 
 def privacy_hash(value:str): return hashlib.sha256((os.getenv("SESSION_SECRET","")+value).encode()).hexdigest()

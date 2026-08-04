@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.business_brain import AgentInput, get_agent_service
+from packages.business_brain.ollama_client import OllamaError
 from packages.business_brain.security import AgentSecurityError
 from packages.database.agent_models import AgentConversation, AgentMessage
 
@@ -39,6 +40,11 @@ async def chat(
         )
     except AgentSecurityError as error:
         raise HTTPException(status_code=429, detail=str(error)) from error
+    except OllamaError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=error.public_message,
+        ) from error
 
 
 @router.get("/conversations")

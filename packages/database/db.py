@@ -8,9 +8,22 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite+aiosqlite:///./operly.db",
+
+def normalize_database_url(url: str) -> str:
+    """Convert Railway-style PostgreSQL URLs to SQLAlchemy's asyncpg driver."""
+    value = url.strip()
+    if value.startswith("postgres://"):
+        return value.replace("postgres://", "postgresql+asyncpg://", 1)
+    if value.startswith("postgresql://"):
+        return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return value
+
+
+DATABASE_URL = normalize_database_url(
+    os.getenv(
+        "DATABASE_URL",
+        "sqlite+aiosqlite:///./operly.db",
+    )
 )
 
 engine = create_async_engine(
