@@ -148,7 +148,7 @@ def validate(url: str) -> None:
                 if REQUIRED_FOREIGN_KEYS[table]-foreign_columns:raise RuntimeError(f"Required foreign keys are missing from {table}")
             uniques={tuple(item["column_names"]) for item in inspector.get_unique_constraints("dashboard_change_operations")}
             if ("change_set_id","position") not in uniques:raise RuntimeError("ChangeSet operation-position uniqueness is missing")
-            duplicates=connection.execute(text("SELECT count(*) FROM (SELECT tenant_id FROM app_configuration_versions WHERE active=1 GROUP BY tenant_id HAVING count(*)>1) AS duplicates")).scalar_one()
+            duplicates=connection.execute(text("SELECT count(*) FROM (SELECT tenant_id FROM app_configuration_versions WHERE active IS TRUE GROUP BY tenant_id HAVING count(*)>1) AS duplicates")).scalar_one()
             if duplicates:raise RuntimeError("Duplicate active configuration versions remain")
             if connection.dialect.name=="sqlite":
                 if connection.exec_driver_sql("PRAGMA integrity_check").scalar_one()!="ok":raise RuntimeError("SQLite integrity_check failed")
