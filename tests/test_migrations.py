@@ -16,6 +16,7 @@ from apps.api.security_headers import SecurityHeadersMiddleware
 from packages.database.backup import verified_backup,verified_postgres_dump
 from packages.database.db import assert_schema_current
 from packages.database.migrate import config, development_unbacked_postgres_migration_allowed, release_id, revisions, validate, verify_postgres_backup_confirmation
+from scripts.run_web import port as web_port
 
 
 def url(path):return f"sqlite+aiosqlite:///{path.as_posix()}"
@@ -130,3 +131,11 @@ class SecurityHeaderTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ,{"OPERLY_ENV":"production"}):response=await self.response("https")
         self.assertEqual(response.headers["strict-transport-security"],"max-age=31536000")
         self.assertNotIn("includeSubDomains",response.headers["strict-transport-security"]);self.assertNotIn("preload",response.headers["strict-transport-security"])
+
+
+class WebEntrypointTests(unittest.TestCase):
+    def test_railway_port_and_local_default(self):
+        with patch.dict(os.environ,{},clear=True):self.assertEqual(web_port(),8000)
+        with patch.dict(os.environ,{"PORT":"8080"},clear=True):self.assertEqual(web_port(),8080)
+        with patch.dict(os.environ,{"PORT":"not-a-port"},clear=True):
+            with self.assertRaisesRegex(RuntimeError,"integer"):web_port()
