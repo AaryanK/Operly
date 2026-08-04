@@ -139,3 +139,6 @@ class WebEntrypointTests(unittest.TestCase):
         with patch.dict(os.environ,{"PORT":"8080"},clear=True):self.assertEqual(web_port(),8080)
         with patch.dict(os.environ,{"PORT":"not-a-port"},clear=True):
             with self.assertRaisesRegex(RuntimeError,"integer"):web_port()
+    def test_railway_healthcheck_hostname_is_trusted(self):
+        source=(Path(__file__).resolve().parents[1]/"apps"/"api"/"main.py").read_text(encoding="utf-8")
+        self.assertIn('railway_health_host = "healthcheck.railway.app"',source)

@@ -119,7 +119,8 @@ allowed_origins = [public_base_url]
 if not production:
     allowed_origins.append("http://localhost:5173")
 trusted_host = urlparse(public_base_url).hostname or "localhost"
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=[trusted_host] if production else [trusted_host,"localhost","127.0.0.1","testserver"])
+railway_health_host = "healthcheck.railway.app"
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=[trusted_host,railway_health_host] if production else [trusted_host,railway_health_host,"localhost","127.0.0.1","testserver"])
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
