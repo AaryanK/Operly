@@ -16,6 +16,7 @@ from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from apps.api.operations_router import router as operations_router
 from apps.api.studio_router import router as studio_router
 from apps.api.dashboard_studio_router import router as dashboard_studio_router
+from apps.api.application_builder_router import router as application_builder_router
 from apps.api.agent_router import router as agent_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.security_headers import SecurityHeadersMiddleware
@@ -504,6 +505,7 @@ app.include_router(agent_router)
 app.include_router(operations_router)
 app.include_router(studio_router)
 app.include_router(dashboard_studio_router)
+app.include_router(application_builder_router)
 
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 

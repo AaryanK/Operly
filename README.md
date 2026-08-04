@@ -1,5 +1,7 @@
 # OPERLY Discord Agent
 
+Operly also includes an authenticated, manifest-driven application builder with blank applications, tested capability composition, structured canvas selection, theme tokens, generic managed records, safe workflow bindings, preview, atomic apply, and immutable rollback. See [README_APPLICATION_BUILDER.md](README_APPLICATION_BUILDER.md).
+
 Implemented baseline capabilities:
 
 1. Persistent tenant-scoped server memory

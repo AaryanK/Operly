@@ -1,5 +1,7 @@
 # Operly Dashboard Studio
 
+Dashboard Studio now hosts the first managed application-builder runtime. See [README_APPLICATION_BUILDER.md](README_APPLICATION_BUILDER.md) for manifests, capability modules, canvas selection, managed data, shared authentication, workflows, versioning, rollback, and current boundaries.
+
 Dashboard Studio lets an authenticated workspace inspect and safely customize
 the OPERLY dashboard itself. It is separate from the public-site builder in
 `packages/studio` and shares the existing FastAPI, SQLAlchemy, cookie-session,

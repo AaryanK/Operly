@@ -1,5 +1,14 @@
 # Operly release checklist
 
+## Managed application builder
+
+- [ ] Run SQLite upgrade to `0003_application_builder_core` twice.
+- [ ] Rehearse PostgreSQL fresh, legacy, current, and unsafe states with the release-scoped backup gate.
+- [ ] Execute authenticated login, theme, component override, customer app, workflow, and selection scenarios.
+- [ ] Verify desktop, tablet, and mobile canvas viewports.
+- [ ] Confirm cross-workspace application, ChangeSet, version, preview, and record access is denied.
+- [ ] Do not deploy before backup verification and authenticated deployment testing.
+
 - [ ] Full automated suite passes; totals and warnings recorded.
 - [ ] Timestamped database backup exists and restoration was tested.
 - [ ] Migration succeeds twice on a copy; record and integrity checks pass.

@@ -38,6 +38,20 @@ REQUIRED_FOREIGN_KEYS={
     "app_configuration_versions":{"tenant_id","originating_change_set_id","source_version_id","created_by"},
     "dashboard_studio_audits":{"tenant_id","actor_id"},
 }
+BUILDER_REQUIRED_TABLES={"managed_applications","application_versions","application_change_sets","managed_records","application_audit_events","application_preview_sessions"}
+BUILDER_REQUIRED_INDEXES={
+    "managed_applications":{"ix_managed_applications_tenant_id"},
+    "application_versions":{"ix_application_versions_tenant_id","ix_application_versions_application_id","ix_application_versions_active"},
+    "application_change_sets":{"ix_application_change_sets_tenant_id","ix_application_change_sets_application_id","ix_application_change_sets_status"},
+    "managed_records":{"ix_managed_records_tenant_id","ix_managed_records_application_id","ix_managed_records_entity_id"},
+    "application_audit_events":{"ix_application_audit_events_tenant_id","ix_application_audit_events_application_id","ix_application_audit_events_action"},
+    "application_preview_sessions":{"ix_application_preview_sessions_tenant_id","ix_application_preview_sessions_application_id"},
+}
+BUILDER_REQUIRED_FOREIGN_KEYS={
+    "managed_applications":{"tenant_id","created_by"},"application_versions":{"tenant_id","application_id","source_version_id","created_by"},
+    "application_change_sets":{"tenant_id","application_id","base_version_id","applied_version_id","created_by"},"managed_records":{"tenant_id","application_id","created_by"},
+    "application_audit_events":{"tenant_id","application_id"},"application_preview_sessions":{"tenant_id","application_id","change_set_id","created_by"},
+}
 POSTGRES_BACKUP_MAX_AGE = timedelta(hours=24)
 POSTGRES_BACKUP_CLOCK_SKEW = timedelta(minutes=5)
 
@@ -111,7 +125,7 @@ def inspect_supported_schema(url:str)->str:
         with engine.connect() as connection:
             inspector=inspect(connection);tables=set(inspector.get_table_names())-{"alembic_version"}
             current=MigrationContext.configure(connection).get_current_revision()
-            if current not in {None,"0001_operly_core","0002_dashboard_studio"}:raise RuntimeError("Unsupported Alembic revision")
+            if current not in {None,"0001_operly_core","0002_dashboard_studio","0003_application_builder_core"}:raise RuntimeError("Unsupported Alembic revision")
             if not tables:return "fresh"
             if not {"tenants","app_users"}<=tables:raise RuntimeError("Unsupported schema: core identity tables are incomplete")
             modeled={table.name:table for table in Base.metadata.tables.values()}
@@ -137,8 +151,8 @@ def validate(url: str) -> None:
     try:
         with engine.connect() as connection:
             inspector=inspect(connection);tables=set(inspector.get_table_names())
-            missing=REQUIRED_TABLES-tables
-            if missing:raise RuntimeError("Required Dashboard Studio tables are missing")
+            missing=(REQUIRED_TABLES|BUILDER_REQUIRED_TABLES)-tables
+            if missing:raise RuntimeError("Required Studio application tables are missing")
             for table,expected in REQUIRED_INDEXES.items():
                 columns={x["name"] for x in inspector.get_columns(table)}
                 if REQUIRED_COLUMNS[table]-columns:raise RuntimeError(f"Required columns are missing from {table}")
@@ -146,6 +160,11 @@ def validate(url: str) -> None:
                 if expected-actual:raise RuntimeError(f"Required indexes are missing from {table}")
                 foreign_columns={column for fk in inspector.get_foreign_keys(table) for column in fk["constrained_columns"]}
                 if REQUIRED_FOREIGN_KEYS[table]-foreign_columns:raise RuntimeError(f"Required foreign keys are missing from {table}")
+            for table,expected in BUILDER_REQUIRED_INDEXES.items():
+                actual={x["name"] for x in inspector.get_indexes(table)}
+                if expected-actual:raise RuntimeError(f"Required indexes are missing from {table}")
+                foreign_columns={column for fk in inspector.get_foreign_keys(table) for column in fk["constrained_columns"]}
+                if BUILDER_REQUIRED_FOREIGN_KEYS[table]-foreign_columns:raise RuntimeError(f"Required foreign keys are missing from {table}")
             uniques={tuple(item["column_names"]) for item in inspector.get_unique_constraints("dashboard_change_operations")}
             if ("change_set_id","position") not in uniques:raise RuntimeError("ChangeSet operation-position uniqueness is missing")
             duplicates=connection.execute(text("SELECT count(*) FROM (SELECT tenant_id FROM app_configuration_versions WHERE active IS TRUE GROUP BY tenant_id HAVING count(*)>1) AS duplicates")).scalar_one()
