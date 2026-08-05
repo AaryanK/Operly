@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from packages.custom_software.architectures import architecture_plan
+from packages.custom_software.planner import build_software_plan
 
 
 FRAMEWORKS={"commerce":"nextjs-postgres","marketplace":"nextjs-postgres","booking":"nextjs-postgres","membership":"nextjs-postgres","inventory":"fastapi-react-postgres","crm":"fastapi-react-postgres","quotation":"fastapi-react-postgres","approval":"fastapi-react-postgres","field_service":"fastapi-react-postgres","support_desk":"fastapi-react-postgres","project_management":"nextjs-postgres","content_platform":"nextjs-postgres","custom":"agent-selected"}
@@ -31,7 +31,9 @@ def validate_runner_url(url:str)->str:
 
 
 def generation_plan(prompt:str)->dict:
-    plan=architecture_plan(prompt);plan.update({"framework":FRAMEWORKS[plan["family"]],"policy":RUNNER_POLICY,"outputs":["sourceArchive","testReport","artifactGraph","previewUrl","buildDigest"]});return plan
+    software=build_software_plan(prompt)
+    framework=FRAMEWORKS.get(software.primaryArchitecture,software.stack.runtime if software.stack else "agent-selected")
+    return {"family":software.primaryArchitecture,"primaryArchitecture":software.primaryArchitecture,"implementationMode":software.implementationMode,"requiresSandbox":software.implementationMode in {"sandbox_generated","hybrid"},"capabilities":[x.model_dump() for x in software.capabilities],"architectureNodes":[x.model_dump() for x in software.architectureNodes],"stack":software.stack.model_dump() if software.stack else None,"framework":framework,"policy":RUNNER_POLICY,"outputs":["sourceArchive","testReport","artifactGraph","previewUrl","buildDigest","requirementEvidence"]}
 
 
 class SandboxRunner:

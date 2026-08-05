@@ -1,8 +1,8 @@
 import json
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
@@ -11,12 +11,18 @@ from packages.custom_software.renderer import render_dispatch, render_public, re
 from packages.custom_software.pack_renderer import render_customer_quotation, render_inventory, render_quotation_public, render_quotation_staff
 from packages.custom_software.architectures import architecture_plan, catalog as architecture_catalog
 from packages.custom_software.sandbox import SandboxFailure, SandboxRunner, SandboxUnavailable, generation_plan
-from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, GenerateProjectInput, PlanApprovalInput, PlanRequestInput, PlanRevisionInput, ServiceRequestInput, TransitionInput, VisualChangeInput
+from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, GenerateProjectInput, PlanApprovalInput, PlanRequestInput, PlanRevisionInput, RunnerBuildInput, RunnerRepairInput, ServiceRequestInput, TransitionInput, VisualChangeInput
 from packages.custom_software.plan_service import PlanConflict, approve, create_plan, owned_plan, plan_json, plan_version, revise
 from packages.custom_software.packs import pack_manifest, PACKS
 from packages.custom_software.coverage import implementation_coverage
+from packages.custom_software.construction import build_preview_evidence
 from packages.custom_software.service import ConflictError, DomainError, apply_visual_change, create_project, create_project_from_plan, create_request, list_requests, plan_artifact_graph, propose_visual_change, public_project, rollback_visual_change, transition_request
 from packages.database.custom_software_models import GeneratedProject, GeneratedProjectChangeSet, ServiceRequest
+from packages.database.custom_software_models import GeneratedSourceBundle,RunnerArtifactRecord,RunnerBuildRecord,RunnerPreviewRecord
+from packages.custom_software.runner_adapters import ExternalRunnerAdapter
+from packages.custom_software.runner_service import RunnerStateError,active_preview,build_events,build_json,owned_build,refresh_build,request_repair,stop_preview,submit_build
+import aiohttp
+from urllib.parse import urlparse
 
 router=APIRouter(tags=["custom-software"])
 
@@ -76,7 +82,11 @@ async def generate_approved_plan(plan_id:str,payload:GenerateApprovedPlanInput,a
     if row.approved_version!=payload.approvedVersion or row.status!="approved":raise HTTPException(409,"Generation requires the explicitly approved current plan version")
     if plan.implementationMode not in {"architecture_pack","managed_runtime"}:
         try:return await SandboxRunner().generate(plan.model_dump_json(),auth.tenant.id,auth.user.id)
-        except SandboxUnavailable as error:raise HTTPException(503,detail={"code":"sandbox_not_configured","message":str(error),"planId":row.id,"approvedVersion":row.approved_version})
+        except SandboxUnavailable:
+            # A safe, non-deployable architecture preview is available without
+            # executing generated code. Full source execution still requires
+            # the isolated runner and remains approval gated.
+            return {"planId":row.id,"approvedVersion":row.approved_version,**build_preview_evidence(plan)}
     coverage=implementation_coverage(plan,plan_artifact_graph(plan.model_dump(),None,1,row.approved_version))
     if not coverage["complete"]:raise HTTPException(422,detail={"code":"implementation_coverage_failed","coverage":coverage})
     project=await create_project_from_plan(db,auth.tenant.id,auth.user.id,row,plan)
@@ -93,6 +103,133 @@ async def project_coverage(project_id:str,auth:AuthContext=Depends(get_auth_cont
 
 @router.post("/api/custom-software/architecture-plan")
 async def plan_architecture(payload:AgenticProjectInput,auth:AuthContext=Depends(get_auth_context)):return generation_plan(payload.prompt)
+
+
+@router.get("/api/custom-software/plans/{plan_id}/preview-evidence")
+async def preview_evidence(plan_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    row=await owned_plan(db,auth.tenant.id,plan_id)
+    if row.status!="approved" or not row.approved_version:raise HTTPException(409,"Preview requires an approved plan")
+    _,plan=await plan_version(db,row,row.approved_version)
+    return build_preview_evidence(plan)
+
+
+@router.post("/api/custom-software/builds",status_code=202)
+async def create_runner_build(payload:RunnerBuildInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    if auth.role!="owner":raise HTTPException(403,"Only owners can submit isolated builds")
+    try:row=await owned_plan(db,auth.tenant.id,payload.planId);_,plan=await plan_version(db,row,payload.approvedVersion)
+    except LookupError as error:raise HTTPException(404,str(error))
+    if row.status!="approved" or row.approved_version!=payload.approvedVersion:raise HTTPException(409,"Build submission requires the approved plan version")
+    build=await submit_build(db,auth.tenant.id,auth.user.id,row,plan,payload.idempotencyKey)
+    result=build_json(build)
+    if build.state=="preview_ready":
+        from sqlalchemy import select
+        preview=await db.scalar(select(RunnerPreviewRecord).where(RunnerPreviewRecord.build_id==build.id,RunnerPreviewRecord.tenant_id==auth.tenant.id,RunnerPreviewRecord.state=="active"))
+        if preview:result["preview"]={"id":preview.id,"url":f"/api/custom-software/previews/{preview.id}/","expiresAt":preview.expires_at.isoformat()}
+    return result
+
+
+@router.get("/api/custom-software/builds/{build_id}")
+async def runner_build(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:
+        row=await owned_build(db,auth.tenant.id,build_id)
+        if row.state not in {"preview_ready","failed","cleaned","cancelled","timed_out","security_blocked","resource_exceeded"}:row=await refresh_build(db,row)
+        return build_json(row)
+    except LookupError as error:raise HTTPException(404,str(error))
+
+
+@router.get("/api/custom-software/builds/{build_id}/events")
+async def runner_events(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:row=await owned_build(db,auth.tenant.id,build_id)
+    except LookupError as error:raise HTTPException(404,str(error))
+    return [{"sequence":x.sequence,"state":x.state,"eventType":x.event_type,"message":x.message,"details":json.loads(x.details_json),"timestamp":x.created_at.isoformat()} for x in await build_events(db,row)]
+
+
+@router.get("/api/custom-software/builds/{build_id}/artifacts")
+async def runner_artifacts(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    from sqlalchemy import select
+    try:await owned_build(db,auth.tenant.id,build_id)
+    except LookupError as error:raise HTTPException(404,str(error))
+    rows=(await db.scalars(select(RunnerArtifactRecord).where(RunnerArtifactRecord.build_id==build_id,RunnerArtifactRecord.tenant_id==auth.tenant.id))).all()
+    return [{"id":x.id,"kind":x.kind,"name":x.name,"digest":x.digest,"sizeBytes":x.size_bytes,"reference":x.reference} for x in rows]
+
+
+@router.get("/api/custom-software/builds/{build_id}/logs")
+async def runner_logs(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:row=await owned_build(db,auth.tenant.id,build_id)
+    except LookupError as error:raise HTTPException(404,str(error))
+    events=await build_events(db,row)
+    return {"buildId":row.id,"truncated":False,"entries":[{"sequence":x.sequence,"state":x.state,"message":x.message,"details":json.loads(x.details_json)} for x in events]}
+
+
+@router.post("/api/custom-software/builds/{build_id}/preview")
+async def start_runner_preview(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    from sqlalchemy import select
+    try:build=await owned_build(db,auth.tenant.id,build_id)
+    except LookupError as error:raise HTTPException(404,str(error))
+    if build.state!="preview_ready":raise HTTPException(409,"A running, healthy, accepted build is required")
+    preview=await db.scalar(select(RunnerPreviewRecord).where(RunnerPreviewRecord.build_id==build.id,RunnerPreviewRecord.tenant_id==auth.tenant.id,RunnerPreviewRecord.state=="active"))
+    if not preview:raise HTTPException(409,"Runner did not provide an active preview")
+    return {"id":preview.id,"url":f"/api/custom-software/previews/{preview.id}/","expiresAt":preview.expires_at.isoformat(),"message":"Isolated development preview — not deployed to production."}
+
+
+@router.post("/api/custom-software/builds/{build_id}/cancel")
+async def cancel_runner_build(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    from packages.custom_software.runner_service import _event
+    try:row=await owned_build(db,auth.tenant.id,build_id);await _event(db,row,"cancel_requested",message="Owner requested cancellation");await ExternalRunnerAdapter().cancel(row.runner_job_id);await _event(db,row,"cancelled",message="Runner confirmed cancellation");await db.commit();return build_json(row)
+    except LookupError as error:raise HTTPException(404,str(error))
+    except RunnerStateError as error:raise HTTPException(409,str(error))
+
+
+@router.post("/api/custom-software/builds/{build_id}/cleanup")
+async def cleanup_runner_build(build_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    from packages.custom_software.runner_service import _event
+    try:
+        row=await owned_build(db,auth.tenant.id,build_id)
+        if row.state not in {"cancelled","failed","build_failed","tests_failed","start_failed","health_check_failed","acceptance_failed","preview_ready","completed"}:raise HTTPException(409,"Build cannot be cleaned from its current state")
+        await _event(db,row,"cleaning",message="Runner cleanup requested");await ExternalRunnerAdapter().cleanup(row.runner_job_id);await _event(db,row,"cleaned",message="Runner cleanup confirmed");await db.commit();return build_json(row)
+    except LookupError as error:raise HTTPException(404,str(error))
+    except RunnerStateError as error:raise HTTPException(409,str(error))
+
+
+@router.post("/api/custom-software/builds/{build_id}/repair",status_code=202)
+async def repair_runner_build(build_id:str,payload:RunnerRepairInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    if auth.role!="owner":raise HTTPException(403,"Only owners can request repair")
+    try:
+        build=await owned_build(db,auth.tenant.id,build_id);plan_row=await owned_plan(db,auth.tenant.id,build.plan_id);_,plan=await plan_version(db,plan_row,plan_row.approved_version);child,repair=await request_repair(db,auth.tenant.id,auth.user.id,build,plan_row,plan,payload.idempotencyKey);return {**build_json(child),"repairId":repair.id}
+    except LookupError as error:raise HTTPException(404,str(error))
+    except RunnerStateError as error:raise HTTPException(409,str(error))
+
+
+def _validated_preview_target(value:str)->str:
+    parsed=urlparse(value);allowed={x.strip().lower() for x in os.getenv("OPERLY_SANDBOX_PREVIEW_HOSTS","").split(",") if x.strip()}
+    local_test=os.getenv("OPERLY_ENV") in {"test","development"} and os.getenv("OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER")=="1" and parsed.hostname=="127.0.0.1"
+    if parsed.scheme not in ({"http","https"} if local_test else {"https"}) or not parsed.hostname or (not local_test and parsed.hostname.lower() not in allowed):raise HTTPException(502,"Preview target is not an approved runner origin")
+    return value.rstrip("/")
+
+
+@router.api_route("/api/custom-software/previews/{preview_id}/{path:path}",methods=["GET","POST"])
+async def preview_proxy(preview_id:str,path:str,request:Request,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    if path.startswith(("_runner","admin","internal")):raise HTTPException(404,"Preview route not found")
+    try:preview,_=await active_preview(db,auth.tenant.id,preview_id)
+    except LookupError as error:raise HTTPException(404,str(error))
+    body=await request.body()
+    if len(body)>1_000_000:raise HTTPException(413,"Preview request is too large")
+    target=_validated_preview_target(preview.target_url)+"/"+path
+    headers={k:v for k,v in request.headers.items() if k.lower() in {"content-type","accept"}}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.request(request.method,target,data=body,headers=headers) as upstream:
+                data=await upstream.content.read(2_000_001)
+                if len(data)>2_000_000:raise HTTPException(502,"Preview response exceeded the size limit")
+                safe={k:v for k,v in upstream.headers.items() if k.lower() in {"content-type","cache-control"}}
+                return Response(data,status_code=upstream.status,headers=safe)
+    except aiohttp.ClientError as error:raise HTTPException(502,"Preview runner is unavailable") from error
+
+
+@router.delete("/api/custom-software/previews/{preview_id}")
+async def terminate_preview(preview_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:preview,build=await active_preview(db,auth.tenant.id,preview_id);await stop_preview(db,preview,build,ExternalRunnerAdapter());return {"state":"cleaned"}
+    except LookupError as error:raise HTTPException(404,str(error))
 
 
 @router.post("/api/custom-software/agentic-projects",status_code=202)

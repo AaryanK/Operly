@@ -4,6 +4,7 @@ import re
 
 from packages.custom_software.architectures import architecture_plan
 from packages.custom_software.schema import SoftwarePlan
+from packages.custom_software.synthesis import identify_domain, synthesize
 
 DESIGNS=["editorial","utility","dashboard_led","conversion_focused","image_led","minimal","modular_grid","asymmetric"]
 
@@ -53,21 +54,52 @@ def _inventory():
     return roles,entities,relationships,wf,surfaces
 
 def build_software_plan(prompt:str)->SoftwarePlan:
-    classification=architecture_plan(prompt);primary=classification["primaryArchitecture"]
+    classification=architecture_plan(prompt)
+    synthesized=synthesize(prompt)
+    synthesized_domain,fixture,_=identify_domain(prompt)
+    # Installed packs are selected only for an actual semantic match. A known
+    # custom domain always wins over a coincidental keyword match.
+    primary=synthesized_domain if fixture else classification["primaryArchitecture"]
     if primary=="field_service":roles,entities,relationships,workflows,surfaces=_field_service()
     elif primary=="quotation":roles,entities,relationships,workflows,surfaces=_quotation()
     elif primary=="inventory":roles,entities,relationships,workflows,surfaces=_inventory()
     else:
-        roles=[_role("administrator","Administrator",["plan:review"],scope="all")];entities=[];relationships=[];workflows=[];surfaces=[]
-    mode=classification["implementationMode"];name=re.sub(r"[^A-Za-z0-9 ]+"," ",prompt).strip().split(".")[0][:80]
-    plan={"projectName":name or "Planned software","summary":prompt.strip(),"productCategory":primary.replace("_"," "),"targetUsers":[x["name"] for x in roles],"businessDomain":primary.replace("_"," "),"primaryGoal":"Implement the requested business loop without unrelated architecture assumptions","successCriteria":["approved workflows function end to end","tenant data remains isolated","planned surfaces are traceable"],"primaryArchitecture":primary,"secondaryArchitectures":classification["secondaryArchitectures"],"implementationMode":mode,"confidence":classification["confidence"],"rationale":classification["rationale"],"roles":roles,"entities":entities,"relationships":relationships,"workflows":workflows,"surfaces":surfaces,"backendCapabilities":["CRUD","search","audit_history","optimistic_concurrency"]+( ["signed_customer_access","notifications"] if primary in {"field_service","quotation"} else ["transactional_stock_changes","bounded_pagination"] if primary=="inventory" else []),"integrations":[],"design":_design(prompt,primary),"runtime":{"strategy":mode,"reason":"Installed architecture pack selected" if mode=="architecture_pack" else "No installed pack satisfies the approved plan","primaryPack":primary if mode=="architecture_pack" else None,"secondaryPacks":classification["secondaryArchitectures"]},"securityConstraints":["tenant isolation","least privilege","no executable plan content","audited state transitions"],"unsupportedRequirements":classification["compatibility"]["issues"],"risks":["external integrations require explicit configuration"] if classification["compatibility"]["issues"] else [],"testRequirements":["tenant isolation","authorization","state transitions","stale write rejection","browser business loop"],"deploymentRequirements":["migration review","preview acceptance","human approval","atomic deployment","rollback"]}
+        role_ids=synthesized["roles"]
+        roles=[_role(x,x.replace("_"," ").title(),["workspace:read","domain:operate"],"public" if x in {"viewer","buyer"} else "authenticated","own" if x in {"viewer","buyer","player"} else "tenant") for x in role_ids]
+        entities=[_entity(x,f"{x.replace('_',' ').title()} domain record",role_ids) for x in synthesized["entities"]]
+        relationships=[]
+        workflows=[]
+        for node in synthesized["architectureNodes"]:
+            states=["draft","active","completed"]
+            workflows.append({"id":node["id"]+"_workflow","name":node["name"],"trigger":"validated domain command","states":states,"transitions":[_transition("activate","draft","active",role_ids[:-1] or role_ids),_transition("complete","active","completed",role_ids[:-1] or role_ids)],"failureBehavior":"reject invalid transitions and preserve an audit event"})
+        workflow_ids=[x["id"] for x in workflows]
+        surfaces=[_surface(x,f"/generated/{{slug}}/{x.replace('_','-')}",role_ids,synthesized["entities"],workflow_ids,access="public" if x in {"standings","fruit_catalog"} else "authenticated",components=["domain_navigation",x,"validation_feedback"]) for x in synthesized["pages"]]
+    mode=classification["implementationMode"] if primary in {"field_service","quotation","inventory"} else "sandbox_generated"
+    confidence=classification["confidence"] if primary in {"field_service","quotation","inventory"} else synthesized["confidence"]
+    name=re.sub(r"[^A-Za-z0-9 &-]+"," ",prompt).strip().split(".")[0][:80]
+    effective=[prompt.strip()]
+    capability_rows=synthesized["capabilities"] if mode=="sandbox_generated" else []
+    generated=[x["id"] for x in capability_rows if x["implementation"]!="reuse_primitive"]
+    tests=["tenant_isolation","authorization","persistence_after_reload","invalid_input","failure_paths","responsive_layout"]
+    tests += ["invariant_"+re.sub(r"[^a-z0-9]+","_",x.lower()).strip("_")[:48] for x in synthesized["invariants"]]
+    evidence=[{"requirementId":f"req_{i+1}","requirement":cap["requirement"],"artifactIds":[cap["id"]],"testIds":[f"test_{cap['id']}"],"status":"planned"} for i,cap in enumerate(capability_rows)]
+    stack=synthesized["stack"]
+    plan={"projectName":name or synthesized["domain"].replace("_"," ").title(),"summary":prompt.strip(),"productCategory":primary.replace("_"," "),"targetUsers":[x["name"] for x in roles],"businessDomain":primary.replace("_"," "),"primaryGoal":"Implement the requested domain without substituting an unrelated architecture","successCriteria":["approved workflows function end to end","tenant data remains isolated","mandatory requirements have executable evidence"],"primaryArchitecture":primary,"secondaryArchitectures":classification["secondaryArchitectures"] if mode!="sandbox_generated" else [],"implementationMode":mode,"confidence":confidence,"rationale":classification["rationale"] if mode!="sandbox_generated" else f"Synthesized a custom architecture from {len(capability_rows)} capabilities; no unrelated installed pack was selected.","roles":roles,"entities":entities,"relationships":relationships,"workflows":workflows,"surfaces":surfaces,"backendCapabilities":["CRUD","search","audit_history","optimistic_concurrency"]+generated,"integrations":[x["id"] for x in capability_rows if x["implementation"]=="integration_adapter"],"design":_design(prompt,primary),"runtime":{"strategy":mode,"reason":"Installed architecture pack selected" if mode=="architecture_pack" else "Custom domain requires isolated generated-software runtime","primaryPack":primary if mode=="architecture_pack" else None,"secondaryPacks":[]},"securityConstraints":["tenant isolation","least privilege","generated code outside control plane","deny-by-default network","secret isolation","audited state transitions"],"unsupportedRequirements":[] if mode=="sandbox_generated" else classification["compatibility"]["issues"],"risks":["external integrations remain sandbox adapters until configured"],"testRequirements":tests,"deploymentRequirements":["migration review","preview acceptance","human approval","atomic deployment","rollback"],"effectiveRequirements":effective,"capabilities":capability_rows,"architectureNodes":synthesized["architectureNodes"] if mode=="sandbox_generated" else [],"stack":{"frontend":stack[0],"backend":stack[1],"database":stack[2],"runtime":stack[3],"reasons":["selected from interaction, processing, persistence, and isolation requirements"],"dependencies":[]},"requirementEvidence":evidence,"reusedPrimitives":[x["id"] for x in capability_rows if x["implementation"]=="reuse_primitive"],"generatedComponents":generated,"provenance":{"originalPrompt":prompt.strip(),"revisions":[],"generatedPrompts":[],"redactionPolicy":"secrets and credentials are never persisted"}}
+    lower_prompt=prompt.lower()
+    if "whatsapp" in lower_prompt and "whatsapp" not in plan["integrations"]:plan["integrations"].append("whatsapp")
+    if "email status" in lower_prompt and "email_status_updates" not in plan["backendCapabilities"]:plan["backendCapabilities"].append("email_status_updates")
     return SoftwarePlan.model_validate(plan)
 
 def revise_plan(current:SoftwarePlan,request:str)->SoftwarePlan:
-    data=deepcopy(current.model_dump());text=request.lower()
-    if "do not use payments" in text:data["backendCapabilities"]=[x for x in data["backendCapabilities"] if x!="payments"];data["integrations"]=[x for x in data["integrations"] if x!="payments"]
-    if "whatsapp" in text and "whatsapp" not in data["integrations"]:data["integrations"].append("whatsapp")
-    if "add another role" in text:data["roles"].append(_role("reviewer","Reviewer",["plan:review"]))
-    if "email status" in text:data["backendCapabilities"].append("email_status_updates")
-    data["rationale"] += f" Revision applied: {request.strip()}"
+    provenance=deepcopy(current.provenance)
+    original=provenance.get("originalPrompt",current.summary)
+    revisions=[*provenance.get("revisions",[]),request.strip()]
+    # Re-synthesis makes revisions structurally effective. The immutable prior
+    # plan version remains in SoftwarePlanVersion.
+    revision_domain,revision_fixture,_=identify_domain(request)
+    effective_prompt=request if revision_fixture else (original+"\nRevision requirements:\n"+"\n".join(revisions))
+    updated=build_software_plan(effective_prompt)
+    data=updated.model_dump();data["summary"]=original;data["effectiveRequirements"]=[original,*revisions]
+    data["provenance"]={**provenance,"originalPrompt":original,"revisions":revisions,"generatedPrompts":provenance.get("generatedPrompts",[]),"redactionPolicy":"secrets and credentials are never persisted"}
+    data["rationale"] += f" Structurally regenerated for revision {len(revisions)}."
     return SoftwarePlan.model_validate(data)

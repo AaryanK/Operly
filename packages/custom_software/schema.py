@@ -8,7 +8,7 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-Architecture = Literal["field_service","booking","crm","inventory","quotation","commerce","membership","marketplace","approval","support_desk","project_management","content_platform","custom"]
+Architecture = str
 ImplementationMode = Literal["managed_runtime","architecture_pack","sandbox_generated","hybrid"]
 
 
@@ -112,6 +112,42 @@ class RuntimePlan(Strict):
     secondaryPacks: list[str] = []
 
 
+class CapabilityPlan(Strict):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    category: str
+    description: str
+    requirement: str
+    implementation: Literal["reuse_primitive","generate_component","generate_engine","integration_adapter"]
+    status: Literal["planned","implemented","verified","blocked"] = "planned"
+
+
+class ArchitectureNode(Strict):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    nodeType: str
+    name: str
+    inputs: list[str] = []
+    outputs: list[str] = []
+    invariants: list[str] = []
+    implementationRequired: bool = True
+
+
+class StackDecision(Strict):
+    frontend: str
+    backend: str
+    database: str
+    runtime: str
+    reasons: list[str]
+    dependencies: list[str] = []
+
+
+class RequirementEvidence(Strict):
+    requirementId: str
+    requirement: str
+    artifactIds: list[str]
+    testIds: list[str]
+    status: Literal["planned","implemented","verified","partial","failed","blocked"] = "planned"
+
+
 class SoftwarePlan(Strict):
     schemaVersion: Literal[1] = 1
     projectName: str
@@ -140,6 +176,14 @@ class SoftwarePlan(Strict):
     risks: list[str] = []
     testRequirements: list[str]
     deploymentRequirements: list[str]
+    effectiveRequirements: list[str] = []
+    capabilities: list[CapabilityPlan] = []
+    architectureNodes: list[ArchitectureNode] = []
+    stack: StackDecision | None = None
+    requirementEvidence: list[RequirementEvidence] = []
+    reusedPrimitives: list[str] = []
+    generatedComponents: list[str] = []
+    provenance: dict = {}
 
     @model_validator(mode="after")
     def graph_integrity(self):
@@ -192,6 +236,14 @@ class VisualChangeInput(Strict):
 
 class AgenticProjectInput(Strict):
     prompt: str = Field(min_length=20, max_length=8000)
+
+class RunnerBuildInput(Strict):
+    planId: str
+    approvedVersion: int = Field(ge=1)
+    idempotencyKey: str = Field(min_length=8,max_length=120)
+
+class RunnerRepairInput(Strict):
+    idempotencyKey: str = Field(min_length=8,max_length=120)
 
 
 class ServiceRequestInput(Strict):

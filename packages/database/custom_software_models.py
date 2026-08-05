@@ -61,6 +61,33 @@ class SandboxJobEvent(Base):
     __tablename__="sandbox_job_events"
     id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);job_id:Mapped[str]=mapped_column(ForeignKey("sandbox_generation_jobs.id",ondelete="CASCADE"),index=True);state:Mapped[str]=mapped_column(String(30));details_json:Mapped[str]=mapped_column(Text,default="{}");created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 
+class GeneratedSourceBundle(Base):
+    __tablename__="generated_source_bundles"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);plan_id:Mapped[str]=mapped_column(ForeignKey("software_plans.id"),index=True);plan_version:Mapped[int]=mapped_column(Integer);source_version:Mapped[int]=mapped_column(Integer);application_id:Mapped[str]=mapped_column(String(120),index=True);bundle_digest:Mapped[str]=mapped_column(String(80),index=True);manifest_json:Mapped[str]=mapped_column(Text);files_json:Mapped[str]=mapped_column(Text);provenance_json:Mapped[str]=mapped_column(Text);created_by:Mapped[str]=mapped_column(ForeignKey("app_users.id"));created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    __table_args__=(UniqueConstraint("tenant_id","application_id","source_version",name="uq_generated_source_version"),)
+
+class RunnerBuildRecord(Base):
+    __tablename__="runner_build_records"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);plan_id:Mapped[str]=mapped_column(ForeignKey("software_plans.id"),index=True);source_bundle_id:Mapped[str]=mapped_column(ForeignKey("generated_source_bundles.id"),index=True);runner_job_id:Mapped[str|None]=mapped_column(String(160),nullable=True,index=True);idempotency_key:Mapped[str]=mapped_column(String(120));state:Mapped[str]=mapped_column(String(40),default="created",index=True);runner_implementation:Mapped[str]=mapped_column(String(80));isolation_profile:Mapped[str]=mapped_column(String(80));submission_json:Mapped[str]=mapped_column(Text);result_json:Mapped[str]=mapped_column(Text,default="{}");failure_classification:Mapped[str|None]=mapped_column(String(60),nullable=True);attempt:Mapped[int]=mapped_column(Integer,default=1);parent_build_id:Mapped[str|None]=mapped_column(ForeignKey("runner_build_records.id"),nullable=True);created_by:Mapped[str]=mapped_column(ForeignKey("app_users.id"));created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow);started_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True);completed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True);updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+    __table_args__=(UniqueConstraint("tenant_id","idempotency_key",name="uq_runner_build_idempotency"),)
+
+class RunnerBuildEvent(Base):
+    __tablename__="runner_build_events"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);build_id:Mapped[str]=mapped_column(ForeignKey("runner_build_records.id",ondelete="CASCADE"),index=True);sequence:Mapped[int]=mapped_column(Integer);state:Mapped[str]=mapped_column(String(40),index=True);event_type:Mapped[str]=mapped_column(String(60));message:Mapped[str]=mapped_column(Text);details_json:Mapped[str]=mapped_column(Text,default="{}");created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    __table_args__=(UniqueConstraint("build_id","sequence",name="uq_runner_build_event_sequence"),)
+
+class RunnerArtifactRecord(Base):
+    __tablename__="runner_artifacts"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);build_id:Mapped[str]=mapped_column(ForeignKey("runner_build_records.id",ondelete="CASCADE"),index=True);kind:Mapped[str]=mapped_column(String(60));name:Mapped[str]=mapped_column(String(200));digest:Mapped[str]=mapped_column(String(80));size_bytes:Mapped[int]=mapped_column(Integer);reference:Mapped[str]=mapped_column(Text);metadata_json:Mapped[str]=mapped_column(Text,default="{}");created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class RunnerPreviewRecord(Base):
+    __tablename__="runner_previews"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);build_id:Mapped[str]=mapped_column(ForeignKey("runner_build_records.id"),index=True);runner_preview_id:Mapped[str]=mapped_column(String(160));state:Mapped[str]=mapped_column(String(30),default="active",index=True);target_url:Mapped[str]=mapped_column(Text);expires_at:Mapped[datetime]=mapped_column(DateTime,index=True);stopped_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True);created_by:Mapped[str]=mapped_column(ForeignKey("app_users.id"));created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class RunnerRepairRecord(Base):
+    __tablename__="runner_repairs"
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=uid);tenant_id:Mapped[str]=mapped_column(ForeignKey("tenants.id"),index=True);build_id:Mapped[str]=mapped_column(ForeignKey("runner_build_records.id"),index=True);source_bundle_id:Mapped[str]=mapped_column(ForeignKey("generated_source_bundles.id"));attempt:Mapped[int]=mapped_column(Integer);classification:Mapped[str]=mapped_column(String(60));repair_prompt:Mapped[str]=mapped_column(Text);patch_json:Mapped[str]=mapped_column(Text);status:Mapped[str]=mapped_column(String(30),default="proposed");created_by:Mapped[str]=mapped_column(ForeignKey("app_users.id"));created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
 
 class GeneratedProjectChangeSet(Base):
     __tablename__ = "generated_project_change_sets"

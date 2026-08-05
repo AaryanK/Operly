@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0009_sandbox_job_lifecycle"
+ALEMBIC_HEAD = "0010_isolated_runner_records"
 
 
 def import_all_models() -> None:

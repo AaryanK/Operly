@@ -56,7 +56,7 @@ class MigrationTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def upgrade(self,path):command.upgrade(config(url(path)),"head");validate(url(path))
     def test_fresh_upgrade_and_idempotency(self):
-        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0009_sandbox_job_lifecycle")
+        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0010_isolated_runner_records")
     def test_revision_identifiers_fit_production_version_storage(self):
         from alembic.config import Config
         from alembic.script import ScriptDirectory
@@ -88,7 +88,7 @@ class MigrationTests(unittest.TestCase):
             engine.dispose()
         self.upgrade(path)
         with closing(sqlite3.connect(path)) as db:
-            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0009_sandbox_job_lifecycle")
+            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0010_isolated_runner_records")
             columns={row[1] for row in db.execute("pragma table_info(generated_projects)")}
             self.assertTrue({"plan_id","approved_plan_version","architecture_pack"}<=columns)
     def test_upgrade_repairs_legacy_managed_records_with_0002_stamp(self):
@@ -164,7 +164,7 @@ class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
         engine=create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
             await connection.exec_driver_sql("CREATE TABLE alembic_version(version_num VARCHAR(32) NOT NULL)")
-            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0009_sandbox_job_lifecycle')")
+            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0010_isolated_runner_records')")
             await assert_schema_current(connection)
         await engine.dispose()
 
@@ -188,6 +188,8 @@ class SecurityHeaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ordinary.headers["x-frame-options"],"DENY");self.assertIn("frame-ancestors 'none'",ordinary.headers["content-security-policy"])
         custom=await self.response(path="/api/custom-software/projects/project-id/preview")
         self.assertEqual(custom.headers["x-frame-options"],"SAMEORIGIN");self.assertIn("frame-ancestors 'self'",custom.headers["content-security-policy"])
+        runner=await self.response(path="/api/custom-software/previews/preview-id/")
+        self.assertEqual(runner.headers["x-frame-options"],"SAMEORIGIN");self.assertIn("frame-ancestors 'self'",runner.headers["content-security-policy"])
         public=await self.response(path="/generated/project-slug")
         self.assertEqual(public.headers["x-frame-options"],"DENY");self.assertIn("frame-ancestors 'none'",public.headers["content-security-policy"])
 
