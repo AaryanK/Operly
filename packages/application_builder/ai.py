@@ -52,14 +52,35 @@ def _normalize(raw: dict, current: ApplicationManifest) -> dict:
             module = {"moduleId": module.get("moduleId") or module.get("id"), "version": module.get("version", 1), "configuration": module.get("configuration", {})}
         normalized_modules.append(module)
     result["modules"] = normalized_modules
-    top_components = list(result.get("components", []))
+    def flatten_components(items, parent_id=None):
+        flattened=[]
+        for raw_component in items:
+            if not isinstance(raw_component,dict):
+                flattened.append(raw_component);continue
+            component=deepcopy(raw_component);children=component.get("children")
+            if parent_id and not component.get("parentId"):component["parentId"]=parent_id
+            if isinstance(children,list) and all(isinstance(child,dict) for child in children):
+                component.pop("children",None);flattened.append(component)
+                flattened.extend(flatten_components(children,component.get("id")))
+            else:flattened.append(component)
+        return flattened
+
+    top_components = flatten_components(list(result.get("components", [])))
     for page in result.get("pages", []):
         if not isinstance(page, dict):
             continue
         nested = page.pop("components", None)
         if isinstance(nested, list):
-            top_components.extend(item for item in nested if isinstance(item, dict))
-            page.setdefault("componentIds", [item.get("id") for item in nested if isinstance(item, dict) and item.get("id") and not item.get("parentId")])
+            flattened=flatten_components(nested);top_components.extend(flattened)
+            page.setdefault("componentIds", [item.get("id") for item in flattened if isinstance(item,dict) and item.get("id") and not item.get("parentId")])
+    known_component_ids={item.get("id") for item in top_components if isinstance(item,dict)}
+    referenced_parents={item.get("parentId") for item in top_components if isinstance(item,dict) and item.get("parentId")}
+    for page in result.get("pages",[]):
+        if not isinstance(page,dict):continue
+        for component_id in page.get("componentIds",[]):
+            if component_id not in known_component_ids and component_id in referenced_parents:
+                top_components.append({"id":component_id,"type":"Page","label":str(page.get("name") or "Page")[:200]})
+                known_component_ids.add(component_id)
     result["components"] = top_components
     return result
 

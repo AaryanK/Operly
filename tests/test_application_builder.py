@@ -94,6 +94,21 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         request=ProposalRequest(message="add an email system",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
         plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
         self.assertEqual(plan["after"]["application"]["id"],"a");self.assertEqual(plan["after"]["modules"][0]["moduleId"],"authentication");self.assertEqual(plan["after"]["pages"][0]["componentIds"],["email-page"])
+    async def test_nested_children_are_flattened_with_canonical_parents(self):
+        class Client:
+            async def chat(self,messages,tools):return {"content":'{"application":{"id":"a","name":"Travel"},"pages":[{"id":"home","name":"Home","route":"/","components":[{"id":"home-page","type":"Page","label":"Home","children":[{"id":"hero","type":"Section","label":"Travel hero","children":[{"id":"hero-title","type":"Heading","label":"Explore the world"}]}]}]}],"components":[],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}' }
+        request=ProposalRequest(message="design a travel agency landing page",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));components={item["id"]:item for item in plan["after"]["components"]}
+        self.assertNotIn("children",str(plan["after"]["components"]));self.assertEqual(components["hero"]["parentId"],"home-page");self.assertEqual(components["hero-title"]["parentId"],"hero");self.assertEqual(plan["after"]["pages"][0]["componentIds"],["home-page"])
+    async def test_missing_referenced_page_root_is_safely_synthesized(self):
+        class Client:
+            async def chat(self,messages,tools):return {"content":'{"application":{"id":"a","name":"Travel"},"pages":[{"id":"home","name":"Home","route":"/","componentIds":["home-page"]}],"components":[{"id":"hero","type":"Section","label":"Hero","parentId":"home-page"}],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}' }
+        request=ProposalRequest(message="travel landing page",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));components={item["id"]:item for item in plan["after"]["components"]}
+        self.assertEqual(components["home-page"]["type"],"Page");self.assertEqual(components["hero"]["parentId"],"home-page")
+    def test_unknown_parent_error_identifies_safe_component_ids(self):
+        with self.assertRaisesRegex(ValidationError,"orphan references missing"):
+            ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="orphan",type="Section",label="Orphan",parentId="missing")])
     async def test_invalid_first_response_is_repaired_on_second_attempt(self):
         class Client:
             def __init__(self):self.calls=0

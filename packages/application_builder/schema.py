@@ -132,7 +132,7 @@ class ApplicationManifest(Strict):
         entities = {entity.id: entity for entity in self.entities}
         for component in self.components:
             if component.parentId and component.parentId not in known:
-                raise ValueError("Unknown component parent")
+                raise ValueError(f"Unknown component parent: {component.id} references {component.parentId}")
             if component.parentId:
                 parent = next(x for x in self.components if x.id == component.parentId)
                 allowed = COMPONENTS[component.type][0]
@@ -153,6 +153,12 @@ class ApplicationManifest(Strict):
                     raise ValueError("Form input requires a declared entity field")
         if len({page.route for page in self.pages}) != len(self.pages):
             raise ValueError("Duplicate application route")
+        components={component.id:component for component in self.components}
+        for page in self.pages:
+            for component_id in page.componentIds:
+                component=components.get(component_id)
+                if not component:raise ValueError(f"Page references unknown component: {page.id} references {component_id}")
+                if component.parentId or component.type!="Page":raise ValueError("Page componentIds must reference root Page components")
         return self
 
 
