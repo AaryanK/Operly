@@ -3,6 +3,7 @@ document.addEventListener("click", async (event) => {
   if (!button || !window.renderOperlyAssistant) return;
 
   event.stopImmediatePropagation();
+  document.querySelector("#operly-chat-dock")?.classList.add("page-suppressed");
 
   document.querySelectorAll("#nav button").forEach((item) => {
     item.classList.toggle("active", item.dataset.page === "assistant");

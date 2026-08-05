@@ -82,7 +82,7 @@ async function loadWorkspaces() {
 async function renderPage(page) {
   state.page = page;
   const dock = document.querySelector("#operly-chat-dock");
-  if (dock) dock.classList.toggle("page-suppressed", page === "studio" || page === "ai");
+  if (dock) dock.classList.toggle("page-suppressed", page === "studio" || page === "assistant");
   $$("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
   const title = {
     overview: "Overview", inbox: "Inbox", tasks: "Tasks", memory: "Business brain",

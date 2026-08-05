@@ -149,7 +149,9 @@ class FrontendContractTests(unittest.TestCase):
         ai=Path("apps/web/static/ai-assistant.js").read_text(encoding="utf-8")
         studio=Path("apps/web/static/studio.js").read_text(encoding="utf-8")
         css=Path("apps/web/static/regression.css").read_text(encoding="utf-8")
-        self.assertIn('page === "studio" || page === "ai"',app)
+        self.assertIn('page === "studio" || page === "assistant"',app)
+        for bridge in ["studio-bridge.js","ai-assistant-bridge.js"]:
+            self.assertIn('classList.add("page-suppressed")',Path("apps/web/static",bridge).read_text(encoding="utf-8"))
         self.assertIn(".operly-dock.page-suppressed",css)
         self.assertIn('/application-builder/proposals',studio)
         self.assertIn('/application-builder/applications',ai)
