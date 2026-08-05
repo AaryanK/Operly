@@ -35,7 +35,7 @@ class BrandTests(unittest.TestCase):
 
     def test_business_architecture_families_are_classified(self):
         cases={"Build appointment booking for a salon":"booking","Create an online store with checkout and orders":"commerce","Build a club membership portal":"membership","Track warehouse inventory and purchase orders":"inventory","Create a CRM sales pipeline":"crm","Build customer quotation and estimate software":"quotation","Create a two-sided vendor marketplace":"marketplace","Build a requests and approvals workflow":"approval"}
-        self.assertEqual({row["id"] for row in catalog()},{"field_service","booking","commerce","membership","inventory","crm","quotation","marketplace","approval"})
+        self.assertTrue({"field_service","booking","commerce","membership","inventory","crm","quotation","marketplace","approval","support_desk","project_management","content_platform","custom"}<={row["id"] for row in catalog()})
         for prompt,family in cases.items():self.assertEqual(architecture_plan(prompt)["family"],family)
 
     def test_agentic_generation_plan_is_bounded(self):

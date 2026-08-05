@@ -19,8 +19,11 @@ from apps.api.dashboard_studio_router import router as dashboard_studio_router
 from apps.api.application_builder_router import router as application_builder_router
 from apps.api.agent_router import router as agent_router
 from apps.api.custom_software_router import router as custom_software_router
+from apps.api.architecture_pack_router import router as architecture_pack_router
+from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.security_headers import SecurityHeadersMiddleware
+from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.session import router as session_router
 from apps.api.business import router as business_router
 from apps.api.schemas import (
@@ -114,6 +117,7 @@ app = FastAPI(
 )
 
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(PublicEndpointSafetyMiddleware)
 
 public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 production = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
@@ -509,6 +513,8 @@ app.include_router(studio_router)
 app.include_router(dashboard_studio_router)
 app.include_router(application_builder_router)
 app.include_router(custom_software_router)
+app.include_router(architecture_pack_router)
+app.include_router(coding_harness_router)
 
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 

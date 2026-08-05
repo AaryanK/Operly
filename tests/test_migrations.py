@@ -55,7 +55,7 @@ class MigrationTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def upgrade(self,path):command.upgrade(config(url(path)),"head");validate(url(path))
     def test_fresh_upgrade_and_idempotency(self):
-        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0005_custom_software_vertical_slice")
+        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0009_sandbox_job_lifecycle")
     def test_legacy_core_preserves_rows(self):
         path=self.root/"legacy.db";legacy_core(path);self.upgrade(path)
         with closing(sqlite3.connect(path)) as db:self.assertEqual(db.execute("select count(*) from app_users").fetchone()[0],1);self.assertEqual(db.execute("pragma integrity_check").fetchone()[0],"ok")
@@ -72,7 +72,7 @@ class MigrationTests(unittest.TestCase):
     def test_unsafe_orphan_fails_without_claiming_head(self):
         path=self.root/"orphan.db";partial_studio(path,orphan=True)
         with self.assertRaises(RuntimeError):command.upgrade(config(url(path)),"head")
-        self.assertNotEqual(revisions(url(path))[0],"0005_custom_software_vertical_slice")
+        self.assertNotEqual(revisions(url(path))[0],"0009_sandbox_job_lifecycle")
     def test_verified_backup_never_overwrites(self):
         path=self.root/"source.db";legacy_core(path);backup=verified_backup(url(path),self.root/"backups");self.assertTrue(backup.is_file())
         with closing(sqlite3.connect(backup)) as db:self.assertEqual(db.execute("pragma integrity_check").fetchone()[0],"ok")
@@ -114,7 +114,7 @@ class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
         engine=create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
             await connection.exec_driver_sql("CREATE TABLE alembic_version(version_num VARCHAR(32) NOT NULL)")
-            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0005_custom_software_vertical_slice')")
+            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0009_sandbox_job_lifecycle')")
             await assert_schema_current(connection)
         await engine.dispose()
 

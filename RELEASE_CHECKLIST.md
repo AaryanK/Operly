@@ -1,8 +1,18 @@
 # Operly release checklist
 
+## Architecture-first generation gate
+
+- [ ] Back up the target database with the release-scoped backup confirmation.
+- [ ] Rehearse Alembic head `0009_sandbox_job_lifecycle` against disposable SQLite and PostgreSQL.
+- [ ] Review plan and architecture-pack migrations; never run browser acceptance against `operly.db`.
+- [ ] Confirm every generated implementation is bound to an explicitly approved plan version.
+- [ ] Confirm unsupported plans fail closed when the isolated runner is absent.
+- [ ] Verify quotation, inventory, and field-service tenant boundaries and stale-write rejection.
+- [ ] Record the deployed commit SHA from `/api/health`; deploy atomically and retain the previous image for rollback.
+
 ## Managed application builder and custom software
 
-- [ ] Run SQLite upgrade to `0005_custom_software_vertical_slice` twice.
+- [ ] Run SQLite upgrade to `0009_sandbox_job_lifecycle` twice.
 - [ ] Rehearse PostgreSQL fresh, legacy, current, and unsafe states with the release-scoped backup gate.
 - [ ] Execute authenticated login, theme, component override, customer app, workflow, and selection scenarios.
 - [ ] Verify desktop, tablet, and mobile canvas viewports.
