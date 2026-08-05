@@ -55,6 +55,7 @@ BUILDER_REQUIRED_FOREIGN_KEYS={
 CUSTOM_REQUIRED_TABLES={"generated_projects","generated_project_change_sets","service_customers","service_requests","service_status_events"}
 POSTGRES_BACKUP_MAX_AGE = timedelta(hours=24)
 POSTGRES_BACKUP_CLOCK_SKEW = timedelta(minutes=5)
+ALEMBIC_VERSION_WIDTH = 128
 
 
 def database_url(override: str | None = None) -> str:
@@ -77,6 +78,15 @@ def revisions(url: str) -> tuple[str | None,str]:
 
 
 def is_postgres(url:str)->bool:return url.startswith(("postgres://","postgresql://","postgresql+asyncpg://","postgresql+psycopg://"))
+
+
+def ensure_alembic_version_capacity(url:str)->None:
+    if not is_postgres(url):return
+    engine=create_engine(synchronous_database_url(url))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR({ALEMBIC_VERSION_WIDTH})"))
+    finally:engine.dispose()
 
 
 def release_id(value: str | None = None) -> str:
@@ -207,7 +217,7 @@ def run(argv=None) -> int:
                     verify_postgres_backup_confirmation(intended_release,args.postgres_backup_release_id,args.postgres_backup_at)
         else:
             backup=verified_backup(url,Path(args.backup_dir) if args.backup_dir else None);print(f"verified backup created: {backup}")
-        command.upgrade(cfg,"head");validate(url);print("controlled production upgrade complete")
+        ensure_alembic_version_capacity(url);command.upgrade(cfg,"head");validate(url);print("controlled production upgrade complete")
     elif args.command=="check":validate(url);print("schema check passed")
     elif args.command=="backup":
         if is_postgres(url):

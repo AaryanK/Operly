@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 from apps.api.security_headers import SecurityHeadersMiddleware
 from packages.database.backup import verified_backup,verified_postgres_dump
 from packages.database.db import assert_schema_current
-from packages.database.migrate import config, development_unbacked_postgres_migration_allowed, release_id, revisions, validate, verify_postgres_backup_confirmation
+from packages.database.migrate import ALEMBIC_VERSION_WIDTH,config, development_unbacked_postgres_migration_allowed, release_id, revisions, validate, verify_postgres_backup_confirmation
 from scripts.run_web import port as web_port
 
 
@@ -57,6 +57,11 @@ class MigrationTests(unittest.TestCase):
     def upgrade(self,path):command.upgrade(config(url(path)),"head");validate(url(path))
     def test_fresh_upgrade_and_idempotency(self):
         path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0009_sandbox_job_lifecycle")
+    def test_revision_identifiers_fit_production_version_storage(self):
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        script=ScriptDirectory.from_config(Config(str(Path(__file__).resolve().parents[1]/"alembic.ini")))
+        self.assertLess(max(len(item.revision) for item in script.walk_revisions()),ALEMBIC_VERSION_WIDTH)
     def test_upgrade_repairs_create_all_polluted_0005_database(self):
         path=self.root/"polluted.db";command.upgrade(config(url(path)),"0005_custom_software_vertical_slice")
         from packages.database.db import Base
