@@ -9,6 +9,10 @@ import sqlalchemy as sa
 revision="0003_application_builder_core";down_revision="0002_dashboard_studio";branch_labels=None;depends_on=None
 
 def upgrade():
+    existing=set(sa.inspect(op.get_bind()).get_table_names())
+    required={"managed_applications","application_versions","application_change_sets","managed_records","application_audit_events","application_preview_sessions"}
+    if required<=existing:
+        return
     op.create_table("managed_applications",sa.Column("id",sa.String(36),primary_key=True),sa.Column("tenant_id",sa.String(36),sa.ForeignKey("tenants.id"),nullable=False),sa.Column("slug",sa.String(100),nullable=False),sa.Column("name",sa.String(200),nullable=False),sa.Column("description",sa.Text(),nullable=False,server_default=""),sa.Column("active_version_id",sa.String(36),nullable=True),sa.Column("created_by",sa.String(36),sa.ForeignKey("app_users.id"),nullable=False),sa.Column("created_at",sa.DateTime(),nullable=False,server_default=sa.text("CURRENT_TIMESTAMP")),sa.UniqueConstraint("tenant_id","slug",name="uq_managed_application_slug"))
     op.create_index("ix_managed_applications_tenant_id","managed_applications",["tenant_id"])
     op.create_table("application_versions",sa.Column("id",sa.String(36),primary_key=True),sa.Column("tenant_id",sa.String(36),sa.ForeignKey("tenants.id"),nullable=False),sa.Column("application_id",sa.String(36),sa.ForeignKey("managed_applications.id",ondelete="CASCADE"),nullable=False),sa.Column("version_number",sa.Integer(),nullable=False),sa.Column("manifest_json",sa.Text(),nullable=False),sa.Column("summary",sa.String(500),nullable=False),sa.Column("source_version_id",sa.String(36),sa.ForeignKey("application_versions.id"),nullable=True),sa.Column("created_by",sa.String(36),sa.ForeignKey("app_users.id"),nullable=False),sa.Column("active",sa.Boolean(),nullable=False,server_default=sa.true()),sa.Column("created_at",sa.DateTime(),nullable=False,server_default=sa.text("CURRENT_TIMESTAMP")),sa.UniqueConstraint("application_id","version_number",name="uq_application_version_number"))

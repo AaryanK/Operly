@@ -13,6 +13,9 @@ depends_on = None
 
 
 def upgrade():
+    columns={item["name"] for item in sa.inspect(op.get_bind()).get_columns("managed_records")}
+    if {"application_version_id","idempotency_key"}<=columns:
+        return
     op.add_column("managed_records", sa.Column("application_version_id", sa.String(36), nullable=True))
     op.add_column("managed_records", sa.Column("idempotency_key", sa.String(120), nullable=True))
     op.execute("UPDATE managed_records SET application_version_id = (SELECT active_version_id FROM managed_applications WHERE managed_applications.id = managed_records.application_id)")
