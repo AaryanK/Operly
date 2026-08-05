@@ -86,6 +86,21 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0009_sandbox_job_lifecycle")
             columns={row[1] for row in db.execute("pragma table_info(generated_projects)")}
             self.assertTrue({"plan_id","approved_plan_version","architecture_pack"}<=columns)
+    def test_upgrade_repairs_legacy_managed_records_with_0002_stamp(self):
+        path=self.root/"polluted-managed-0002.db";command.upgrade(config(url(path)),"0003_application_builder_core")
+        with closing(sqlite3.connect(path)) as db:
+            db.execute("update alembic_version set version_num='0002_dashboard_studio'");db.commit()
+        from packages.database.db import Base
+        from packages.database.schema import import_all_models,synchronous_database_url
+        import_all_models();engine=create_engine(synchronous_database_url(url(path)))
+        try:
+            Base.metadata.create_all(engine)
+        finally:
+            engine.dispose()
+        self.upgrade(path)
+        with closing(sqlite3.connect(path)) as db:
+            columns={row[1] for row in db.execute("pragma table_info(managed_records)")}
+            self.assertTrue({"application_version_id","idempotency_key"}<=columns)
     def test_legacy_core_preserves_rows(self):
         path=self.root/"legacy.db";legacy_core(path);self.upgrade(path)
         with closing(sqlite3.connect(path)) as db:self.assertEqual(db.execute("select count(*) from app_users").fetchone()[0],1);self.assertEqual(db.execute("pragma integrity_check").fetchone()[0],"ok")
