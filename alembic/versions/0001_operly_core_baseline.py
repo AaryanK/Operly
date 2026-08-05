@@ -22,6 +22,14 @@ APPLICATION_BUILDER_TABLES = {
 CUSTOM_SOFTWARE_TABLES = {
     "generated_projects", "generated_project_change_sets", "service_customers", "service_requests", "service_status_events",
 }
+ARCHITECTURE_FIRST_TABLES = {
+    "software_plans", "software_plan_versions", "quote_customers", "quote_inquiries",
+    "quotations", "quotation_versions", "quotation_line_items", "quotation_approvals",
+    "quotation_status_events", "inventory_products", "inventory_suppliers",
+    "inventory_locations", "inventory_stock_levels", "inventory_stock_movements",
+    "inventory_purchase_orders", "inventory_purchase_order_lines", "inventory_reorder_rules",
+    "sandbox_generation_jobs", "sandbox_job_events",
+}
 
 
 def upgrade() -> None:
@@ -32,7 +40,7 @@ def upgrade() -> None:
     import_all_models()
     bind = op.get_bind()
     for table in Base.metadata.sorted_tables:
-        if table.name not in DASHBOARD_TABLES | APPLICATION_BUILDER_TABLES | CUSTOM_SOFTWARE_TABLES and table.name != "alembic_version":
+        if table.name not in DASHBOARD_TABLES | APPLICATION_BUILDER_TABLES | CUSTOM_SOFTWARE_TABLES | ARCHITECTURE_FIRST_TABLES and table.name != "alembic_version":
             table.create(bind, checkfirst=True)
 
 

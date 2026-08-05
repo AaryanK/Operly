@@ -1,8 +1,183 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+"""Strict, non-executable contracts for architecture-first software generation."""
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+Architecture = Literal["field_service","booking","crm","inventory","quotation","commerce","membership","marketplace","approval","support_desk","project_management","content_platform","custom"]
+ImplementationMode = Literal["managed_runtime","architecture_pack","sandbox_generated","hybrid"]
+
+
+class RolePlan(Strict):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    name: str
+    description: str
+    permissions: list[str]
+    access: Literal["public","authenticated"]
+    dataScope: Literal["own","assigned","tenant","all"]
+
+
+class FieldPlan(Strict):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    type: Literal["string","text","integer","decimal","boolean","date","datetime","email","phone","enum","json"]
+    required: bool = False
+    sensitive: bool = False
+    options: list[str] = []
+
+
+class RelationshipPlan(Strict):
+    id: str
+    sourceEntity: str
+    targetEntity: str
+    cardinality: Literal["one_to_one","one_to_many","many_to_many","belongs_to"]
+    implementationSupport: Literal["managed_runtime","architecture_pack","sandbox_required"]
+
+
+class EntityPlan(Strict):
+    id: str
+    name: str
+    purpose: str
+    fields: list[FieldPlan]
+    relationshipIds: list[str] = []
+    ownership: str
+    visibility: list[str]
+    lifecycle: list[str] = []
+
+
+class TransitionPlan(Strict):
+    id: str
+    fromState: str
+    toState: str
+    actors: list[str]
+    guards: list[str] = []
+    sideEffects: list[str] = []
+    approvalRequired: bool = False
+
+
+class WorkflowPlan(Strict):
+    id: str
+    name: str
+    trigger: str
+    states: list[str]
+    transitions: list[TransitionPlan]
+    failureBehavior: str
+
+    @model_validator(mode="after")
+    def transitions_reference_states(self):
+        states=set(self.states)
+        if any(t.fromState not in states or t.toState not in states for t in self.transitions):
+            raise ValueError("Workflow transitions must reference declared states")
+        return self
+
+
+class SurfacePlan(Strict):
+    id: str
+    name: str
+    route: str
+    audience: list[str]
+    purpose: str
+    majorComponents: list[str]
+    relatedEntities: list[str] = []
+    relatedWorkflows: list[str] = []
+    access: Literal["public","authenticated"]
+
+
+class DesignPlan(Strict):
+    family: Literal["editorial","utility","dashboard_led","conversion_focused","image_led","minimal","modular_grid","asymmetric"]
+    visualPersonality: str
+    navigationFamily: str
+    heroFamily: str
+    typographyPairing: str
+    typeScale: str
+    contentDensity: str
+    spacingSystem: str
+    gridSystem: str
+    surfaceStyle: str
+    cardStyle: str
+    ctaStrategy: str
+    mediaStrategy: str
+    motionStrategy: str
+    responsiveBehavior: str
+    accessibilityGoals: list[str]
+
+
+class RuntimePlan(Strict):
+    strategy: ImplementationMode
+    reason: str
+    primaryPack: str | None = None
+    secondaryPacks: list[str] = []
+
+
+class SoftwarePlan(Strict):
+    schemaVersion: Literal[1] = 1
+    projectName: str
+    summary: str
+    productCategory: str
+    targetUsers: list[str]
+    businessDomain: str
+    primaryGoal: str
+    successCriteria: list[str]
+    primaryArchitecture: Architecture
+    secondaryArchitectures: list[Architecture] = []
+    implementationMode: ImplementationMode
+    confidence: float = Field(ge=0, le=1)
+    rationale: str
+    roles: list[RolePlan]
+    entities: list[EntityPlan]
+    relationships: list[RelationshipPlan]
+    workflows: list[WorkflowPlan]
+    surfaces: list[SurfacePlan]
+    backendCapabilities: list[str]
+    integrations: list[str] = []
+    design: DesignPlan
+    runtime: RuntimePlan
+    securityConstraints: list[str]
+    unsupportedRequirements: list[str] = []
+    risks: list[str] = []
+    testRequirements: list[str]
+    deploymentRequirements: list[str]
+
+    @model_validator(mode="after")
+    def graph_integrity(self):
+        def unique(rows, label):
+            ids=[x.id for x in rows]
+            if len(ids)!=len(set(ids)): raise ValueError(f"Duplicate {label} IDs")
+            return set(ids)
+        roles=unique(self.roles,"role");entities=unique(self.entities,"entity");relationships=unique(self.relationships,"relationship");workflows=unique(self.workflows,"workflow");unique(self.surfaces,"surface")
+        for rel in self.relationships:
+            if rel.sourceEntity not in entities or rel.targetEntity not in entities: raise ValueError("Relationship references unknown entity")
+        for entity in self.entities:
+            if not set(entity.relationshipIds)<=relationships or not set(entity.visibility)<=roles: raise ValueError("Entity references unknown relationship or role")
+        for workflow in self.workflows:
+            for transition in workflow.transitions:
+                if not set(transition.actors)<=roles: raise ValueError("Workflow transition references unknown role")
+        for surface in self.surfaces:
+            if not set(surface.audience)<=roles or not set(surface.relatedEntities)<=entities or not set(surface.relatedWorkflows)<=workflows: raise ValueError("Surface references unknown plan item")
+        forbidden=("<script","javascript:","import os","subprocess","eval(","exec(")
+        if any(token in self.model_dump_json().lower() for token in forbidden): raise ValueError("Executable content is not allowed in a SoftwarePlan")
+        return self
+
+
+class PlanRequestInput(Strict):
+    prompt: str = Field(min_length=20, max_length=8000)
+
+
+class PlanRevisionInput(Strict):
+    request: str = Field(min_length=3, max_length=2000)
+    expectedVersion: int = Field(ge=1)
+
+
+class PlanApprovalInput(Strict):
+    expectedVersion: int = Field(ge=1)
+
+
+class GenerateApprovedPlanInput(Strict):
+    planId: str
+    approvedVersion: int = Field(ge=1)
 
 
 class GenerateProjectInput(Strict):
@@ -32,19 +207,16 @@ class ServiceRequestInput(Strict):
     @field_validator("name", "phone", "issue_category", "address")
     @classmethod
     def not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Value cannot be blank")
+        value=value.strip()
+        if not value: raise ValueError("Value cannot be blank")
         return value
 
     @field_validator("email")
     @classmethod
     def valid_email(cls, value: str | None) -> str | None:
-        if not value:
-            return None
-        value = value.strip().lower()
-        if "@" not in value or value.startswith("@") or value.endswith("@"):
-            raise ValueError("Enter a valid email address")
+        if not value:return None
+        value=value.strip().lower()
+        if "@" not in value or value.startswith("@") or value.endswith("@"):raise ValueError("Enter a valid email address")
         return value
 
 

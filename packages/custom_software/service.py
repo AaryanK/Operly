@@ -56,10 +56,11 @@ def slugify(value: str) -> str:
 
 def artifact_graph() -> dict:
     nodes = [
-        {"id":"public.hero","kind":"visual","source":"packages/custom_software/renderer.py","symbol":"render_public","route":"public.home","styles":["brand.primary","brand.accent"]},
-        {"id":"public.request-form","kind":"form","source":"apps/api/custom_software_router.py","symbol":"create_request","route":"public.home","entity":"service_request","api":"POST /api/public/service-projects/{slug}/requests","permission":"anonymous:create_service_request","tests":["test_public_request_is_idempotent"]},
-        {"id":"dispatch.queue","kind":"visual","source":"packages/custom_software/renderer.py","symbol":"render_dispatch","route":"dispatch.queue","entity":"service_request","api":"GET /api/custom-software/projects/{id}/requests","permission":"staff:dispatch","tests":["test_transition_state_machine"]},
-        {"id":"workflow.rescue-lifecycle","kind":"workflow","source":"packages/custom_software/service.py","symbol":"transition_request","entity":"service_request","tests":["test_transition_state_machine"]},
+        {"id":"public.hero","kind":"visual","architecturePack":"field_service","page":"public_request","component":"Hero","source":"packages/custom_software/renderer.py","symbol":"render_public","route":"public.home","styles":["brand.primary","brand.accent"],"designTokens":["brand.primary","typography.display"],"deploymentArtifact":"field-service-public"},
+        {"id":"public.request-form","kind":"form","architecturePack":"field_service","page":"public_request","component":"ServiceRequestForm","source":"apps/api/custom_software_router.py","symbol":"create_request","route":"public.home","entity":"service_request","fields":["issue_category","address","asset_details","name","phone","email","description"],"workflow":"workflow.rescue-lifecycle","api":"POST /api/public/service-projects/{slug}/requests","permission":"anonymous:create_service_request","tests":["test_public_request_is_idempotent"],"deploymentArtifact":"field-service-public"},
+        {"id":"dispatch.queue","kind":"visual","architecturePack":"field_service","page":"dispatch_queue","component":"DispatchQueue","source":"packages/custom_software/renderer.py","symbol":"render_dispatch","route":"dispatch.queue","entity":"service_request","workflow":"workflow.rescue-lifecycle","api":"GET /api/custom-software/projects/{id}/requests","permission":"staff:dispatch","tests":["test_transition_state_machine"],"deploymentArtifact":"field-service-internal"},
+        {"id":"workflow.rescue-lifecycle","kind":"workflow","architecturePack":"field_service","source":"packages/custom_software/service.py","symbol":"transition_request","entity":"service_request","states":["submitted","assigned","en_route","completed"],"permission":"dispatcher_or_technician","tests":["test_transition_state_machine"],"deploymentArtifact":"operly-api"},
+        {"id":"dispatch.assignment-control","kind":"action","architecturePack":"field_service","page":"dispatch_queue","route":"dispatch.queue","component":"AssignmentControl","source":"apps/api/custom_software_router.py","symbol":"transition","entity":"service_request","fields":["assigned_to","version","status"],"workflow":"workflow.rescue-lifecycle","stateTransition":"submitted->assigned","api":"POST /api/custom-software/requests/{id}/transition","permission":"request:assign","tests":["test_transition_state_machine_and_optimistic_version"],"deploymentArtifact":"field-service-internal"},
     ]
     return {"schemaVersion":1,"nodes":nodes,"edges":[{"from":"public.request-form","to":"workflow.rescue-lifecycle","type":"starts"},{"from":"dispatch.queue","to":"workflow.rescue-lifecycle","type":"invokes"},{"from":"public.request-form","to":"service_request","type":"writes"}]}
 
@@ -83,8 +84,50 @@ async def create_project(db, tenant_id: str, user_id: str, prompt: str):
     db.add(row);await db.commit();await db.refresh(row);return row
 
 
-def visual_change(current:dict,request:str,selected:list[str],viewport:str):
+def plan_artifact_graph(plan:dict,project_id:str|None=None,project_version:int=1,plan_version:int=1)->dict:
+    nodes=[]
+    pack=plan["primaryArchitecture"]
+    for surface in plan["surfaces"]:
+        for component in surface["majorComponents"]:
+            node_id=f'{surface["id"]}.{slugify(component)}'
+            nodes.append({"id":node_id,"kind":"visual","project":project_id,"projectVersion":project_version,"softwarePlanVersion":plan_version,"architecturePack":pack,"page":surface["id"],"route":surface["route"],"component":component,"designTokens":["design.family","typography.pairing","spacing.system"],"entities":surface["relatedEntities"],"workflows":surface["relatedWorkflows"],"permission":f'{surface["access"]}:{"|".join(surface["audience"])}',"source":"packages/custom_software/pack_renderer.py","tests":plan["testRequirements"],"deploymentArtifact":f'{pack}-runtime'})
+    specials={
+      "quotation":[{"id":"quotation.send-action","kind":"action","page":"approval_review","route":"/generated/{slug}/manage","component":"SendQuotation","entity":"quotation","fields":["status","version","public_token"],"relationships":["quotation_has_versions"],"workflow":"quotation_lifecycle","stateTransition":"approved_for_sending->sent_to_customer","api":"POST /api/quotation/quotations/{id}/transition","permission":"quotation:send","source":"apps/api/architecture_pack_router.py:quote_transition","tests":["test_complete_quotation_loop"],"deploymentArtifact":"quotation-runtime"}],
+      "inventory":[{"id":"inventory.receive-items","kind":"action","page":"receiving","route":"/generated/{slug}/manage","component":"ReceiveItems","entity":"purchase_order_line_item","fields":["ordered_quantity","received_quantity"],"relationships":["order_has_lines","product_has_stock"],"workflow":"purchase_order_lifecycle","stateTransition":"ordered->partially_received|received","api":"POST /api/inventory/purchase-orders/{id}/receive","permission":"stock:receive","source":"apps/api/architecture_pack_router.py:receive_po","tests":["test_inventory_receiving_and_order_loop"],"deploymentArtifact":"inventory-runtime"}],
+      "field_service":[{"id":"dispatch.assignment-control","kind":"action","page":"dispatch_queue","route":"/generated/{slug}/dispatch","component":"AssignmentControl","entity":"service_request","fields":["assigned_to","version","status"],"relationships":["customer_has_requests"],"workflow":"service_lifecycle","stateTransition":"submitted->assigned","api":"POST /api/custom-software/requests/{id}/transition","permission":"request:assign","source":"apps/api/custom_software_router.py:transition","tests":["test_transition_state_machine_and_optimistic_version"],"deploymentArtifact":"field-service-internal"}],
+    }
+    for node in specials.get(pack,[]):nodes.append({"project":project_id,"projectVersion":project_version,"softwarePlanVersion":plan_version,"architecturePack":pack,**node})
+    return {"schemaVersion":2,"projectId":project_id,"projectVersion":project_version,"softwarePlanVersion":plan_version,"architecturePack":pack,"nodes":nodes,"edges":[]}
+
+
+async def create_project_from_plan(db,tenant_id,user_id,plan_row,plan):
+    pack=plan.primaryArchitecture
+    if pack=="field_service":
+        row=await create_project(db,tenant_id,user_id,plan_row.prompt);row.plan_id=plan_row.id;row.approved_plan_version=plan_row.approved_version;row.architecture_pack=pack;await db.commit();await db.refresh(row);return row
+    base=slugify(plan.projectName) or f"{pack}-application";slug=base;suffix=2
+    while await db.scalar(select(GeneratedProject.id).where(GeneratedProject.slug==slug)):slug=f"{base}-{suffix}";suffix+=1
+    design=plan.design.model_dump();design.update({"vertical":pack,"name":plan.projectName})
+    row=GeneratedProject(tenant_id=tenant_id,slug=slug,name=plan.projectName,vertical=pack,prompt=plan_row.prompt,brand_json=json.dumps(design),artifact_graph_json="{}",created_by=user_id,plan_id=plan_row.id,approved_plan_version=plan_row.approved_version,architecture_pack=pack);db.add(row);await db.flush();row.artifact_graph_json=json.dumps(plan_artifact_graph(plan.model_dump(),row.id,1,plan_row.approved_version));await db.commit();await db.refresh(row);return row
+
+
+def visual_change(current:dict,request:str,selected:list[str],viewport:str,architecture:str="field_service"):
     after=dict(current);text=request.lower();impact=[]
+    if architecture=="quotation":
+        allowed={"customer_quotation.price_sidebar","customer_quotation.itinerary","approval_review.approval_inbox"}
+        if not set(selected)<=allowed:raise DomainError("This quotation edit targets an unsupported artifact")
+        if "right sidebar" in text:after["quotationTotalLayout"]="right_sidebar";impact.append("quotation.layout.total")
+        if "hide internal margin" in text:after["customerMarginVisible"]=False;impact.append("permission.customer.internal_margin")
+        if "manager approval" in text:after["managerApprovalRequired"]=True;impact.append("workflow.quotation.send_guard")
+        if not impact:raise DomainError("The selected quotation change is not supported")
+        return after,{"artifacts":selected,"viewport":viewport,"dependencies":impact,"affected":["quotation.send","quotation.customer_view","permission.customer"],"preserved":["inquiry","quotation_version","quotation.line_items"]}
+    if architecture=="inventory":
+        allowed={"inventory_dashboard.low_stock_queue","purchase_orders.purchase_order_editor","receiving.receipt_lines"}
+        if not set(selected)<=allowed:raise DomainError("This inventory edit targets an unsupported artifact")
+        if "compact priority board" in text:after["lowStockLayout"]="compact_priority_board";impact.append("inventory.low_stock.layout")
+        if "preferred supplier" in text:after["showPreferredSupplier"]=True;impact.append("relationship.product_supplier")
+        if "above 5,000" in text or "above 5000" in text:after["purchaseOrderApprovalThreshold"]=5000;impact.append("workflow.purchase_order.approval_guard")
+        if not impact:raise DomainError("The selected inventory change is not supported")
+        return after,{"artifacts":selected,"viewport":viewport,"dependencies":impact,"affected":["low_stock","supplier","purchase_order.approval"],"preserved":["stock_movement","stock_level","inventory_history"]}
     if "bold condensed" in text or "condensed font" in text:after["displayFont"]="condensed-heavy";impact.append("typography.display")
     elif "serif" in text:after["displayFont"]="editorial";impact.append("typography.display")
     if "video hero" in text or "replace this with a video" in text:after["heroMedia"]="video";impact.append("hero.media")
@@ -98,7 +141,7 @@ def visual_change(current:dict,request:str,selected:list[str],viewport:str):
 
 
 async def propose_visual_change(db,project,actor_id,request,selected,viewport):
-    before=json.loads(project.brand_json);after,impact=visual_change(before,request,selected,viewport)
+    before=json.loads(project.brand_json);after,impact=visual_change(before,request,selected,viewport,project.architecture_pack)
     row=GeneratedProjectChangeSet(tenant_id=project.tenant_id,project_id=project.id,base_version=project.version,request=request,selected_artifacts_json=json.dumps(selected),before_json=json.dumps(before),after_json=json.dumps(after),impact_json=json.dumps(impact),created_by=actor_id)
     db.add(row);await db.commit();await db.refresh(row);return row
 
@@ -108,6 +151,12 @@ async def apply_visual_change(db,project,change):
     if change.status!="proposed":raise ConflictError("Change set was already applied")
     if change.base_version!=project.version:raise ConflictError("Project changed; create a new proposal")
     project.brand_json=change.after_json;project.version+=1;change.status="applied";await db.commit();await db.refresh(project);return project
+
+async def rollback_visual_change(db,project,change):
+    if change.project_id!=project.id or change.tenant_id!=project.tenant_id:raise LookupError("Change set not found")
+    if change.status!="applied":raise ConflictError("Only an applied change can be rolled back")
+    if project.version!=change.base_version+1:raise ConflictError("Project changed; rollback would overwrite newer work")
+    project.brand_json=change.before_json;project.version+=1;change.status="rolled_back";await db.commit();await db.refresh(project);return project
 
 
 async def public_project(db, slug: str):

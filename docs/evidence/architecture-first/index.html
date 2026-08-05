@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OPERLY architecture-first milestone evidence</title>
+  <style>
+    :root{color-scheme:dark;--ink:#f4f0e7;--muted:#a9adad;--line:#33403d;--acid:#c9ff4a;--panel:#17201e}*{box-sizing:border-box}body{margin:0;background:#0d1312;color:var(--ink);font:16px/1.55 Inter,system-ui,sans-serif}header,main{max-width:1160px;margin:auto;padding:48px 28px}header{padding-top:76px;border-bottom:1px solid var(--line)}.eyebrow{color:var(--acid);font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{font-size:clamp(2.7rem,7vw,6.8rem);line-height:.9;letter-spacing:-.06em;max-width:950px;margin:.25em 0}h2{font-size:2rem;margin-top:2.4em}h3{color:var(--acid)}p{max-width:82ch}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}.card,pre,.shot{background:var(--panel);border-left:4px solid var(--acid);padding:20px;overflow:auto}.metric{font-size:2.4rem;font-weight:900}.muted{color:var(--muted)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid var(--line)}th{color:var(--acid)}.shot{min-height:170px;display:grid;place-items:center;text-align:center;border:1px dashed #61706c;border-left:4px solid #61706c}.ok{color:var(--acid);font-weight:800}@media(max-width:620px){header,main{padding:32px 18px}h1{font-size:3.2rem}table{display:block;overflow:auto}}
+  </style>
+</head>
+<body>
+<header><p class="eyebrow">Architecture-first milestone · local evidence · 2026-08-05</p><h1>Plans became working business systems.</h1><p class="muted">Plan-first generation, quotation and inventory runtimes, traceable behavioral editing, fail-closed coverage, sandbox lifecycle, security controls, and browser-verified business loops.</p></header>
+<main>
+  <section class="grid"><article class="card"><div class="metric">144</div><b>tests passed</b><p>5 conditional skips; 41 subtests passed.</p></article><article class="card"><div class="metric">2</div><b>domain runtimes exercised</b><p>Quotation and inventory through visible browser UI.</p></article><article class="card"><div class="metric">0</div><b>production mutations</b><p>No commit, push, migration against production, or deployment.</p></article></section>
+  <h2>Exact prompts</h2><pre>Build a travel agency system where customers request trips, agents prepare and revise quotations, managers approve them, and customers review itineraries.
+
+Add WhatsApp follow-up
+
+Build a grocery inventory system with suppliers, stock receiving, low-stock alerts, purchase orders, partial receipts, and manager approval for large orders.
+
+Make the customer quotation price area more prominent, hide margin from customers, and require manager approval before sending.
+
+Turn this into a compact priority board, show the preferred supplier, and require manager approval for purchase orders above 5,000.</pre>
+  <h2>Plans and coverage</h2><div class="grid"><article class="card"><h3>Quotation</h3><pre>{"architecture":"quotation","mode":"architecture_pack","design":"editorial","coverage":"complete"}</pre><p>8 entities · 3 relationships · 4 roles · 1 workflow · 4 pages · 8 permissions</p></article><article class="card"><h3>Inventory</h3><pre>{"architecture":"inventory","mode":"architecture_pack","design":"dashboard_led","coverage":"complete"}</pre><p>8 entities · 3 relationships · 5 roles · 1 workflow · 4 pages · 7 permissions</p></article></div>
+  <h2>Workflow state histories</h2><div class="grid"><article class="card"><h3>Quotation</h3><p>inquiry → quotation_draft v1 / 1400.00 → internal_review → approved_for_sending → sent_to_customer → signed customer view → revision_requested</p></article><article class="card"><h3>Inventory</h3><p>draft v1 → approved → ordered v3 → partially_received v4 (4 received, 6 remaining) → received v5 → closed v6</p></article></div>
+  <h2>API excerpts</h2><pre>POST /api/inventory/purchase-orders/&lt;id&gt;/receive
+{"locationId":"&lt;scoped-id&gt;","receipts":{"&lt;line-id&gt;":4},"expectedVersion":3}
+→ {"status":"partially_received","version":4}
+
+POST /api/public/quotation/customer/&lt;signed-token&gt;/decision
+{"status":"revision_requested","expectedVersion":4}
+→ {"status":"revision_requested"}</pre>
+  <h2>Artifact graph</h2><pre>public_inquiry.editorial-hero → public route → quotation_inquiry
+inquiry_queue.quotation-editor → staff route → quotation API → quotation_lifecycle
+quotation.send-action → transition API → manager permission
+customer_quotation.price-sidebar → signed customer route → customer permission
+inventory_dashboard.low-stock-queue → stock_level → low-stock API
+inventory.receive-items → purchase_order_line → receiving workflow → stock_employee</pre>
+  <h2>Browser-observed states</h2><pre>heading "revision requested"
+paragraph "Your response was recorded."
+
+article "Honeycrisp Apples3 / 5"
+article "partially_received · 20.00 · v4"
+option "6 remaining"
+article "closed · 20.00 · v6"
+movement history: receiving 6, receiving 4, adjustment -7, initial 10</pre>
+  <h2>Security failure evidence</h2><div class="grid"><article class="card"><h3>Rejected inputs</h3><p>Duplicate identifiers, script-bearing plan content, invalid transitions, stale versions, cross-tenant/project references, tampered signed links, over-receipts, oversized/rate-limited public payloads, and disallowed network targets.</p></article><article class="card"><h3>Contained output</h3><p>Mocked sandbox results are schema checked. Bearer tokens and secrets are redacted from persisted failure and event text.</p></article></div>
+  <h2>Test output</h2><pre>Focused architecture/workflow/security/migration:
+28 passed, 82 warnings, 12 subtests passed in 50.45s
+
+Full suite:
+144 passed, 5 skipped, 341 warnings, 41 subtests passed in 237.64s</pre>
+  <h2>Routes exercised</h2><pre>/
+Studio plan creation / approval / implementation generation
+/generated/build-a-travel-agency-system-where-customers-request-trips-agents-prepare-and-r
+/generated/build-a-travel-agency-system-where-customers-request-trips-agents-prepare-and-r/manage
+/quotation/customer/&lt;signed-token&gt;
+/generated/build-a-grocery-inventory-system-with-suppliers-stock-receiving-low-stock-aler/manage</pre><p>Default in-app desktop viewport was used; Studio desktop/tablet/mobile preview selectors were exercised. Capture targets below define exact reproducible viewport dimensions.</p>
+  <h2>Screenshot evidence</h2><div class="shot">Screenshot capture verified in browser session but binary export unavailable in current tool environment.</div>
+  <table><thead><tr><th>Filename</th><th>Route / role</th><th>Viewport</th><th>Visible state / reproduction</th></tr></thead><tbody>
+    <tr><td>01-quotation-public-desktop.png</td><td>travel public route / public</td><td>1440×900</td><td>Open route; editorial hero and inquiry form visible.</td></tr>
+    <tr><td>02-quotation-inquiry-confirmation-mobile.png</td><td>travel public route / public</td><td>390×844</td><td>Submit name, email, trip; capture inquiry confirmation.</td></tr>
+    <tr><td>03-quotation-staff-sent.png</td><td>travel /manage / owner-agent</td><td>1440×900</td><td>Approve then send; open quote showing version, total and customer link.</td></tr>
+    <tr><td>04-quotation-customer-revision.png</td><td>signed quotation / customer</td><td>390×844</td><td>Click Request revision; capture recorded response.</td></tr>
+    <tr><td>05-inventory-low-stock.png</td><td>inventory /manage / owner</td><td>1440×900</td><td>Record +10 and -7; show 3 / 5 and history.</td></tr>
+    <tr><td>06-inventory-partial-receipt.png</td><td>inventory /manage / stock employee</td><td>1440×900</td><td>Receive four of ten; show version 4 and six remaining.</td></tr>
+    <tr><td>07-inventory-closed.png</td><td>inventory /manage / owner</td><td>1440×900</td><td>Receive remaining six and close; show version 6.</td></tr>
+    <tr><td>08-studio-plan-coverage.png</td><td>Studio / owner</td><td>1440×900</td><td>Generate inventory prompt; approve; show artifact graph and full coverage.</td></tr>
+    <tr><td>09-studio-visual-edit-mobile.png</td><td>Studio / owner</td><td>390×844</td><td>Select low-stock artifact; enter behavioral edit; preview impact.</td></tr>
+  </tbody></table>
+  <p class="ok">Exact blocker: Browser screenshots were visually verified but could not be exported as binary PNG files with the available tool interface.</p>
+</main>
+</body>
+</html>
