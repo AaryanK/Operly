@@ -101,7 +101,10 @@ def plan_artifact_graph(plan:dict,project_id:str|None=None,project_version:int=1
 
 
 async def create_project_from_plan(db,tenant_id,user_id,plan_row,plan):
-    pack=plan.primaryArchitecture
+    # Optional verified primitive reuse occurs only after the requirement-led
+    # plan has passed global validation. It never determines the plan itself.
+    text=plan_row.prompt.lower()
+    pack="quotation" if "quotation" in text or "quote" in text else "inventory" if "inventory" in text and "purchase order" in text else "field_service" if any(x in text for x in ("locksmith","bicycle rescue","mobile service")) else "custom"
     if pack=="field_service":
         row=await create_project(db,tenant_id,user_id,plan_row.prompt);row.plan_id=plan_row.id;row.approved_plan_version=plan_row.approved_version;row.architecture_pack=pack;await db.commit();await db.refresh(row);return row
     base=slugify(plan.projectName) or f"{pack}-application";slug=base;suffix=2

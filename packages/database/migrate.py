@@ -136,7 +136,7 @@ def inspect_supported_schema(url:str)->str:
         with engine.connect() as connection:
             inspector=inspect(connection);tables=set(inspector.get_table_names())-{"alembic_version"}
             current=MigrationContext.configure(connection).get_current_revision()
-            if current not in {None,"0001_operly_core","0002_dashboard_studio","0003_application_builder_core","0004_managed_record_runtime","0005_custom_software_vertical_slice","0006_architecture_first_plans","0007_architecture_pack_runtimes","0008_plan_bound_projects","0009_sandbox_job_lifecycle","0010_isolated_runner_records"}:raise RuntimeError("Unsupported Alembic revision")
+            if current not in {None,"0001_operly_core","0002_dashboard_studio","0003_application_builder_core","0004_managed_record_runtime","0005_custom_software_vertical_slice","0006_architecture_first_plans","0007_architecture_pack_runtimes","0008_plan_bound_projects","0009_sandbox_job_lifecycle","0010_isolated_runner_records","0011_recursive_planning"}:raise RuntimeError("Unsupported Alembic revision")
             if not tables:return "fresh"
             if not {"tenants","app_users"}<=tables:raise RuntimeError("Unsupported schema: core identity tables are incomplete")
             modeled={table.name:table for table in Base.metadata.tables.values()}

@@ -5,6 +5,7 @@ import re
 from packages.custom_software.architectures import architecture_plan
 from packages.custom_software.schema import SoftwarePlan
 from packages.custom_software.synthesis import identify_domain, synthesize
+from packages.custom_software.recursive_planning import build_recursive_plan
 
 DESIGNS=["editorial","utility","dashboard_led","conversion_focused","image_led","minimal","modular_grid","asymmetric"]
 
@@ -54,6 +55,65 @@ def _inventory():
     return roles,entities,relationships,wf,surfaces
 
 def build_software_plan(prompt:str)->SoftwarePlan:
+    recursive=build_recursive_plan(prompt)
+    # The compatibility envelope is derived from the requirement graph.  It
+    # does not select or populate an application template.
+    explicit_roles=[]
+    role_match=re.search(r"(?:roles?(?:\s+exactly)?|preserve(?:\s+these)?\s+roles(?:\s+exactly)?)\s*[:—-]\s*([^\n.]+)",prompt,re.I)
+    if role_match:
+        explicit_roles=[x.strip(" -*") for x in re.split(r"[;,]",role_match.group(1)) if x.strip(" -*")]
+    role_block=re.search(r"(?:users and roles|roles)\s*\n+(.*?)(?:\n\s*\n|\n#|\Z)",prompt,re.I|re.S)
+    if role_block:
+        bullets=[re.sub(r"^\s*[-*]\s*","",x).strip() for x in role_block.group(1).splitlines() if re.match(r"^\s*[-*]\s+",x)]
+        if bullets:explicit_roles=bullets
+    if not explicit_roles: explicit_roles=["Administrator","Authenticated User"]
+    role_ids=[];roles=[]
+    for name in explicit_roles:
+        rid=re.sub(r"[^a-z0-9]+","_",name.lower()).strip("_")
+        if rid and rid not in role_ids:
+            role_ids.append(rid);roles.append(_role(rid,name,["workspace:read","domain:operate"],scope="all" if rid=="administrator" else "tenant"))
+    # Data concepts are not inferred from a closed catalog.  Each persisted
+    # data-model requirement gets an explicit contract entity.
+    entity_names=[]
+    for req in recursive["requirementLedger"]:
+        if req["category"] in {"data model","persistence component"}:
+            candidate=req["normalizedMeaning"][:80]
+            entity_names.append(candidate)
+    if not entity_names: entity_names=["Domain State"]
+    entities=[]
+    for index,name in enumerate(entity_names[:30],1):
+        eid=f"domain_record_{index}"
+        entities.append(_entity(eid,name,role_ids))
+    leaves=[x for x in recursive["planTree"] if x["status"]=="implementation_ready"]
+    capabilities=[{"id":f"leaf_{i}","category":x["nodeType"],"description":x["title"],
+        "requirement":x["objective"],"implementation":"generate_engine" if x["nodeType"] in {"domain engine","algorithm","state machine"} else "generate_component",
+        "status":"planned"} for i,x in enumerate(leaves,1)]
+    tests=[test for x in leaves for test in x["requiredTests"]]
+    name=re.sub(r"[^A-Za-z0-9 &-]+"," ",prompt).strip().split(".")[0][:80]
+    plan={"projectName":name or "Generated Software","summary":prompt.strip(),"productCategory":"custom software",
+        "targetUsers":[x["name"] for x in roles],"businessDomain":"user-defined","primaryGoal":"Construct the requested outcome from validated requirements",
+        "successCriteria":["all mandatory requirements mapped","all leaves implementation-ready","global validation passed"],
+        "primaryArchitecture":"llm_directed_recursive","secondaryArchitectures":[],"implementationMode":"sandbox_generated",
+        "confidence":0.0,"rationale":"Architecture is constructed from a recursive requirement graph; no application-type template is selected.",
+        "roles":roles,"entities":entities,"relationships":[],"workflows":[],"surfaces":[],
+        "backendCapabilities":[x["id"] for x in capabilities],"integrations":[],"design":_design(prompt,"custom"),
+        "runtime":{"strategy":"sandbox_generated","reason":"Validated implementation leaves require isolated source generation","primaryPack":None,"secondaryPacks":[]},
+        "securityConstraints":["tenant isolation","least privilege","generated code outside control plane","approval gated by global validation"],
+        "unsupportedRequirements":[],"risks":["model provider availability and generated-code verification"],"testRequirements":tests,
+        "deploymentRequirements":["migration review","preview acceptance","human approval","atomic deployment","rollback"],
+        "effectiveRequirements":[prompt.strip()],"capabilities":capabilities,
+        "architectureNodes":[{"id":x["id"],"nodeType":x["nodeType"],"name":x["title"],"inputs":x["inputs"],"outputs":x["outputs"],"invariants":x["constraints"],"implementationRequired":True} for x in leaves],
+        "stack":{"frontend":"model-selected","backend":"model-selected","database":"model-selected","runtime":"python-stdlib-web","reasons":["runtime mechanics selected after validated leaf contracts"],"dependencies":[]},
+        "requirementEvidence":[{"requirementId":x["id"],"requirement":x["normalizedMeaning"],"artifactIds":x["relatedArtifactIds"],"testIds":x["relatedTestIds"],"status":"planned"} for x in recursive["requirementLedger"]],
+        "reusedPrimitives":[],"generatedComponents":[x["id"] for x in capabilities],
+        "provenance":{"originalPrompt":prompt.strip(),"revisions":[],"generatedPrompts":[],"redactionPolicy":"secrets and credentials are never persisted"},**recursive}
+    lower_prompt=prompt.lower()
+    for integration in ("whatsapp","email","stripe","slack"):
+        if integration in lower_prompt:plan["integrations"].append(integration)
+    return SoftwarePlan.model_validate(plan)
+
+    # Legacy template implementations remain below only for already persisted
+    # project compatibility; they are unreachable from new planning requests.
     classification=architecture_plan(prompt)
     synthesized=synthesize(prompt)
     synthesized_domain,fixture,_=identify_domain(prompt)
@@ -96,10 +156,10 @@ def revise_plan(current:SoftwarePlan,request:str)->SoftwarePlan:
     revisions=[*provenance.get("revisions",[]),request.strip()]
     # Re-synthesis makes revisions structurally effective. The immutable prior
     # plan version remains in SoftwarePlanVersion.
-    revision_domain,revision_fixture,_=identify_domain(request)
-    effective_prompt=request if revision_fixture else (original+"\nRevision requirements:\n"+"\n".join(revisions))
+    effective_prompt=original+"\nRevision requirements:\n"+"\n".join(revisions)
     updated=build_software_plan(effective_prompt)
-    data=updated.model_dump();data["summary"]=original;data["effectiveRequirements"]=[original,*revisions]
+    recursive=build_recursive_plan(effective_prompt,current.planTree[0].version+1 if current.planTree else 2,current.model_dump())
+    data=updated.model_dump();data.update(recursive);data["summary"]=original;data["effectiveRequirements"]=[original,*revisions]
     data["provenance"]={**provenance,"originalPrompt":original,"revisions":revisions,"generatedPrompts":provenance.get("generatedPrompts",[]),"redactionPolicy":"secrets and credentials are never persisted"}
     data["rationale"] += f" Structurally regenerated for revision {len(revisions)}."
     return SoftwarePlan.model_validate(data)

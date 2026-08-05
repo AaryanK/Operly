@@ -1,5 +1,5 @@
 """Strict, non-executable contracts for architecture-first software generation."""
-from typing import Literal
+from typing import Literal, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -148,6 +148,103 @@ class RequirementEvidence(Strict):
     status: Literal["planned","implemented","verified","partial","failed","blocked"] = "planned"
 
 
+class RequirementLedgerItem(Strict):
+    id: str
+    originalSource: str
+    exactText: str
+    normalizedMeaning: str
+    mandatory: bool = True
+    category: str
+    acceptanceCriteria: list[str]
+    relatedPlanNodeIds: list[str] = []
+    relatedArtifactIds: list[str] = []
+    relatedTestIds: list[str] = []
+    coverageStatus: Literal["unplanned","planned","partially_planned","implementation_ready","implemented","tested","verified","conflicted","waived_by_user"] = "unplanned"
+    verificationStatus: str = "unverified"
+    planningMode: Literal["live_llm","deterministic_test","unavailable"] = "deterministic_test"
+    explicitTerms: list[str] = []
+    exclusions: list[str] = []
+    ambiguities: list[str] = []
+    conflicts: list[str] = []
+    assumptions: list[str] = []
+
+
+class PlanNodeValidation(Strict):
+    readyForImplementation: bool
+    missingInformation: list[str] = []
+    ambiguousBehavior: list[str] = []
+    missingInputs: list[str] = []
+    missingOutputs: list[str] = []
+    missingInvariants: list[str] = []
+    missingDependencies: list[str] = []
+    missingFailureHandling: list[str] = []
+    missingSecurityRules: list[str] = []
+    missingPersistenceBehavior: list[str] = []
+    missingTests: list[str] = []
+    conflicts: list[str] = []
+    recommendedDecompositionAreas: list[str] = []
+
+
+class RecursivePlanNode(Strict):
+    id: str
+    parentId: str | None = None
+    originalRequirementIds: list[str]
+    title: str
+    objective: str
+    description: str
+    nodeType: str
+    inputs: list[str]
+    outputs: list[str]
+    dependencies: list[str]
+    constraints: list[str]
+    securityRequirements: list[str]
+    failureCases: list[str]
+    acceptanceCriteria: list[str]
+    requiredArtifacts: list[str]
+    requiredTests: list[str]
+    status: Literal["created","planning","awaiting_validation","validation_failed","decomposition_required","implementation_ready","blocked","generating","generated","testing","test_failed","repairing","verified","integrated","completed"]
+    validation: PlanNodeValidation
+    implementationEvidence: list[str] = []
+    childIds: list[str] = []
+    version: int = 1
+    provenance: dict = {}
+    planningMode: Literal["live_llm","deterministic_test","unavailable"] = "deterministic_test"
+    responsibilities: list[str] = []
+    stateEffects: list[str] = []
+    invariants: list[str] = []
+    persistenceBehavior: list[str] = []
+    refinementCount: int = 0
+
+
+class PlanningMetrics(Strict):
+    mandatoryRequirementsMapped: int
+    mandatoryRequirementsTotal: int
+    planNodesReady: int
+    planNodesTotal: int
+    executableTestsMapped: int
+    unresolvedValidatorFindings: int
+    dependencyComplete: bool
+    globalValidationPassed: bool
+    approvalBlockedReasons: list[str] = []
+    planningMode: Literal["live_llm","deterministic_test","unavailable"] = "deterministic_test"
+    planningCallsUsed: int = 0
+    inputTokensUsed: int = 0
+    outputTokensUsed: int = 0
+    blockedNodes: int = 0
+    nodesRequiringDecomposition: int = 0
+    testSpecificationCoverage: int = 0
+
+
+class SemanticPlanDiff(Strict):
+    addedRequirementIds: list[str] = []
+    modifiedRequirementIds: list[str] = []
+    removedRequirementIds: list[str] = []
+    addedNodeIds: list[str] = []
+    invalidatedNodeIds: list[str] = []
+    preservedNodeIds: list[str] = []
+    structuralChange: bool
+
+
 class SoftwarePlan(Strict):
     schemaVersion: Literal[1] = 1
     projectName: str
@@ -184,6 +281,13 @@ class SoftwarePlan(Strict):
     reusedPrimitives: list[str] = []
     generatedComponents: list[str] = []
     provenance: dict = {}
+    requirementLedger: list[RequirementLedgerItem] = []
+    planTree: list[RecursivePlanNode] = []
+    planningMetrics: PlanningMetrics | None = None
+    semanticDiff: SemanticPlanDiff | None = None
+    globalValidation: dict = {}
+    planningMode: Literal["live_llm","deterministic_test","unavailable"] = "deterministic_test"
+    planningBudget: dict[str, Any] = {}
 
     @model_validator(mode="after")
     def graph_integrity(self):

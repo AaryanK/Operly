@@ -40,7 +40,7 @@ class BrandTests(unittest.TestCase):
 
     def test_agentic_generation_plan_is_bounded(self):
         plan=generation_plan("Create an online store with checkout and orders")
-        self.assertEqual(plan["framework"],"nextjs-postgres");self.assertEqual(plan["policy"]["network"],"deny_by_default");self.assertFalse(plan["policy"]["productionDeploy"])
+        self.assertEqual(plan["framework"],"python-stdlib-web");self.assertEqual(plan["policy"]["network"],"deny_by_default");self.assertFalse(plan["policy"]["productionDeploy"])
 
 
 class ServiceDomainTests(unittest.IsolatedAsyncioTestCase):

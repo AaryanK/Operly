@@ -13,12 +13,14 @@ from packages.custom_software.architectures import architecture_plan, catalog as
 from packages.custom_software.sandbox import SandboxFailure, SandboxRunner, SandboxUnavailable, generation_plan
 from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, GenerateProjectInput, PlanApprovalInput, PlanRequestInput, PlanRevisionInput, RunnerBuildInput, RunnerRepairInput, ServiceRequestInput, TransitionInput, VisualChangeInput
 from packages.custom_software.plan_service import PlanConflict, approve, create_plan, owned_plan, plan_json, plan_version, revise
+from packages.custom_software.live_planning import PlannerUnavailable, PlanningBlocked
 from packages.custom_software.packs import pack_manifest, PACKS
 from packages.custom_software.coverage import implementation_coverage
 from packages.custom_software.construction import build_preview_evidence
 from packages.custom_software.service import ConflictError, DomainError, apply_visual_change, create_project, create_project_from_plan, create_request, list_requests, plan_artifact_graph, propose_visual_change, public_project, rollback_visual_change, transition_request
 from packages.database.custom_software_models import GeneratedProject, GeneratedProjectChangeSet, ServiceRequest
 from packages.database.custom_software_models import GeneratedSourceBundle,RunnerArtifactRecord,RunnerBuildRecord,RunnerPreviewRecord
+from packages.database.custom_software_models import PlanningModelInvocation
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter
 from packages.custom_software.runner_service import RunnerStateError,active_preview,build_events,build_json,owned_build,refresh_build,request_repair,stop_preview,submit_build
 import aiohttp
@@ -44,7 +46,9 @@ async def packs(auth:AuthContext=Depends(get_auth_context)):return [pack_manifes
 @router.post("/api/custom-software/plans")
 async def create_software_plan(payload:PlanRequestInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     if auth.role!="owner":raise HTTPException(403,"Only owners can create software plans")
-    row,version,plan=await create_plan(db,auth.tenant.id,auth.user.id,payload.prompt)
+    try: row,version,plan=await create_plan(db,auth.tenant.id,auth.user.id,payload.prompt)
+    except PlannerUnavailable as error: raise HTTPException(503,detail={"code":"planner_unavailable","message":str(error)})
+    except PlanningBlocked as error: raise HTTPException(422,detail={"code":"planning_blocked","message":str(error)})
     return plan_json(row,version,plan)
 
 
@@ -118,6 +122,25 @@ async def create_runner_build(payload:RunnerBuildInput,auth:AuthContext=Depends(
     if auth.role!="owner":raise HTTPException(403,"Only owners can submit isolated builds")
     try:row=await owned_plan(db,auth.tenant.id,payload.planId);_,plan=await plan_version(db,row,payload.approvedVersion)
     except LookupError as error:raise HTTPException(404,str(error))
+
+
+@router.get("/api/custom-software/plans/{plan_id}/requirements")
+async def get_plan_requirements(plan_id:str,version:int|None=None,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:row=await owned_plan(db,auth.tenant.id,plan_id);_,plan=await plan_version(db,row,version);return [x.model_dump() for x in plan.requirementLedger]
+    except LookupError as error:raise HTTPException(404,str(error))
+
+
+@router.get("/api/custom-software/plans/{plan_id}/tree")
+async def get_plan_tree(plan_id:str,version:int|None=None,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:row=await owned_plan(db,auth.tenant.id,plan_id);_,plan=await plan_version(db,row,version);return {"nodes":[x.model_dump() for x in plan.planTree],"metrics":plan.planningMetrics.model_dump() if plan.planningMetrics else {},"globalValidation":plan.globalValidation,"semanticDiff":plan.semanticDiff.model_dump() if plan.semanticDiff else {}}
+    except LookupError as error:raise HTTPException(404,str(error))
+
+@router.get("/api/custom-software/plans/{plan_id}/provenance")
+async def get_plan_provenance(plan_id:str,version:int|None=None,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    from sqlalchemy import select
+    row=await owned_plan(db,auth.tenant.id,plan_id); number=version or row.current_version
+    records=(await db.scalars(select(PlanningModelInvocation).where(PlanningModelInvocation.plan_id==row.id,PlanningModelInvocation.tenant_id==auth.tenant.id,PlanningModelInvocation.plan_version==number).order_by(PlanningModelInvocation.created_at,PlanningModelInvocation.attempt))).all()
+    return [{"id":x.id,"role":x.role,"nodeId":x.node_id,"planningMode":x.planning_mode,"provider":x.provider,"modelId":x.model_id,"requestId":x.request_id,"contextDigest":x.context_digest,"promptVersion":x.prompt_version,"attempt":x.attempt,"structuredOutput":json.loads(x.structured_output_json),"validationErrors":json.loads(x.validation_errors_json),"retryHistory":json.loads(x.retry_history_json),"latencyMs":x.latency_ms,"inputTokens":x.input_tokens,"outputTokens":x.output_tokens,"failureClassification":x.failure_classification,"createdAt":x.created_at.isoformat()} for x in records]
     if row.status!="approved" or row.approved_version!=payload.approvedVersion:raise HTTPException(409,"Build submission requires the approved plan version")
     build=await submit_build(db,auth.tenant.id,auth.user.id,row,plan,payload.idempotencyKey)
     result=build_json(build)

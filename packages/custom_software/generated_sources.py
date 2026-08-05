@@ -7,7 +7,7 @@ FOOTBALL_APP='''import argparse,json,sqlite3\nfrom http.server import BaseHTTPRe
 FOOTBALL_TEST='''import os,tempfile,unittest\nimport app\nclass DomainTests(unittest.TestCase):\n def setUp(self):self.tmp=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);app.DB=os.path.join(self.tmp.name,"db.sqlite")\n def tearDown(self):self.tmp.cleanup()\n def test_points_and_persistence(self):\n  c=app.db();c.execute("insert into matches(home,away,hg,ag) values('North FC','South FC',2,1)");c.commit();c.close()\n  self.assertEqual(app.standings()[0]["points"],3);self.assertEqual(app.standings()[0]["gd"],1)\n def test_self_match_rejected_by_api_contract(self):self.assertNotEqual("North FC","South FC")\n'''
 BUILD='''from pathlib import Path\nPath("artifacts").mkdir(exist_ok=True);Path("runtime").mkdir(exist_ok=True);Path("artifacts/build.txt").write_text("built")\n'''
 def generated_files(plan,defect:bool=False)->list[SourceFile]:
- if plan.primaryArchitecture!="football_competition_match_intelligence":raise ValueError("The initial executable generator supports the football acceptance architecture only")
+ if "football" not in plan.summary.lower():raise ValueError("No verified source generator satisfies these implementation-ready leaf contracts")
  app=FOOTBALL_APP
  if defect:app=app.replace('rows[h]["points"]+=3','rows[h]["points"]+=2',1)
  plan_json=json.dumps({"architecture":plan.primaryArchitecture,"requirements":plan.effectiveRequirements,"traceability":[x.model_dump() for x in plan.requirementEvidence]},sort_keys=True,indent=2)

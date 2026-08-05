@@ -49,10 +49,45 @@ class SoftwarePlanVersion(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("software_plans.id", ondelete="CASCADE"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     plan_json: Mapped[str] = mapped_column(Text)
+    requirement_ledger_json: Mapped[str] = mapped_column(Text, default="[]")
+    plan_tree_json: Mapped[str] = mapped_column(Text, default="[]")
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    semantic_diff_json: Mapped[str] = mapped_column(Text, default="{}")
     revision_request: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("app_users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     __table_args__ = (UniqueConstraint("plan_id", "version", name="uq_software_plan_version"),)
+
+class PlanningModelInvocation(Base):
+    __tablename__ = "planning_model_invocations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("software_plans.id", ondelete="CASCADE"), index=True)
+    plan_version: Mapped[int] = mapped_column(Integer, index=True)
+    node_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    role: Mapped[str] = mapped_column(String(40), index=True)
+    planning_mode: Mapped[str] = mapped_column(String(30), index=True)
+    provider: Mapped[str] = mapped_column(String(80)); model_id: Mapped[str] = mapped_column(String(160))
+    request_id: Mapped[str] = mapped_column(String(160), index=True); context_digest: Mapped[str] = mapped_column(String(64), index=True)
+    prompt_version: Mapped[str] = mapped_column(String(40), default="v1"); attempt: Mapped[int] = mapped_column(Integer, default=1)
+    structured_output_json: Mapped[str] = mapped_column(Text, default="{}"); raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_errors_json: Mapped[str] = mapped_column(Text, default="[]"); retry_history_json: Mapped[str] = mapped_column(Text, default="[]")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0); input_tokens: Mapped[int] = mapped_column(Integer, default=0); output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    failure_classification: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    parent_invocation_id: Mapped[str | None] = mapped_column(ForeignKey("planning_model_invocations.id"), nullable=True)
+    retry_of_id: Mapped[str | None] = mapped_column(ForeignKey("planning_model_invocations.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class PlanningWorkItem(Base):
+    __tablename__ = "planning_work_items"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True); plan_id: Mapped[str] = mapped_column(ForeignKey("software_plans.id", ondelete="CASCADE"), index=True)
+    plan_version: Mapped[int] = mapped_column(Integer); node_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    work_type: Mapped[str] = mapped_column(String(40), index=True); priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    state: Mapped[str] = mapped_column(String(30), default="queued", index=True); attempts: Mapped[int] = mapped_column(Integer, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}"); findings_json: Mapped[str] = mapped_column(Text, default="[]"); blocked_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True); created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow); updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("plan_id", "plan_version", "node_id", "work_type", name="uq_planning_work_item"),)
 
 class SandboxGenerationJob(Base):
     __tablename__="sandbox_generation_jobs"

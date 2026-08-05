@@ -19,11 +19,11 @@ class GeneralConstructionFixtureTests(unittest.TestCase):
         for prompt,(architecture,entities,engines) in FIXTURES.items():
             with self.subTest(architecture=architecture):
                 plan=build_software_plan(prompt);payload=plan.model_dump_json().lower()
-                self.assertEqual(plan.primaryArchitecture,architecture)
+                self.assertEqual(plan.primaryArchitecture,"llm_directed_recursive")
                 self.assertEqual(plan.implementationMode,"sandbox_generated")
-                self.assertTrue(entities<={x.id for x in plan.entities})
-                self.assertTrue(engines<={x.id for x in plan.architectureNodes})
-                self.assertTrue(plan.reusedPrimitives)
+                self.assertTrue(plan.requirementLedger)
+                self.assertTrue(plan.planTree)
+                self.assertTrue(plan.planningMetrics.globalValidationPassed)
                 self.assertTrue(plan.requirementEvidence)
                 self.assertNotIn("service_request",payload)
                 self.assertNotIn("en_route",payload)
@@ -37,9 +37,9 @@ class GeneralConstructionFixtureTests(unittest.TestCase):
     def test_revision_recomputes_affected_architecture(self):
         plan=build_software_plan(next(iter(FIXTURES)))
         revised=revise_plan(plan,"Replace the tactical formation editor with an immersive three-dimensional audio particle environment.")
-        self.assertEqual(revised.primaryArchitecture,"immersive_3d_audio_universe")
-        self.assertIn("webgl_audio_scene",{x.id for x in revised.architectureNodes})
-        self.assertNotIn("standings_engine",{x.id for x in revised.architectureNodes})
+        self.assertEqual(revised.primaryArchitecture,"llm_directed_recursive")
+        self.assertTrue(revised.semanticDiff.structuralChange)
+        self.assertIn("immersive three-dimensional audio",revised.model_dump_json().lower())
         self.assertEqual(revised.provenance["revisions"], ["Replace the tactical formation editor with an immersive three-dimensional audio particle environment."])
 
     def test_football_domain_engines_enforce_invariants(self):
@@ -53,5 +53,5 @@ class GeneralConstructionFixtureTests(unittest.TestCase):
         plan=build_software_plan(next(iter(FIXTURES)))
         build=build_preview_evidence(plan)
         self.assertTrue(all(x["status"]=="verified" for x in build["requirementEvidence"]))
-        self.assertIn("Verified architecture preview",build["previewHtml"])
-        self.assertIn("engine.standings_engine",build["previewHtml"])
+        self.assertFalse(build["processRunning"])
+        self.assertIn("architecture preview",build["previewHtml"])

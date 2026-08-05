@@ -17,17 +17,39 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 class PlannerTests(unittest.IsolatedAsyncioTestCase):
-    def test_acceptance_classification_and_negative_dispatch(self):
-        cases={"Build a travel agency system where agents prepare and revise quotations and managers approve them":"quotation","Build a grocery inventory system with suppliers stock receiving low-stock alerts and purchase orders":"inventory","Build a 24-hour emergency locksmith business":"field_service","Create a membership portal with paid plans renewals events and member-only resources":"membership","Create a collaborative music composition workspace with real-time editing and audio arrangement versioning":"custom"}
-        for prompt,expected in cases.items():
+    def test_new_requests_never_select_an_application_template(self):
+        cases=["Build a travel agency system where agents prepare and revise quotations and managers approve them","Build a grocery inventory system with suppliers stock receiving low-stock alerts and purchase orders","Build a 24-hour emergency locksmith business","Create a membership portal with paid plans renewals events and member-only resources","Create a collaborative music composition workspace with real-time editing and audio arrangement versioning"]
+        for prompt in cases:
             with self.subTest(prompt=prompt):
-                plan=build_software_plan(prompt);self.assertEqual(plan.primaryArchitecture,expected)
-                if expected!="field_service":self.assertNotIn("dispatcher",plan.model_dump_json().lower());self.assertNotIn("en_route",plan.model_dump_json().lower())
-        self.assertEqual(build_software_plan(cases.popitem()[0]).schemaVersion,1)
+                plan=build_software_plan(prompt);self.assertEqual(plan.primaryArchitecture,"llm_directed_recursive")
+                self.assertTrue(plan.requirementLedger);self.assertTrue(plan.planTree);self.assertTrue(plan.planningMetrics.globalValidationPassed)
+        self.assertEqual(build_software_plan(cases[-1]).schemaVersion,1)
 
-    def test_ambiguous_is_low_confidence_custom(self):
+    def test_unknown_domain_triggers_recursive_planning(self):
         plan=build_software_plan("Make unusual software that helps our team do a completely novel thing")
-        self.assertEqual(plan.primaryArchitecture,"custom");self.assertLess(plan.confidence,.5);self.assertEqual(plan.implementationMode,"sandbox_generated")
+        self.assertEqual(plan.primaryArchitecture,"llm_directed_recursive");self.assertEqual(plan.implementationMode,"sandbox_generated")
+        self.assertGreater(plan.planningMetrics.planNodesReady,0)
+
+    def test_forbidden_field_service_terms_are_exclusions_not_routing_signals(self):
+        plan=build_software_plan("Create a linguistic simulator. Do not use field service, technicians, service requests, or a dispatch queue.")
+        self.assertEqual(plan.primaryArchitecture,"llm_directed_recursive")
+        self.assertNotIn('"primaryArchitecture":"field_service"',plan.model_dump_json())
+
+    def test_novel_domains_have_requirement_ledgers_validated_leaves_and_tests(self):
+        prompts=[
+            "Living Language Observatory with proto-languages, ordered sound-change rules, deterministic simulation, language-family graph, and corpus transformation provenance.",
+            "Dream-logic narrative simulator with symbolic world state, nonlinear causality, constrained scene transitions, and narrative consistency validation.",
+            "Biological ecosystem co-evolution laboratory with species genomes, environmental pressures, reproduction, mutation, food webs, and a seeded deterministic simulation.",
+            "Collaborative choreography notation system with movement vocabulary, timelines, spatial formations, performer synchronization, and playback visualization.",
+            "Mathematical proof dependency explorer with definitions, axioms, lemmas, theorems, a dependency graph, and proof-gap detection.",
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                plan=build_software_plan(prompt);blob=plan.model_dump_json().lower()
+                self.assertEqual(plan.primaryArchitecture,"llm_directed_recursive")
+                self.assertTrue(all(x.relatedPlanNodeIds and x.relatedTestIds for x in plan.requirementLedger if x.mandatory))
+                self.assertTrue(any(not x.validation.readyForImplementation and x.childIds for x in plan.planTree))
+                self.assertNotIn('"primaryarchitecture":"field_service"',blob)
 
     def test_invalid_graph_and_executable_content_rejected(self):
         data=build_software_plan("Build a grocery inventory system with stock and suppliers").model_dump();data["roles"].append(data["roles"][0].copy())

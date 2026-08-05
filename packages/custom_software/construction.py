@@ -22,6 +22,7 @@ def artifact_graph(plan)->dict:
     for capability in plan.capabilities:
         if capability.id not in existing:nodes.append({"id":f"capability.{capability.id}","type":capability.implementation,"name":capability.description,"source":f"operly/primitives/{capability.id}" if capability.implementation=="reuse_primitive" else f"generated/components/{capability.id}.tsx"})
     for requirement in plan.requirementEvidence:
+        for artifact in requirement.artifactIds:nodes.append({"id":f"artifact.{artifact}","type":"contract_artifact","name":artifact,"source":f"generated/contracts/{artifact}.json"})
         for test in requirement.testIds:nodes.append({"id":test,"type":"test","name":test,"source":f"generated/tests/{test}.py"})
     return {"schemaVersion":2,"nodes":nodes,"edges":[{"from":f"ui.{s.id}","to":f"model.{entity}"} for s in plan.surfaces for entity in s.relatedEntities],"selectionMetadata":{"planVersion":"approved","dependencyTraversal":True}}
 
