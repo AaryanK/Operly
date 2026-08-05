@@ -34,7 +34,7 @@
 
   async function renderAssistant(openConversationId = null) {
     conversationId = openConversationId;
-    const conversations = await loadConversations();
+    const [conversations, applications] = await Promise.all([loadConversations(), api("/application-builder/applications")]);
 
     document.querySelector("#content").innerHTML = `
       <div class="page-head">
@@ -66,6 +66,7 @@
             </div>
           </div>
           <div>
+            ${applications.length ? `<label class="ai-application-picker">Application<select id="ai-application">${applications.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}</select></label>` : ""}
             <form id="ai-form" class="ai-composer">
               <textarea id="ai-input" placeholder="Example: Add Ram as a contact and create a $500 lead." required></textarea>
               <button class="button primary">Send</button>
@@ -127,7 +128,8 @@
         method: "POST",
         body: JSON.stringify({
           message: text,
-          conversation_id: conversationId
+          conversation_id: conversationId,
+          application_id: document.querySelector("#ai-application")?.value || null
         })
       });
 

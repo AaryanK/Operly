@@ -1,5 +1,7 @@
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker,create_async_engine
@@ -9,10 +11,12 @@ from packages.database import models,business_models,agent_models,operations_mod
 from packages.database.models import Tenant,AppUser,TenantMember
 from packages.database.application_builder_models import ApplicationVersion
 from packages.application_builder.schema import ApplicationManifest,BuilderContext,ComponentDefinition,ProposalRequest
-from packages.application_builder.service import ApplicationBuilderService,BuilderError,UnsupportedRequestError,plan_request
+from packages.application_builder.service import ApplicationBuilderService,BuilderError,UnsupportedRequestError,detect_intent,plan_request,safe_log_text
 from packages.application_builder.ai import ApplicationBuilderAI
 from packages.application_builder.renderer import render_application
 from apps.api.session import LOGIN_MAX_ATTEMPTS,clear_login_attempts,login_allowed
+from packages.business_brain.agent import AgentService
+from packages.business_brain.types import AgentInput
 
 class SchemaTests(unittest.TestCase):
     def context(self,scope="application",selected=None):return BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope=scope,selectedIds=selected or [],userRole="owner")
@@ -31,6 +35,16 @@ class SchemaTests(unittest.TestCase):
     def test_authentication_is_capability_not_form_only(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"});plan=plan_request(ProposalRequest(message="Add a secure login page",context=self.context()),manifest);after=plan["after"]
         self.assertTrue({"authentication","audit","permissions"}<={x["moduleId"] for x in after["modules"]});self.assertTrue(any(x["route"]=="/login" and not x["protected"] for x in after["routes"]));self.assertTrue(any(x["route"]=="/" and x["protected"] for x in after["routes"]));self.assertNotIn("passwordHash",str(after))
+    def test_known_login_phrases_are_deterministic(self):
+        manifest=ApplicationManifest(application={"id":"a","name":"A"})
+        for message in ["add a login page","add a secure login page","create authentication","add user login"]:
+            with self.subTest(message=message):
+                self.assertEqual(detect_intent(message),"secure_login")
+                plan=plan_request(ProposalRequest(message=message,context=self.context()),manifest)
+                self.assertFalse(any(x["operation"]=="synthesize_application" for x in plan["operations"]))
+                self.assertTrue(any(page["id"]=="login" for page in plan["after"]["pages"]))
+    def test_builder_log_text_redacts_credentials(self):
+        self.assertNotIn("hunter2",safe_log_text("add login password=hunter2 token:abc"))
     def test_customer_application_composes_managed_crud(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"});plan=plan_request(ProposalRequest(message="Create a customer-management application with login, a customer form, and a customer table.",context=self.context()),manifest);after=plan["after"]
         self.assertTrue({"authentication","crud_entity","form","data_table"}<={x["moduleId"] for x in after["modules"]});self.assertEqual(after["entities"][0]["id"],"customer");self.assertTrue({"Form","DataTable"}<={x["type"] for x in after["components"]})
@@ -72,6 +86,17 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         plan=await ApplicationBuilderAI(client).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
         self.assertEqual(client.calls,2);self.assertEqual(plan["after"]["pages"][0]["id"],"appointments")
 
+    async def test_operly_ai_known_login_never_reaches_ollama(self):
+        class Service(AgentService):
+            async def _get_or_create_conversation(self,request):return SimpleNamespace(id="conversation")
+            async def _run_known_builder_intent(self,request,conversation,user_text,intent):return {"planner":"deterministic","intent":intent}
+        with patch.dict("os.environ",{"OLLAMA_API_KEY":"test-key"}):service=Service()
+        class NeverClient:
+            async def chat(self,*args,**kwargs):raise AssertionError("Ollama must not run")
+        service.client=NeverClient()
+        result=await service.run(AgentInput(tenant_id="t",principal_id="web-user:u",actor_name="Owner",channel="web",text="add user login",metadata={"user_id":"u","role":"owner"}))
+        self.assertEqual(result,{"planner":"deterministic","intent":"secure_login"})
+
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.engine=create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -96,6 +121,15 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             app,base=await self.service.create(db,self.tenant.id,self.user.id,"Atomic");change=await self.proposal(db,app,base);change.after_json='{"invalid":true}';await db.commit()
             with self.assertRaises(ValidationError):await self.service.apply(db,self.tenant.id,self.user.id,"owner",change.id)
             rows=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.application_id==app.id))).all();self.assertEqual(len(rows),1)
+    async def test_login_alias_preview_and_apply(self):
+        async with self.sessions() as db:
+            app,base=await self.service.create(db,self.tenant.id,self.user.id,"Aliases")
+            change=await self.proposal(db,app,base,"add a login page")
+            preview=await self.service.preview(db,self.tenant.id,self.user.id,change.id)
+            self.assertEqual(preview.application_id,app.id)
+            await self.service.apply(db,self.tenant.id,self.user.id,"owner",change.id)
+            manifest=(await self.service.current(db,self.tenant.id,app.id))[2]
+            self.assertTrue(any(page.id=="login" for page in manifest.pages))
 
 class FrontendContractTests(unittest.TestCase):
     def test_canvas_layers_scope_and_viewports(self):
@@ -110,5 +144,15 @@ class FrontendContractTests(unittest.TestCase):
         landing=html.split('<div id="login"',1)[0]
         self.assertIn("Developed and maintained by <strong>Dragonzpyder Industries</strong>",landing)
         self.assertNotIn("public-footer",html.split('<div id="dashboard"',1)[1])
+    def test_studio_and_ai_hide_global_dock_and_share_builder_api(self):
+        app=Path("apps/web/static/app.js").read_text(encoding="utf-8")
+        ai=Path("apps/web/static/ai-assistant.js").read_text(encoding="utf-8")
+        studio=Path("apps/web/static/studio.js").read_text(encoding="utf-8")
+        css=Path("apps/web/static/regression.css").read_text(encoding="utf-8")
+        self.assertIn('page === "studio" || page === "ai"',app)
+        self.assertIn(".operly-dock.page-suppressed",css)
+        self.assertIn('/application-builder/proposals',studio)
+        self.assertIn('/application-builder/applications',ai)
+        self.assertEqual(ai.count('id="ai-input"'),1)
 
 if __name__=="__main__":unittest.main()

@@ -1,9 +1,11 @@
-import json
+import json, logging
 from copy import deepcopy
 
 from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS, MODULES
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest
 from packages.business_brain.ollama_client import OllamaClient
+
+logger = logging.getLogger("operly.application_builder")
 
 
 SYSTEM = """You are OPERLY's managed application compiler. Convert the owner's request into one complete ApplicationManifest JSON object.
@@ -80,7 +82,9 @@ class ApplicationBuilderAI:
             except Exception as exc:
                 first_error = exc
                 if attempt:
+                    logger.warning("builder_model_repair %s", json.dumps({"planner":"ollama","schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
                     raise ValueError("The AI could not produce a valid application plan after an automatic repair attempt. Please retry or describe the required pages, data, and actions more explicitly.") from exc
+                logger.warning("builder_model_validation %s", json.dumps({"planner":"ollama","schema_validation_errors":str(exc),"repair_attempt_result":"started"}))
                 repair = {
                     "instruction": "Repair the previous output. Return the complete corrected manifest as JSON only.",
                     "validationErrors": str(exc)[:12000],
@@ -88,6 +92,8 @@ class ApplicationBuilderAI:
                 }
                 messages.extend([{"role": "assistant", "content": str(response.get("content", ""))[:80000]}, {"role": "user", "content": json.dumps(repair, separators=(",", ":"))}])
                 response = await client.chat(messages, [])
+        if first_error is not None:
+            logger.info("builder_model_repair %s", json.dumps({"planner":"ollama","schema_validation_errors":str(first_error),"repair_attempt_result":"succeeded"}))
         before = current.model_dump(mode="json")
         after = manifest.model_dump(mode="json")
         if after == before:

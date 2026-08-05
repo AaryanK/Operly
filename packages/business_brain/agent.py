@@ -20,6 +20,9 @@ from packages.business_brain.tools import build_registry
 from packages.business_brain.types import AgentInput, ToolContext
 from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.db import session_scope
+from packages.database.application_builder_models import ManagedApplication
+from packages.application_builder.schema import BuilderContext, ProposalRequest
+from packages.application_builder.service import ApplicationBuilderService, detect_intent
 
 
 SYSTEM_PROMPT = """
@@ -72,6 +75,10 @@ class AgentService:
         await self.rate_limiter.check(rate_key)
 
         conversation = await self._get_or_create_conversation(request)
+
+        intent = detect_intent(user_text)
+        if intent and request.metadata.get("user_id"):
+            return await self._run_known_builder_intent(request, conversation, user_text, intent)
 
         async with session_scope() as db:
             history = await load_conversation_messages(
@@ -230,6 +237,31 @@ class AgentService:
             "conversation_id": conversation.id,
             "message": answer,
         }
+
+    async def _run_known_builder_intent(self, request, conversation, user_text, intent):
+        """Route allowlisted application requests before any Ollama invocation."""
+        requested_id = str(request.metadata.get("application_id") or "").strip()
+        user_id = str(request.metadata.get("user_id") or "").strip()
+        role = str(request.metadata.get("role") or "employee")
+        async with session_scope() as db:
+            query = select(ManagedApplication).where(ManagedApplication.tenant_id == request.tenant_id)
+            if requested_id:
+                query = query.where(ManagedApplication.id == requested_id)
+            else:
+                query = query.order_by(ManagedApplication.created_at.desc()).limit(1)
+            application = await db.scalar(query)
+            if application is None:
+                answer = "Create or select a managed application in Studio before adding login."
+                db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="user",content=user_text))
+                db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="assistant",content=answer))
+                return {"conversation_id":conversation.id,"message":answer,"planner":"deterministic","intent":intent}
+            payload = ProposalRequest(message=user_text,context=BuilderContext(workspaceId=request.tenant_id,applicationId=application.id,activeVersionId=application.active_version_id,selectionScope="application",userRole=role))
+            change = await ApplicationBuilderService.propose(db,request.tenant_id,user_id,role,payload)
+            answer = f"Created a validated secure-login proposal for {application.name}. Preview and apply it in Studio."
+        async with session_scope() as db:
+            db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="user",content=user_text))
+            db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="assistant",content=answer))
+        return {"conversation_id":conversation.id,"message":answer,"planner":"deterministic","intent":intent,"application_id":application.id,"change_set_id":change.id}
 
     async def _get_or_create_conversation(
         self,

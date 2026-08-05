@@ -1,4 +1,4 @@
-import json, re
+import json, logging, os, re
 from copy import deepcopy
 from datetime import datetime, timedelta
 from sqlalchemy import desc, select, update
@@ -10,6 +10,31 @@ from packages.database.application_builder_models import ApplicationAuditEvent, 
 
 class BuilderError(ValueError): pass
 class UnsupportedRequestError(BuilderError): pass
+
+logger = logging.getLogger("operly.application_builder")
+DEPLOYED_COMMIT_SHA = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or os.getenv("SOURCE_VERSION") or "unknown")[:64]
+
+LOGIN_INTENT_PATTERNS = (
+    re.compile(r"\b(?:add|create|build|make|implement|enable|set\s*up)\b.{0,40}\b(?:secure\s+)?(?:user\s+)?login\b", re.I),
+    re.compile(r"\b(?:add|create|build|make|implement|enable|set\s*up)\b.{0,40}\bauth(?:entication)?\b", re.I),
+    re.compile(r"\blogin\s+(?:page|screen|form|system|flow)\b", re.I),
+)
+
+
+def detect_intent(text: str) -> str | None:
+    """Classify allowlisted builder requests without sending content to a model."""
+    normalized = " ".join(text.strip().split())
+    if "customer management" in normalized.lower() or "customer-management" in normalized.lower():
+        return None
+    if any(pattern.search(normalized) for pattern in LOGIN_INTENT_PATTERNS):
+        return "secure_login"
+    return None
+
+
+def safe_log_text(text: str) -> str:
+    """Retain request wording while removing credential-like assignments."""
+    pattern = r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|cookie)\b\s*[:=]\s*\S+"
+    return re.sub(pattern, r"\1=[REDACTED]", text)[:4000]
 
 
 def slugify(value):
@@ -34,7 +59,7 @@ def plan_request(request: ProposalRequest, current: ApplicationManifest):
     after=deepcopy(current.model_dump(mode="json")); operations=[]
     def op(name,target,details,risk="medium"):
         operations.append({"operation":name,"target":target,"after":details,"dependencies":[],"risk":risk,"validation":{"valid":True}})
-    if "secure login" in text or "login system" in text:
+    if detect_intent(text) == "secure_login":
         for mid in ["authentication","dashboard","navigation"]: _install(after,mid); op("install_module",mid,{"moduleId":mid,"version":1},"high" if mid=="authentication" else "medium")
         if not any(p["id"]=="login" for p in after["pages"]):
             ids=["login-page","login-card","login-form","login-email","login-password","login-submit"]
@@ -93,12 +118,17 @@ class ApplicationBuilderService:
         if role!="owner":raise PermissionError("Only owners can change managed applications")
         app,version,manifest=await cls.current(db,tenant_id,payload.context.applicationId)
         if payload.context.workspaceId!=tenant_id or payload.context.activeVersionId!=version.id:raise BuilderError("Studio context is stale or belongs to another workspace")
+        intent=detect_intent(payload.message);planner="deterministic" if intent else "ollama"
+        logger.info("builder_request %s",json.dumps({"request_text":safe_log_text(payload.message),"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"deployed_git_commit_sha":DEPLOYED_COMMIT_SHA},ensure_ascii=False))
         try:
             plan=plan_request(payload,manifest)
         except UnsupportedRequestError:
             from packages.application_builder.ai import ApplicationBuilderAI
             try:plan=await ApplicationBuilderAI().plan(payload,manifest)
-            except ValueError as exc:raise BuilderError(str(exc)) from exc
+            except ValueError as exc:
+                logger.warning("builder_validation_failure %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":"ollama","intent":intent,"schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
+                raise BuilderError(str(exc)) from exc
+        logger.info("builder_plan_validated %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"schema_validation_errors":[],"repair_attempt_result":"not_attempted" if planner=="deterministic" else "valid"}))
         row=ApplicationChangeSet(tenant_id=tenant_id,application_id=app.id,base_version_id=version.id,request=payload.message,scope=payload.context.selectionScope,operations_json=json.dumps(plan["operations"]),before_json=manifest.model_dump_json(),after_json=json.dumps(plan["after"]),validation_json=json.dumps({"valid":True,"errors":[]}),risk=plan["risk"],created_by=user_id);db.add(row);await db.flush();db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="change_set_proposed",details_json=json.dumps({"changeSetId":row.id,"scope":row.scope,"planner":"model" if any(x["operation"]=="synthesize_application" for x in plan["operations"]) else "deterministic"})));await db.commit();return row
     @classmethod
     async def change_set(cls,db,tenant_id,change_id):

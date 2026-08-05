@@ -116,6 +116,7 @@ app.add_middleware(CSRFMiddleware)
 
 public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 production = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
+deployed_commit_sha = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or os.getenv("SOURCE_VERSION") or "unknown").strip()[:64]
 allowed_origins = [public_base_url]
 if not production:
     allowed_origins.append("http://localhost:5173")
@@ -134,7 +135,7 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "operly"}
+    return {"ok": True, "service": "operly", "commit_sha": deployed_commit_sha}
 
 
 @app.post("/api/auth/login", include_in_schema=False)

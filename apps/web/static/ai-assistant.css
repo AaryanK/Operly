@@ -9,6 +9,7 @@
 .ai-history-list strong{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ai-history-list span{font-size:9px;color:var(--muted)}
 .ai-chat{display:grid;grid-template-rows:auto 1fr auto}
+.ai-application-picker{display:grid;grid-template-columns:auto minmax(0,260px);align-items:center;gap:10px;padding:0 18px 10px;color:var(--green);font-size:11px}.ai-application-picker select{min-width:0;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)}
 .ai-chat-head h3{margin:0}.ai-chat-head p{margin:4px 0 0;color:var(--muted);font-size:10px}
 .ai-messages{padding:22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
 .ai-message{max-width:78%;padding:13px 15px;border-radius:15px;line-height:1.55;font-size:13px;white-space:pre-wrap}

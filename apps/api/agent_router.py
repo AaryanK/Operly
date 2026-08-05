@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 class ChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     conversation_id: str | None = Field(default=None, max_length=120)
+    application_id: str | None = Field(default=None, max_length=120)
 
 
 @router.post("/chat")
@@ -35,7 +36,7 @@ async def chat(
                 channel="web",
                 conversation_id=payload.conversation_id,
                 text=payload.message,
-                metadata={},
+                metadata={"application_id":payload.application_id,"user_id":auth.user.id,"role":auth.role},
             )
         )
     except AgentSecurityError as error:
