@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -106,6 +107,53 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         request=ProposalRequest(message="travel landing page",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
         plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));components={item["id"]:item for item in plan["after"]["components"]}
         self.assertEqual(components["home-page"]["type"],"Page");self.assertEqual(components["hero"]["parentId"],"home-page")
+    async def test_page_parent_aliases_resolve_to_synthesized_roots(self):
+        fixtures=[("nav_main","landing_page"),("nav-main","landing-page"),("nav-main","landing_page")]
+        for child_id,parent_id in fixtures:
+            with self.subTest(child_id=child_id,parent_id=parent_id):
+                content=json.dumps({"application":{"id":"a","name":"Travel"},"pages":[{"id":"landing-page","name":"Landing page","route":"/","componentIds":[]}],"components":[{"id":child_id,"type":"Navigation","label":"Main navigation","parentId":parent_id}],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]})
+                class Client:
+                    async def chat(self,messages,tools):return {"content":content}
+                request=ProposalRequest(message="Design a landing page for this application. This is a travel agency landing page.",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+                for _ in range(2):
+                    plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));after=ApplicationManifest.model_validate(plan["after"]);components={item.id:item for item in after.components};root=after.pages[0].componentIds[0]
+                    self.assertIn(root,components);self.assertEqual(components[root].type,"Page");self.assertEqual(components[child_id].parentId,root);self.assertNotEqual(components[child_id].parentId,parent_id)
+    async def test_component_alias_resolution_precedes_page_resolution(self):
+        class Client:
+            async def chat(self,messages,tools):return {"content":'{"application":{"id":"a","name":"Travel"},"pages":[{"id":"landing_page","name":"Landing","route":"/","componentIds":["landing-page"]}],"components":[{"id":"landing-page","type":"Page","label":"Landing"},{"id":"nav_main","type":"Navigation","label":"Navigation","parentId":"landing_page"}],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}' }
+        request=ProposalRequest(message="Design a landing page for this application. This is a travel agency landing page.",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));components={item["id"]:item for item in plan["after"]["components"]}
+        self.assertEqual(components["nav_main"]["parentId"],"landing-page");self.assertEqual(len([item for item in components.values() if item["type"]=="Page"]),1)
+    async def test_initial_and_repair_share_identity_normalization(self):
+        class Client:
+            def __init__(self):self.calls=0
+            async def chat(self,messages,tools):
+                self.calls+=1;modules=["not-real"] if self.calls==1 else []
+                return {"content":json.dumps({"application":{"id":"a","name":"Travel"},"pages":[{"id":"landing-page","name":"Landing","route":"/","componentIds":[]}],"components":[{"id":"nav-main","type":"Navigation","label":"Navigation","parentId":"landing_page"}],"entities":[],"modules":modules,"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]})}
+        client=Client();request=ProposalRequest(message="Design a landing page for this application. This is a travel agency landing page.",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        plan=await ApplicationBuilderAI(client).plan(request,ApplicationManifest(application={"id":"a","name":"A"}));components={item["id"]:item for item in plan["after"]["components"]}
+        self.assertEqual(client.calls,2);self.assertIn(components["nav-main"]["parentId"],components)
+    async def test_cross_page_parent_is_rejected_with_resolution_details(self):
+        content='{"application":{"id":"a","name":"Travel"},"pages":[{"id":"page-a","name":"A","route":"/a","components":[{"id":"page-a-root","type":"Page","label":"A","children":[{"id":"nav-main","type":"Navigation","label":"Navigation","parentId":"page-b"}]}]},{"id":"page-b","name":"B","route":"/b","components":[{"id":"page-b-root","type":"Page","label":"B"}]}],"components":[],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}'
+        class Client:
+            async def chat(self,messages,tools):return {"content":content}
+        request=ProposalRequest(message="travel pages",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        with self.assertRaises(ManifestGenerationError) as caught:await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        details=caught.exception.details;self.assertEqual(details["errors"][0]["resolution"]["reason"],"cross_page_parent");self.assertTrue(details["errors"][0]["resolution"]["matchedPage"])
+    async def test_arbitrary_parent_remains_invalid_with_sanitized_resolution(self):
+        content='{"application":{"id":"a","name":"Travel"},"pages":[{"id":"landing","name":"Landing","route":"/","componentIds":[]}],"components":[{"id":"nav-main","type":"Navigation","label":"Navigation","parentId":"does-not-exist"}],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}'
+        class Client:
+            async def chat(self,messages,tools):return {"content":content}
+        request=ProposalRequest(message="travel",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        with self.assertRaises(ManifestGenerationError) as caught:await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        resolution=caught.exception.details["errors"][0]["resolution"];self.assertEqual(resolution["child"],"nav-main");self.assertEqual(resolution["suppliedParent"],"does-not-exist");self.assertFalse(resolution["matchedPage"])
+    async def test_route_id_cannot_be_used_as_component_parent(self):
+        content='{"application":{"id":"a","name":"Travel"},"pages":[],"components":[{"id":"nav-main","type":"Navigation","label":"Navigation","parentId":"landing-route"}],"entities":[],"modules":[],"permissions":[],"workflows":[],"integrations":[],"routes":[{"id":"landing_route","route":"/","protected":true}],"regions":[]}'
+        class Client:
+            async def chat(self,messages,tools):return {"content":content}
+        request=ProposalRequest(message="travel",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
+        with self.assertRaises(ManifestGenerationError) as caught:await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        resolution=caught.exception.details["errors"][0]["resolution"];self.assertTrue(resolution["matchedRoute"]);self.assertEqual(resolution["reason"],"route_parent_not_allowed")
     def test_unknown_parent_error_identifies_safe_component_ids(self):
         with self.assertRaisesRegex(ValidationError,"orphan references missing"):
             ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="orphan",type="Section",label="Orphan",parentId="missing")])
@@ -210,6 +258,7 @@ class FrontendContractTests(unittest.TestCase):
             self.assertIn('classList.add("page-suppressed")',Path("apps/web/static",bridge).read_text(encoding="utf-8"))
         self.assertIn(".operly-dock.page-suppressed",css)
         self.assertIn('/application-builder/proposals',studio)
+        self.assertIn('supplied parent:',studio);self.assertIn('page root found:',studio);self.assertIn('synthesis attempted:',studio)
         self.assertIn('/application-builder/applications',ai)
         self.assertEqual(ai.count('id="ai-input"'),1)
     def test_managed_runtime_forms_tables_routes_and_selection_metadata(self):

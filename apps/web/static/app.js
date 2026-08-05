@@ -40,7 +40,7 @@ async function api(path, options = {}) {
   }
   let body = null;
   try { body = await response.json(); } catch {}
-  if (!response.ok) { const detail=body?.detail; const validation=detail?.validation; const items=[...(validation?.initial?.errors||[]),...(validation?.errors||[])].map(item=>`${item.stage} ${item.path}: ${item.message}`).join(" · "); const error=new Error((typeof detail==="string"?detail:detail?.message||detail?.code||`Request failed (${response.status})`)+(items?` — ${items}`:"")); error.details=detail; throw error; }
+  if (!response.ok) { const detail=body?.detail; const validation=detail?.validation; const items=[...(validation?.initial?.errors||[]),...(validation?.errors||[])].map(item=>{const r=item.resolution;const resolved=r?` [child: ${r.child}; supplied parent: ${r.suppliedParent}; matched page: ${r.matchedPage}; page root found: ${r.pageRootFound}; synthesis attempted: ${r.synthesisAttempted}]`:"";return `${item.stage} ${item.path}: ${item.message}${resolved}`}).join(" · "); const error=new Error((typeof detail==="string"?detail:detail?.message||detail?.code||`Request failed (${response.status})`)+(items?` — ${items}`:"")); error.details=detail; throw error; }
   return body;
 }
 
