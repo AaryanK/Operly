@@ -1,12 +1,17 @@
 # Operly release checklist
 
-## Managed application builder
+## Managed application builder and custom software
 
-- [ ] Run SQLite upgrade to `0004_managed_record_runtime` twice.
+- [ ] Run SQLite upgrade to `0005_custom_software_vertical_slice` twice.
 - [ ] Rehearse PostgreSQL fresh, legacy, current, and unsafe states with the release-scoped backup gate.
 - [ ] Execute authenticated login, theme, component override, customer app, workflow, and selection scenarios.
 - [ ] Verify desktop, tablet, and mobile canvas viewports.
 - [ ] Confirm cross-workspace application, ChangeSet, version, preview, and record access is denied.
+- [ ] Generate a field-service product from Studio and verify public intake, signed customer status, dispatch transitions, and artifact selection.
+- [ ] Preview and apply a selected visual change; verify unrelated backend artifact hashes are preserved.
+- [ ] Confirm public and dispatcher pages deny framing while authenticated Studio previews allow same-origin framing.
+- [ ] Confirm agentic requests fail closed unless the isolated runner URL and token are configured.
+- [ ] Review the sandbox runner's dependency scan, test report, artifact graph, immutable digest, resource usage, and preview URL before promotion.
 - [ ] Do not deploy before backup verification and authenticated deployment testing.
 
 - [ ] Full automated suite passes; totals and warnings recorded.

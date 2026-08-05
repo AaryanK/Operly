@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0004_managed_record_runtime"
+ALEMBIC_HEAD = "0005_custom_software_vertical_slice"
 
 
 def import_all_models() -> None:
@@ -11,6 +11,7 @@ def import_all_models() -> None:
     from packages.database import studio_models  # noqa: F401
     from packages.database import dashboard_studio_models  # noqa: F401
     from packages.database import application_builder_models  # noqa: F401
+    from packages.database import custom_software_models  # noqa: F401
 
 
 def synchronous_database_url(url: str) -> str:

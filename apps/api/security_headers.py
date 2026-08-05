@@ -8,7 +8,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
         path=request.url.path
-        studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview"))
+        studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview"))
         response.headers["X-Frame-Options"]="SAMEORIGIN" if studio_preview else "DENY"
         frame_ancestors="'self'" if studio_preview else "'none'"
         script_sources="'self' 'unsafe-inline'" if studio_preview else "'self'"

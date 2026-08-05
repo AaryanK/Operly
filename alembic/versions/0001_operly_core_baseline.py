@@ -19,6 +19,9 @@ APPLICATION_BUILDER_TABLES = {
     "managed_applications", "application_versions", "application_change_sets",
     "managed_records", "application_audit_events", "application_preview_sessions",
 }
+CUSTOM_SOFTWARE_TABLES = {
+    "generated_projects", "generated_project_change_sets", "service_customers", "service_requests", "service_status_events",
+}
 
 
 def upgrade() -> None:
@@ -29,7 +32,7 @@ def upgrade() -> None:
     import_all_models()
     bind = op.get_bind()
     for table in Base.metadata.sorted_tables:
-        if table.name not in DASHBOARD_TABLES | APPLICATION_BUILDER_TABLES and table.name != "alembic_version":
+        if table.name not in DASHBOARD_TABLES | APPLICATION_BUILDER_TABLES | CUSTOM_SOFTWARE_TABLES and table.name != "alembic_version":
             table.create(bind, checkfirst=True)
 
 

@@ -52,6 +52,7 @@ BUILDER_REQUIRED_FOREIGN_KEYS={
     "application_change_sets":{"tenant_id","application_id","base_version_id","applied_version_id","created_by"},"managed_records":{"tenant_id","application_id","created_by"},
     "application_audit_events":{"tenant_id","application_id"},"application_preview_sessions":{"tenant_id","application_id","change_set_id","created_by"},
 }
+CUSTOM_REQUIRED_TABLES={"generated_projects","generated_project_change_sets","service_customers","service_requests","service_status_events"}
 POSTGRES_BACKUP_MAX_AGE = timedelta(hours=24)
 POSTGRES_BACKUP_CLOCK_SKEW = timedelta(minutes=5)
 
@@ -125,7 +126,7 @@ def inspect_supported_schema(url:str)->str:
         with engine.connect() as connection:
             inspector=inspect(connection);tables=set(inspector.get_table_names())-{"alembic_version"}
             current=MigrationContext.configure(connection).get_current_revision()
-            if current not in {None,"0001_operly_core","0002_dashboard_studio","0003_application_builder_core","0004_managed_record_runtime"}:raise RuntimeError("Unsupported Alembic revision")
+            if current not in {None,"0001_operly_core","0002_dashboard_studio","0003_application_builder_core","0004_managed_record_runtime","0005_custom_software_vertical_slice"}:raise RuntimeError("Unsupported Alembic revision")
             if not tables:return "fresh"
             if not {"tenants","app_users"}<=tables:raise RuntimeError("Unsupported schema: core identity tables are incomplete")
             modeled={table.name:table for table in Base.metadata.tables.values()}
@@ -151,7 +152,7 @@ def validate(url: str) -> None:
     try:
         with engine.connect() as connection:
             inspector=inspect(connection);tables=set(inspector.get_table_names())
-            missing=(REQUIRED_TABLES|BUILDER_REQUIRED_TABLES)-tables
+            missing=(REQUIRED_TABLES|BUILDER_REQUIRED_TABLES|CUSTOM_REQUIRED_TABLES)-tables
             if missing:raise RuntimeError("Required Studio application tables are missing")
             for table,expected in REQUIRED_INDEXES.items():
                 columns={x["name"] for x in inspector.get_columns(table)}
