@@ -64,10 +64,13 @@ class ManagedRecord(Base):
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
     application_id: Mapped[str] = mapped_column(ForeignKey("managed_applications.id", ondelete="CASCADE"), index=True)
     entity_id: Mapped[str] = mapped_column(String(100), index=True)
+    application_version_id: Mapped[str] = mapped_column(ForeignKey("application_versions.id"), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120))
     data_json: Mapped[str] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(ForeignKey("app_users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("tenant_id", "application_id", "idempotency_key", name="uq_managed_record_idempotency"),)
 
 
 class ApplicationAuditEvent(Base):

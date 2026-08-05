@@ -8,7 +8,7 @@ from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.application_builder.catalog import component_catalog, module_catalog
 from packages.application_builder.renderer import render_application
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest, RecordInput
-from packages.application_builder.service import ApplicationBuilderService, BuilderError
+from packages.application_builder.service import ApplicationBuilderService, BuilderError, BuilderGenerationError, RecordValidationError
 from packages.business_brain.ollama_client import OllamaError
 from packages.database.application_builder_models import ApplicationChangeSet, ApplicationVersion, ManagedApplication, ManagedRecord
 
@@ -34,6 +34,7 @@ async def get_application(application_id:str,auth:AuthContext=Depends(get_auth_c
 @router.post("/api/application-builder/proposals")
 async def propose(payload:ProposalRequest,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     try:return change(await service.propose(db,auth.tenant.id,auth.user.id,auth.role,payload))
+    except BuilderGenerationError as e:raise HTTPException(422,detail={"code":"manifest_generation_failed","message":str(e),"validation":e.details})
     except OllamaError as e:raise HTTPException(503,e.public_message)
     except (BuilderError,PermissionError,LookupError) as e:raise failure(e)
 @router.get("/api/application-builder/change-sets/{change_id}")
@@ -56,30 +57,34 @@ async def rollback(application_id:str,version_id:str,auth:AuthContext=Depends(ge
     try:v=await service.rollback(db,auth.tenant.id,auth.user.id,auth.role,application_id,version_id);return {"ok":True,"versionId":v.id,"versionNumber":v.version_number}
     except (BuilderError,PermissionError,LookupError) as e:raise failure(e)
 @router.get("/apps/{application_id}/preview",response_class=HTMLResponse)
-async def preview_app(application_id:str,changeSetId:str|None=None,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+async def preview_app(application_id:str,changeSetId:str|None=None,route:str="/",auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     try:
         app,version,manifest=await service.current(db,auth.tenant.id,application_id)
         if changeSetId:
             row=await service.change_set(db,auth.tenant.id,changeSetId)
             if row.application_id!=app.id:raise LookupError("Change set not found")
             manifest=ApplicationManifest.model_validate_json(row.after_json)
-        return render_application(manifest,studio=True)
+        base=f"/apps/{app.id}/preview"+(f"?changeSetId={changeSetId}" if changeSetId else "")
+        return render_application(manifest,application_id=app.id,version_id=version.id,studio=True,base_path=base,route=route,role=auth.role)
     except (BuilderError,LookupError) as e:raise failure(e)
 @router.get("/apps/{application_id}/run",response_class=HTMLResponse)
 async def run_app(application_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
-    try:app,version,manifest=await service.current(db,auth.tenant.id,application_id);return render_application(manifest)
+    try:app,version,manifest=await service.current(db,auth.tenant.id,application_id);return render_application(manifest,application_id=app.id,version_id=version.id,base_path=f"/apps/{app.id}/run",route="/",role=auth.role)
+    except (BuilderError,LookupError) as e:raise failure(e)
+@router.get("/apps/{application_id}/run/{route_path:path}",response_class=HTMLResponse)
+async def run_app_route(application_id:str,route_path:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:
+        app,version,manifest=await service.current(db,auth.tenant.id,application_id);route="/"+route_path.strip("/")
+        return render_application(manifest,application_id=app.id,version_id=version.id,base_path=f"/apps/{app.id}/run",route=route,role=auth.role)
     except (BuilderError,LookupError) as e:raise failure(e)
 @router.post("/api/application-builder/applications/{application_id}/entities/{entity_id}/records")
 async def create_record(application_id:str,entity_id:str,payload:RecordInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     try:
-        app,version,manifest=await service.current(db,auth.tenant.id,application_id);entity=next((x for x in manifest.entities if x.id==entity_id),None)
-        if not entity:raise LookupError("Entity not found")
-        allowed={x.id:x for x in entity.fields};unknown=set(payload.data)-set(allowed)
-        if unknown:raise BuilderError("Unknown managed fields")
-        for field in entity.fields:
-            if field.required and payload.data.get(field.id) in {None,""}:raise BuilderError(f"{field.name} is required")
-        row=ManagedRecord(tenant_id=auth.tenant.id,application_id=app.id,entity_id=entity_id,data_json=json.dumps(payload.data),created_by=auth.user.id);db.add(row);await db.commit();return {"id":row.id,"data":payload.data}
-    except (BuilderError,LookupError) as e:raise failure(e)
+        row,data,created=await service.create_record(db,auth.tenant.id,auth.user.id,auth.role,application_id,entity_id,payload);return {"id":row.id,"data":data,"created":created,"createdAt":row.created_at.isoformat()}
+    except RecordValidationError as e:raise HTTPException(422,detail={"code":"record_validation_failed","errors":e.errors})
+    except (BuilderError,PermissionError,LookupError) as e:raise failure(e)
 @router.get("/api/application-builder/applications/{application_id}/entities/{entity_id}/records")
 async def records(application_id:str,entity_id:str,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
-    await service.current(db,auth.tenant.id,application_id);rows=(await db.scalars(select(ManagedRecord).where(ManagedRecord.tenant_id==auth.tenant.id,ManagedRecord.application_id==application_id,ManagedRecord.entity_id==entity_id))).all();return [{"id":x.id,"data":json.loads(x.data_json)} for x in rows]
+    try:
+        rows,data,version=await service.list_records(db,auth.tenant.id,auth.role,application_id,entity_id);return {"versionId":version.id,"records":[{"id":row.id,"data":item,"createdAt":row.created_at.isoformat(),"updatedAt":row.updated_at.isoformat()} for row,item in zip(rows,data)]}
+    except (BuilderError,PermissionError,LookupError) as e:raise failure(e)

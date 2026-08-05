@@ -40,7 +40,7 @@ async function api(path, options = {}) {
   }
   let body = null;
   try { body = await response.json(); } catch {}
-  if (!response.ok) throw new Error(body?.detail || `Request failed (${response.status})`);
+  if (!response.ok) { const detail=body?.detail; const validation=detail?.validation; const items=[...(validation?.initial?.errors||[]),...(validation?.errors||[])].map(item=>`${item.stage} ${item.path}: ${item.message}`).join(" · "); const error=new Error((typeof detail==="string"?detail:detail?.message||detail?.code||`Request failed (${response.status})`)+(items?` — ${items}`:"")); error.details=detail; throw error; }
   return body;
 }
 

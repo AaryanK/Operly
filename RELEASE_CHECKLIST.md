@@ -2,7 +2,7 @@
 
 ## Managed application builder
 
-- [ ] Run SQLite upgrade to `0003_application_builder_core` twice.
+- [ ] Run SQLite upgrade to `0004_managed_record_runtime` twice.
 - [ ] Rehearse PostgreSQL fresh, legacy, current, and unsafe states with the release-scoped backup gate.
 - [ ] Execute authenticated login, theme, component override, customer app, workflow, and selection scenarios.
 - [ ] Verify desktop, tablet, and mobile canvas viewports.

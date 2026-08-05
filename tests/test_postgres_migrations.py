@@ -41,7 +41,7 @@ class PostgreSQLMigrationTests(unittest.TestCase):
             db.execute("INSERT INTO app_configuration_versions VALUES('version-a','tenant-a',1,'{}','existing','[]','change-a','user-a',TRUE,CURRENT_TIMESTAMP)")
             if orphan:db.execute("INSERT INTO dashboard_change_operations VALUES('op-a','tenant-a','missing',0,'update_component','overview-messages-card','{}')")
             if duplicate:db.execute("INSERT INTO app_configuration_versions VALUES('version-b','tenant-a',2,'{}','newer','[]',NULL,'user-a',TRUE,CURRENT_TIMESTAMP)")
-    def test_fresh_and_already_current_idempotency(self):self.upgrade();self.upgrade();self.assertEqual(revisions(URL)[0],"0003_application_builder_core")
+    def test_fresh_and_already_current_idempotency(self):self.upgrade();self.upgrade();self.assertEqual(revisions(URL)[0],"0004_managed_record_runtime")
     def test_legacy_core_preserves_rows(self):
         self.core();self.upgrade()
         with psycopg.connect(psycopg_url()) as db:self.assertEqual(db.execute("SELECT count(*) FROM app_users").fetchone()[0],1)
@@ -56,4 +56,4 @@ class PostgreSQLMigrationTests(unittest.TestCase):
     def test_unsafe_orphan_rolls_back_and_never_claims_head(self):
         self.partial(orphan=True)
         with self.assertRaises(RuntimeError):command.upgrade(config(URL),"head")
-        self.assertNotEqual(revisions(URL)[0],"0003_application_builder_core")
+        self.assertNotEqual(revisions(URL)[0],"0004_managed_record_runtime")

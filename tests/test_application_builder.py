@@ -9,10 +9,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker,create_async_engine
 from packages.database.db import Base
 from packages.database import models,business_models,agent_models,operations_models,studio_models,dashboard_studio_models,application_builder_models
 from packages.database.models import Tenant,AppUser,TenantMember
-from packages.database.application_builder_models import ApplicationVersion
-from packages.application_builder.schema import ApplicationManifest,BuilderContext,ComponentDefinition,ProposalRequest
-from packages.application_builder.service import ApplicationBuilderService,BuilderError,UnsupportedRequestError,detect_intent,plan_request,safe_log_text
-from packages.application_builder.ai import ApplicationBuilderAI
+from packages.database.application_builder_models import ApplicationAuditEvent,ApplicationVersion,ManagedRecord
+from packages.application_builder.schema import ApplicationManifest,BuilderContext,ComponentDefinition,ProposalRequest,RecordInput
+from packages.application_builder.service import ApplicationBuilderService,BuilderError,RecordValidationError,UnsupportedRequestError,detect_intent,plan_request,safe_log_text
+from packages.application_builder.ai import ApplicationBuilderAI,ManifestGenerationError
 from packages.application_builder.renderer import render_application
 from apps.api.session import LOGIN_MAX_ATTEMPTS,clear_login_attempts,login_allowed
 from packages.business_brain.agent import AgentService
@@ -28,6 +28,17 @@ class SchemaTests(unittest.TestCase):
     def test_scope_ambiguity(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"})
         with self.assertRaisesRegex(BuilderError,"select"):plan_request(ProposalRequest(message="Move this below the form",context=self.context()),manifest)
+    def test_whole_word_and_context_ambiguity(self):
+        manifest=ApplicationManifest(application={"id":"a","name":"A"})
+        for message in ["make me a little place where I can remember who bought what and how to reach them","build a notebook where I can track customers","create a place to store customers and purchases"]:
+            with self.subTest(message=message):
+                try:plan_request(ProposalRequest(message=message,context=self.context()),manifest)
+                except BuilderError as exc:self.assertNotIn("select",str(exc).lower())
+        for message in ["change this button to orange","remove that table"]:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(BuilderError,"select"):plan_request(ProposalRequest(message=message,context=self.context()),manifest)
+        plan=plan_request(ProposalRequest(message="build a customer tracker here",context=self.context()),manifest)
+        self.assertEqual(plan["after"]["entities"][0]["id"],"customer")
     def test_theme_scope_and_component_override(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="submit",type="Button",label="Submit")])
         global_plan=plan_request(ProposalRequest(message="Change the entire application to dark green and cream",context=self.context()),manifest);self.assertEqual(global_plan["after"]["theme"]["primary"],"forest");self.assertEqual(global_plan["after"]["theme"]["background"],"cream")
@@ -48,6 +59,13 @@ class SchemaTests(unittest.TestCase):
     def test_customer_application_composes_managed_crud(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"});plan=plan_request(ProposalRequest(message="Create a customer-management application with login, a customer form, and a customer table.",context=self.context()),manifest);after=plan["after"]
         self.assertTrue({"authentication","crud_entity","form","data_table"}<={x["moduleId"] for x in after["modules"]});self.assertEqual(after["entities"][0]["id"],"customer");self.assertTrue({"Form","DataTable"}<={x["type"] for x in after["components"]})
+    def test_customer_notebook_phrases_are_canonical_and_deterministic(self):
+        phrases=["make me a little place where I can remember who bought what and how to reach them","Build a small notebook for buyers, purchases, phone numbers, and email addresses.","Create a simple customer and purchase tracker.","I need somewhere to record customers, what they purchased, and their contact information.","Build a lightweight customer notebook."]
+        for message in phrases:
+            with self.subTest(message=message):
+                self.assertEqual(detect_intent(message),"customer_notebook")
+                plan=plan_request(ProposalRequest(message=message,context=self.context()),ApplicationManifest(application={"id":"a","name":"A"}))
+                validated=ApplicationManifest.model_validate(plan["after"]);self.assertEqual({x.id for x in validated.entities},{"customer","purchase"});self.assertEqual(len(validated.pages),5)
     def test_workflow_binding_is_allowlisted(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"},components=[ComponentDefinition(id="follow-up",type="Button",label="Follow up")]);plan=plan_request(ProposalRequest(message="When this is clicked, create a follow-up task.",context=self.context("component",["follow-up"])),manifest);binding=plan["after"]["workflows"][0];self.assertEqual(binding["event"],"on_click");self.assertEqual(binding["action"],"create_record")
     def test_renderer_uses_structured_ids(self):
@@ -68,7 +86,8 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         class Client:
             async def chat(self,messages,tools):return {"content":'{"schemaVersion":1,"application":{"id":"a","name":"Bad"},"components":[{"id":"x","type":"Button","label":"X","properties":{"script":"alert(1)"}}]}'}
         request=ProposalRequest(message="do something",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner"))
-        with self.assertRaisesRegex(ValueError,"automatic repair attempt"):await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        with self.assertRaisesRegex(ManifestGenerationError,"automatic repair attempt") as caught:await ApplicationBuilderAI(Client()).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
+        serialized=str(caught.exception.details);self.assertNotIn("Traceback",serialized);self.assertNotIn("alert(1)",serialized);self.assertIn("components.0",serialized)
     async def test_common_module_and_nested_component_shapes_are_normalized(self):
         class Client:
             async def chat(self,messages,tools):return {"content":'{"application":{"id":"wrong","name":"Mail"},"theme":{},"modules":["authentication"],"pages":[{"id":"email","name":"Email","route":"/email","protected":true,"components":[{"id":"email-page","type":"Page","label":"Email"}]}],"components":[],"entities":[],"permissions":[],"workflows":[],"integrations":[],"routes":[],"regions":[]}'}
@@ -130,6 +149,28 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.service.apply(db,self.tenant.id,self.user.id,"owner",change.id)
             manifest=(await self.service.current(db,self.tenant.id,app.id))[2]
             self.assertTrue(any(page.id=="login" for page in manifest.pages))
+    async def test_customer_notebook_record_loop_validation_idempotency_and_audit(self):
+        async with self.sessions() as db:
+            app,base=await self.service.create(db,self.tenant.id,self.user.id,"Notebook")
+            change=await self.proposal(db,app,base,"make me a little place where I can remember who bought what and how to reach them")
+            version=await self.service.apply(db,self.tenant.id,self.user.id,"owner",change.id)
+            payload=RecordInput(formId="customer-form",versionId=version.id,idempotencyKey="customer-test-0001",data={"name":"Test Customer","phone":"555-0100","email":"test@example.com"})
+            row,data,created=await self.service.create_record(db,self.tenant.id,self.user.id,"owner",app.id,"customer",payload);self.assertTrue(created);self.assertEqual(data["email"],"test@example.com")
+            duplicate,_,created_again=await self.service.create_record(db,self.tenant.id,self.user.id,"owner",app.id,"customer",payload);self.assertFalse(created_again);self.assertEqual(duplicate.id,row.id)
+            rows,items,current=await self.service.list_records(db,self.tenant.id,"owner",app.id,"customer");self.assertEqual(len(rows),1);self.assertEqual(items[0]["name"],"Test Customer");self.assertEqual(current.id,version.id)
+            audits=(await db.scalars(select(ApplicationAuditEvent).where(ApplicationAuditEvent.application_id==app.id))).all();self.assertIn("managed_record_created",{x.action for x in audits});self.assertIn("customer_notebook_proposed",{x.action for x in audits})
+    async def test_record_rejects_unknown_missing_invalid_stale_cross_app_and_workspace(self):
+        async with self.sessions() as db:
+            app,base=await self.service.create(db,self.tenant.id,self.user.id,"Validation");change=await self.proposal(db,app,base,"Build a lightweight customer notebook.");version=await self.service.apply(db,self.tenant.id,self.user.id,"owner",change.id)
+            def payload(data,key="validation-0001",version_id=None):return RecordInput(formId="customer-form",versionId=version_id or version.id,idempotencyKey=key,data=data)
+            for data in [{"unknown":"x"},{"email":"bad"},{"name":"A","email":"bad"}]:
+                with self.subTest(data=data):
+                    with self.assertRaises(RecordValidationError):await self.service.create_record(db,self.tenant.id,self.user.id,"owner",app.id,"customer",payload(data,str(data)))
+            with self.assertRaisesRegex(BuilderError,"stale"):await self.service.create_record(db,self.tenant.id,self.user.id,"owner",app.id,"customer",payload({"name":"A"},"stale-key",base.id))
+            other,other_version=await self.service.create(db,self.tenant.id,self.user.id,"Other")
+            with self.assertRaises(LookupError):await self.service.create_record(db,self.tenant.id,self.user.id,"owner",other.id,"customer",RecordInput(formId="customer-form",versionId=other_version.id,idempotencyKey="cross-app-0001",data={"name":"A"}))
+            with self.assertRaises(LookupError):await self.service.list_records(db,self.other.id,"owner",app.id,"customer")
+            with self.assertRaises(LookupError):await self.service.list_records(db,self.tenant.id,"owner",app.id,"missing")
 
 class FrontendContractTests(unittest.TestCase):
     def test_canvas_layers_scope_and_viewports(self):
@@ -156,5 +197,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('/application-builder/proposals',studio)
         self.assertIn('/application-builder/applications',ai)
         self.assertEqual(ai.count('id="ai-input"'),1)
+    def test_managed_runtime_forms_tables_routes_and_selection_metadata(self):
+        manifest=ApplicationManifest.model_validate(plan_request(ProposalRequest(message="Build a lightweight customer notebook.",context=BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope="application",userRole="owner")),ApplicationManifest(application={"id":"a","name":"A"}))["after"])
+        add=render_application(manifest,application_id="a",version_id="v",base_path="/apps/a/run",route="/customers/new")
+        table=render_application(manifest,application_id="a",version_id="v",base_path="/apps/a/run",route="/customers")
+        missing=render_application(manifest,application_id="a",version_id="v",base_path="/apps/a/run",route="/escape")
+        runtime=Path("apps/web/static/managed-runtime.js").read_text(encoding="utf-8")
+        self.assertIn('name="name"',add);self.assertNotIn(" disabled",add);self.assertIn('src="/static/managed-runtime.js"',add);self.assertIn("idempotencyKey",runtime);self.assertIn("record_validation_failed",runtime);self.assertIn("replaceChildren",runtime);self.assertIn('data-operly-field-id="name"',add);self.assertIn('href="/apps/a/run/customers"',add);self.assertIn("Page not found",missing);self.assertNotIn("innerHTML",runtime)
 
 if __name__=="__main__":unittest.main()
