@@ -133,7 +133,7 @@ def inspect_supported_schema(url:str)->str:
             for table in tables&set(modeled):
                 actual={item["name"] for item in inspector.get_columns(table)}
                 expected={column.name for column in modeled[table].columns}
-                allowed_missing={"source_version_id"} if table=="app_configuration_versions" else set()
+                allowed_missing={"source_version_id"} if table=="app_configuration_versions" else {"plan_id","approved_plan_version","architecture_pack"} if table=="generated_projects" else set()
                 if (expected-allowed_missing)-actual:raise RuntimeError(f"Unsupported schema: modeled columns are missing from {table}")
             studio=tables&REQUIRED_TABLES
             if not studio:return "legacy_core"

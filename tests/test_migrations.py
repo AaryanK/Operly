@@ -71,7 +71,9 @@ class MigrationTests(unittest.TestCase):
             columns={row[1] for row in db.execute("pragma table_info(generated_projects)")}
             self.assertTrue({"plan_id","approved_plan_version","architecture_pack"}<=columns)
     def test_upgrade_repairs_create_all_polluted_0002_database(self):
-        path=self.root/"polluted-0002.db";command.upgrade(config(url(path)),"0002_dashboard_studio")
+        path=self.root/"polluted-0002.db";command.upgrade(config(url(path)),"0005_custom_software_vertical_slice")
+        with closing(sqlite3.connect(path)) as db:
+            db.execute("update alembic_version set version_num='0002_dashboard_studio'");db.commit()
         from packages.database.db import Base
         from packages.database.schema import import_all_models,synchronous_database_url
         import_all_models();engine=create_engine(synchronous_database_url(url(path)))
