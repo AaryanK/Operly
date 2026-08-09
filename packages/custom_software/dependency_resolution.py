@@ -19,6 +19,7 @@ from packages.custom_software.live_planning import (
     RequirementsAnalysis,
     ROLE_PROMPTS,
     ValidatorOutput,
+    finding_records_for_node,
     structural_errors,
     scope_errors,
 )
@@ -65,14 +66,13 @@ class DependencyResolutionOutput(Contract):
 
 
 def dependency_findings(node: ProposedNode, verdict: ValidatorOutput) -> list[dict[str, str]]:
-    from packages.custom_software.live_planning import _finding_id
-
     return [
         {
-            "finding_id": _finding_id("missing_dependencies", message),
-            "message": message,
+            "finding_id": str(item["finding_id"]),
+            "message": str(item["message"]),
         }
-        for message in verdict.missing_dependencies
+        for item in finding_records_for_node(node, verdict)
+        if item.get("field") == "dependencies"
     ]
 
 
