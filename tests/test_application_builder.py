@@ -168,16 +168,19 @@ class AIPlannerTests(unittest.IsolatedAsyncioTestCase):
         plan=await ApplicationBuilderAI(client).plan(request,ApplicationManifest(application={"id":"a","name":"A"}))
         self.assertEqual(client.calls,2);self.assertEqual(plan["after"]["pages"][0]["id"],"appointments")
 
-    async def test_operly_ai_known_login_never_reaches_ollama(self):
+    async def test_operly_ai_uses_model_to_route_known_login(self):
         class Service(AgentService):
             async def _get_or_create_conversation(self,request):return SimpleNamespace(id="conversation")
-            async def _run_known_builder_intent(self,request,conversation,user_text,intent):return {"planner":"deterministic","intent":intent}
+            async def _run_builder_request(self,request,conversation,user_text,intent,routing_reason):return {"routing_authority":"model","intent":intent,"reason":routing_reason}
         with patch.dict("os.environ",{"OLLAMA_API_KEY":"test-key"}):service=Service()
-        class NeverClient:
-            async def chat(self,*args,**kwargs):raise AssertionError("Ollama must not run")
-        service.client=NeverClient()
-        result=await service.run(AgentInput(tenant_id="t",principal_id="web-user:u",actor_name="Owner",channel="web",text="add user login",metadata={"user_id":"u","role":"owner"}))
-        self.assertEqual(result,{"planner":"deterministic","intent":"secure_login"})
+        class RoutingClient:
+            def __init__(self):self.calls=0
+            async def chat(self,*args,**kwargs):
+                self.calls+=1
+                return {"content":json.dumps({"domainMatch":True,"known":True,"route":"secure_login","reason":"The request is fully covered by the existing login capability."})}
+        client=RoutingClient();service.client=client
+        result=await service.run(AgentInput(tenant_id="t",principal_id="web-user:u",actor_name="Owner",channel="web",text="let my staff sign in before using the portal",metadata={"user_id":"u","role":"owner"}))
+        self.assertEqual(client.calls,1);self.assertEqual(result["routing_authority"],"model");self.assertEqual(result["intent"],"secure_login")
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
