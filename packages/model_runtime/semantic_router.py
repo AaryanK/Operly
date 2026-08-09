@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from packages.business_brain.ollama_client import OllamaClient
+from packages.model_runtime.ollama_client import OllamaClient
 
 
 class SemanticRoutingError(ValueError):
