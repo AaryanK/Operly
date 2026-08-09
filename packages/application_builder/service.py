@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import desc, select, update
 
 from packages.application_builder.catalog import MODULES, PALETTE
+from packages.application_builder.routing import BUILDER_ROUTES
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest, RecordInput, blank_manifest
 from packages.database.application_builder_models import ApplicationAuditEvent, ApplicationChangeSet, ApplicationPreviewSession, ApplicationVersion, ManagedApplication, ManagedRecord
 
@@ -34,7 +35,10 @@ CUSTOMER_NOTEBOOK_PATTERNS = (
 
 
 def detect_intent(text: str) -> str | None:
-    """Classify allowlisted builder requests without sending content to a model."""
+    """Legacy deterministic helper for direct planner tests and compatibility paths.
+
+    Runtime API and OPERLY AI routing use the configured model instead.
+    """
     normalized = " ".join(text.strip().split())
     if any(pattern.search(normalized) for pattern in CUSTOMER_NOTEBOOK_PATTERNS):
         return "customer_notebook"
@@ -74,14 +78,16 @@ def _install(manifest, module_id):
         manifest["modules"].append({"moduleId":module_id,"version":MODULES[module_id]["version"],"configuration":{}})
 
 
-def plan_request(request: ProposalRequest, current: ApplicationManifest):
+def plan_request(request: ProposalRequest, current: ApplicationManifest, routed_intent: str | None = None):
     text=request.message.lower().strip(); scope=request.context.selectionScope; selected=request.context.selectedIds
     if unresolved_selection_reference(text,scope,selected):
         raise BuilderError("Please select the page, region, or component you mean.")
+    if routed_intent is not None and routed_intent not in BUILDER_ROUTES:
+        raise BuilderError("Model selected an unavailable application capability")
     after=deepcopy(current.model_dump(mode="json")); operations=[]
     def op(name,target,details,risk="medium"):
         operations.append({"operation":name,"target":target,"after":details,"dependencies":[],"risk":risk,"validation":{"valid":True}})
-    intent=detect_intent(text)
+    intent=routed_intent if routed_intent is not None else detect_intent(text)
     if intent == "secure_login":
         for mid in ["authentication","dashboard","navigation"]: _install(after,mid); op("install_module",mid,{"moduleId":mid,"version":1},"high" if mid=="authentication" else "medium")
         if not any(p["id"]=="login" for p in after["pages"]):
@@ -111,26 +117,30 @@ def plan_request(request: ProposalRequest, current: ApplicationManifest):
         ]
         after["permissions"] += [{"role":"manager","actions":["run_application","create_record","list_records"]},{"role":"employee","actions":["run_application","create_record","list_records"]}]
         op("create_customer_notebook","application",{"entities":["customer","purchase"],"pages":[x[0] for x in pages]},"medium")
-    elif "customer-management" in text or "customer management" in text:
+    elif intent == "customer_management" or (routed_intent is None and ("customer-management" in text or "customer management" in text)):
         nested=ProposalRequest(message="Add a secure login page",context=request.context);nested_plan=plan_request(nested,ApplicationManifest.model_validate(after));after=nested_plan["after"];operations.extend(nested_plan["operations"])
         for mid in ["crud_entity","form","data_table"]:_install(after,mid);op("install_module",mid,{"moduleId":mid,"version":1})
         after["entities"].append({"id":"customer","name":"Customer","fields":[{"id":"name","name":"Name","type":"text","required":True},{"id":"email","name":"Email","type":"email","required":False}]})
         after["pages"].append({"id":"customers","name":"Customers","route":"/customers","protected":True,"componentIds":["customers-page"]})
         after["components"] += [_component("customers-page","Page","Customers"),_component("customer-form","Form","Customer form","customers-page",0,entityId="customer"),_component("customer-table","DataTable","Customers","customers-page",1,entityId="customer")]
         op("create_entity","customer",after["entities"][-1]);op("create_page","customers",after["pages"][-1])
-    elif "entire application" in text or "whole application" in text or ("dark green" in text and "cream" in text):
+    elif intent == "application_theme" or (routed_intent is None and ("entire application" in text or "whole application" in text or ("dark green" in text and "cream" in text))):
         if scope not in {"application"}: raise BuilderError("Select the application or clear the selection for a global theme change.")
-        if "dark green" in text:after["theme"]["primary"]="forest"
-        elif "green" in text:after["theme"]["primary"]="emerald"
-        if "cream" in text:after["theme"]["background"]=after["theme"]["surface"]="cream"
+        changed=False
+        if "dark green" in text:after["theme"]["primary"]="forest";changed=True
+        elif "green" in text:after["theme"]["primary"]="emerald";changed=True
+        if "cream" in text:after["theme"]["background"]=after["theme"]["surface"]="cream";changed=True
+        if routed_intent=="application_theme" and not changed:raise UnsupportedRequestError("The routed theme request needs model synthesis for its requested tokens")
         _install(after,"theme");op("update_theme","application",after["theme"])
-    elif "orange" in text and scope in {"component","multi"} and selected:
+    elif intent == "component_orange" or (routed_intent is None and "orange" in text and scope in {"component","multi"} and selected):
+        if scope not in {"component","multi"} or not selected:raise BuilderError("Select the component or components to change.")
         changed=[]
         for component in after["components"]:
             if component["id"] in selected: component["overrides"]["primary"]="orange";changed.append(component["id"])
         if not changed: raise BuilderError("The selected component is not in this application.")
         op("update_component",changed,{"tokenOverride":{"primary":"orange"}})
-    elif "follow-up task" in text and selected:
+    elif intent == "follow_up_task" or (routed_intent is None and "follow-up task" in text and selected):
+        if not selected:raise BuilderError("Select the component that should create the follow-up task.")
         _install(after,"workflow");binding={"id":f"follow-up-{selected[0]}","componentId":selected[0],"event":"on_click","action":"create_record","configuration":{"entityId":"task","preset":{"status":"open"}}};after["workflows"].append(binding);op("create_workflow",binding["id"],binding)
     else: raise UnsupportedRequestError("The request requires model-driven application synthesis.")
     validated=ApplicationManifest.model_validate(after)
@@ -157,30 +167,36 @@ class ApplicationBuilderService:
         manifest=blank_manifest(app.id,app.name);version=ApplicationVersion(tenant_id=tenant_id,application_id=app.id,version_number=1,manifest_json=manifest.model_dump_json(),summary="Blank application",created_by=user_id,active=True);db.add(version);await db.flush();app.active_version_id=version.id
         db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="application_created",details_json="{}"));await db.commit();return app,version
     @classmethod
-    async def propose(cls,db,tenant_id,user_id,role,payload):
+    async def propose(cls,db,tenant_id,user_id,role,payload,routed_intent=None,model_routed=False,routing_reason=None):
         if role!="owner":raise PermissionError("Only owners can change managed applications")
         app,version,manifest=await cls.current(db,tenant_id,payload.context.applicationId)
         if payload.context.workspaceId!=tenant_id or payload.context.activeVersionId!=version.id:raise BuilderError("Studio context is stale or belongs to another workspace")
-        intent=detect_intent(payload.message);planner="deterministic" if intent else "ollama"
-        logger.info("builder_request %s",json.dumps({"request_text":safe_log_text(payload.message),"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"deployed_git_commit_sha":DEPLOYED_COMMIT_SHA},ensure_ascii=False))
+        if model_routed and routed_intent is not None and routed_intent not in BUILDER_ROUTES:raise BuilderError("Model selected an unavailable application capability")
+        intent=routed_intent if model_routed else detect_intent(payload.message);planner="deterministic" if intent else "ollama";routing_authority="model" if model_routed else "legacy"
+        logger.info("builder_request %s",json.dumps({"request_text":safe_log_text(payload.message),"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"routing_authority":routing_authority,"routing_reason":str(routing_reason or "")[:500],"deployed_git_commit_sha":DEPLOYED_COMMIT_SHA},ensure_ascii=False))
         try:
-            plan=plan_request(payload,manifest)
+            if model_routed:
+                if intent is None:raise UnsupportedRequestError("The model classified this request as requiring synthesis")
+                plan=plan_request(payload,manifest,routed_intent=intent)
+            else:
+                plan=plan_request(payload,manifest)
         except UnsupportedRequestError:
             from packages.application_builder.ai import ApplicationBuilderAI, ManifestGenerationError
+            planner="ollama"
             try:plan=await ApplicationBuilderAI().plan(payload,manifest)
             except ManifestGenerationError as exc:
-                safe={"planner":"ollama","intent":intent,"details":exc.details}
+                safe={"planner":"ollama","intent":intent,"routing_authority":routing_authority,"details":exc.details}
                 initial=[item for item in exc.details.get("errors",[]) if item.get("stage")=="initial"]
                 repair=[item for item in exc.details.get("errors",[]) if item.get("stage")=="repair"]
                 db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="model_manifest_generation_failed",details_json=json.dumps({**safe,"details":{**exc.details,"errors":initial}})))
                 db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="model_manifest_repair_failed",details_json=json.dumps({**safe,"details":{**exc.details,"errors":repair}})))
                 await db.commit();raise BuilderGenerationError(exc.details) from exc
             except ValueError as exc:
-                logger.warning("builder_validation_failure %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":"ollama","intent":intent,"schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
+                logger.warning("builder_validation_failure %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":"ollama","intent":intent,"routing_authority":routing_authority,"schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
                 raise BuilderError(str(exc)) from exc
-        logger.info("builder_plan_validated %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"schema_validation_errors":[],"repair_attempt_result":"not_attempted" if planner=="deterministic" else "valid"}))
-        if intent=="customer_notebook":db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="customer_notebook_proposed",details_json=json.dumps({"planner":"deterministic","versionId":version.id})))
-        row=ApplicationChangeSet(tenant_id=tenant_id,application_id=app.id,base_version_id=version.id,request=payload.message,scope=payload.context.selectionScope,operations_json=json.dumps(plan["operations"]),before_json=manifest.model_dump_json(),after_json=json.dumps(plan["after"]),validation_json=json.dumps({"valid":True,"errors":[]}),risk=plan["risk"],created_by=user_id);db.add(row);await db.flush();db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="change_set_proposed",details_json=json.dumps({"changeSetId":row.id,"scope":row.scope,"planner":"model" if any(x["operation"]=="synthesize_application" for x in plan["operations"]) else "deterministic"})));await db.commit();return row
+        logger.info("builder_plan_validated %s",json.dumps({"workspace_id":tenant_id,"application_id":app.id,"planner":planner,"intent":intent,"routing_authority":routing_authority,"schema_validation_errors":[],"repair_attempt_result":"not_attempted" if planner=="deterministic" else "valid"}))
+        if intent=="customer_notebook":db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="customer_notebook_proposed",details_json=json.dumps({"planner":planner,"routingAuthority":routing_authority,"versionId":version.id})))
+        row=ApplicationChangeSet(tenant_id=tenant_id,application_id=app.id,base_version_id=version.id,request=payload.message,scope=payload.context.selectionScope,operations_json=json.dumps(plan["operations"]),before_json=manifest.model_dump_json(),after_json=json.dumps(plan["after"]),validation_json=json.dumps({"valid":True,"errors":[]}),risk=plan["risk"],created_by=user_id);db.add(row);await db.flush();db.add(ApplicationAuditEvent(tenant_id=tenant_id,application_id=app.id,actor_id=user_id,action="change_set_proposed",details_json=json.dumps({"changeSetId":row.id,"scope":row.scope,"planner":"model" if any(x["operation"]=="synthesize_application" for x in plan["operations"]) else "deterministic","routingAuthority":routing_authority,"intent":intent})));await db.commit();return row
     @classmethod
     async def change_set(cls,db,tenant_id,change_id):
         row=await db.scalar(select(ApplicationChangeSet).where(ApplicationChangeSet.id==change_id,ApplicationChangeSet.tenant_id==tenant_id))
