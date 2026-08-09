@@ -63,8 +63,7 @@ def _bounded_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     encoded = json.dumps(dict(context), ensure_ascii=False, default=str)
     if len(encoded) > 12_000:
-        encoded = encoded[:12_000]
-        return {"truncatedContext": encoded}
+        return {"truncatedContext": encoded[:12_000]}
     return dict(context)
 
 
@@ -111,19 +110,24 @@ class SemanticRouter:
         for attempt in range(2):
             try:
                 raw = _json_content(response)
-                domain_match = raw.get("domainMatch")
-                known = raw.get("known")
-                route = raw.get("route")
-                reason = " ".join(str(raw.get("reason") or "").split())[:500]
+                if set(raw) != {"domainMatch", "known", "route", "reason"}:
+                    raise SemanticRoutingError("Routing response fields do not match the required contract")
+                domain_match = raw["domainMatch"]
+                known = raw["known"]
+                route = raw["route"]
+                reason_value = raw["reason"]
                 if not isinstance(domain_match, bool) or not isinstance(known, bool):
                     raise SemanticRoutingError("domainMatch and known must be booleans")
+                if not isinstance(reason_value, str):
+                    raise SemanticRoutingError("Routing reason must be a string")
+                reason = " ".join(reason_value.split())[:500]
                 if known:
                     if not domain_match:
                         raise SemanticRoutingError("A known capability must match the routing domain")
                     if not isinstance(route, str) or route not in clean_routes:
                         raise SemanticRoutingError("Known routing decision referenced an unavailable capability")
                 else:
-                    if route not in {None, ""}:
+                    if route is not None and route != "":
                         raise SemanticRoutingError("Unknown routing decisions must not select a capability")
                     route = None
                 if not reason:
