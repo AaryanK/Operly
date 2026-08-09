@@ -6,7 +6,7 @@ from packages.custom_software.schema import SoftwarePlan
 from packages.database.custom_software_models import SoftwarePlanRecord, SoftwarePlanVersion, PlanningModelInvocation
 from packages.custom_software.live_planning import (OllamaPlanningClient,PlanningMode,
     PlannerUnavailable,PlanningBlocked,planning_mode)
-from packages.custom_software.global_repair import GlobalRepairPlanningOrchestrator
+from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 
 class PlanConflict(ValueError):pass
 
@@ -17,7 +17,7 @@ async def create_plan(db,tenant_id,user_id,prompt):
     if mode==PlanningMode.LIVE_LLM:
         async def persist_result(role,node_id,result):
             db.add(_invocation(row,tenant_id,role,node_id,result)); await db.commit()
-        orchestrator=GlobalRepairPlanningOrchestrator(OllamaPlanningClient(),on_result=persist_result)
+        orchestrator=RecursiveRepairPlanningOrchestrator(OllamaPlanningClient(),on_result=persist_result)
         try: outcome=await orchestrator.run(prompt); outcome["invocations"]=orchestrator.results
         except Exception:
             row.status="planning_blocked"; await db.commit(); raise
@@ -46,7 +46,7 @@ def _live_plan(prompt,outcome):
         tree.append({"id":node.node_id,"parentId":None,"originalRequirementIds":node.linked_requirement_ids,"title":node.title,"objective":node.objective,"description":node.objective,"nodeType":node.node_type,"inputs":node.inputs,"outputs":node.outputs,"dependencies":node.dependencies,"constraints":node.assumptions,"securityRequirements":node.security_constraints,"failureCases":node.failure_cases,"acceptanceCriteria":[a for r in analysis.requirements if r.requirement_id in node.linked_requirement_ids for a in r.acceptance_criteria],"requiredArtifacts":node.required_artifacts,"requiredTests":node.required_tests,"status":"implementation_ready","validation":{"readyForImplementation":True,"missingInformation":verdict.missing_information,"ambiguousBehavior":verdict.ambiguous_behavior,"missingInputs":verdict.missing_inputs,"missingOutputs":verdict.missing_outputs,"missingInvariants":verdict.missing_invariants,"missingDependencies":verdict.missing_dependencies,"missingFailureHandling":verdict.missing_failure_handling,"missingSecurityRules":verdict.missing_security_rules,"missingPersistenceBehavior":verdict.missing_persistence_behavior,"missingTests":verdict.missing_tests,"conflicts":verdict.requirement_conflicts,"recommendedDecompositionAreas":verdict.recommended_decomposition},"implementationEvidence":[],"childIds":[],"version":1,"provenance":{"planningMode":"live_llm"},"planningMode":"live_llm","responsibilities":node.responsibilities,"stateEffects":node.state_effects,"invariants":node.invariants,"persistenceBehavior":node.persistence_behavior})
     mandatory=[x for x in ledger if x["mandatory"]]; mapped=sum(bool(x["relatedPlanNodeIds"]) for x in mandatory); global_ok=outcome["global"].approved and mapped==len(mandatory)
     invocations=outcome.get("invocations",[]); input_tokens=sum(r.input_tokens for _,_,r in invocations); output_tokens=sum(r.output_tokens for _,_,r in invocations)
-    base["provenance"]={**base.get("provenance",{}),"planningMode":"live_llm","providerModel":f"{invocations[0][2].provider}/{invocations[0][2].model_id}" if invocations else "unknown","invocationCount":len(invocations),"contextPacketsStoredAsDigests":True,"globalRepairRounds":outcome.get("global_repair_rounds",0)}
+    base["provenance"]={**base.get("provenance",{}),"planningMode":"live_llm","providerModel":f"{invocations[0][2].provider}/{invocations[0][2].model_id}" if invocations else "unknown","invocationCount":len(invocations),"contextPacketsStoredAsDigests":True,"globalRepairRounds":outcome.get("global_repair_rounds",0),"dependencyResolutionCount":len(outcome.get("dependency_resolution_traces",[]))}
     base.update({"summary":analysis.root_objective,"primaryGoal":analysis.root_objective,"requirementLedger":ledger,"planTree":tree,"planningMode":"live_llm","planningBudget":{"maxDepth":budget.max_depth,"maxNodes":budget.max_nodes,"maxRefinementsPerNode":budget.max_refinements_per_node,"maxModelCalls":budget.max_model_calls,"maxTokens":budget.max_tokens,"maxElapsedSeconds":budget.max_elapsed_seconds},"planningMetrics":{"mandatoryRequirementsMapped":mapped,"mandatoryRequirementsTotal":len(mandatory),"planNodesReady":len(tree),"planNodesTotal":len(tree),"executableTestsMapped":sum(bool(x["relatedTestIds"]) for x in ledger),"unresolvedValidatorFindings":0,"dependencyComplete":True,"globalValidationPassed":global_ok,"approvalBlockedReasons":[] if global_ok else ["live global validation failed"],"planningMode":"live_llm","planningCallsUsed":budget.calls,"inputTokensUsed":input_tokens,"outputTokensUsed":output_tokens,"blockedNodes":0,"nodesRequiringDecomposition":0,"testSpecificationCoverage":sum(bool(x["relatedTestIds"]) for x in ledger)},"globalValidation":outcome["global"].model_dump(mode="json")|{"passed":global_ok,"planningMode":"live_llm"}})
     return SoftwarePlan.model_validate(base)
 
