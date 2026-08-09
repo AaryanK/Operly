@@ -1,3 +1,5 @@
+import asyncio
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -6,8 +8,9 @@ from pydantic import ValidationError
 from packages.coding_harness.contracts import (
     BaselineImport, BenchmarkTask, ExecutionState, OutcomeMetrics, RunnerJob,
 )
-from packages.coding_harness.engine import build_harness_plan
+from packages.coding_harness.engine import build_harness_plan, build_harness_plan_with_model
 from packages.coding_harness.evaluation import aggregate_report, calculate_loss, compare_task
+from packages.coding_harness.model_resolution import CapabilityResolutionError, ModelCapabilityResolver
 from packages.coding_harness.state_machine import transition
 
 
@@ -44,6 +47,61 @@ def test_specialized_task_selects_isolated_analysis_and_realtime_boundaries():
     assert selected["queue"] == "isolated worker queue"
     assert selected["realtime"] == "WebSocket collaboration service"
     assert "S3-compatible" in selected["objectStorage"]
+
+
+def test_runtime_harness_uses_model_resolution_not_keyword_detection():
+    class Client:
+        async def chat(self, messages, tools):
+            return {"content": json.dumps({
+                "knownFeatureIds": ["analysis"],
+                "unknownRequirements": [],
+                "reason": "The request requires an isolated compute workload.",
+            })}
+
+    result = asyncio.run(build_harness_plan_with_model(
+        "Create a workspace that executes researcher numerical workloads away from the control process.",
+        Client(),
+    ))
+    assert result["knowledgeResolution"]["authority"] == "model"
+    assert result["knowledgeResolution"]["knownCapabilityIds"] == ["analysis"]
+    selected = next(x for x in result["architecturePlan"]["candidates"] if x["id"] == result["architecturePlan"]["recommendedCandidateId"])
+    assert selected["queue"] == "isolated worker queue"
+
+
+def test_runtime_harness_preserves_model_declared_unknown_requirement():
+    class Client:
+        async def chat(self, messages, tools):
+            return {"content": json.dumps({
+                "knownFeatureIds": [],
+                "unknownRequirements": [{
+                    "description": "Render a domain-specific spatial overlay editor",
+                    "reason": "No supplied capability represents this requested behavior.",
+                }],
+                "reason": "The requested editor requires a new capability.",
+            })}
+
+    result = asyncio.run(build_harness_plan_with_model("Build the specialized editor.", Client()))
+    assert result["knowledgeResolution"]["unknownRequirements"][0]["description"] == "Render a domain-specific spatial overlay editor"
+    requirement = next(x for x in result["requirementGraph"]["requirements"] if x["source"] == "model_unmatched_requirement")
+    capability = next(x for x in result["capabilityGraph"]["capabilities"] if requirement["id"] in x["requirementIds"])
+    assert capability["knownImplementations"] == []
+
+
+def test_runtime_harness_rejects_model_invented_capability_after_repair():
+    class Client:
+        def __init__(self): self.calls = 0
+        async def chat(self, messages, tools):
+            self.calls += 1
+            return {"content": json.dumps({
+                "knownFeatureIds": ["invented"],
+                "unknownRequirements": [],
+                "reason": "Invalid response.",
+            })}
+
+    client = Client()
+    with pytest.raises(CapabilityResolutionError):
+        asyncio.run(ModelCapabilityResolver(client).resolve("Build something."))
+    assert client.calls == 2
 
 
 def test_runner_contract_fails_closed_against_operly_execution_and_shells():
