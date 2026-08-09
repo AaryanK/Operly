@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from packages.business_brain.ollama_client import OllamaClient
+from packages.model_runtime.ollama_client import OllamaClient
 
 
 class CapabilityResolutionError(ValueError):
@@ -95,6 +95,7 @@ def _parse(raw: dict[str, Any], capabilities: Mapping[str, str]) -> CapabilityRe
         raise CapabilityResolutionError("unknownRequirements must be a list")
 
     unknown_rows: list[UnknownRequirement] = []
+    seen_unknown: set[str] = set()
     for item in unknown:
         if not isinstance(item, dict) or set(item) != {"description", "reason"}:
             raise CapabilityResolutionError("Each unknown requirement must contain description and reason")
@@ -106,6 +107,10 @@ def _parse(raw: dict[str, Any], capabilities: Mapping[str, str]) -> CapabilityRe
         item_reason = " ".join(item_reason.split())[:500]
         if not description or not item_reason:
             raise CapabilityResolutionError("Unknown requirement fields cannot be empty")
+        normalized = description.casefold()
+        if normalized in seen_unknown:
+            raise CapabilityResolutionError("Unknown requirements must be unique")
+        seen_unknown.add(normalized)
         unknown_rows.append(UnknownRequirement(description=description, reason=item_reason))
 
     if not isinstance(reason, str):
