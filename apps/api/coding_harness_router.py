@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from apps.api.dependencies import AuthContext, get_auth_context
-from packages.business_brain.ollama_client import OllamaError
 from packages.coding_harness.engine import build_harness_plan_with_model
 from packages.coding_harness.model_resolution import CapabilityResolutionError
 from packages.custom_software.schema import AgenticProjectInput
+from packages.model_runtime import OllamaError
 
 router = APIRouter(tags=["coding-harness"])
 
