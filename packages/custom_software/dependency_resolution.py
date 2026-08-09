@@ -76,21 +76,25 @@ def dependency_findings(node: ProposedNode, verdict: ValidatorOutput) -> list[di
     ]
 
 
-def _new_dependency_cycle_errors(
-    new_nodes: list[ProposedNode], blocked_node_id: str
+def _resolution_cycle_errors(
+    blocked_node: ProposedNode,
+    existing_nodes: list[ProposedNode],
+    new_nodes: list[ProposedNode],
+    output: DependencyResolutionOutput,
 ) -> list[str]:
-    errors: list[str] = []
-    new_ids = {node.node_id for node in new_nodes}
-    graph = {
-        node.node_id: {dependency for dependency in node.dependencies if dependency in new_ids}
-        for node in new_nodes
+    graph: dict[str, set[str]] = {
+        node.node_id: set(node.dependencies)
+        for node in existing_nodes
+        if node.node_id != blocked_node.node_id
     }
-    for node in new_nodes:
-        if blocked_node_id in node.dependencies:
-            errors.append(
-                f"{node.node_id}: dependency cannot point back to blocked node {blocked_node_id}"
-            )
+    graph.update({node.node_id: set(node.dependencies) for node in new_nodes})
+    selected_targets = {
+        item.existing_node_id if item.action == "link_existing" else item.dependency_node.node_id
+        for item in output.resolutions
+    }
+    graph[blocked_node.node_id] = set(blocked_node.dependencies) | selected_targets
 
+    errors: list[str] = []
     visiting: set[str] = set()
     visited: set[str] = set()
 
@@ -100,16 +104,15 @@ def _new_dependency_cycle_errors(
             cycle = path[cycle_start:] + [node_id]
             errors.append("dependency resolution introduced cycle: " + " -> ".join(cycle))
             return
-        if node_id in visited:
+        if node_id in visited or node_id not in graph:
             return
         visiting.add(node_id)
-        for dependency_id in graph.get(node_id, set()):
+        for dependency_id in graph[node_id]:
             visit(dependency_id, [*path, node_id])
         visiting.remove(node_id)
         visited.add(node_id)
 
-    for node_id in graph:
-        visit(node_id, [])
+    visit(blocked_node.node_id, [])
     return list(dict.fromkeys(errors))
 
 
@@ -159,7 +162,6 @@ def validate_dependency_resolution(
         new_ids = [item.node_id for item in new_nodes]
         if len(new_ids) != len(set(new_ids)):
             errors.append("dependency resolution proposed duplicate node IDs")
-        errors.extend(_new_dependency_cycle_errors(new_nodes, blocked_node.node_id))
         errors.extend(
             structural_errors(
                 new_nodes,
@@ -175,6 +177,8 @@ def validate_dependency_resolution(
             errors.extend(
                 f"{dependency.node_id}: {message}" for message in scope_errors(dependency, linked)
             )
+
+    errors.extend(_resolution_cycle_errors(blocked_node, existing_nodes, new_nodes, output))
     return errors
 
 
@@ -238,6 +242,7 @@ async def resolve_dependencies(
                     "objective": item.objective,
                     "responsibilities": item.responsibilities,
                     "outputs": item.outputs,
+                    "dependencies": item.dependencies,
                     "linked_requirement_ids": item.linked_requirement_ids,
                 }
                 for item in existing_nodes
@@ -249,7 +254,6 @@ async def resolve_dependencies(
             "prefer_existing_dependency": True,
             "new_dependency_must_be_minimal": True,
             "new_dependency_requirement_ids_must_be_subset_of": blocked_node.linked_requirement_ids,
-            "new_dependency_must_not_depend_on_blocked_node": blocked_node.node_id,
             "dependency_graph_must_be_acyclic": True,
             "do_not_add_user_requirements": True,
             "do_not_add_optional_scope": True,
