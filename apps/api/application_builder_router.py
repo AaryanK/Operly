@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.application_builder.catalog import component_catalog, module_catalog
 from packages.application_builder.renderer import render_application
+from packages.application_builder.routing import route_application_request
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest, RecordInput
 from packages.application_builder.service import ApplicationBuilderService, BuilderError, BuilderGenerationError, RecordValidationError
 from packages.business_brain.ollama_client import OllamaError
 from packages.database.application_builder_models import ApplicationChangeSet, ApplicationVersion, ManagedApplication, ManagedRecord
+from packages.model_runtime.semantic_router import SemanticRoutingError
 
 router=APIRouter(tags=["application-builder"]);service=ApplicationBuilderService()
 def failure(error):return HTTPException(403 if isinstance(error,PermissionError) else 404 if isinstance(error,LookupError) else 422,str(error))
@@ -33,8 +35,12 @@ async def get_application(application_id:str,auth:AuthContext=Depends(get_auth_c
     except (BuilderError,LookupError) as e:raise failure(e)
 @router.post("/api/application-builder/proposals")
 async def propose(payload:ProposalRequest,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
-    try:return change(await service.propose(db,auth.tenant.id,auth.user.id,auth.role,payload))
+    try:
+        if auth.role!="owner":raise PermissionError("Only owners can change managed applications")
+        decision=await route_application_request(payload.message,context={"surface":"studio","workspaceId":payload.context.workspaceId,"applicationId":payload.context.applicationId,"selectionScope":payload.context.selectionScope,"selectedIds":payload.context.selectedIds})
+        return change(await service.propose(db,auth.tenant.id,auth.user.id,auth.role,payload,routed_intent=decision.route_id if decision.known else None,model_routed=True,routing_reason=decision.reason))
     except BuilderGenerationError as e:raise HTTPException(422,detail={"code":"manifest_generation_failed","message":str(e),"validation":e.details})
+    except SemanticRoutingError as e:raise HTTPException(502,detail={"code":"semantic_routing_failed","message":str(e)})
     except OllamaError as e:raise HTTPException(503,e.public_message)
     except (BuilderError,PermissionError,LookupError) as e:raise failure(e)
 @router.get("/api/application-builder/change-sets/{change_id}")
