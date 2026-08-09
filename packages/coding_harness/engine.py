@@ -95,6 +95,7 @@ def capabilities(graph: RequirementGraph) -> CapabilityGraph:
             elif "access" in text: implementations=["OIDC", "session authentication with policy checks"]
             elif "file" in text: implementations=["object storage with signed uploads"]
         slug=re.sub(r"[^a-z0-9]+","-",req.description.lower()).strip("-")[:32] or "requirement"
+        if req.source == "model_unmatched_requirement": slug=f"{slug[:24]}-{req.id.lower()}"
         caps.append(Capability(id=f"CAP-{slug}", category=category, purpose=req.description, requirementIds=[req.id], knownImplementations=implementations))
     return CapabilityGraph(capabilities=caps)
 
