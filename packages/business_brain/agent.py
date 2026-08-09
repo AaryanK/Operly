@@ -21,8 +21,9 @@ from packages.business_brain.types import AgentInput, ToolContext
 from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.db import session_scope
 from packages.database.application_builder_models import ManagedApplication
+from packages.application_builder.routing import route_application_request
 from packages.application_builder.schema import BuilderContext, ProposalRequest
-from packages.application_builder.service import ApplicationBuilderService, detect_intent
+from packages.application_builder.service import ApplicationBuilderService
 
 
 SYSTEM_PROMPT = """
@@ -76,9 +77,24 @@ class AgentService:
 
         conversation = await self._get_or_create_conversation(request)
 
-        intent = detect_intent(user_text)
-        if intent and request.metadata.get("user_id"):
-            return await self._run_known_builder_intent(request, conversation, user_text, intent)
+        if user_text and request.metadata.get("user_id"):
+            decision = await route_application_request(
+                user_text,
+                client=self.client,
+                context={
+                    "surface": "operly_ai",
+                    "applicationId": request.metadata.get("application_id"),
+                    "role": request.metadata.get("role"),
+                },
+            )
+            if decision.domain_match:
+                return await self._run_builder_request(
+                    request,
+                    conversation,
+                    user_text,
+                    decision.route_id if decision.known else None,
+                    decision.reason,
+                )
 
         async with session_scope() as db:
             history = await load_conversation_messages(
@@ -238,8 +254,8 @@ class AgentService:
             "message": answer,
         }
 
-    async def _run_known_builder_intent(self, request, conversation, user_text, intent):
-        """Route allowlisted application requests before any Ollama invocation."""
+    async def _run_builder_request(self, request, conversation, user_text, intent, routing_reason):
+        """Execute a model-routed managed-application request."""
         requested_id = str(request.metadata.get("application_id") or "").strip()
         user_id = str(request.metadata.get("user_id") or "").strip()
         role = str(request.metadata.get("role") or "employee")
@@ -251,17 +267,19 @@ class AgentService:
                 query = query.order_by(ManagedApplication.created_at.desc()).limit(1)
             application = await db.scalar(query)
             if application is None:
-                answer = "Create or select a managed application in Studio before adding login."
+                answer = "Create or select a managed application in Studio before changing the application."
                 db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="user",content=user_text))
                 db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="assistant",content=answer))
-                return {"conversation_id":conversation.id,"message":answer,"planner":"deterministic","intent":intent}
+                return {"conversation_id":conversation.id,"message":answer,"routing_authority":"model","intent":intent}
             payload = ProposalRequest(message=user_text,context=BuilderContext(workspaceId=request.tenant_id,applicationId=application.id,activeVersionId=application.active_version_id,selectionScope="application",userRole=role))
-            change = await ApplicationBuilderService.propose(db,request.tenant_id,user_id,role,payload)
-            answer = f"Created a validated secure-login proposal for {application.name}. Preview and apply it in Studio."
+            change = await ApplicationBuilderService.propose(db,request.tenant_id,user_id,role,payload,routed_intent=intent,model_routed=True,routing_reason=routing_reason)
+            operations=json.loads(change.operations_json)
+            planner="model_synthesis" if any(item.get("operation")=="synthesize_application" for item in operations) else "model_routed_deterministic"
+            answer = f"Created a validated application proposal for {application.name}. Preview and apply it in Studio."
         async with session_scope() as db:
             db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="user",content=user_text))
             db.add(AgentMessage(tenant_id=request.tenant_id,conversation_id=conversation.id,role="assistant",content=answer))
-        return {"conversation_id":conversation.id,"message":answer,"planner":"deterministic","intent":intent,"application_id":application.id,"change_set_id":change.id}
+        return {"conversation_id":conversation.id,"message":answer,"planner":planner,"routing_authority":"model","intent":intent,"application_id":application.id,"change_set_id":change.id}
 
     async def _get_or_create_conversation(
         self,
