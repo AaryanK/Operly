@@ -76,6 +76,43 @@ def dependency_findings(node: ProposedNode, verdict: ValidatorOutput) -> list[di
     ]
 
 
+def _new_dependency_cycle_errors(
+    new_nodes: list[ProposedNode], blocked_node_id: str
+) -> list[str]:
+    errors: list[str] = []
+    new_ids = {node.node_id for node in new_nodes}
+    graph = {
+        node.node_id: {dependency for dependency in node.dependencies if dependency in new_ids}
+        for node in new_nodes
+    }
+    for node in new_nodes:
+        if blocked_node_id in node.dependencies:
+            errors.append(
+                f"{node.node_id}: dependency cannot point back to blocked node {blocked_node_id}"
+            )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node_id: str, path: list[str]):
+        if node_id in visiting:
+            cycle_start = path.index(node_id) if node_id in path else 0
+            cycle = path[cycle_start:] + [node_id]
+            errors.append("dependency resolution introduced cycle: " + " -> ".join(cycle))
+            return
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        for dependency_id in graph.get(node_id, set()):
+            visit(dependency_id, [*path, node_id])
+        visiting.remove(node_id)
+        visited.add(node_id)
+
+    for node_id in graph:
+        visit(node_id, [])
+    return list(dict.fromkeys(errors))
+
+
 def validate_dependency_resolution(
     output: DependencyResolutionOutput,
     findings: list[dict[str, str]],
@@ -112,6 +149,8 @@ def validate_dependency_resolution(
                 errors.append(f"{item.finding_id}: dependency node cannot reuse blocked node ID")
             if dependency.node_id in existing_ids:
                 errors.append(f"{item.finding_id}: dependency node ID already exists: {dependency.node_id}")
+            if not dependency.linked_requirement_ids:
+                errors.append(f"{item.finding_id}: dependency node must retain requirement provenance")
             if not set(dependency.linked_requirement_ids) <= set(blocked_node.linked_requirement_ids):
                 errors.append(f"{item.finding_id}: dependency expanded beyond blocked node requirements")
             new_nodes.append(dependency)
@@ -120,6 +159,7 @@ def validate_dependency_resolution(
         new_ids = [item.node_id for item in new_nodes]
         if len(new_ids) != len(set(new_ids)):
             errors.append("dependency resolution proposed duplicate node IDs")
+        errors.extend(_new_dependency_cycle_errors(new_nodes, blocked_node.node_id))
         errors.extend(
             structural_errors(
                 new_nodes,
@@ -209,6 +249,8 @@ async def resolve_dependencies(
             "prefer_existing_dependency": True,
             "new_dependency_must_be_minimal": True,
             "new_dependency_requirement_ids_must_be_subset_of": blocked_node.linked_requirement_ids,
+            "new_dependency_must_not_depend_on_blocked_node": blocked_node.node_id,
+            "dependency_graph_must_be_acyclic": True,
             "do_not_add_user_requirements": True,
             "do_not_add_optional_scope": True,
             "remaining_calls": orchestrator.budget.max_model_calls - orchestrator.budget.calls,
