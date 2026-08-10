@@ -22,6 +22,7 @@ on:
       - "tests/test_planning_internal_questions.py"
       - "tests/test_scope_convergence_deterministic_targets.py"
       - "tests/test_graph_planning_efficiency.py"
+      - "tests/test_coding_spec_compaction.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_capability_harness_journey.py"
@@ -59,6 +60,7 @@ jobs:
           tests/test_planning_internal_questions.py
           tests/test_scope_convergence_deterministic_targets.py
           tests/test_graph_planning_efficiency.py
+          tests/test_coding_spec_compaction.py
           tests/test_opencode_coding_harness.py
           tests/test_coding_agent_tool_loop.py
           tests/test_capability_harness_journey.py
