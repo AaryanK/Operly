@@ -5,7 +5,9 @@ on:
     branches: [capability-sandbox]
     paths:
       - "packages/capability_sandbox/**"
+      - "packages/custom_software/live_planning.py"
       - "tests/test_capability_target_resolution.py"
+      - "tests/test_refinement_scope_routing.py"
       - "scripts/run_capability_sandbox.py"
       - ".github/workflows/capability-sandbox.yml"
   workflow_dispatch:
@@ -20,4 +22,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest
-      - run: python -m pytest -q tests/test_capability_target_resolution.py
+      - run: >-
+          python -m pytest -q
+          tests/test_capability_target_resolution.py
+          tests/test_refinement_scope_routing.py
