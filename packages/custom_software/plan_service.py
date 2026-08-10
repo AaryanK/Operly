@@ -4,7 +4,12 @@ from pydantic import ValidationError
 
 from packages.custom_software.planner import build_software_plan, revise_plan
 from packages.custom_software.schema import SoftwarePlan
-from packages.database.custom_software_models import SoftwarePlanRecord, SoftwarePlanVersion, PlanningModelInvocation
+from packages.database.custom_software_models import (
+    SoftwarePlanRecord,
+    SoftwarePlanVersion,
+    PlanningModelInvocation,
+    PlanningWorkItem,
+)
 from packages.custom_software.live_planning import (
     OllamaPlanningClient,
     PlanningMode,
@@ -13,12 +18,106 @@ from packages.custom_software.live_planning import (
     planning_mode,
 )
 from packages.custom_software.live_projection import neutral_live_envelope, project_live_envelope
-from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
+from packages.custom_software.planning_orchestrator import (
+    PlanningNeedsUserInput,
+    RecursiveRepairPlanningOrchestrator,
+)
 from packages.custom_software.planning_output_normalizer import NormalizingPlanningClient
 
 
 class PlanConflict(ValueError):
     pass
+
+
+async def _run_live_plan(db, row, tenant_id, prompt):
+    async def persist_result(role, node_id, result):
+        db.add(_invocation(row, tenant_id, role, node_id, result))
+        await db.commit()
+
+    orchestrator = RecursiveRepairPlanningOrchestrator(
+        NormalizingPlanningClient(OllamaPlanningClient()), on_result=persist_result
+    )
+    outcome = await orchestrator.run(prompt)
+    outcome["invocations"] = orchestrator.results
+    return _live_plan(prompt, outcome)
+
+
+async def _clarification_item(db, row):
+    return await db.scalar(
+        select(PlanningWorkItem)
+        .where(
+            PlanningWorkItem.plan_id == row.id,
+            PlanningWorkItem.tenant_id == row.tenant_id,
+            PlanningWorkItem.plan_version == row.current_version,
+            PlanningWorkItem.work_type == "user_clarification",
+        )
+        .order_by(desc(PlanningWorkItem.updated_at))
+    )
+
+
+async def _store_clarification(db, row, questions, history=None, item=None):
+    cleaned = [str(question).strip() for question in questions if str(question).strip()][:2]
+    if not cleaned:
+        raise PlanningBlocked("planner requested clarification without a usable question")
+    item = item or await _clarification_item(db, row)
+    if item is None:
+        item = PlanningWorkItem(
+            tenant_id=row.tenant_id,
+            plan_id=row.id,
+            plan_version=row.current_version,
+            node_id="root_clarification",
+            work_type="user_clarification",
+            priority=1,
+        )
+        db.add(item)
+    item.state = "blocked"
+    item.payload_json = json.dumps(
+        {
+            "questions": cleaned,
+            "history": list(history or []),
+            "originalPrompt": row.prompt,
+        }
+    )
+    item.findings_json = json.dumps(
+        [{"type": "user_clarification", "question": question} for question in cleaned]
+    )
+    item.blocked_question = cleaned[0]
+    row.status = "awaiting_clarification"
+    await db.commit()
+    return item
+
+
+def _clarified_prompt(original_prompt, history):
+    sections = [original_prompt.strip(), "", "Clarifications supplied by the owner:"]
+    for index, turn in enumerate(history, 1):
+        questions = [str(value).strip() for value in turn.get("questions", []) if str(value).strip()]
+        answer = str(turn.get("answer", "")).strip()
+        sections.append(f"Clarification {index}:")
+        for question in questions:
+            sections.append(f"- OPERLY asked: {question}")
+        sections.append(f"- Owner answered: {answer}")
+    sections.append("Treat the owner's clarification as authoritative context for this same planning request.")
+    return "\n".join(sections)
+
+
+async def _persist_first_version(db, row, user_id, planned, revision_request=None):
+    version = SoftwarePlanVersion(
+        tenant_id=row.tenant_id,
+        plan_id=row.id,
+        version=row.current_version,
+        plan_json=planned.model_dump_json(),
+        requirement_ledger_json=json.dumps([x.model_dump() for x in planned.requirementLedger]),
+        plan_tree_json=json.dumps([x.model_dump() for x in planned.planTree]),
+        validation_json=json.dumps(planned.globalValidation),
+        semantic_diff_json=planned.semanticDiff.model_dump_json() if planned.semanticDiff else "{}",
+        revision_request=revision_request,
+        created_by=user_id,
+    )
+    db.add(version)
+    row.status = "draft"
+    await db.commit()
+    await db.refresh(row)
+    return version
 
 
 async def create_plan(db, tenant_id, user_id, prompt):
@@ -34,17 +133,12 @@ async def create_plan(db, tenant_id, user_id, prompt):
     db.add(row)
     await db.flush()
     if mode == PlanningMode.LIVE_LLM:
-        async def persist_result(role, node_id, result):
-            db.add(_invocation(row, tenant_id, role, node_id, result))
-            await db.commit()
-
-        orchestrator = RecursiveRepairPlanningOrchestrator(
-            NormalizingPlanningClient(OllamaPlanningClient()), on_result=persist_result
-        )
         try:
-            outcome = await orchestrator.run(prompt)
-            outcome["invocations"] = orchestrator.results
-            planned = _live_plan(prompt, outcome)
+            planned = await _run_live_plan(db, row, tenant_id, prompt)
+        except PlanningNeedsUserInput as error:
+            await _store_clarification(db, row, error.questions)
+            error.plan_id = row.id
+            raise
         except ValidationError as error:
             row.status = "planning_blocked"
             await db.commit()
@@ -67,21 +161,108 @@ async def create_plan(db, tenant_id, user_id, prompt):
         for item in data["planTree"]:
             item["planningMode"] = "deterministic_test"
         planned = SoftwarePlan.model_validate(data)
-    row.status = "draft"
-    version = SoftwarePlanVersion(
-        tenant_id=tenant_id,
-        plan_id=row.id,
-        version=1,
-        plan_json=planned.model_dump_json(),
-        requirement_ledger_json=json.dumps([x.model_dump() for x in planned.requirementLedger]),
-        plan_tree_json=json.dumps([x.model_dump() for x in planned.planTree]),
-        validation_json=json.dumps(planned.globalValidation),
-        semantic_diff_json=planned.semanticDiff.model_dump_json() if planned.semanticDiff else "{}",
-        created_by=user_id,
+    version = await _persist_first_version(db, row, user_id, planned)
+    return row, version, planned
+
+
+async def pending_clarification(db, tenant_id, user_id):
+    row = await db.scalar(
+        select(SoftwarePlanRecord)
+        .where(
+            SoftwarePlanRecord.tenant_id == tenant_id,
+            SoftwarePlanRecord.created_by == user_id,
+            SoftwarePlanRecord.status == "awaiting_clarification",
+        )
+        .order_by(desc(SoftwarePlanRecord.created_at))
     )
-    db.add(version)
+    if row is None:
+        return None
+    item = await _clarification_item(db, row)
+    if item is None or item.state != "blocked":
+        return None
+    payload = json.loads(item.payload_json or "{}")
+    return {
+        "status": "clarification_required",
+        "planId": row.id,
+        "questions": payload.get("questions", []),
+        "history": payload.get("history", []),
+        "prompt": row.prompt,
+    }
+
+
+async def continue_after_clarification(db, row, user_id, answer):
+    if row.status != "awaiting_clarification":
+        raise PlanConflict("This plan is not waiting for clarification")
+    item = await _clarification_item(db, row)
+    if item is None or item.state != "blocked":
+        raise PlanConflict("No active clarification exists for this plan")
+    answer = str(answer or "").strip()
+    if not answer:
+        raise PlanConflict("Clarification answer cannot be empty")
+
+    payload = json.loads(item.payload_json or "{}")
+    questions = payload.get("questions", [])
+    history = list(payload.get("history", []))
+    history.append({"questions": questions, "answer": answer})
+    effective_prompt = _clarified_prompt(row.prompt, history)
+
+    item.state = "running"
+    item.payload_json = json.dumps(
+        {
+            "questions": questions,
+            "history": history,
+            "originalPrompt": row.prompt,
+        }
+    )
+    row.status = "planning"
     await db.commit()
-    await db.refresh(row)
+
+    mode = planning_mode()
+    if mode == PlanningMode.UNAVAILABLE:
+        row.status = "awaiting_clarification"
+        item.state = "blocked"
+        await db.commit()
+        raise PlannerUnavailable("planner_unavailable")
+    if mode != PlanningMode.LIVE_LLM:
+        raise PlanConflict("Clarification continuation requires live planning mode")
+
+    try:
+        planned = await _run_live_plan(db, row, row.tenant_id, effective_prompt)
+    except PlanningNeedsUserInput as error:
+        await _store_clarification(db, row, error.questions, history=history, item=item)
+        error.plan_id = row.id
+        raise
+    except ValidationError as error:
+        row.status = "planning_blocked"
+        item.state = "failed"
+        await db.commit()
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in entry.get('loc', []))}: {entry.get('msg', 'invalid')}"
+            for entry in error.errors()[:8]
+        )
+        raise PlanningBlocked(f"live plan projection failed schema validation: {details}") from error
+    except Exception:
+        row.status = "planning_blocked"
+        item.state = "failed"
+        await db.commit()
+        raise
+
+    item.state = "resolved"
+    item.blocked_question = None
+    item.payload_json = json.dumps(
+        {
+            "questions": [],
+            "history": history,
+            "originalPrompt": row.prompt,
+        }
+    )
+    version = await _persist_first_version(
+        db,
+        row,
+        user_id,
+        planned,
+        revision_request="Planning clarification: " + answer,
+    )
     return row, version, planned
 
 
@@ -212,8 +393,6 @@ def _live_plan(prompt, outcome):
     input_tokens = sum(result.input_tokens for _, _, result in invocations)
     output_tokens = sum(result.output_tokens for _, _, result in invocations)
 
-    # Live mode no longer re-runs the deterministic/legacy planner.  The shell
-    # is schema-only; all semantic content below comes from validated live output.
     base = project_live_envelope(
         neutral_live_envelope(prompt, analysis.root_objective), analysis, nodes, ledger
     )
