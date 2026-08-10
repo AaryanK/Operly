@@ -1,3 +1,4 @@
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,7 @@ from packages.coding_harness.model_resolution import CapabilityResolutionError
 from packages.coding_harness.opencode_agent import CodingHarnessError
 from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
 from packages.custom_software.plan_service import owned_plan, plan_version
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter
+from packages.custom_software.runner_adapters import ExternalRunnerAdapter, LocalSubprocessTestRunner
 from packages.custom_software.runner_service import build_json
 from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
 from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
@@ -51,12 +52,23 @@ def _assert_owner(auth: AuthContext) -> None:
         raise HTTPException(403, "Only owners can run the coding harness")
 
 
+def _configured_runner_adapter():
+    """Select the test subprocess runner only when explicitly enabled.
+
+    LocalSubprocessTestRunner independently enforces OPERLY_ENV in
+    {development,test}, so production never falls back to process-only isolation.
+    """
+    if os.getenv("OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER", "").strip() == "1":
+        return LocalSubprocessTestRunner()
+    return ExternalRunnerAdapter()
+
+
 @router.get("/api/coding-harness/runner-capabilities")
 async def runner_capabilities(auth: AuthContext = Depends(get_auth_context)):
     """Report what the configured isolated runner actually advertises."""
     _assert_owner(auth)
-    adapter = ExternalRunnerAdapter()
     try:
+        adapter = _configured_runner_adapter()
         capabilities = await adapter.capabilities()
     except SandboxUnavailable as error:
         raise HTTPException(status_code=503, detail={"code": "runner_unavailable", "message": str(error)}) from error
@@ -141,10 +153,11 @@ async def edit_harness_source(plan_id: str, payload: HarnessSourceEditInput, aut
 
 @router.post("/api/coding-harness/builds", status_code=202)
 async def create_harness_build(payload: RunnerBuildInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
-    """Run build/test/health gates and bounded source repair only in the isolated runner."""
+    """Run build/test/health gates and bounded source repair only in the configured runner."""
     _assert_owner(auth)
     row, plan = await _approved_plan(db, auth, payload.planId, payload.approvedVersion)
     try:
+        adapter = _configured_runner_adapter()
         build, source, repairs = await build_with_repair(
             db,
             auth.tenant.id,
@@ -152,7 +165,10 @@ async def create_harness_build(payload: RunnerBuildInput, auth: AuthContext = De
             row,
             plan,
             payload.idempotencyKey,
+            adapter=adapter,
         )
+    except SandboxUnavailable as error:
+        raise HTTPException(status_code=503, detail={"code": "runner_unavailable", "message": str(error)}) from error
     except SourceRecordError as error:
         raise HTTPException(409, str(error)) from error
     except OllamaError as error:
