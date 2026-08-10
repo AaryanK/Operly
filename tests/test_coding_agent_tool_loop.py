@@ -85,6 +85,12 @@ class DoomLoopModel:
         }
 
 
+class SlowCodingModel:
+    async def chat(self, messages, tools=None):
+        await asyncio.sleep(0.2)
+        return {"role": "assistant", "content": "", "tool_calls": []}
+
+
 class MissingTestRecoveryModel:
     def __init__(self):
         self.calls = 0
@@ -215,3 +221,12 @@ def test_plan_mode_is_read_only_by_tool_permission():
 def test_repeated_identical_tool_calls_trigger_doom_loop_guard():
     with pytest.raises(CodingHarnessError, match="repeated the same list tool call"):
         asyncio.run(OpenCodeStyleCodingAgent(client=DoomLoopModel(), max_steps=8).build("Approved specification"))
+
+
+def test_wall_clock_budget_stops_slow_model_turn_instead_of_running_indefinitely():
+    agent = OpenCodeStyleCodingAgent(client=SlowCodingModel(), max_steps=8)
+    agent.max_seconds = 1
+    agent.model_slice_seconds = 0.01
+
+    with pytest.raises(CodingHarnessError, match="bounded generation window"):
+        asyncio.run(agent.build("Approved specification"))

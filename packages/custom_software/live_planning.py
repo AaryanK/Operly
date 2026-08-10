@@ -305,7 +305,11 @@ class OllamaPlanningClient:
                 candidates = [(model, OllamaClient(model=model, fallback_models=[])) for model in models]
                 for _, candidate in candidates:
                     candidate.max_attempts = 1
-                configured_slice = int(os.getenv("OPERLY_PLANNING_MODEL_SLICE_SECONDS", "45"))
+                # Keep the runtime default aligned with .env.example. Cloud
+                # Gemma requests regularly need more than 45 seconds under
+                # account or provider load; the old hidden default caused two
+                # identical premature timeouts before the role budget expired.
+                configured_slice = int(os.getenv("OPERLY_PLANNING_MODEL_SLICE_SECONDS", "120"))
                 slice_seconds = max(15, min(configured_slice, timeout_seconds))
             last_error: BaseException | None = None
             message = None
@@ -347,6 +351,13 @@ class PlanningBudget:
 
 class PlannerUnavailable(RuntimeError): pass
 class PlanningBlocked(RuntimeError): pass
+
+
+_TRANSIENT_FAILURE_MESSAGES = {
+    FailureClass.TIMEOUT: "The planning model did not respond within the current time budget. Please try again; your prompt is still available.",
+    FailureClass.RATE_LIMIT: "The planning model is temporarily rate-limited. Please try again shortly; your prompt is still available.",
+    FailureClass.PROVIDER_UNAVAILABLE: "The planning model is temporarily unavailable. Please try again shortly; your prompt is still available.",
+}
 
 
 def structural_errors(nodes: list[ProposedNode], requirement_ids: set[str], exclusions: list[str], budget: PlanningBudget,
@@ -541,7 +552,12 @@ class LivePlanningOrchestrator:
             if result.failure_classification not in {FailureClass.MALFORMED_OUTPUT,FailureClass.SCHEMA_MISMATCH,FailureClass.EMPTY_RESPONSE,FailureClass.TIMEOUT,FailureClass.RATE_LIMIT,FailureClass.PROVIDER_UNAVAILABLE}: break
             if result.failure_classification in {FailureClass.MALFORMED_OUTPUT,FailureClass.SCHEMA_MISMATCH,FailureClass.EMPTY_RESPONSE}:
                 active_context=context.model_copy(deep=True);active_context.previous_findings=[*context.previous_findings,{"structured_output_repair_errors":result.validation_errors}];active_context.constraints={**context.constraints,"repair_structured_output_only":True}
-        raise PlanningBlocked(f"{role} failed: {retry_history[-1] if retry_history else 'unknown failure'}")
+        final_failure = result.failure_classification if retry_history else None
+        if final_failure in _TRANSIENT_FAILURE_MESSAGES:
+            raise PlannerUnavailable(_TRANSIENT_FAILURE_MESSAGES[final_failure])
+        # Preserve detailed retry evidence in persisted model invocations, but
+        # never expose internal role names, exception payloads, or schemas to UI.
+        raise PlanningBlocked("OPERLY could not produce a valid software plan from this request. Please try again or simplify the prompt.")
 
     async def run(self, prompt: str) -> dict[str,Any]:
         analyst_context=PlanningContextPacket(role="requirements_analyst",untrusted_requirements={"original_request":prompt},constraints={"no_architecture_design":True,"preserve_negation":True})

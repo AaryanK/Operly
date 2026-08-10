@@ -5,7 +5,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput
+from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
 from packages.coding_harness.source_service import generate_source_for_plan, source_record_json
 from packages.custom_software.live_planning import PlannerUnavailable
 from packages.custom_software.plan_service import plan_version
@@ -78,6 +78,12 @@ async def run_source_job(job_id: str) -> None:
                 message = error.question
             elif isinstance(error, PlannerUnavailable):
                 message = "The configured coding model is unavailable"
+            elif isinstance(error, CodingHarnessError) and (
+                "did not converge" in str(error)
+                or "bounded model-turn budget" in str(error)
+                or "bounded generation window" in str(error)
+            ):
+                message = "Coding did not converge within OPERLY's safe generation window. Try regenerating; if it repeats, simplify the Solution or inspect the latest validation issue in activity."
             job.failure_message = message
             await _event(db, job, "failed", message=message)
 

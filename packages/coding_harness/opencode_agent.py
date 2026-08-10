@@ -13,12 +13,14 @@ runner.
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
 import fnmatch
 import inspect
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
@@ -221,6 +223,7 @@ class CodingSession:
     notes: list[str] = field(default_factory=list)
     summary: str = ""
     verification: list[str] = field(default_factory=list)
+    last_validation_error: str = ""
     finished: bool = False
 
     def changed_paths(self) -> list[str]:
@@ -326,6 +329,7 @@ async def _finish_tool(args: dict[str, Any], session: CodingSession) -> dict[str
     try:
         profile = validate_source_files(files)
     except RuntimeResolutionError as error:
+        session.last_validation_error = str(error)[:4000]
         return {
             "ok": False,
             "error": (
@@ -400,6 +404,7 @@ Principles:
 - Browser applications must have a coherent visual hierarchy, intentional spacing and typography, labeled controls, visible focus states, useful empty/error states, and no horizontal overflow at 360px or desktop widths. Do not ship browser-default-only styling.
 - Tests must exercise the critical workflow, calculations, validation, and persistence behavior described by the approved requirements—not merely check that files or functions exist.
 - Every visible interactive control (including buttons, forms, links/navigation, inputs, selectors, and dialogs) must have a unique `data-operly-interaction` id and an entry in `operly.interactions.json`. Each entry declares requirementIds, its event, real handler, domain operation, success/rejection behavior, state change/stateProbe, UI evidence/uiProjection, persistence/reloadOperation, and executable test id. The application must wire the rendered id through the named handler to both the named domain operation and UI projection. `node:test` must invoke the operation, state probe, UI projection and reload operation with assertions, so thrown runtime errors fail. Placeholder, cosmetic-only, throwing, or untested controls are forbidden.
+- Write the interaction artifact correctly on the first pass. Exact shape: `{"schemaVersion":1,"interactions":[{"id":"unique-control-id","control":"button|form|input|select|link","event":"click|submit|change|input","handler":"namedHandler","operation":"namedDomainOperation","success":"observable success","rejection":"observable rejection","stateChange":"expected mutation","stateProbe":"namedStateProbe","uiEvidence":"observable UI change","uiProjection":"namedRenderFunction","persistence":"reload_preserved|session_only|not_applicable","reloadOperation":"namedReloadFunction","testId":"interaction_r_001","requirementIds":["R-001"]}]}`. Every rendered control id appears exactly once. Shared operations/probes/projections are allowed when controls belong to the same workflow.
 - Before finishing a browser application, use the canonical dependency-free shape: `index.html`, at least one separate non-test `.js` application module, and one `*.test.js` or `tests/*.js` test using `node:test` that imports that application module. Remove duplicate test scripts.
 - Before finishing a Python application, provide `app.py`, `build.py`, and executable Python tests.
 - Never write secrets, .env files, credentials, keys, or tokens.
@@ -479,6 +484,10 @@ class CapabilityCodingAgent:
         self.client = client or coding_model_client()
         configured = int(os.getenv("OPERLY_CODING_AGENT_MAX_STEPS", "56"))
         self.max_steps = max(4, min(max_steps or configured, 120))
+        configured_seconds = int(os.getenv("OPERLY_CODING_AGENT_MAX_SECONDS", "240"))
+        self.max_seconds = max(30, min(configured_seconds, 900))
+        configured_slice = int(os.getenv("OPERLY_CODING_AGENT_MODEL_SLICE_SECONDS", "90"))
+        self.model_slice_seconds = max(15, min(configured_slice, self.max_seconds))
         self.registry = registry or CodingToolRegistry()
         self.doom_loop_threshold = 3
         self.progress_callback = progress_callback
@@ -560,10 +569,22 @@ class CapabilityCodingAgent:
         tools = self.registry.for_mode(mode, visual=bool(editor_context), web=web_enabled)
         schemas = [tool.schema() for tool in tools.values()]
         nudges = 0
+        started = time.monotonic()
 
         for step in range(1, self.max_steps + 1):
+            remaining = self.max_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
+                raise CodingHarnessError(f"Coding agent did not converge within {self.max_seconds} seconds.{detail}"[:4000])
             await self._progress({"step": step, "phase": "model", "summary": "Reviewing the approved requirements and choosing the next coding actions."})
-            assistant = await self.client.chat(session.messages, schemas)
+            try:
+                assistant = await asyncio.wait_for(
+                    self.client.chat(session.messages, schemas),
+                    timeout=min(self.model_slice_seconds, max(1, remaining)),
+                )
+            except asyncio.TimeoutError as error:
+                detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
+                raise CodingHarnessError(f"Coding model did not respond within the bounded generation window.{detail}"[:4000]) from error
             session.messages.append(assistant)
             content = str(assistant.get("content") or "").strip()
             if content:
@@ -628,7 +649,8 @@ class CapabilityCodingAgent:
                 break
 
         if not session.finished:
-            raise CodingHarnessError("Coding agent exhausted its bounded tool-step budget")
+            detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
+            raise CodingHarnessError(f"Coding agent exhausted its bounded model-turn budget.{detail}"[:4000])
         if mode != "plan":
             files = workspace.source_files()
             if not files:
