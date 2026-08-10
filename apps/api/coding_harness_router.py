@@ -13,7 +13,16 @@ from packages.coding_harness.execution_loop import build_with_repair
 from packages.coding_harness.model_resolution import CapabilityResolutionError
 from packages.coding_harness.opencode_agent import CodingHarnessError
 from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
-from packages.custom_software.plan_service import owned_plan, plan_version
+from packages.custom_software.live_planning import PlannerUnavailable, PlanningBlocked
+from packages.custom_software.plan_service import (
+    PlanConflict,
+    continue_after_clarification,
+    owned_plan,
+    pending_clarification,
+    plan_json,
+    plan_version,
+)
+from packages.custom_software.planning_orchestrator import PlanningNeedsUserInput
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter, LocalSubprocessTestRunner
 from packages.custom_software.runner_service import build_json
 from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
@@ -31,6 +40,11 @@ class HarnessSourceEditInput(BaseModel):
     instruction: str = Field(min_length=1, max_length=20_000)
     mode: Literal["visual", "frontend", "backend", "source"] = "source"
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanningClarificationAnswerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer: str = Field(min_length=1, max_length=4000)
 
 
 @router.post("/api/coding-harness/plans")
@@ -61,6 +75,39 @@ def _configured_runner_adapter():
     if os.getenv("OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER", "").strip() == "1":
         return LocalSubprocessTestRunner()
     return ExternalRunnerAdapter()
+
+
+@router.get("/api/coding-harness/planning-clarification")
+async def get_planning_clarification(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    """Return the owner's most recent planning question that is waiting for an answer."""
+    _assert_owner(auth)
+    item = await pending_clarification(db, auth.tenant.id, auth.user.id)
+    if item is None:
+        raise HTTPException(404, "No planning clarification is waiting for an answer")
+    return item
+
+
+@router.post("/api/coding-harness/plans/{plan_id}/clarification")
+async def answer_planning_clarification(plan_id: str, payload: PlanningClarificationAnswerInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    """Resume the same SoftwarePlan after the owner answers a material planning question."""
+    _assert_owner(auth)
+    try:
+        row = await owned_plan(db, auth.tenant.id, plan_id)
+        row, version, plan = await continue_after_clarification(db, row, auth.user.id, payload.answer)
+        return plan_json(row, version, plan)
+    except PlanningNeedsUserInput:
+        item = await pending_clarification(db, auth.tenant.id, auth.user.id)
+        if item is None:
+            raise HTTPException(422, detail={"code": "clarification_state_missing", "message": "Planning requested another clarification but no pending state was found"})
+        return item
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    except PlanConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except PlannerUnavailable as error:
+        raise HTTPException(503, detail={"code": "planner_unavailable", "message": str(error)}) from error
+    except PlanningBlocked as error:
+        raise HTTPException(422, detail={"code": "planning_blocked", "message": str(error)}) from error
 
 
 @router.get("/api/coding-harness/runner-capabilities")
