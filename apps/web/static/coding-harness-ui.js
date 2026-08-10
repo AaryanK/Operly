@@ -24,6 +24,89 @@
     else content.append(section);
   }
 
+  function readableEvidence(value) {
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value, null, 2); }
+    catch { return String(value); }
+  }
+
+  async function renderHarnessRunnerBuild(content, build) {
+    content.querySelector(".runner-evidence")?.remove();
+    const section = studioNode("section", undefined, "plan-section construction-evidence runner-evidence");
+    let events = [];
+    if (build.id) {
+      try { events = await api(`/custom-software/builds/${build.id}/events`); }
+      catch (_) { events = []; }
+    }
+
+    const failure = build.result?.failureEvidence || {};
+    const classification = build.failureClassification || failure.classification || "";
+    const failed = !["preview_ready", "running", "completed"].includes(build.state);
+
+    section.append(
+      studioNode("h3", `Runner state: ${build.state}`),
+      studioNode("p", `${build.runnerImplementation} · ${build.isolationProfile} · source v${build.sourceVersion || "?"} · attempt ${build.attempt}`),
+      studioNode("p", `Runtime: ${build.operations?.length ? (build.source?.runtimeProfile || build.result?.runtime || "detected source profile") : "unknown"} · Network: ${build.networkPolicy?.mode || "unknown"} · CPU: ${build.resourcePolicy?.cpu || "?"} · memory: ${build.resourcePolicy?.memoryMb || "?"} MB · timeout: ${build.resourcePolicy?.durationSeconds || "?"}s`)
+    );
+
+    if (build.state === "preview_ready") {
+      section.append(studioNode("p", "Preview verified in an isolated runner. Production deployment has not been performed."));
+    } else if (build.result?.code === "runner_unavailable") {
+      section.append(studioNode("p", "runner_unavailable — generated code was not executed in the control plane.", "builder-error"));
+    } else if (failed) {
+      const lastFailureEvent = [...events].reverse().find(item =>
+        item.eventType === "failure" || /failed|blocked|exceeded|timed_out/.test(item.state || "")
+      );
+      section.append(studioNode("h4", "Failure evidence"));
+      if (classification) section.append(studioNode("p", `Classification: ${classification}`, "builder-error"));
+      if (lastFailureEvent) section.append(studioNode("p", `Failed phase: ${lastFailureEvent.state} · ${lastFailureEvent.message}`, "builder-error"));
+
+      const evidenceText = readableEvidence(failure);
+      if (evidenceText && evidenceText !== "{}") {
+        const pre = studioNode("pre", evidenceText, "builder-error runner-failure-evidence");
+        pre.style.whiteSpace = "pre-wrap";
+        pre.style.overflowWrap = "anywhere";
+        section.append(pre);
+      } else if (lastFailureEvent?.details && Object.keys(lastFailureEvent.details).length) {
+        const pre = studioNode("pre", readableEvidence(lastFailureEvent.details), "builder-error runner-failure-evidence");
+        pre.style.whiteSpace = "pre-wrap";
+        pre.style.overflowWrap = "anywhere";
+        section.append(pre);
+      } else {
+        section.append(studioNode("p", "The runner returned a failure without detailed evidence. Inspect phase history below.", "builder-error"));
+      }
+    }
+
+    section.append(planList("Phase history", events, item => {
+      const details = item.details && Object.keys(item.details).length ? ` · ${readableEvidence(item.details)}` : "";
+      return `${item.sequence} · ${item.state} · ${item.message}${details}`;
+    }));
+
+    if (build.result?.staticAnalysisReport && Object.keys(build.result.staticAnalysisReport).length) {
+      section.append(studioNode("h4", "Static analysis"), studioNode("pre", readableEvidence(build.result.staticAnalysisReport)));
+    }
+    if (build.result?.testReport && Object.keys(build.result.testReport).length) {
+      section.append(studioNode("h4", "Test report"), studioNode("pre", readableEvidence(build.result.testReport)));
+    }
+    if (build.result?.dependencyReport && Object.keys(build.result.dependencyReport).length) {
+      section.append(studioNode("h4", "Dependency report"), studioNode("pre", readableEvidence(build.result.dependencyReport)));
+    }
+
+    if (build.preview) {
+      const frame = document.createElement("iframe");
+      frame.title = "Isolated generated application preview";
+      frame.src = build.preview.url;
+      frame.className = "construction-preview";
+      section.append(frame, studioNode("p", `Preview expires ${build.preview.expiresAt}`));
+    }
+    content.append(section);
+  }
+
+  // Override the legacy renderer after studio.js has loaded so coding-harness
+  // failures expose the evidence already persisted by the runner control plane.
+  window.renderRunnerBuild = renderHarnessRunnerBuild;
+
   async function loadExistingSource(result) {
     try {
       const source = await api(`/coding-harness/plans/${result.id}/source`);
@@ -112,7 +195,7 @@
           })
         });
         if (row.source) renderSource(row.source);
-        if (typeof renderRunnerBuild === "function") await renderRunnerBuild(content, row);
+        await renderHarnessRunnerBuild(content, row);
       } catch (error) {
         alert(error.message);
       } finally {
