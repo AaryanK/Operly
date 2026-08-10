@@ -8,13 +8,17 @@ on:
       - "packages/coding_harness/**"
       - "packages/custom_software/live_planning.py"
       - "packages/custom_software/planning_orchestrator.py"
+      - "packages/custom_software/scope_convergence.py"
       - "apps/api/coding_harness_router.py"
       - "apps/web/static/coding-harness-ui.js"
       - "apps/web/static/planning-clarification-normal.js"
+      - "apps/web/static/planning-clarification.css"
       - "apps/web/static/index.html"
       - "tests/test_capability_target_resolution.py"
       - "tests/test_refinement_scope_routing.py"
       - "tests/test_planning_clarification_gate.py"
+      - "tests/test_planning_internal_questions.py"
+      - "tests/test_scope_convergence_deterministic_targets.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_capability_harness_journey.py"
@@ -37,6 +41,8 @@ jobs:
           packages/coding_harness/opencode_agent.py
           packages/coding_harness/web_tools.py
           packages/coding_harness/source_service.py
+          packages/custom_software/planning_orchestrator.py
+          packages/custom_software/scope_convergence.py
           apps/api/coding_harness_router.py
       - run: node --check apps/web/static/coding-harness-ui.js
       - run: node --check apps/web/static/planning-clarification-normal.js
@@ -45,6 +51,8 @@ jobs:
           tests/test_capability_target_resolution.py
           tests/test_refinement_scope_routing.py
           tests/test_planning_clarification_gate.py
+          tests/test_planning_internal_questions.py
+          tests/test_scope_convergence_deterministic_targets.py
           tests/test_opencode_coding_harness.py
           tests/test_coding_agent_tool_loop.py
           tests/test_capability_harness_journey.py
