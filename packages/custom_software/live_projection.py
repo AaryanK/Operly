@@ -1,8 +1,8 @@
-"""Project validated live planning output into the historical SoftwarePlan envelope.
+"""Project validated live graph planning output into the historical SoftwarePlan envelope.
 
-Live recursive planning is the semantic authority.  The compatibility shell in
-this module exists only because older APIs/UI still consume ``SoftwarePlan``.  It
-must never call another planner or invent product semantics.
+The dynamic capability graph is the semantic authority. This compatibility shell
+exists only because older APIs/UI still consume ``SoftwarePlan``. It must never
+call another planner or invent product semantics.
 """
 from __future__ import annotations
 
@@ -21,12 +21,7 @@ def _unique(values):
 
 
 def neutral_live_envelope(prompt: str, objective: str | None = None) -> dict:
-    """Return a schema-only live-mode shell with no guessed product semantics.
-
-    This deliberately does not inspect the request for domains, roles, entities,
-    stacks, templates, or application types.  Those values are projected later
-    only from validated live requirements/contracts.
-    """
+    """Return a schema-only live-mode shell with no guessed product semantics."""
     goal = " ".join(str(objective or prompt or "Generated Software").split()).strip()
     name = re.sub(r"[^A-Za-z0-9 &-]+", " ", goal).strip()[:80] or "Generated Software"
     return {
@@ -39,14 +34,14 @@ def neutral_live_envelope(prompt: str, objective: str | None = None) -> dict:
         "primaryGoal": goal,
         "successCriteria": [
             "all mandatory requirements mapped",
-            "all implementation leaves validated",
-            "whole-system validation passed",
+            "all capability leaves deterministically ready",
+            "whole-graph semantic validation passed",
         ],
-        "primaryArchitecture": "live_recursive_requirement_graph",
+        "primaryArchitecture": "dynamic_capability_graph",
         "secondaryArchitectures": [],
         "implementationMode": "sandbox_generated",
         "confidence": 0.0,
-        "rationale": "Compatibility envelope only; validated live contracts are semantic authority.",
+        "rationale": "Compatibility envelope only; validated capability graph is semantic authority.",
         "roles": [],
         "entities": [],
         "relationships": [],
@@ -91,7 +86,7 @@ def neutral_live_envelope(prompt: str, objective: str | None = None) -> dict:
         "reusedPrimitives": [],
         "generatedComponents": [],
         "provenance": {
-            "semanticAuthority": "validated_recursive_plan",
+            "semanticAuthority": "validated_dynamic_capability_graph",
             "compatibilityEnvelope": "neutral_live",
         },
         "requirementLedger": [],
@@ -156,9 +151,6 @@ def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> di
 
     projected.update(
         {
-            # Historical structured views stay empty in live mode unless a
-            # validated live projection explicitly exists for them.  The
-            # recursive plan tree is the implementation contract.
             "targetUsers": [],
             "roles": [],
             "entities": [],
@@ -177,8 +169,8 @@ def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> di
             "securityConstraints": security,
             "rationale": (
                 "Live architecture is projected only from the validated requirement "
-                "ledger and recursive implementation contracts; no second planner "
-                "or legacy semantic defaults are used."
+                "ledger and dynamic capability graph; implementation mechanics are "
+                "deferred to the coding harness rather than recursively planned."
             ),
         }
     )
