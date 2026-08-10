@@ -1,4 +1,4 @@
-"""Bridge immutable coding-harness source bundles into the existing isolated runner."""
+"""Bridge immutable coding-harness source bundles into an isolated runner."""
 from __future__ import annotations
 
 import json
@@ -19,27 +19,19 @@ class SourceRecordError(ValueError):
     pass
 
 
+class RunnerProfileUnsupported(SourceRecordError):
+    def __init__(self, profile_id: str, supported: list[str]):
+        self.profile_id = profile_id
+        self.supported = supported
+        super().__init__(f"Runner does not support source runtime {profile_id}; supported profiles: {', '.join(supported) or 'none'}")
+
+
 def source_bundle_from_record(source: GeneratedSourceBundle):
     try:
         manifest = json.loads(source.manifest_json)
         rows = json.loads(source.files_json)
-        files = [
-            SourceFile(
-                str(item["path"]),
-                str(item["content"]).encode("utf-8"),
-                str(item.get("generatedBy") or "coding_harness"),
-            )
-            for item in rows
-        ]
-        rebuilt = build_bundle(
-            files,
-            source.tenant_id,
-            source.application_id,
-            source.plan_id,
-            source.plan_version,
-            source.source_version,
-            str(manifest["promptDigest"]),
-        )
+        files = [SourceFile(str(item["path"]), str(item["content"]).encode("utf-8"), str(item.get("generatedBy") or "coding_harness")) for item in rows]
+        rebuilt = build_bundle(files, source.tenant_id, source.application_id, source.plan_id, source.plan_version, source.source_version, str(manifest["promptDigest"]))
     except Exception as error:
         raise SourceRecordError("Stored source bundle is invalid") from error
     if rebuilt.digest != source.bundle_digest:
@@ -72,6 +64,21 @@ def _submission_for_source(source: GeneratedSourceBundle, bundle, idempotency_ke
     )
 
 
+async def _check_runner_profile(adapter: RunnerAdapter, profile_id: str) -> None:
+    try:
+        capabilities = await adapter.capabilities()
+    except Exception:
+        # Communication errors are recorded by the normal submit path with a
+        # durable build record. Do not turn network availability into a source error.
+        return
+    if not capabilities:
+        return
+    profiles = capabilities.get("profiles") or {}
+    supported = sorted(str(key) for key in profiles)
+    if profile_id not in profiles:
+        raise RunnerProfileUnsupported(profile_id, supported)
+
+
 async def submit_source_build(
     db,
     tenant_id: str,
@@ -82,12 +89,7 @@ async def submit_source_build(
     idempotency_key: str,
     adapter: RunnerAdapter | None = None,
 ):
-    existing = await db.scalar(
-        select(RunnerBuildRecord).where(
-            RunnerBuildRecord.tenant_id == tenant_id,
-            RunnerBuildRecord.idempotency_key == idempotency_key,
-        )
-    )
+    existing = await db.scalar(select(RunnerBuildRecord).where(RunnerBuildRecord.tenant_id == tenant_id, RunnerBuildRecord.idempotency_key == idempotency_key))
     if existing:
         return existing
     if source.tenant_id != tenant_id or source.plan_id != plan_row.id:
@@ -98,6 +100,8 @@ async def submit_source_build(
     bundle = source_bundle_from_record(source)
     submission = _submission_for_source(source, bundle, idempotency_key)
     adapter = adapter or ExternalRunnerAdapter()
+    await _check_runner_profile(adapter, submission.stackId)
+
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
@@ -113,26 +117,14 @@ async def submit_source_build(
     db.add(row)
     await db.flush()
     await _event(db, row, "created", message="Coding harness build record created")
-    await _event(
-        db,
-        row,
-        "queued",
-        message=f"Harness-authored source submitted with detected runtime {submission.stackId}",
-    )
+    await _event(db, row, "queued", message=f"Harness-authored source submitted with negotiated runtime {submission.stackId}")
     await db.commit()
 
     try:
         response = await adapter.submit(submission, bundle)
     except Exception as error:
-        await _event(
-            db,
-            row,
-            "failed",
-            event_type="runner_unavailable",
-            message="runner_unavailable",
-            details={"message": str(error), "runtime": submission.stackId},
-        )
-        row.result_json = json.dumps({"code": "runner_unavailable", "runtime": submission.stackId})
+        await _event(db, row, "failed", event_type="runner_unavailable", message="runner_unavailable", details={"message": str(error), "runtime": submission.stackId})
+        row.result_json = json.dumps({"code": "runner_unavailable", "runtime": submission.stackId, "failureEvidence": {"classification": "runner_unavailable", "message": str(error)}})
         row.completed_at = datetime.utcnow()
         await db.commit()
         await db.refresh(row)
