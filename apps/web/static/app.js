@@ -86,7 +86,7 @@ async function renderPage(page) {
   $$("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
   const title = {
     overview: "Overview", inbox: "Inbox", tasks: "Tasks", memory: "Business brain",
-    approvals: "Approvals", integrations: "Integrations", settings: "Settings"
+    approvals: "Approvals", integrations: "Integrations", settings: "Connectors"
   }[page];
   $("#page-title").textContent = title;
   const renderers = { overview, inbox, tasks, memory, approvals, integrations, settings };
@@ -192,9 +192,19 @@ async function integrations() {
 }
 
 async function settings() {
+  const connectors = await api("/integrations");
+  const connectorCards = connectors.map((item) => `
+    <article class="connector-card">
+      <span class="pill status ${esc(item.status)}">${esc(item.status.replaceAll("_", " "))}</span>
+      <h3>${esc(item.label)}</h3>
+      <p>${esc(item.detail || "Not connected")}</p>
+      <div class="connector-boundary"><strong>Event and action channel</strong><span>${esc((item.capabilities || []).map(value => value.replaceAll("_", " ")).join(" · ") || "Messages and workflow triggers")}</span></div>
+    </article>`).join("");
   $("#content").innerHTML = `
-    <div class="page-head"><div><span class="kicker green">Workspace configuration</span><h2>Business settings</h2></div></div>
+    <div class="page-head"><div><span class="kicker green">Business nervous system</span><h2>Connectors & workspace</h2><p>Connectors listen for events and run approved backend actions. They may publish controlled updates into a Solution, but they do not directly redesign or freely mutate its frontend.</p></div></div>
+    <section class="connector-grid">${connectorCards}</section>
     <form id="settings-form" class="panel settings">
+      <h3>Workspace identity</h3>
       <label>Business name<input id="tenant-name" value="${esc(state.me.tenant.name)}" required></label>
       <label>Timezone<input id="tenant-timezone" value="${esc(state.me.tenant.timezone)}" placeholder="Asia/Kathmandu"></label>
       <p><span class="pill status connected">Tenant isolation active</span></p>

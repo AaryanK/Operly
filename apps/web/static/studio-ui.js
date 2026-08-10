@@ -21,9 +21,9 @@
 
   function normalizeBuildShell() {
     const nav = document.querySelector('#nav [data-page="studio"]');
-    if (nav) nav.textContent = "Build";
+    if (nav) nav.textContent = "Solutions";
     const title = document.querySelector("#page-title");
-    if (title) title.textContent = "Build";
+    if (title) title.textContent = "Solutions";
   }
 
   function dismissPlanningOverlay() {
@@ -116,7 +116,7 @@
   async function focusedStudioHome() {
     normalizeBuildShell();
     const content = document.querySelector("#content");
-    content.replaceChildren(el("div", "Loading Build…", "studio-loading"));
+    content.replaceChildren(el("div", "Loading Solutions…", "studio-loading"));
 
     let siteRows = [], managedApps = [], customProjects = [];
     try {
@@ -128,7 +128,7 @@
     } catch (error) {
       content.replaceChildren();
       const box = el("section", undefined, "studio-load-error");
-      box.append(el("h2", "Build could not load"), el("p", error.message || "Request failed."));
+      box.append(el("h2", "Solutions could not load"), el("p", error.message || "Request failed."));
       const retry = el("button", "Retry", "button primary");
       retry.onclick = focusedStudioHome;
       box.append(retry);
@@ -144,13 +144,13 @@
     const launch = el("section", undefined, "studio-launch");
     const copy = el("div", undefined, "studio-launch-copy");
     copy.append(
-      el("span", "BUILD", "studio-eyebrow"),
-      el("h2", "What should OPERLY build?"),
-      el("p", "Describe the software you want. OPERLY will plan it, let you approve the specification, author the code with the coding harness, and run it in the isolated runner.")
+      el("span", "AI-NATIVE SOLUTIONS", "studio-eyebrow"),
+      el("h2", "Launch something tailored to your business"),
+      el("p", "Describe the outcome, not the implementation. OPERLY will understand the company, compose the necessary software, workflows and agents, let you approve the plan, and produce an inspectable preview.")
     );
 
     const flow = el("div", undefined, "studio-build-flow");
-    ["1 · Plan", "2 · Approve", "3 · Code", "4 · Run"].forEach(step => flow.append(el("span", step, "pill")));
+    ["1 · Understand", "2 · Compose", "3 · Approve", "4 · Inspect & edit"].forEach(step => flow.append(el("span", step, "pill")));
     copy.append(flow);
 
     const form = el("form", undefined, "studio-prompt-form");
@@ -158,11 +158,11 @@
     input.id = "studio-software-prompt";
     input.required = true;
     input.rows = 6;
-    input.placeholder = "Example: Build a calculator with HTML, CSS and JavaScript, served by a small Python backend. Include tests and handle division by zero.";
-    input.setAttribute("aria-label", "Describe the software to build");
+    input.placeholder = "Example: Launch a digital presence for my mobile pet-care company that captures leads, books visits, follows up automatically, and gives my team a daily work queue.";
+    input.setAttribute("aria-label", "Describe the Solution to launch");
     const promptFooter = el("div", undefined, "studio-prompt-footer");
     promptFooter.append(el("span", "Nothing executes until you approve the plan.", "studio-prompt-hint"));
-    const submit = el("button", "Start build", "button primary studio-generate");
+    const submit = el("button", "Shape my Solution", "button primary studio-generate");
     submit.type = "submit";
     promptFooter.append(submit);
     form.append(input, promptFooter);
@@ -188,12 +188,27 @@
       }
     };
 
+    const starters = el("div", undefined, "studio-solution-starters");
+    const starterPrompts = [
+      ["Website & digital presence", "Launch a website and digital presence tailored to my company that explains our offer, captures qualified leads, and gives us a clear follow-up workflow."],
+      ["Internal operating tool", "Create an internal operating tool tailored to my company for the work my team repeats every day, with roles, records, approvals, and a clear work queue."],
+      ["Customer portal", "Create a customer-facing portal tailored to my company where customers can request service, see status, exchange information, and take the next required action."],
+      ["Workflow & agent", "Create a backend workflow and agent tailored to my company that reacts to connector events, manages reminders and approvals, and publishes controlled status updates to our Solutions."]
+    ];
+    starterPrompts.forEach(([label, prompt]) => {
+      const starter = el("button", label, "studio-solution-starter");
+      starter.type = "button";
+      starter.onclick = () => { input.value = prompt; input.focus(); };
+      starters.append(starter);
+    });
+    launch.append(starters);
+
     const secondary = el("div", undefined, "studio-secondary-actions");
-    secondary.append(el("span", "Other builders", "studio-secondary-label"));
-    const blank = el("button", "Blank managed app", "studio-text-action");
+    secondary.append(el("span", "Structured starting points", "studio-secondary-label"));
+    const blank = el("button", "Blank internal app", "studio-text-action");
     blank.type = "button";
     blank.onclick = () => showManagedApplicationCreate(launch);
-    const website = el("button", "Website", "studio-text-action");
+    const website = el("button", "Blank website", "studio-text-action");
     website.type = "button";
     website.onclick = createStudioProject;
     secondary.append(blank, website);
@@ -203,8 +218,8 @@
     const recent = el("section", undefined, "studio-section-block");
     const recentHead = el("div", undefined, "studio-section-heading");
     const recentCopy = el("div");
-    recentCopy.append(el("span", "RECENT", "studio-eyebrow"), el("h2", "Software projects"));
-    recentHead.append(recentCopy, el("span", `${custom.length} total`, "studio-count"));
+    recentCopy.append(el("span", "YOUR BUSINESS", "studio-eyebrow"), el("h2", "Solutions"));
+    recentHead.append(recentCopy, el("span", `${custom.length + apps.length + sites.length} total`, "studio-count"));
     recent.append(recentHead);
 
     const grid = el("div", undefined, "studio-project-grid");
@@ -213,39 +228,17 @@
         const type = (project.vertical || "software").replaceAll("_", " ");
         grid.append(projectCard(project, type, () => openCustomSoftware(project.id)));
       });
-    } else {
+    }
+    sites.forEach(project => grid.append(projectCard(project, "website", () => openStudioProject(project.id))));
+    apps.forEach(project => grid.append(projectCard(project, "managed application", () => openManagedApplication(project.id))));
+    if (!custom.length && !sites.length && !apps.length) {
       const empty = el("div", undefined, "studio-empty-state");
-      empty.append(el("h3", "No software projects yet"), el("p", "Your first generated plan will appear here."));
+      empty.append(el("h3", "No Solutions yet"), el("p", "Describe a business outcome above to launch the first one."));
       grid.append(empty);
     }
     recent.append(grid);
     content.append(recent);
 
-    const legacy = document.createElement("details");
-    legacy.className = "studio-legacy";
-    const summary = document.createElement("summary");
-    const summaryText = el("div");
-    summaryText.append(el("strong", "Legacy builders"), el("span", "Managed applications and websites"));
-    summary.append(summaryText, el("span", `${apps.length + sites.length} items`, "studio-count"));
-    legacy.append(summary);
-
-    const legacyBody = el("div", undefined, "studio-legacy-body");
-    const appSection = el("section");
-    appSection.append(el("h3", "Managed applications"));
-    const appGrid = el("div", undefined, "studio-project-grid studio-project-grid-compact");
-    apps.forEach(project => appGrid.append(projectCard(project, "managed runtime", () => openManagedApplication(project.id))));
-    if (!apps.length) appGrid.append(el("p", "No managed applications.", "studio-muted"));
-    appSection.append(appGrid);
-
-    const siteSection = el("section");
-    siteSection.append(el("h3", "Websites"));
-    const siteGrid = el("div", undefined, "studio-project-grid studio-project-grid-compact");
-    sites.forEach(project => siteGrid.append(projectCard(project, project.status || "website", () => openStudioProject(project.id))));
-    if (!sites.length) siteGrid.append(el("p", "No websites.", "studio-muted"));
-    siteSection.append(siteGrid);
-    legacyBody.append(appSection, siteSection);
-    legacy.append(legacyBody);
-    content.append(legacy);
   }
 
   const previousRenderPage = window.renderPage;

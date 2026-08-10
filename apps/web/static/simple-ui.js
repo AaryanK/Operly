@@ -46,7 +46,7 @@
 
   async function openBuild(text = "") {
     setActive("studio");
-    setTitle("Build");
+    setTitle("Solutions");
     document.querySelector("#operly-chat-dock")?.classList.add("page-suppressed");
     document.querySelector("#dashboard")?.classList.add("studio-focus");
     if (typeof window.operlyStudio === "function") {
@@ -77,25 +77,33 @@
     if (!content) return;
     content.innerHTML = `<div class="simple-loading">Loading your workspace…</div>`;
 
-    const [tasksResult, approvalsResult, projectsResult] = await Promise.allSettled([
-      api("/tasks"), api("/approvals"), api("/custom-software/projects")
+    const [tasksResult, approvalsResult, projectsResult, sitesResult, appsResult] = await Promise.allSettled([
+      api("/tasks"), api("/approvals"), api("/custom-software/projects"),
+      api("/studio/projects"), api("/application-builder/applications")
     ]);
     const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
     const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
-    const projects = projectsResult.status === "fulfilled" && Array.isArray(projectsResult.value) ? projectsResult.value : [];
+    const generated = projectsResult.status === "fulfilled" && Array.isArray(projectsResult.value) ? projectsResult.value : [];
+    const sites = sitesResult.status === "fulfilled" && Array.isArray(sitesResult.value) ? sitesResult.value : [];
+    const managed = appsResult.status === "fulfilled" && Array.isArray(appsResult.value) ? appsResult.value : [];
+    const solutions = [
+      ...generated.map(item => ({...item, solutionKind:"generated", solutionType:(item.vertical || "custom solution").replaceAll("_", " ")})),
+      ...sites.map(item => ({...item, solutionKind:"website", solutionType:"website"})),
+      ...managed.map(item => ({...item, solutionKind:"managed", solutionType:"managed application"}))
+    ];
     const {openTasks, pending} = attentionSummary(tasks, approvals);
     const workspace = document.querySelector("#workspace-name")?.textContent || "your workspace";
 
     content.innerHTML = `
       <section class="simple-home-hero">
         <span class="simple-eyebrow">${esc(workspace)}</span>
-        <h2>What do you want OPERLY to do?</h2>
-        <p>Ask about the business, take an action, or describe software you want built.</p>
+        <h2>What should OPERLY compose for your business?</h2>
+        <p>Ask about the company, take an action, or launch a tailored Solution—from a website to an internal operating system.</p>
         <form id="simple-command-form" class="simple-command-form">
           <textarea id="simple-command" rows="4" placeholder="Describe what you need…" aria-label="What should OPERLY do?"></textarea>
           <div class="simple-command-actions">
             <button type="button" id="simple-ask" class="button secondary">Ask OPERLY</button>
-            <button type="button" id="simple-build" class="button primary">Build software</button>
+            <button type="button" id="simple-build" class="button primary">Launch a Solution</button>
           </div>
         </form>
       </section>
@@ -113,16 +121,16 @@
       </section>
 
       <section class="simple-block">
-        <div class="simple-section-head"><div><span class="simple-eyebrow">RECENT</span><h3>Software projects</h3></div><button class="simple-link" id="simple-new-build">New build</button></div>
+        <div class="simple-section-head"><div><span class="simple-eyebrow">RECENT</span><h3>Your Solutions</h3></div><button class="simple-link" id="simple-new-build">Launch Solution</button></div>
         <div class="simple-project-grid">
-          ${projects.length ? projects.slice(0,6).map(project => `
-            <button class="simple-project-card" data-project-id="${esc(project.id)}">
-              <span>${esc((project.vertical || "software").replaceAll("_", " "))}</span>
-              <h4>${esc(project.name || "Untitled software")}</h4>
+          ${solutions.length ? solutions.slice(0,6).map(project => `
+            <button class="simple-project-card" data-solution-id="${esc(project.id)}" data-solution-kind="${esc(project.solutionKind)}">
+              <span>${esc(project.solutionType)}</span>
+              <h4>${esc(project.name || "Untitled Solution")}</h4>
               <p>${project.version ? `Version ${esc(project.version)}` : "Open project"}</p>
             </button>`).join("") : `
             <div class="simple-empty-projects">
-              <h4>No software projects yet</h4><p>Describe what you want above and OPERLY will shape the first plan.</p>
+              <h4>No Solutions yet</h4><p>Describe what your business needs and OPERLY will shape the first tailored Solution.</p>
             </div>`}
         </div>
       </section>`;
@@ -132,8 +140,11 @@
     document.querySelector("#simple-build")?.addEventListener("click", () => openBuild(command?.value || ""));
     document.querySelector("#simple-command-form")?.addEventListener("submit", event => { event.preventDefault(); openAssistant(command?.value || ""); });
     document.querySelector("#simple-new-build")?.addEventListener("click", () => openBuild());
-    document.querySelectorAll("[data-project-id]").forEach(button => button.addEventListener("click", () => {
-      if (typeof window.openCustomSoftware === "function") window.openCustomSoftware(button.dataset.projectId);
+    document.querySelectorAll("[data-solution-id]").forEach(button => button.addEventListener("click", () => {
+      const open = button.dataset.solutionKind === "website" ? window.openStudioProject
+        : button.dataset.solutionKind === "managed" ? window.openManagedApplication
+        : window.openCustomSoftware;
+      if (typeof open === "function") open(button.dataset.solutionId);
     }));
     document.querySelectorAll("[data-simple-open='activity']").forEach(button => button.addEventListener("click", renderActivity));
     refreshActivityBadge(tasks, approvals);

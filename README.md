@@ -1,14 +1,36 @@
 # OPERLY
 
-OPERLY is a tenant-isolated business workspace and AI-assisted software builder.
-Its current interface focuses on four areas:
+OPERLY is an AI-native, tenant-isolated business operating system. Its intelligence
+understands a company and composes tailored software, agents, workflows,
+connectors, and actions around it. Its current interface focuses on four areas:
 
 - **Home** accepts a business question or software request and shows work that
   needs attention.
-- **Build** turns a software request into a reviewed capability graph, generated
-  source, an isolated build-and-test cycle, and a preview.
+- **Solutions** launches websites, digital presences, internal tools, customer
+  portals, workflows, agents, or other arbitrary business software. Each Solution
+  can move through planning, generation, preview, visual inspection, and editing.
 - **Activity** combines tasks, approval decisions, and recent Discord messages.
-- **Settings** manages the current workspace.
+- **Connectors** shows communication/event channels and workspace configuration.
+
+## Product model
+
+A **Solution** is the primary thing a business launches in OPERLY. It may contain
+customer-facing surfaces, internal surfaces, backend capabilities, workflows,
+agents, integrations, or any combination required by the business outcome.
+Websites, managed applications, and generated projects are presented as one
+Solution library even while their existing runtime implementations remain
+separate internally.
+
+Visual editing treats a rendered Solution as inspectable evidence: a user selects
+what they can see, describes a change, and OPERLY maps that selection back to the
+authoritative component or source artifact before producing a versioned preview.
+The rendered DOM is never treated as unrestricted source authority.
+
+A **Connector** such as Discord or WhatsApp is an event and action channel. It can
+capture messages, set reminders, trigger workflows, request approvals, run bounded
+backend agents, and publish controlled updates into a Solution. A connector does
+not receive unrestricted authority to redesign or arbitrarily mutate Solution
+frontends.
 
 The current web application is the FastAPI service and the static browser client
 under `apps/web/static`. The React/Vite client under `apps/web/src` is retained
@@ -124,6 +146,8 @@ uv run pytest -q
 ```
 
 Before releasing, follow [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
+For the north-star gap analysis and delivery sequence, see
+[`ROADMAP.md`](ROADMAP.md).
 
 ## Repository map
 
