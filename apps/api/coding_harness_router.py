@@ -13,8 +13,10 @@ from packages.coding_harness.model_resolution import CapabilityResolutionError
 from packages.coding_harness.opencode_agent import CodingHarnessError
 from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
 from packages.custom_software.plan_service import owned_plan, plan_version
+from packages.custom_software.runner_adapters import ExternalRunnerAdapter
 from packages.custom_software.runner_service import build_json
 from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
+from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
 from packages.database.custom_software_models import RunnerPreviewRecord
 from packages.model_runtime import OllamaError
 
@@ -47,6 +49,24 @@ async def create_harness_plan(payload: AgenticProjectInput, auth: AuthContext = 
 def _assert_owner(auth: AuthContext) -> None:
     if auth.role != "owner":
         raise HTTPException(403, "Only owners can run the coding harness")
+
+
+@router.get("/api/coding-harness/runner-capabilities")
+async def runner_capabilities(auth: AuthContext = Depends(get_auth_context)):
+    """Report what the configured isolated runner actually advertises."""
+    _assert_owner(auth)
+    adapter = ExternalRunnerAdapter()
+    try:
+        capabilities = await adapter.capabilities()
+    except SandboxUnavailable as error:
+        raise HTTPException(status_code=503, detail={"code": "runner_unavailable", "message": str(error)}) from error
+    except SandboxFailure as error:
+        raise HTTPException(status_code=502, detail={"code": "runner_capability_probe_failed", "message": str(error)}) from error
+    return {
+        "runnerImplementation": adapter.implementation,
+        "isolationProfile": adapter.isolation_profile,
+        "capabilities": capabilities or {"protocolVersion": None, "profiles": {}},
+    }
 
 
 async def _approved_plan(db: AsyncSession, auth: AuthContext, plan_id: str, approved_version: int):
