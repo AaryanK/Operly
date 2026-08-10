@@ -12,7 +12,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from packages.model_runtime import OllamaClient
+from packages.model_runtime import OllamaClient, model_route
 
 
 class Strict(BaseModel):
@@ -207,7 +207,11 @@ async def resolve_capability_placement(
     text = str(request or "").strip()
     if not text:
         raise PlacementResolutionError("capability request is empty")
-    client = client or OllamaClient()
+    if client is None:
+        route = model_route("capability_placement")
+        if route.provider != "ollama":
+            raise RuntimeError(f"Model provider {route.provider} is not installed")
+        client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
     packet = {
         "userRequest": text[:8000],
         "workspace": workspace.model_dump(mode="json"),

@@ -94,11 +94,14 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self) -> None:
+    def __init__(self, *, model: str | None = None, fallback_models: list[str] | tuple[str, ...] | None = None) -> None:
         self.url = os.getenv("OLLAMA_URL", "https://ollama.com/api/chat").strip()
         self.api_key = os.getenv("OLLAMA_API_KEY", "").strip()
-        self.model = os.getenv("OLLAMA_MODEL", "gemma4:cloud").strip()
-        self.fallback_model = os.getenv("OLLAMA_FALLBACK_MODEL", "").strip()
+        self.model = (model or os.getenv("OLLAMA_MODEL", "gemma4:31b")).strip()
+        configured_fallbacks = fallback_models if fallback_models is not None else os.getenv("OLLAMA_FALLBACK_MODELS", os.getenv("OLLAMA_FALLBACK_MODEL", "")).split(",")
+        self.fallback_models = [str(item).strip() for item in configured_fallbacks if str(item).strip() and str(item).strip() != self.model]
+        self.fallback_model = self.fallback_models[0] if self.fallback_models else ""
+        self.last_model = self.model
         self.timeout_seconds = _bounded_int(
             "OLLAMA_TIMEOUT_SECONDS",
             default=180,
@@ -136,7 +139,7 @@ class OllamaClient:
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
-                return await self._chat_model(
+                result = await self._chat_model(
                     session,
                     headers,
                     self.model,
@@ -144,31 +147,22 @@ class OllamaClient:
                     tools or [],
                     attempts=self.max_attempts,
                 )
+                self.last_model = self.model
+                return result
             except OllamaError as primary_error:
-                if (
-                    not self.fallback_model
-                    or self.fallback_model == self.model
-                    or not primary_error.retryable
-                ):
+                if not self.fallback_models or not primary_error.retryable:
                     raise
-
-                try:
-                    return await self._chat_model(
-                        session,
-                        headers,
-                        self.fallback_model,
-                        messages,
-                        tools or [],
-                        attempts=1,
-                    )
-                except OllamaError as fallback_error:
-                    reference = fallback_error.reference or primary_error.reference
-                    raise OllamaError(
-                        str(fallback_error),
-                        status=fallback_error.status,
-                        reference=reference,
-                        retryable=fallback_error.retryable,
-                    ) from fallback_error
+                last_error = primary_error
+                for fallback_model in self.fallback_models:
+                    try:
+                        result = await self._chat_model(session, headers, fallback_model, messages, tools or [], attempts=1)
+                        self.last_model = fallback_model
+                        return result
+                    except OllamaError as fallback_error:
+                        last_error = fallback_error
+                        if not fallback_error.retryable:
+                            break
+                raise last_error
 
     async def _chat_model(
         self,

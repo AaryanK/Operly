@@ -7,6 +7,7 @@ import os
 
 from sqlalchemy import func, select
 
+from packages.coding_harness.model_client import coding_model_client
 from packages.coding_harness.opencode_agent import CodingHarnessError, CodingHarnessResult, OpenCodeStyleCodingAgent
 from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
 from packages.custom_software.source_bundles import SourceFile, build_bundle
@@ -144,7 +145,8 @@ async def _persist_result(
     provenance = {
         "harness": "operly_tool_loop_v1",
         "inspiration": "opencode_session_tool_loop",
-        "modelProvider": "ollama",
+        "modelProvider": result.model_provider,
+        "modelId": result.model_id,
         "agentMode": {
             "planning": "read_only_permission_mode_available",
             "coding": "persistent_project_tool_loop",
@@ -242,7 +244,7 @@ async def _persist_with_contract_repair(
 
 
 async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None, progress_callback=None):
-    agent = OpenCodeStyleCodingAgent(client=client, progress_callback=progress_callback)
+    agent = OpenCodeStyleCodingAgent(client=client or coding_model_client("coding"), progress_callback=progress_callback)
     result = await agent.build(_plan_specification(plan))
     return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="generate")
 
@@ -260,7 +262,7 @@ async def edit_source_for_plan(
     edit_kind: str = "source_edit",
     context: dict | None = None,
 ):
-    agent = OpenCodeStyleCodingAgent(client=client)
+    agent = OpenCodeStyleCodingAgent(client=client or coding_model_client("coding"))
     task = str(instruction or "").strip()
     result = await agent.edit(
         _plan_specification(plan),
@@ -282,7 +284,7 @@ async def repair_source_for_plan(
     *,
     client=None,
 ):
-    agent = OpenCodeStyleCodingAgent(client=client)
+    agent = OpenCodeStyleCodingAgent(client=client or coding_model_client("repair"))
     result = await agent.repair(_plan_specification(plan), source_files_from_record(source), failure_evidence)
     return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="runner_repair", parent=source, failure_evidence=failure_evidence)
 
@@ -301,6 +303,7 @@ def source_record_json(row) -> dict:
         "totalBytes": manifest.get("totalBytes", 0),
         "harness": provenance.get("harness"),
         "modelProvider": provenance.get("modelProvider", "ollama"),
+        "modelId": provenance.get("modelId", "unknown"),
         "agentMode": provenance.get("agentMode"),
         "terminalExecution": provenance.get("terminalExecution"),
         "runtimeProfile": provenance.get("detectedRuntimeProfile"),

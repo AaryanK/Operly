@@ -41,7 +41,7 @@
     const operation = source.sourceOperation ? ` · ${source.sourceOperation.replaceAll("_", " ")}` : "";
     section.append(
       studioNode("h3", `Coding harness · source v${source.sourceVersion}`),
-      studioNode("p", `${source.harness || "coding harness"} · ${source.modelProvider || "ollama"} · ${source.files?.length || 0} files · ${source.totalBytes || 0} bytes${runtime}${operation}`),
+      studioNode("p", `${source.harness || "coding harness"} · ${source.modelProvider || "ollama"}/${source.modelId || "unknown"} · ${source.files?.length || 0} files · ${source.totalBytes || 0} bytes${runtime}${operation}`),
       studioNode("p", source.summary || "Source tree authored. Execution has not run in the OPERLY control plane.")
     );
     if (source.changedPaths?.length) section.append(studioNode("p", `Changed: ${source.changedPaths.join(", ")}`));

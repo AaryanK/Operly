@@ -62,6 +62,8 @@ class CodingHarnessResult:
     verification: list[str] = field(default_factory=list)
     trace: list[AgentTrace] = field(default_factory=list)
     changed_paths: list[str] = field(default_factory=list)
+    model_provider: str = "unknown"
+    model_id: str = "unknown"
 
 
 class VirtualWorkspace:
@@ -493,6 +495,7 @@ class CapabilityCodingAgent:
         return self._result(session)
 
     def _result(self, session: CodingSession) -> CodingHarnessResult:
+        model_client = getattr(self.client, "inner", self.client)
         plan = session.notes[0][:20_000] if session.notes else "Persistent tool-loop session executed directly against the approved specification."
         return CodingHarnessResult(
             files=session.workspace.source_files(),
@@ -501,6 +504,8 @@ class CapabilityCodingAgent:
             verification=session.verification,
             trace=session.trace,
             changed_paths=session.changed_paths(),
+            model_provider="ollama" if hasattr(model_client, "model") else type(model_client).__name__,
+            model_id=str(getattr(model_client, "last_model", getattr(model_client, "model", "unknown"))),
         )
 
     async def _session(

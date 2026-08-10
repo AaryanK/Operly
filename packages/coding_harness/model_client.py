@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
 from packages.model_runtime import OllamaClient
+from packages.model_runtime.portfolio import model_route
 
 
 class CodingModelClient(Protocol):
@@ -20,6 +21,9 @@ class CodingModelClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def coding_model_client() -> CodingModelClient:
+def coding_model_client(role: str = "coding") -> CodingModelClient:
     """Return the configured coding model client behind bounded session context."""
-    return ContextBoundCodingClient(OllamaClient())
+    route = model_route(role)
+    if route.provider != "ollama":
+        raise RuntimeError(f"Model provider {route.provider} is not installed")
+    return ContextBoundCodingClient(OllamaClient(model=route.primary, fallback_models=route.fallbacks))

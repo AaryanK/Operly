@@ -9,6 +9,7 @@ from packages.business_brain.context_loader import (
     load_conversation_messages,
 )
 from packages.business_brain.ollama_client import OllamaClient
+from packages.model_runtime.portfolio import model_route
 from packages.business_brain.security import (
     MAX_ASSISTANT_TEXT,
     MAX_USER_TEXT,
@@ -52,7 +53,8 @@ what is still required.
 
 class AgentService:
     def __init__(self) -> None:
-        self.client = OllamaClient()
+        route = model_route("business_agent")
+        self.client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
         self.registry = build_registry()
         self.rate_limiter = SlidingWindowRateLimiter(
             limit=20,

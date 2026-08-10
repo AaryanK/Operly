@@ -64,6 +64,11 @@ class OllamaClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("832be54b", error.public_message)
         self.assertNotIn("API", error.public_message)
 
+    async def test_accepts_explicit_model_portfolio(self):
+        client = OllamaClient(model="nemotron-3-ultra", fallback_models=["nemotron-3-super", "gemma4:31b"])
+        self.assertEqual(client.model, "nemotron-3-ultra")
+        self.assertEqual(client.fallback_models, ["nemotron-3-super", "gemma4:31b"])
+
 
 if __name__ == "__main__":
     unittest.main()

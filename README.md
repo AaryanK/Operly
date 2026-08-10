@@ -124,7 +124,8 @@ Start from [`.env.example`](.env.example). Important settings include:
 | `SESSION_SECRET` | Signs authenticated sessions; required |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Bootstrap owner account |
 | `PUBLIC_BASE_URL` | Canonical origin and production host policy |
-| `OLLAMA_URL`, `OLLAMA_API_KEY`, `OLLAMA_MODEL` | Planning and coding model |
+| `OLLAMA_URL`, `OLLAMA_API_KEY`, `OLLAMA_MODEL` | Ollama endpoint and default compatibility model |
+| `OPERLY_MODEL_<ROLE>`, `OPERLY_MODEL_<ROLE>_FALLBACKS` | Provider-neutral role portfolio for planning, validation, coding, repair, placement, agents, and bounded tasks |
 | `OPERLY_PLANNING_MODE` | Selects the planning implementation |
 | `OPERLY_SANDBOX_RUNNER_URL`, `OPERLY_SANDBOX_RUNNER_TOKEN` | External isolated runner |
 | `OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER` | Development/test runner; never production |
@@ -133,6 +134,14 @@ Start from [`.env.example`](.env.example). Important settings include:
 Production additionally requires HTTPS, strong unique secrets, PostgreSQL,
 completed migrations, a verified backup, and an independently isolated runner if
 software builds are enabled.
+
+The default Ollama portfolio uses `nemotron-3-ultra` for requirements and
+planning, `gpt-oss:120b` for independent validation, `minimax-m3` for coding,
+`nemotron-3-super` for repair and capability placement, `gemma4:31b` for the
+business agent, and `nemotron-3-nano:30b` for bounded low-cost work. The
+`gpt-oss:20b` model participates as a smaller fallback. Routing is expressed as
+provider plus model, so adding OpenRouter or another provider does not require
+changing planner or coding-agent contracts.
 
 ## Database and tests
 
