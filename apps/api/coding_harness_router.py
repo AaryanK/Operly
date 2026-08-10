@@ -11,7 +11,7 @@ from packages.coding_harness.build_service import SourceRecordError
 from packages.coding_harness.engine import build_harness_plan_with_model
 from packages.coding_harness.execution_loop import build_with_repair
 from packages.coding_harness.model_resolution import CapabilityResolutionError
-from packages.coding_harness.opencode_agent import CodingHarnessError
+from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
 from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
 from packages.custom_software.live_planning import PlannerUnavailable, PlanningBlocked
 from packages.custom_software.plan_service import (
@@ -64,6 +64,18 @@ async def create_harness_plan(payload: AgenticProjectInput, auth: AuthContext = 
 def _assert_owner(auth: AuthContext) -> None:
     if auth.role != "owner":
         raise HTTPException(403, "Only owners can run the coding harness")
+
+
+def _coding_clarification(error: CodingAgentNeedsUserInput) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "coding_agent_clarification_required",
+            "message": error.question,
+            "question": error.question,
+            "options": error.options,
+        },
+    )
 
 
 def _configured_runner_adapter():
@@ -150,6 +162,8 @@ async def create_harness_source(plan_id: str, payload: GenerateApprovedPlanInput
         source, _ = await generate_source_for_plan(db, auth.tenant.id, auth.user.id, row, plan)
         await db.commit(); await db.refresh(source)
         return source_record_json(source)
+    except CodingAgentNeedsUserInput as error:
+        await db.rollback(); raise _coding_clarification(error)
     except OllamaError as error:
         await db.rollback(); raise HTTPException(status_code=503, detail=error.public_message) from error
     except CodingHarnessError as error:
@@ -179,6 +193,7 @@ async def edit_harness_source(plan_id: str, payload: HarnessSourceEditInput, aut
     if source is None:
         raise HTTPException(404, "Generate source before editing it")
     try:
+        editor_context = {**payload.context, "editMode": payload.mode}
         updated, _ = await edit_source_for_plan(
             db,
             auth.tenant.id,
@@ -188,10 +203,12 @@ async def edit_harness_source(plan_id: str, payload: HarnessSourceEditInput, aut
             source,
             payload.instruction,
             edit_kind=f"{payload.mode}_edit",
-            context=payload.context,
+            context=editor_context,
         )
         await db.commit(); await db.refresh(updated)
         return source_record_json(updated)
+    except CodingAgentNeedsUserInput as error:
+        await db.rollback(); raise _coding_clarification(error)
     except OllamaError as error:
         await db.rollback(); raise HTTPException(status_code=503, detail=error.public_message) from error
     except CodingHarnessError as error:
@@ -218,6 +235,8 @@ async def create_harness_build(payload: RunnerBuildInput, auth: AuthContext = De
         raise HTTPException(status_code=503, detail={"code": "runner_unavailable", "message": str(error)}) from error
     except SourceRecordError as error:
         raise HTTPException(409, str(error)) from error
+    except CodingAgentNeedsUserInput as error:
+        await db.rollback(); raise _coding_clarification(error)
     except OllamaError as error:
         await db.rollback(); raise HTTPException(status_code=503, detail=error.public_message) from error
     except CodingHarnessError as error:
