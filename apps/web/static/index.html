@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/operations-phase.css?v=20260804-responsive">
   <link rel="stylesheet" href="/static/ai-assistant.css">
   <link rel="stylesheet" href="/static/general-business.css?v=20260804-responsive">
-  <link rel="stylesheet" href="/static/studio.css?v=20260804-responsive">
+  <link rel="stylesheet" href="/static/studio.css?v=20260810-unified-harness-v4">
   <link rel="stylesheet" href="/static/dashboard-customize.css?v=20260804-responsive">
   <link rel="stylesheet" href="/static/regression.css?v=20260805-login-regression">
   <link rel="stylesheet" href="/static/studio-ui.css?v=20260809-focused-studio">
@@ -30,23 +30,11 @@
         <button class="button lime large" data-open-login>Launch your workspace →</button>
       </section>
       <section class="product-preview">
-        <div class="preview-sidebar">
-          <div class="brand"><span class="brand-mark">O</span></div>
-          <i></i><i></i><i></i><i></i>
-        </div>
+        <div class="preview-sidebar"><div class="brand"><span class="brand-mark">O</span></div><i></i><i></i><i></i><i></i></div>
         <div class="preview-main">
           <h3>Good morning, Owner</h3>
-          <div class="preview-stats">
-            <article><b>128</b><span>Messages</span></article>
-            <article><b>12</b><span>Tasks</span></article>
-            <article><b>4</b><span>Approvals</span></article>
-          </div>
-          <div class="preview-card">
-            <b>Unified business activity</b>
-            <p>Discord inquiry received</p>
-            <p>OPERLY captured a task</p>
-            <p>Owner approval requested</p>
-          </div>
+          <div class="preview-stats"><article><b>128</b><span>Messages</span></article><article><b>12</b><span>Tasks</span></article><article><b>4</b><span>Approvals</span></article></div>
+          <div class="preview-card"><b>Unified business activity</b><p>Discord inquiry received</p><p>OPERLY captured a task</p><p>Owner approval requested</p></div>
         </div>
       </section>
     </main>
@@ -56,30 +44,18 @@
       <article><span>02</span><h2>Turn language into action</h2><p>Tasks, memory and approvals from natural language.</p></article>
       <article><span>03</span><h2>Keep the owner in control</h2><p>Visible and auditable business operations.</p></article>
     </section>
-    <footer class="public-footer">
-      <span class="brand-mark" aria-hidden="true">O</span>
-      <p>Developed and maintained by <strong>Dragonzpyder Industries</strong></p>
-    </footer>
+    <footer class="public-footer"><span class="brand-mark" aria-hidden="true">O</span><p>Developed and maintained by <strong>Dragonzpyder Industries</strong></p></footer>
   </div>
 
   <div id="login" class="screen hidden">
     <div class="login-art">
-      <button class="back" data-home>← Home</button>
-      <div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
-      <div>
-        <span class="kicker">Owner access</span>
-        <h1>Your business command center.</h1>
-        <p>Messages, tasks, memory and approvals—one secure workspace.</p>
-      </div>
+      <button class="back" data-home>← Home</button><div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div><span class="kicker">Owner access</span><h1>Your business command center.</h1><p>Messages, tasks, memory and approvals—one secure workspace.</p></div>
     </div>
     <form id="login-form" class="login-form">
-      <span class="kicker green">Sign in</span>
-      <h1>Open your workspace</h1>
-      <p>Use the credentials configured in your `.env` file.</p>
-      <label>Email<input id="email" type="email" value="admin@operly.local" required></label>
-      <label>Password<input id="password" type="password" required></label>
-      <div id="login-error" class="error hidden"></div>
-      <button class="button primary large" type="submit">Enter OPERLY →</button>
+      <span class="kicker green">Sign in</span><h1>Open your workspace</h1><p>Use the credentials configured in your `.env` file.</p>
+      <label>Email<input id="email" type="email" value="admin@operly.local" required></label><label>Password<input id="password" type="password" required></label>
+      <div id="login-error" class="error hidden"></div><button class="button primary large" type="submit">Enter OPERLY →</button>
     </form>
   </div>
 
@@ -87,19 +63,10 @@
     <button id="mobile-nav-backdrop" class="mobile-nav-backdrop" aria-label="Close navigation" tabindex="-1"></button>
     <aside class="sidebar" id="sidebar">
       <div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
-      <nav id="nav">
-        <button data-simple-page="home" class="active">Home</button>
-        <button data-page="studio">Build</button>
-        <button data-simple-page="activity">Activity <span id="simple-activity-badge" class="simple-activity-badge hidden"></span></button>
-        <button data-page="settings">Settings</button>
-      </nav>
+      <nav id="nav"><button data-simple-page="home" class="active">Home</button><button data-page="studio">Build</button><button data-simple-page="activity">Activity <span id="simple-activity-badge" class="simple-activity-badge hidden"></span></button><button data-page="settings">Settings</button></nav>
       <div class="sidebar-bottom">
         <label class="workspace-switch-label">Workspace<select id="workspace-switch" aria-label="Switch workspace"></select></label>
-        <div class="workspace">
-          <span id="workspace-avatar">O</span>
-          <div><b id="workspace-name">Workspace</b><small id="workspace-role">owner</small></div>
-        </div>
-        <button id="logout">Sign out</button>
+        <div class="workspace"><span id="workspace-avatar">O</span><div><b id="workspace-name">Workspace</b><small id="workspace-role">owner</small></div></div><button id="logout">Sign out</button>
       </div>
     </aside>
 
@@ -108,38 +75,24 @@
         <button id="mobile-nav-toggle" class="mobile-nav-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">☰</button>
         <div><small id="tenant-kicker"></small><h1 id="page-title">Home</h1></div>
         <div class="simple-topbar-actions"><button id="simple-topbar-ask" class="button primary simple-topbar-ask">Ask OPERLY</button></div>
-        <div class="builder-controls">
-          <div class="mode-switch" role="group" aria-label="Dashboard mode"><button id="mode-operate" class="active">Operate</button><button id="mode-customize">Customize</button></div>
-          <button id="version-history" class="button secondary" aria-label="Open version history">History</button>
-          <span class="online">● System online</span>
-        </div>
+        <div class="builder-controls"><div class="mode-switch" role="group" aria-label="Dashboard mode"><button id="mode-operate" class="active">Operate</button><button id="mode-customize">Customize</button></div><button id="version-history" class="button secondary" aria-label="Open version history">History</button><span class="online">● System online</span></div>
       </header>
       <div id="content" class="content"></div>
     </main>
     <section id="operly-chat-dock" class="operly-dock" aria-label="Operly AI chat">
       <button id="dock-toggle" class="dock-toggle" aria-expanded="true">✦ Operly</button>
-      <div class="dock-panel">
-        <div id="dock-context" class="dock-context" aria-label="Current AI context"></div>
-        <div id="dock-messages" class="dock-messages" aria-live="polite"></div>
-        <form id="dock-form" class="dock-form"><textarea id="dock-input" required placeholder="Ask Operly to change, build, connect, explain, or automate…" aria-label="Message Operly"></textarea><button class="button primary">Send</button></form>
-      </div>
+      <div class="dock-panel"><div id="dock-context" class="dock-context" aria-label="Current AI context"></div><div id="dock-messages" class="dock-messages" aria-live="polite"></div><form id="dock-form" class="dock-form"><textarea id="dock-input" required placeholder="Ask Operly to change, build, connect, explain, or automate…" aria-label="Message Operly"></textarea><button class="button primary">Send</button></form></div>
     </section>
-    <dialog id="change-review" class="builder-dialog" aria-labelledby="change-review-title"></dialog>
-    <dialog id="version-dialog" class="builder-dialog" aria-labelledby="version-title"></dialog>
+    <dialog id="change-review" class="builder-dialog" aria-labelledby="change-review-title"></dialog><dialog id="version-dialog" class="builder-dialog" aria-labelledby="version-title"></dialog>
   </div>
 
   <script src="/static/app.js?v=20260804-responsive2"></script>
-  <script src="/static/operations-phase.js"></script>
-  <script src="/static/operations-phase-bridge.js"></script>
-  <script src="/static/ai-assistant.js"></script>
-  <script src="/static/ai-assistant-bridge.js"></script>
-  <script src="/static/general-business.js"></script>
-  <script src="/static/general-business-bridge.js"></script>
-  <script src="/static/studio.js?v=20260805-recursive-planning"></script>
-  <script src="/static/studio-bridge.js"></script>
+  <script src="/static/operations-phase.js"></script><script src="/static/operations-phase-bridge.js"></script>
+  <script src="/static/ai-assistant.js"></script><script src="/static/ai-assistant-bridge.js"></script>
+  <script src="/static/general-business.js"></script><script src="/static/general-business-bridge.js"></script>
+  <script src="/static/studio.js?v=20260805-recursive-planning"></script><script src="/static/studio-bridge.js"></script>
   <script src="/static/dashboard-customize.js"></script>
-  <script src="/static/studio-ui.js?v=20260810-build-flow"></script>
-  <script src="/static/studio-ui-bridge.js?v=20260810-build-flow2"></script>
+  <script src="/static/studio-ui.js?v=20260810-build-flow"></script><script src="/static/studio-ui-bridge.js?v=20260810-build-flow2"></script>
   <script src="/static/simple-ui.js?v=20260809-simple-operly"></script>
   <script src="/static/coding-harness-ui.js?v=20260810-unified-harness-v4"></script>
 </body>
