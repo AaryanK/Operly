@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
+import inspect
 import hashlib
 import json
 import os
@@ -422,6 +423,29 @@ def _tool_signature(name: str, args: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _progress_summary(tool: str, path: str | None, ok: bool) -> str:
+    target = f" `{path}`" if path else ""
+    if not ok:
+        return f"The {tool} action needs correction; feeding its evidence back into the coding loop."
+    messages = {
+        "list": "Inspecting the current source workspace.",
+        "glob": f"Finding relevant files{target}.",
+        "grep": f"Searching the source for the behavior to change{target}.",
+        "read": f"Reading{target} before making a source change.",
+        "write": f"Creating or replacing{target}.",
+        "edit": f"Applying a focused source edit to{target}.",
+        "delete": f"Removing obsolete source{target}.",
+        "diff": "Reviewing the accumulated source changes.",
+        "inspect_visual": "Inspecting the current visual context and mapping it back to source.",
+        "web_search": "Researching an external implementation detail requested by the Solution.",
+        "web_fetch": "Reading a selected external technical source.",
+        "finish": "Checking tests and finalizing the generated source bundle.",
+        "finish_plan": "Finalizing the implementation plan.",
+        "ask_user": "A product decision is required before coding can continue.",
+    }
+    return messages.get(tool, f"Running the {tool} coding action{target}.")
+
+
 def _tool_result_message(name: str, result: dict[str, Any]) -> dict[str, Any]:
     content = json.dumps(result, ensure_ascii=False, default=str)
     if len(content) > 50_000:
@@ -432,12 +456,20 @@ def _tool_result_message(name: str, result: dict[str, Any]) -> dict[str, Any]:
 class CapabilityCodingAgent:
     """OpenCode-inspired persistent tool-loop agent with OPERLY safety boundaries."""
 
-    def __init__(self, client=None, max_steps: int | None = None, registry: CodingToolRegistry | None = None) -> None:
+    def __init__(self, client=None, max_steps: int | None = None, registry: CodingToolRegistry | None = None, progress_callback=None) -> None:
         self.client = client or coding_model_client()
         configured = int(os.getenv("OPERLY_CODING_AGENT_MAX_STEPS", "56"))
         self.max_steps = max(4, min(max_steps or configured, 120))
         self.registry = registry or CodingToolRegistry()
         self.doom_loop_threshold = 3
+        self.progress_callback = progress_callback
+
+    async def _progress(self, event: dict[str, Any]) -> None:
+        if self.progress_callback is None:
+            return
+        value = self.progress_callback(event)
+        if inspect.isawaitable(value):
+            await value
 
     async def plan(self, specification: str, files: list[SourceFile] | None = None, task: str = "Plan the implementation.", *, context: dict[str, Any] | None = None) -> str:
         session = await self._session("plan", specification, VirtualWorkspace(files), task, require_change=False, editor_context=context or {})
@@ -508,6 +540,7 @@ class CapabilityCodingAgent:
         nudges = 0
 
         for step in range(1, self.max_steps + 1):
+            await self._progress({"step": step, "phase": "model", "summary": "Reviewing the approved requirements and choosing the next coding actions."})
             assistant = await self.client.chat(session.messages, schemas)
             session.messages.append(assistant)
             content = str(assistant.get("content") or "").strip()
@@ -558,6 +591,14 @@ class CapabilityCodingAgent:
                         input_digest=signature[:16],
                     )
                 )
+                await self._progress({
+                    "step": step,
+                    "phase": "tool",
+                    "tool": name or "unknown",
+                    "path": path,
+                    "ok": bool(result.get("ok", False)),
+                    "summary": _progress_summary(name or "unknown", path, bool(result.get("ok", False))),
+                })
                 session.messages.append(_tool_result_message(name, result))
                 if session.finished:
                     break

@@ -306,7 +306,7 @@
     try { renderSource(await api(`/coding-harness/plans/${result.id}/source`)); } catch (_) {}
   }
 
-  function renderCodingProgress(content, state, elapsedSeconds, detail = "") {
+  function renderCodingProgress(content, state, elapsedSeconds, detail = "", activity = []) {
     let panel = content.querySelector(".coding-harness-progress");
     if (!panel) {
       panel = studioNode("section", undefined, "plan-section coding-harness-progress");
@@ -319,6 +319,16 @@
       studioNode("p", detail || (state === "generating" ? "The coding agent is creating and validating files in a persistent source workspace." : "Preparing the coding workspace.")),
       studioNode("p", `${elapsedSeconds}s elapsed · You can leave this screen and return; status is stored by OPERLY.`, "coding-progress-meta")
     );
+    const recent = (activity || []).slice(-5).reverse();
+    if (recent.length) {
+      const list = studioNode("ol", undefined, "coding-activity-list");
+      recent.forEach((item, index) => {
+        const row = studioNode("li", item.summary || "Continuing the coding session.");
+        if (index === 0) row.classList.add("current");
+        list.append(row);
+      });
+      panel.append(studioNode("h4", "Current activity"), list);
+    }
   }
 
   async function generateSourceInBackground(result, content, code) {
@@ -326,7 +336,8 @@
     let job = await api(`/coding-harness/plans/${result.id}/source-jobs`, {method: "POST", body: JSON.stringify({planId: result.id, approvedVersion: result.approvedVersion})});
     while (["queued", "generating"].includes(job.state)) {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      renderCodingProgress(content, job.state, elapsed); code.textContent = `Coding · ${elapsed}s`;
+      const current = job.result?.current;
+      renderCodingProgress(content, job.state, elapsed, current?.summary || "", job.result?.activity || []); code.textContent = `Coding · ${elapsed}s`;
       await new Promise(resolve => setTimeout(resolve, 2000));
       job = await api(`/coding-harness/source-jobs/${job.id}`);
     }

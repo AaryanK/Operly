@@ -49,7 +49,20 @@ async def run_source_job(job_id: str) -> None:
             if plan_row is None or plan_row.tenant_id != job.tenant_id:
                 raise LookupError("Approved software plan no longer exists")
             _, plan = await plan_version(db, plan_row, job.approved_plan_version)
-            source, _ = await generate_source_for_plan(db, job.tenant_id, job.created_by, plan_row, plan)
+            async def progress(event: dict) -> None:
+                async with SessionFactory() as progress_db:
+                    progress_job = await progress_db.get(SandboxGenerationJob, job_id)
+                    if progress_job is None or progress_job.state not in {"queued", "generating"}:
+                        return
+                    current = json.loads(progress_job.result_json or "{}")
+                    activity = list(current.get("activity") or [])[-39:]
+                    activity.append(event)
+                    progress_job.result_json = json.dumps({"current": event, "activity": activity})
+                    progress_job.updated_at = datetime.utcnow()
+                    progress_db.add(SandboxJobEvent(tenant_id=progress_job.tenant_id, job_id=progress_job.id, state="generating", details_json=json.dumps(event)))
+                    await progress_db.commit()
+
+            source, _ = await generate_source_for_plan(db, job.tenant_id, job.created_by, plan_row, plan, progress_callback=progress)
             await db.commit()
             await db.refresh(source)
             job.result_json = json.dumps({"source": source_record_json(source)})

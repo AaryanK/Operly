@@ -127,6 +127,19 @@ def test_rejected_finish_returns_evidence_and_agent_adds_missing_tests():
     assert any(item.tool == "finish" and item.ok for item in result.trace)
 
 
+def test_progress_callback_reports_model_and_real_tool_activity():
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    asyncio.run(OpenCodeStyleCodingAgent(client=DirectBuildModel(), max_steps=6, progress_callback=progress).build("Approved tiny Python specification"))
+
+    assert events[0]["phase"] == "model"
+    assert any(item.get("tool") == "write" and "Creating or replacing" in item["summary"] for item in events)
+    assert any(item.get("tool") == "finish" and "finalizing" in item["summary"] for item in events)
+
+
 def test_visual_edit_observes_selected_dom_context_before_source_change():
     files = [
         SourceFile("index.html", b"<h1>Welcome</h1>", "seed"),

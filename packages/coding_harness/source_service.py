@@ -241,8 +241,8 @@ async def _persist_with_contract_repair(
     raise CodingHarnessError("Source contract repair budget exhausted")
 
 
-async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None):
-    agent = OpenCodeStyleCodingAgent(client=client)
+async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None, progress_callback=None):
+    agent = OpenCodeStyleCodingAgent(client=client, progress_callback=progress_callback)
     result = await agent.build(_plan_specification(plan))
     return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="generate")
 
