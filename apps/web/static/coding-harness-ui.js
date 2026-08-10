@@ -7,9 +7,10 @@
     if (!content || !source) return;
     content.querySelector(".coding-harness-source")?.remove();
     const section = studioNode("section", undefined, "plan-section coding-harness-source");
+    const runtime = source.runtimeProfile ? ` · runtime ${source.runtimeProfile}` : " · runtime pending; regenerate legacy source";
     section.append(
       studioNode("h3", `Coding harness · source v${source.sourceVersion}`),
-      studioNode("p", `${source.harness || "coding harness"} · ${source.files?.length || 0} files · ${source.totalBytes || 0} bytes`),
+      studioNode("p", `${source.harness || "coding harness"} · ${source.files?.length || 0} files · ${source.totalBytes || 0} bytes${runtime}`),
       studioNode("p", source.summary || "Source tree authored. Execution has not run in the OPERLY control plane.")
     );
     const grid = studioNode("div", undefined, "plan-grid");
