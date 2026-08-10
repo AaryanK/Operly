@@ -77,7 +77,17 @@ async def build_with_repair(
     while True:
         attempt_key = idempotency_key if used_repairs == 0 else f"{idempotency_key}-repair-{used_repairs}"
         try:
-            build = await submit_source_build(db, tenant_id, user_id, plan_row, plan, source, attempt_key, adapter=adapter)
+            build = await submit_source_build(
+                db,
+                tenant_id,
+                user_id,
+                plan_row,
+                plan,
+                source,
+                attempt_key,
+                adapter=adapter,
+                attempt=used_repairs + 1,
+            )
         except RunnerProfileUnsupported as error:
             if used_repairs >= budget:
                 raise
