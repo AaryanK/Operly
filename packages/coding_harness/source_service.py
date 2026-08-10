@@ -1,4 +1,4 @@
-"""Persist source authored by the coding harness as immutable OPERLY source bundles."""
+"""Persist coding-harness source and edits as immutable OPERLY source bundles."""
 from __future__ import annotations
 
 import hashlib
@@ -6,18 +6,14 @@ import json
 
 from sqlalchemy import func, select
 
-from packages.coding_harness.opencode_agent import CodingHarnessError, OpenCodeStyleCodingAgent
+from packages.coding_harness.opencode_agent import CodingHarnessError, CodingHarnessResult, OpenCodeStyleCodingAgent
 from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
-from packages.custom_software.source_bundles import build_bundle
+from packages.custom_software.source_bundles import SourceFile, build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle
 
 
 def _plan_specification(plan) -> str:
     data = plan.model_dump(mode="json") if hasattr(plan, "model_dump") else dict(plan)
-    # The coding harness consumes the semantic authority produced by recursive
-    # planning, not legacy presentation fields such as roles/entities/stack.
-    # Those compatibility views may exist for older UI/runtime paths but must
-    # never become hidden coding requirements.
     selected = {
         "projectName": data.get("projectName"),
         "summary": data.get("summary"),
@@ -26,13 +22,11 @@ def _plan_specification(plan) -> str:
         "planTree": data.get("planTree") or [],
         "globalValidation": data.get("globalValidation"),
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
-        # This is an OPERLY execution-boundary contract, not a product feature.
-        # The model remains free to choose the source structure, while generated
-        # tests must be runnable by a finite isolated profile without manual UI.
         "operlyExecutionContract": {
-            "tests": "All critical tests must run non-interactively in the isolated runner; manual browser-console verification is not an executable test.",
-            "staticWeb": "If you choose browser HTML/CSS/vanilla JavaScript, keep calculation/domain logic DOM-free where practical and test it with Node's built-in node:test and node:assert modules. Do not require third-party packages.",
-            "execution": "Do not execute code in the OPERLY control plane. The runner selects execution mechanics from the completed source tree.",
+            "tests": "Critical tests must run non-interactively in the isolated runner and must exercise generated application code.",
+            "staticWeb": "For browser HTML/CSS/vanilla JavaScript, keep domain logic importable from tests and use Node built-ins only for runner verification.",
+            "pythonStdlibWeb": "For Python standard-library web applications, provide app.py, build.py, and executable Python tests without third-party packages.",
+            "execution": "Never execute code in the OPERLY control plane. The runner selects deterministic execution mechanics from the completed source tree.",
         },
     }
     return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -49,57 +43,65 @@ def _prompt_text(plan) -> str:
     return str(getattr(plan, "summary", "") or "")
 
 
+def source_files_from_record(row: GeneratedSourceBundle) -> list[SourceFile]:
+    try:
+        records = json.loads(row.files_json)
+        return [SourceFile(str(item["path"]), str(item["content"]).encode("utf-8"), str(item.get("generatedBy") or "coding_harness")) for item in records]
+    except Exception as error:
+        raise CodingHarnessError("Stored coding-harness source is invalid") from error
+
+
 async def latest_source(db, tenant_id: str, plan_id: str, plan_version: int | None = None):
-    query = select(GeneratedSourceBundle).where(
-        GeneratedSourceBundle.tenant_id == tenant_id,
-        GeneratedSourceBundle.plan_id == plan_id,
-    )
+    query = select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id == tenant_id, GeneratedSourceBundle.plan_id == plan_id)
     if plan_version is not None:
         query = query.where(GeneratedSourceBundle.plan_version == plan_version)
-    query = query.order_by(GeneratedSourceBundle.source_version.desc())
-    return await db.scalar(query)
+    return await db.scalar(query.order_by(GeneratedSourceBundle.source_version.desc()))
 
 
-async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None):
+async def _next_source_version(db, tenant_id: str, application_id: str) -> int:
+    return int(await db.scalar(select(func.max(GeneratedSourceBundle.source_version)).where(GeneratedSourceBundle.tenant_id == tenant_id, GeneratedSourceBundle.application_id == application_id)) or 0) + 1
+
+
+async def _persist_result(
+    db,
+    tenant_id: str,
+    user_id: str,
+    plan_row,
+    plan,
+    result: CodingHarnessResult,
+    *,
+    kind: str,
+    parent: GeneratedSourceBundle | None = None,
+    instruction: str | None = None,
+    failure_evidence: dict | None = None,
+):
     approved_version = int(plan_row.approved_version or 0)
     if not approved_version:
         raise ValueError("Source generation requires an approved plan")
-
-    agent = OpenCodeStyleCodingAgent(client=client)
-    result = await agent.build(_plan_specification(plan))
     application_id = f"plan-{plan_row.id}"
-    source_version = (
-        await db.scalar(
-            select(func.max(GeneratedSourceBundle.source_version)).where(
-                GeneratedSourceBundle.tenant_id == tenant_id,
-                GeneratedSourceBundle.application_id == application_id,
-            )
-        )
-        or 0
-    ) + 1
+    source_version = await _next_source_version(db, tenant_id, application_id)
     prompt = _prompt_text(plan)
     prompt_digest = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    bundle = build_bundle(
-        result.files,
-        tenant_id,
-        application_id,
-        plan_row.id,
-        approved_version,
-        source_version,
-        prompt_digest,
-    )
+    bundle = build_bundle(result.files, tenant_id, application_id, plan_row.id, approved_version, source_version, prompt_digest)
     try:
         runtime_profile_id = validate_runtime_contract(bundle)
     except RuntimeResolutionError as error:
         raise CodingHarnessError(str(error)) from error
+
     provenance = {
-        "harness": "opencode_style_v1",
-        "agentMode": {"plan": "read_only", "build": "project_edit"},
+        "harness": "opencode_style_v2",
+        "modelProvider": "ollama",
+        "agentMode": {"plan": "read_only", "build": "project_edit", "repair": "runner_feedback"},
         "terminalExecution": "isolated_runner_only",
+        "sourceOperation": kind,
+        "parentSourceBundleId": parent.id if parent else None,
+        "instruction": (instruction or "")[:20_000],
+        "failureEvidence": failure_evidence or {},
         "agentPlan": result.plan[:20_000],
         "summary": result.summary[:4_000],
         "verificationIntent": result.verification,
-        "toolTrace": [item.__dict__ for item in result.trace[-200:]],
+        "changedPaths": result.changed_paths,
+        "toolTrace": [item.__dict__ for item in result.trace[-300:]],
         "originalPrompt": prompt,
         "semanticInput": "validated_requirement_ledger_and_plan_tree",
         "legacyPresentationFieldsUsed": False,
@@ -114,23 +116,56 @@ async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, p
         application_id=application_id,
         bundle_digest=bundle.digest,
         manifest_json=json.dumps(bundle.manifest, ensure_ascii=False),
-        files_json=json.dumps(
-            [
-                {
-                    "path": item.path,
-                    "content": item.content.decode("utf-8"),
-                    "generatedBy": item.generated_by,
-                }
-                for item in bundle.files
-            ],
-            ensure_ascii=False,
-        ),
+        files_json=json.dumps([{"path": item.path, "content": item.content.decode("utf-8"), "generatedBy": item.generated_by} for item in bundle.files], ensure_ascii=False),
         provenance_json=json.dumps(provenance, ensure_ascii=False),
         created_by=user_id,
     )
     db.add(row)
     await db.flush()
     return row, result
+
+
+async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None):
+    agent = OpenCodeStyleCodingAgent(client=client)
+    result = await agent.build(_plan_specification(plan))
+    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind="generate")
+
+
+async def edit_source_for_plan(
+    db,
+    tenant_id: str,
+    user_id: str,
+    plan_row,
+    plan,
+    source: GeneratedSourceBundle,
+    instruction: str,
+    *,
+    client=None,
+    edit_kind: str = "source_edit",
+    context: dict | None = None,
+):
+    agent = OpenCodeStyleCodingAgent(client=client)
+    task = str(instruction or "").strip()
+    if context:
+        task += "\n\nEDITOR CONTEXT:\n" + json.dumps(context, ensure_ascii=False, sort_keys=True)[:15_000]
+    result = await agent.edit(_plan_specification(plan), source_files_from_record(source), task)
+    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind=edit_kind, parent=source, instruction=instruction)
+
+
+async def repair_source_for_plan(
+    db,
+    tenant_id: str,
+    user_id: str,
+    plan_row,
+    plan,
+    source: GeneratedSourceBundle,
+    failure_evidence: dict,
+    *,
+    client=None,
+):
+    agent = OpenCodeStyleCodingAgent(client=client)
+    result = await agent.repair(_plan_specification(plan), source_files_from_record(source), failure_evidence)
+    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind="runner_repair", parent=source, failure_evidence=failure_evidence)
 
 
 def source_record_json(row) -> dict:
@@ -146,9 +181,13 @@ def source_record_json(row) -> dict:
         "files": manifest.get("files", []),
         "totalBytes": manifest.get("totalBytes", 0),
         "harness": provenance.get("harness"),
+        "modelProvider": provenance.get("modelProvider", "ollama"),
         "agentMode": provenance.get("agentMode"),
         "terminalExecution": provenance.get("terminalExecution"),
         "runtimeProfile": provenance.get("detectedRuntimeProfile"),
+        "sourceOperation": provenance.get("sourceOperation"),
+        "parentSourceBundleId": provenance.get("parentSourceBundleId"),
+        "changedPaths": provenance.get("changedPaths", []),
         "summary": provenance.get("summary"),
         "verificationIntent": provenance.get("verificationIntent", []),
     }
