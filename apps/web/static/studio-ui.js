@@ -19,6 +19,13 @@
     return node;
   }
 
+  function normalizeBuildShell() {
+    const nav = document.querySelector('#nav [data-page="studio"]');
+    if (nav) nav.textContent = "Build";
+    const title = document.querySelector("#page-title");
+    if (title) title.textContent = "Build";
+  }
+
   function dismissPlanningOverlay() {
     if (planningTimer) clearInterval(planningTimer);
     if (elapsedTimer) clearInterval(elapsedTimer);
@@ -107,8 +114,9 @@
   }
 
   async function focusedStudioHome() {
+    normalizeBuildShell();
     const content = document.querySelector("#content");
-    content.replaceChildren(el("div", "Loading Studio…", "studio-loading"));
+    content.replaceChildren(el("div", "Loading Build…", "studio-loading"));
 
     let siteRows = [], managedApps = [], customProjects = [];
     try {
@@ -120,7 +128,7 @@
     } catch (error) {
       content.replaceChildren();
       const box = el("section", undefined, "studio-load-error");
-      box.append(el("h2", "Studio could not load"), el("p", error.message || "Request failed."));
+      box.append(el("h2", "Build could not load"), el("p", error.message || "Request failed."));
       const retry = el("button", "Retry", "button primary");
       retry.onclick = focusedStudioHome;
       box.append(retry);
@@ -136,21 +144,25 @@
     const launch = el("section", undefined, "studio-launch");
     const copy = el("div", undefined, "studio-launch-copy");
     copy.append(
-      el("span", "SOFTWARE STUDIO", "studio-eyebrow"),
+      el("span", "BUILD", "studio-eyebrow"),
       el("h2", "What should OPERLY build?"),
-      el("p", "Describe the product, workflow, users, rules, and anything that must be true. OPERLY will shape and validate the plan before implementation.")
+      el("p", "Describe the software you want. OPERLY will plan it, let you approve the specification, author the code with the coding harness, and run it in the isolated runner.")
     );
+
+    const flow = el("div", undefined, "studio-build-flow");
+    ["1 · Plan", "2 · Approve", "3 · Code", "4 · Run"].forEach(step => flow.append(el("span", step, "pill")));
+    copy.append(flow);
 
     const form = el("form", undefined, "studio-prompt-form");
     const input = document.createElement("textarea");
     input.id = "studio-software-prompt";
     input.required = true;
     input.rows = 6;
-    input.placeholder = "Example: Build a veterinary appointment system for a multi-vet clinic. Clients should manage pets and appointments; staff should manage availability and prevent conflicts…";
+    input.placeholder = "Example: Build a calculator with HTML, CSS and JavaScript, served by a small Python backend. Include tests and handle division by zero.";
     input.setAttribute("aria-label", "Describe the software to build");
     const promptFooter = el("div", undefined, "studio-prompt-footer");
-    promptFooter.append(el("span", "Plan first. Build after approval.", "studio-prompt-hint"));
-    const submit = el("button", "Generate plan", "button primary studio-generate");
+    promptFooter.append(el("span", "Nothing executes until you approve the plan.", "studio-prompt-hint"));
+    const submit = el("button", "Start build", "button primary studio-generate");
     submit.type = "submit";
     promptFooter.append(submit);
     form.append(input, promptFooter);
@@ -240,10 +252,12 @@
   if (typeof previousRenderPage === "function") {
     window.renderPage = async function(page) {
       document.querySelector("#dashboard")?.classList.toggle("studio-focus", page === "studio");
+      if (page === "studio") normalizeBuildShell();
       return previousRenderPage(page);
     };
   }
 
+  normalizeBuildShell();
   window.studioHome = focusedStudioHome;
   window.showCustomSoftwareCreate = () => {
     document.querySelector("#studio-software-prompt")?.focus();
