@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 from sqlalchemy import func, select
 
@@ -125,10 +126,66 @@ async def _persist_result(
     return row, result
 
 
+def _contract_repair_budget() -> int:
+    try:
+        value = int(os.getenv("OPERLY_CODING_SOURCE_CONTRACT_REPAIRS", "2"))
+    except ValueError:
+        value = 2
+    return max(0, min(value, 3))
+
+
+async def _persist_with_contract_repair(
+    db,
+    tenant_id: str,
+    user_id: str,
+    plan_row,
+    plan,
+    agent: OpenCodeStyleCodingAgent,
+    result: CodingHarnessResult,
+    *,
+    kind: str,
+    parent: GeneratedSourceBundle | None = None,
+    instruction: str | None = None,
+    failure_evidence: dict | None = None,
+):
+    """Feed deterministic source-contract failures back into the same workspace."""
+    specification = _plan_specification(plan)
+    current = result
+    budget = _contract_repair_budget()
+    for attempt in range(budget + 1):
+        try:
+            return await _persist_result(
+                db,
+                tenant_id,
+                user_id,
+                plan_row,
+                plan,
+                current,
+                kind=kind,
+                parent=parent,
+                instruction=instruction,
+                failure_evidence=failure_evidence,
+            )
+        except CodingHarnessError as error:
+            if attempt >= budget:
+                raise
+            current = await agent.repair(
+                specification,
+                current.files,
+                {
+                    "classification": "source_contract_failure",
+                    "message": str(error),
+                    "instruction": "Repair only what is necessary to satisfy the deterministic OPERLY source/runtime contract while preserving requested product behavior.",
+                    "contractRepairAttempt": attempt + 1,
+                },
+            )
+    raise CodingHarnessError("Source contract repair budget exhausted")
+
+
 async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, plan, client=None):
     agent = OpenCodeStyleCodingAgent(client=client)
     result = await agent.build(_plan_specification(plan))
-    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind="generate")
+    return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="generate")
 
 
 async def edit_source_for_plan(
@@ -149,7 +206,7 @@ async def edit_source_for_plan(
     if context:
         task += "\n\nEDITOR CONTEXT:\n" + json.dumps(context, ensure_ascii=False, sort_keys=True)[:15_000]
     result = await agent.edit(_plan_specification(plan), source_files_from_record(source), task)
-    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind=edit_kind, parent=source, instruction=instruction)
+    return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind=edit_kind, parent=source, instruction=instruction)
 
 
 async def repair_source_for_plan(
@@ -165,7 +222,7 @@ async def repair_source_for_plan(
 ):
     agent = OpenCodeStyleCodingAgent(client=client)
     result = await agent.repair(_plan_specification(plan), source_files_from_record(source), failure_evidence)
-    return await _persist_result(db, tenant_id, user_id, plan_row, plan, result, kind="runner_repair", parent=source, failure_evidence=failure_evidence)
+    return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="runner_repair", parent=source, failure_evidence=failure_evidence)
 
 
 def source_record_json(row) -> dict:
