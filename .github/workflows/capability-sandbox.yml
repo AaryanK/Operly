@@ -17,6 +17,7 @@ on:
       - "tests/test_planning_clarification_gate.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
+      - "tests/test_capability_harness_journey.py"
       - "scripts/run_capability_sandbox.py"
       - ".github/workflows/capability-sandbox.yml"
   workflow_dispatch:
@@ -46,3 +47,4 @@ jobs:
           tests/test_planning_clarification_gate.py
           tests/test_opencode_coding_harness.py
           tests/test_coding_agent_tool_loop.py
+          tests/test_capability_harness_journey.py
