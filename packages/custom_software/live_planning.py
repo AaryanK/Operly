@@ -297,9 +297,29 @@ class OllamaPlanningClient:
             route = model_route(role)
             if route.provider != "ollama":
                 raise RuntimeError(f"Model provider {route.provider} is not installed")
-            client = self.client or OllamaClient(model=route.primary, fallback_models=route.fallbacks)
-            message = await asyncio.wait_for(client.chat(messages), timeout=timeout_seconds)
-            used_model = getattr(client, "last_model", client.model)
+            if self.client is not None:
+                candidates = [(self.client.model, self.client)]
+                slice_seconds = timeout_seconds
+            else:
+                models = [route.primary, *route.fallbacks]
+                candidates = [(model, OllamaClient(model=model, fallback_models=[])) for model in models]
+                for _, candidate in candidates:
+                    candidate.max_attempts = 1
+                configured_slice = int(os.getenv("OPERLY_PLANNING_MODEL_SLICE_SECONDS", "45"))
+                slice_seconds = max(15, min(configured_slice, timeout_seconds))
+            last_error: BaseException | None = None
+            message = None
+            used_model = candidates[0][0]
+            for candidate_model, client in candidates:
+                used_model = candidate_model
+                try:
+                    message = await asyncio.wait_for(client.chat(messages), timeout=slice_seconds)
+                    used_model = getattr(client, "last_model", candidate_model)
+                    break
+                except (OllamaError, asyncio.TimeoutError) as error:
+                    last_error = error
+            if message is None:
+                raise last_error or RuntimeError("All configured planning models failed")
             raw, parsed = _json_content(message); validated = output_schema.model_validate(parsed)
             return StructuredModelResult(provider=self.provider,model_id=used_model,request_id=request_id,attempt=attempt,
                 input_tokens=len(messages[1]["content"])//4,output_tokens=len(raw)//4,latency_ms=int((time.monotonic()-started)*1000),
