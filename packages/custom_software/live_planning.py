@@ -418,6 +418,17 @@ def scope_errors(node: ProposedNode, linked_requirements: list[dict[str,Any]]) -
     return errors
 
 
+def hard_refinement_errors(nodes: list[ProposedNode], requirement_ids: set[str], exclusions: list[str], budget: PlanningBudget,
+    external_node_ids: set[str] | None = None) -> list[str]:
+    """Return only structural defects that cannot be repaired by the normal validator loop.
+
+    Scope expansion is intentionally excluded here. Newly expanded children are queued
+    and their scope findings are deterministically recomputed on the next validator
+    pass, where prune/minimal-contract repair can resolve them.
+    """
+    return structural_errors(nodes, requirement_ids, exclusions, budget, external_node_ids)
+
+
 def normalized_plan_digest(nodes: list[ProposedNode]) -> str:
     value=[{"title":re.sub(r"\W+"," ",n.title.lower()).strip(),"responsibilities":sorted(re.sub(r"\W+"," ",x.lower()).strip() for x in n.responsibilities),"inputs":sorted(n.inputs),"outputs":sorted(n.outputs)} for n in nodes]
     return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
@@ -613,11 +624,8 @@ class LivePlanningOrchestrator:
                     if unknown_dependencies: expansion_errors.append("unknown dependency node IDs: "+", ".join(sorted(unknown_dependencies)))
                 if expansion_errors: raise PlanningBlocked(f"{partition.partition_id}: contract expansion failed after bounded repair: {'; '.join(expansion_errors)}")
                 refined_nodes.append(child)
-            errors=structural_errors(refined_nodes,req_ids,analysis.global_exclusions,self.budget,known_plan_node_ids)
-            for child in refined_nodes:
-                child_linked=[x for x in linked if x["requirement_id"] in child.linked_requirement_ids]
-                errors.extend(f"{child.node_id}: {message}" for message in scope_errors(child,child_linked))
-            if errors: raise PlanningBlocked("refinement structural validation failed: "+"; ".join(errors[:20]))
+            hard_errors=hard_refinement_errors(refined_nodes,req_ids,analysis.global_exclusions,self.budget,known_plan_node_ids)
+            if hard_errors: raise PlanningBlocked("refinement structural validation failed: "+"; ".join(hard_errors[:20]))
             known_plan_node_ids.update(x.node_id for x in refined_nodes)
             if not refined_nodes: raise PlanningBlocked(f"{node.node_id}: empty refinement")
             merely_restates=all(set(x.responsibilities)==set(node.responsibilities) and contract_completeness(x)<=contract_completeness(node) for x in refined_nodes)

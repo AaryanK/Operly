@@ -26,11 +26,15 @@
     if (title) title.textContent = "Solutions";
   }
 
-  function dismissPlanningOverlay() {
+  function stopPlanningTimers() {
     if (planningTimer) clearInterval(planningTimer);
     if (elapsedTimer) clearInterval(elapsedTimer);
     planningTimer = null;
     elapsedTimer = null;
+  }
+
+  function dismissPlanningOverlay() {
+    stopPlanningTimers();
     document.querySelector(".planning-overlay")?.remove();
   }
 
@@ -74,10 +78,7 @@
   function showPlanningError(error, retry) {
     const overlay = document.querySelector(".planning-overlay");
     if (!overlay) return;
-    if (planningTimer) clearInterval(planningTimer);
-    if (elapsedTimer) clearInterval(elapsedTimer);
-    planningTimer = null;
-    elapsedTimer = null;
+    stopPlanningTimers();
 
     const card = overlay.querySelector(".planning-card");
     card.replaceChildren();
@@ -96,6 +97,123 @@
     };
     actions.append(close, again);
     card.append(mark, kicker, title, copy, actions);
+  }
+
+  function placementQuickChoices(questions) {
+    const text = (questions || []).join(" ").toLowerCase();
+    if (!/(standalone|existing website|internal tool|where.*live|integrated into)/.test(text)) return [];
+    return [
+      ["Existing website", "Add this capability to my existing website."],
+      ["Internal tool", "Create this as a private internal tool for me."],
+      ["Standalone app", "Create this as a standalone application."],
+      ["OPERLY decides", "Choose the best placement based on my existing OPERLY workspace and explain the choice."],
+    ];
+  }
+
+  async function continuePlanningFromClarification(clarification, answer) {
+    showPlanningOverlay();
+    try {
+      const result = await api(`/coding-harness/plans/${encodeURIComponent(clarification.planId)}/clarification`, {
+        method: "POST",
+        body: JSON.stringify({ answer })
+      });
+      if (result?.status === "clarification_required") {
+        showPlanningClarification(result);
+        return;
+      }
+      customSoftwareState.plan = result;
+      dismissPlanningOverlay();
+      drawSynthesizedSoftwarePlan();
+    } catch (error) {
+      showPlanningError(error, () => showPlanningClarification(clarification));
+    }
+  }
+
+  function showPlanningClarification(clarification) {
+    let overlay = document.querySelector(".planning-overlay");
+    if (!overlay) overlay = showPlanningOverlay().overlay;
+    stopPlanningTimers();
+    const card = overlay.querySelector(".planning-card");
+    card.replaceChildren();
+    overlay.setAttribute("aria-label", "OPERLY needs clarification");
+
+    const mark = el("div", "?", "planning-mark planning-mark-question");
+    const kicker = el("span", "ONE THING BEFORE I BUILD THIS", "planning-kicker");
+    const title = el("h2", "I need your choice first");
+    const copy = el(
+      "p",
+      "This changes where or how the capability should be implemented. Your answer continues the same plan; OPERLY will not silently guess.",
+      "planning-copy"
+    );
+
+    const questions = Array.isArray(clarification?.questions) ? clarification.questions.filter(Boolean) : [];
+    const questionList = el("div", undefined, "planning-question-list");
+    questions.forEach((question, index) => {
+      const item = el("div", undefined, "planning-question");
+      item.append(el("span", String(index + 1), "planning-question-number"), el("strong", question));
+      questionList.append(item);
+    });
+
+    const form = el("form", undefined, "planning-clarification-form");
+    const quick = placementQuickChoices(questions);
+    const answer = document.createElement("textarea");
+    answer.required = true;
+    answer.maxLength = 4000;
+    answer.rows = questions.length > 1 ? 5 : 4;
+    answer.placeholder = questions.length > 1
+      ? "Answer the questions here. Example: Add it to my existing website, and treat fewer than 5 items as low stock."
+      : "Tell OPERLY what you want…";
+    answer.setAttribute("aria-label", "Answer OPERLY's planning question");
+
+    if (quick.length) {
+      const choices = el("div", undefined, "planning-quick-choices");
+      quick.forEach(([label, value]) => {
+        const button = el("button", label, "planning-choice");
+        button.type = "button";
+        button.onclick = () => {
+          answer.value = value;
+          choices.querySelectorAll(".planning-choice").forEach(node => node.classList.toggle("selected", node === button));
+          answer.focus();
+        };
+        choices.append(button);
+      });
+      form.append(choices);
+    }
+
+    const actions = el("div", undefined, "planning-clarification-actions");
+    const back = el("button", "Back to prompt", "button secondary");
+    const submit = el("button", "Continue planning", "button primary");
+    back.type = "button";
+    submit.type = "submit";
+    back.onclick = dismissPlanningOverlay;
+    actions.append(back, submit);
+    form.append(answer, actions);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const value = answer.value.trim();
+      if (!value) return;
+      submit.disabled = true;
+      await continuePlanningFromClarification(clarification, value);
+      submit.disabled = false;
+    };
+
+    card.append(mark, kicker, title, copy, questionList, form);
+    setTimeout(() => answer.focus(), 0);
+  }
+
+  async function recoverPlanningClarification(error) {
+    const detail = error?.details || {};
+    const message = String(detail?.message || error?.message || "");
+    if (detail?.code !== "planning_blocked" || !message.toLowerCase().includes("user input required before planning")) {
+      return false;
+    }
+    try {
+      const clarification = await api("/coding-harness/planning-clarification");
+      showPlanningClarification(clarification);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function projectCard(project, type, onOpen) {
@@ -146,11 +264,11 @@
     copy.append(
       el("span", "AI-NATIVE SOLUTIONS", "studio-eyebrow"),
       el("h2", "Launch something tailored to your business"),
-      el("p", "Describe the outcome, not the implementation. OPERLY will understand the company, compose the necessary software, workflows and agents, let you approve the plan, and produce an inspectable preview.")
+      el("p", "Describe the outcome, not the implementation. OPERLY will determine where it belongs, ask only when a choice materially changes the result, compose the necessary software, workflows and agents, and produce an inspectable preview.")
     );
 
     const flow = el("div", undefined, "studio-build-flow");
-    ["1 · Understand", "2 · Compose", "3 · Approve", "4 · Inspect & edit"].forEach(step => flow.append(el("span", step, "pill")));
+    ["1 · Understand", "2 · Place", "3 · Compose", "4 · Approve", "5 · Inspect & edit"].forEach(step => flow.append(el("span", step, "pill")));
     copy.append(flow);
 
     const form = el("form", undefined, "studio-prompt-form");
@@ -161,7 +279,7 @@
     input.placeholder = "Example: Launch a digital presence for my mobile pet-care company that captures leads, books visits, follows up automatically, and gives my team a daily work queue.";
     input.setAttribute("aria-label", "Describe the Solution to launch");
     const promptFooter = el("div", undefined, "studio-prompt-footer");
-    promptFooter.append(el("span", "Nothing executes until you approve the plan.", "studio-prompt-hint"));
+    promptFooter.append(el("span", "OPERLY asks before architecture-changing assumptions. Nothing executes until you approve.", "studio-prompt-hint"));
     const submit = el("button", "Shape my Solution", "button primary studio-generate");
     submit.type = "submit";
     promptFooter.append(submit);
@@ -182,7 +300,8 @@
         dismissPlanningOverlay();
         drawSynthesizedSoftwarePlan();
       } catch (error) {
-        showPlanningError(error, () => form.requestSubmit());
+        const recovered = await recoverPlanningClarification(error);
+        if (!recovered) showPlanningError(error, () => form.requestSubmit());
       } finally {
         submit.disabled = false;
       }

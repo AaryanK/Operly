@@ -2,15 +2,32 @@
   const originalDraw = window.drawSynthesizedSoftwarePlan;
   if (typeof originalDraw !== "function") return;
 
-  async function applyHarnessEdit({instruction, mode = "source", context = {}}) {
+  async function applyHarnessEdit({instruction, mode = "source", context = {}, clarificationDepth = 0}) {
     const result = typeof customSoftwareState !== "undefined" ? customSoftwareState.plan : null;
     if (!result?.id || result.status !== "approved") throw new Error("Approve the software plan before editing source");
-    const source = await api(`/coding-harness/plans/${result.id}/source/edits`, {
-      method: "POST",
-      body: JSON.stringify({planId: result.id, approvedVersion: result.approvedVersion, instruction, mode, context})
-    });
-    renderSource(source);
-    return source;
+    try {
+      const source = await api(`/coding-harness/plans/${result.id}/source/edits`, {
+        method: "POST",
+        body: JSON.stringify({planId: result.id, approvedVersion: result.approvedVersion, instruction, mode, context})
+      });
+      renderSource(source);
+      return source;
+    } catch (error) {
+      const detail = error?.details || {};
+      if (detail.code === "coding_agent_clarification_required" && clarificationDepth < 2) {
+        const options = Array.isArray(detail.options) && detail.options.length ? `\n\nOptions:\n${detail.options.map(item => `• ${item}`).join("\n")}` : "";
+        const answer = window.prompt(`${detail.question || detail.message || "OPERLY needs one clarification."}${options}`);
+        if (answer?.trim()) {
+          return applyHarnessEdit({
+            instruction: `${instruction}\n\nOWNER CLARIFICATION:\n${answer.trim()}`,
+            mode,
+            context: {...context, priorClarificationQuestion: detail.question || detail.message || ""},
+            clarificationDepth: clarificationDepth + 1,
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   window.operlyCodingHarnessEdit = applyHarnessEdit;
@@ -93,16 +110,43 @@
       const value = element.getAttribute?.(name);
       if (value) attrs[name] = safeText(value, 200);
     });
+    const doc = element.ownerDocument;
+    const view = doc?.defaultView;
+    const computed = view?.getComputedStyle?.(element);
+    const rect = element.getBoundingClientRect?.();
+    const style = {};
+    [
+      "display", "position", "width", "height", "color", "backgroundColor", "fontFamily", "fontSize",
+      "fontWeight", "lineHeight", "textAlign", "padding", "margin", "gap", "border", "borderRadius",
+      "boxShadow", "overflow", "opacity", "flexDirection", "justifyContent", "alignItems", "gridTemplateColumns"
+    ].forEach(name => {
+      const value = computed?.[name];
+      if (value && value !== "none" && value !== "normal") style[name] = safeText(value, 300);
+    });
+    const parent = element.parentElement;
     return {
       sourceVersion: build.source?.sourceVersion || build.sourceVersion || null,
       previewPath: frame.getAttribute("src") || "",
+      page: {
+        title: safeText(doc?.title, 300),
+        bodyClasses: [...(doc?.body?.classList || [])].slice(0, 12).map(value => safeText(value, 80)),
+      },
+      viewport: {
+        width: view?.innerWidth || frame.clientWidth || null,
+        height: view?.innerHeight || frame.clientHeight || null,
+        devicePixelRatio: view?.devicePixelRatio || 1,
+      },
       selection: {
         selector: simpleSelector(element),
         tag: element.tagName?.toLowerCase() || "",
         id: safeText(element.id, 120),
         classes: [...(element.classList || [])].slice(0, 8).map(value => safeText(value, 80)),
-        text: safeText(element.textContent, 300),
+        text: safeText(element.textContent, 500),
+        outerHTML: safeText(element.outerHTML, 2200),
         attributes: attrs,
+        rect: rect ? {x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height)} : {},
+        computedStyle: style,
+        parent: parent ? {selector: simpleSelector(parent), tag: parent.tagName?.toLowerCase() || "", text: safeText(parent.textContent, 400)} : null,
       }
     };
   }

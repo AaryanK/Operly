@@ -48,7 +48,7 @@ def test_virtual_workspace_exact_edit():
     workspace = VirtualWorkspace()
     workspace.write("app.py", "value = 1\n")
     workspace.edit("app.py", "value = 1", "value = 2")
-    assert workspace.read("app.py") == "value = 2\n"
+    assert workspace.raw("app.py") == "value = 2\n"
 
 
 def test_opencode_style_agent_authors_real_source_tree_without_execution():

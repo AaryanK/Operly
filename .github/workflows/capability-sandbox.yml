@@ -1,0 +1,76 @@
+name: capability-sandbox
+
+on:
+  push:
+    branches: [capability-sandbox]
+    paths:
+      - "packages/capability_sandbox/**"
+      - "packages/coding_harness/**"
+      - "packages/custom_software/graph_planning.py"
+      - "packages/custom_software/graph_coverage.py"
+      - "packages/custom_software/live_planning.py"
+      - "packages/custom_software/live_projection.py"
+      - "packages/custom_software/planning_orchestrator.py"
+      - "packages/custom_software/scope_convergence.py"
+      - "apps/api/coding_harness_router.py"
+      - "apps/web/static/coding-harness-ui.js"
+      - "apps/web/static/graph-planning-ui.js"
+      - "apps/web/static/planning-clarification-normal.js"
+      - "apps/web/static/planning-clarification.css"
+      - "apps/web/static/index.html"
+      - "tests/test_capability_target_resolution.py"
+      - "tests/test_refinement_scope_routing.py"
+      - "tests/test_planning_clarification_gate.py"
+      - "tests/test_planning_internal_questions.py"
+      - "tests/test_scope_convergence_deterministic_targets.py"
+      - "tests/test_graph_planning_efficiency.py"
+      - "tests/test_graph_coverage_repair.py"
+      - "tests/test_coding_spec_compaction.py"
+      - "tests/test_coding_context_window.py"
+      - "tests/test_opencode_coding_harness.py"
+      - "tests/test_coding_agent_tool_loop.py"
+      - "tests/test_capability_harness_journey.py"
+      - "scripts/run_capability_sandbox.py"
+      - ".github/workflows/capability-sandbox.yml"
+  workflow_dispatch:
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: >-
+          python -m py_compile
+          packages/coding_harness/context_window.py
+          packages/coding_harness/model_client.py
+          packages/coding_harness/opencode_agent.py
+          packages/coding_harness/web_tools.py
+          packages/coding_harness/source_service.py
+          packages/custom_software/graph_planning.py
+          packages/custom_software/graph_coverage.py
+          packages/custom_software/planning_orchestrator.py
+          packages/custom_software/live_projection.py
+          packages/custom_software/scope_convergence.py
+          apps/api/coding_harness_router.py
+      - run: node --check apps/web/static/coding-harness-ui.js
+      - run: node --check apps/web/static/planning-clarification-normal.js
+      - run: node --check apps/web/static/graph-planning-ui.js
+      - run: >-
+          python -m pytest -q
+          tests/test_capability_target_resolution.py
+          tests/test_refinement_scope_routing.py
+          tests/test_planning_clarification_gate.py
+          tests/test_planning_internal_questions.py
+          tests/test_scope_convergence_deterministic_targets.py
+          tests/test_graph_planning_efficiency.py
+          tests/test_graph_coverage_repair.py
+          tests/test_coding_spec_compaction.py
+          tests/test_coding_context_window.py
+          tests/test_opencode_coding_harness.py
+          tests/test_coding_agent_tool_loop.py
+          tests/test_capability_harness_journey.py
