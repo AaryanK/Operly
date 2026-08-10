@@ -1,0 +1,256 @@
+(() => {
+  let booted = false;
+
+  function esc(value = "") {
+    return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
+  }
+
+  function formatWhen(value) {
+    if (!value) return "";
+    try {
+      return new Intl.DateTimeFormat(undefined, {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}).format(new Date(value));
+    } catch { return ""; }
+  }
+
+  function setTitle(title) {
+    const node = document.querySelector("#page-title");
+    if (node) node.textContent = title;
+  }
+
+  function setActive(kind) {
+    document.querySelectorAll("#nav button").forEach(button => {
+      const value = button.dataset.simplePage || button.dataset.page;
+      button.classList.toggle("active", value === kind);
+    });
+  }
+
+  function leaveStudioFocus() {
+    document.querySelector("#dashboard")?.classList.remove("studio-focus");
+  }
+
+  async function openAssistant(text = "") {
+    leaveStudioFocus();
+    setActive("assistant");
+    setTitle("OPERLY AI");
+    if (typeof window.renderOperlyAssistant !== "function") return;
+    await window.renderOperlyAssistant();
+    const input = document.querySelector("#ai-input");
+    if (input && text.trim()) {
+      input.value = text.trim();
+      input.focus();
+      document.querySelector("#ai-form")?.requestSubmit();
+    } else {
+      input?.focus();
+    }
+  }
+
+  async function openBuild(text = "") {
+    setActive("studio");
+    setTitle("Build");
+    document.querySelector("#operly-chat-dock")?.classList.add("page-suppressed");
+    document.querySelector("#dashboard")?.classList.add("studio-focus");
+    if (typeof window.operlyStudio === "function") {
+      await window.operlyStudio();
+      const input = document.querySelector("#studio-software-prompt");
+      if (input && text.trim()) {
+        input.value = text.trim();
+        input.focus();
+        input.closest("form")?.requestSubmit();
+      } else {
+        input?.focus();
+      }
+    }
+  }
+
+  function attentionSummary(tasks, approvals) {
+    const openTasks = tasks.filter(item => item.status !== "completed");
+    const pending = approvals.filter(item => item.status === "pending");
+    return {openTasks, pending};
+  }
+
+  async function renderHome() {
+    leaveStudioFocus();
+    document.querySelector("#operly-chat-dock")?.classList.remove("page-suppressed");
+    setActive("home");
+    setTitle("Home");
+    const content = document.querySelector("#content");
+    if (!content) return;
+    content.innerHTML = `<div class="simple-loading">Loading your workspace…</div>`;
+
+    const [tasksResult, approvalsResult, projectsResult] = await Promise.allSettled([
+      api("/tasks"), api("/approvals"), api("/custom-software/projects")
+    ]);
+    const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
+    const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
+    const projects = projectsResult.status === "fulfilled" && Array.isArray(projectsResult.value) ? projectsResult.value : [];
+    const {openTasks, pending} = attentionSummary(tasks, approvals);
+    const workspace = document.querySelector("#workspace-name")?.textContent || "your workspace";
+
+    content.innerHTML = `
+      <section class="simple-home-hero">
+        <span class="simple-eyebrow">${esc(workspace)}</span>
+        <h2>What do you want OPERLY to do?</h2>
+        <p>Ask about the business, take an action, or describe software you want built.</p>
+        <form id="simple-command-form" class="simple-command-form">
+          <textarea id="simple-command" rows="4" placeholder="Describe what you need…" aria-label="What should OPERLY do?"></textarea>
+          <div class="simple-command-actions">
+            <button type="button" id="simple-ask" class="button secondary">Ask OPERLY</button>
+            <button type="button" id="simple-build" class="button primary">Build software</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="simple-block">
+        <div class="simple-section-head"><div><span class="simple-eyebrow">NOW</span><h3>Needs attention</h3></div><button class="simple-link" data-simple-open="activity">View activity</button></div>
+        <div class="simple-attention-grid">
+          <button class="simple-attention-card" data-simple-open="activity">
+            <span>Approvals</span><strong>${pending.length}</strong><p>${pending.length ? "Waiting for your decision" : "Nothing waiting"}</p>
+          </button>
+          <button class="simple-attention-card" data-simple-open="activity">
+            <span>Open tasks</span><strong>${openTasks.length}</strong><p>${openTasks.length ? "Still in progress" : "You’re clear"}</p>
+          </button>
+        </div>
+      </section>
+
+      <section class="simple-block">
+        <div class="simple-section-head"><div><span class="simple-eyebrow">RECENT</span><h3>Software projects</h3></div><button class="simple-link" id="simple-new-build">New build</button></div>
+        <div class="simple-project-grid">
+          ${projects.length ? projects.slice(0,6).map(project => `
+            <button class="simple-project-card" data-project-id="${esc(project.id)}">
+              <span>${esc((project.vertical || "software").replaceAll("_", " "))}</span>
+              <h4>${esc(project.name || "Untitled software")}</h4>
+              <p>${project.version ? `Version ${esc(project.version)}` : "Open project"}</p>
+            </button>`).join("") : `
+            <div class="simple-empty-projects">
+              <h4>No software projects yet</h4><p>Describe what you want above and OPERLY will shape the first plan.</p>
+            </div>`}
+        </div>
+      </section>`;
+
+    const command = document.querySelector("#simple-command");
+    document.querySelector("#simple-ask")?.addEventListener("click", () => openAssistant(command?.value || ""));
+    document.querySelector("#simple-build")?.addEventListener("click", () => openBuild(command?.value || ""));
+    document.querySelector("#simple-command-form")?.addEventListener("submit", event => { event.preventDefault(); openAssistant(command?.value || ""); });
+    document.querySelector("#simple-new-build")?.addEventListener("click", () => openBuild());
+    document.querySelectorAll("[data-project-id]").forEach(button => button.addEventListener("click", () => {
+      if (typeof window.openCustomSoftware === "function") window.openCustomSoftware(button.dataset.projectId);
+    }));
+    document.querySelectorAll("[data-simple-open='activity']").forEach(button => button.addEventListener("click", renderActivity));
+    refreshActivityBadge(tasks, approvals);
+    command?.focus();
+  }
+
+  async function renderActivity() {
+    leaveStudioFocus();
+    document.querySelector("#operly-chat-dock")?.classList.remove("page-suppressed");
+    setActive("activity");
+    setTitle("Activity");
+    const content = document.querySelector("#content");
+    if (!content) return;
+    content.innerHTML = `<div class="simple-loading">Loading activity…</div>`;
+
+    const [messagesResult, tasksResult, approvalsResult] = await Promise.allSettled([
+      api("/messages"), api("/tasks"), api("/approvals")
+    ]);
+    const messages = messagesResult.status === "fulfilled" && Array.isArray(messagesResult.value) ? messagesResult.value : [];
+    const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
+    const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
+    const {openTasks, pending} = attentionSummary(tasks, approvals);
+
+    content.innerHTML = `
+      <section class="simple-page-intro"><span class="simple-eyebrow">WORKSPACE</span><h2>Activity</h2><p>Decisions, work, and recent conversations in one place.</p></section>
+      <div class="simple-activity-layout">
+        <section class="simple-activity-section">
+          <div class="simple-section-head"><div><h3>Approvals</h3><span>${pending.length} pending</span></div></div>
+          <div class="simple-list">
+            ${approvals.length ? approvals.slice(0,8).map(item => `
+              <article class="simple-list-row">
+                <div><span class="simple-status ${esc(item.status)}">${esc(item.status)}</span><h4>${esc(item.action)}</h4><p>${esc(Object.values(item.details || {}).join(" · ") || "No details")}</p></div>
+                ${item.status === "pending" ? `<div class="simple-row-actions"><button class="button secondary" data-simple-approval="rejected" data-id="${esc(item.id)}">Reject</button><button class="button primary" data-simple-approval="approved" data-id="${esc(item.id)}">Approve</button></div>` : ""}
+              </article>`).join("") : `<div class="simple-empty">No approvals yet.</div>`}
+          </div>
+        </section>
+
+        <section class="simple-activity-section">
+          <div class="simple-section-head"><div><h3>Tasks</h3><span>${openTasks.length} open</span></div></div>
+          <div class="simple-list">
+            ${tasks.length ? tasks.slice(0,10).map(item => `
+              <article class="simple-list-row simple-task-row ${item.status === "completed" ? "completed" : ""}">
+                <div><h4>${esc(item.title)}</h4><p>${item.due_at ? `Due ${formatWhen(item.due_at)}` : esc(item.status)}</p></div>
+                ${item.status !== "completed" ? `<button class="simple-check" data-simple-complete="${esc(item.id)}" aria-label="Complete task">✓</button>` : `<span class="simple-done">Done</span>`}
+              </article>`).join("") : `<div class="simple-empty">No tasks yet.</div>`}
+          </div>
+        </section>
+
+        <section class="simple-activity-section simple-messages-section">
+          <div class="simple-section-head"><div><h3>Recent messages</h3><span>${messages.length} total</span></div></div>
+          <div class="simple-list">
+            ${messages.length ? messages.slice(0,12).map(item => `
+              <article class="simple-message-row"><div class="simple-avatar">${esc((item.author_name || "?").slice(0,1).toUpperCase())}</div><div><h4>${esc(item.author_name || "Unknown")}</h4><p>${esc(item.content || "")}</p></div><time>${formatWhen(item.created_at)}</time></article>`).join("") : `<div class="simple-empty">No messages yet.</div>`}
+          </div>
+        </section>
+      </div>`;
+
+    document.querySelectorAll("[data-simple-approval]").forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/approvals/${button.dataset.id}`, {method:"PATCH", body:JSON.stringify({status:button.dataset.simpleApproval})});
+        await renderActivity();
+      } catch (error) { button.disabled = false; alert(error.message); }
+    }));
+    document.querySelectorAll("[data-simple-complete]").forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/tasks/${button.dataset.simpleComplete}/complete`, {method:"PATCH"});
+        await renderActivity();
+      } catch (error) { button.disabled = false; alert(error.message); }
+    }));
+    refreshActivityBadge(tasks, approvals);
+  }
+
+  function refreshActivityBadge(tasks, approvals) {
+    const badge = document.querySelector("#simple-activity-badge");
+    if (!badge) return;
+    const count = tasks.filter(item => item.status !== "completed").length + approvals.filter(item => item.status === "pending").length;
+    badge.textContent = count ? String(count) : "";
+    badge.classList.toggle("hidden", !count);
+  }
+
+  function bootSimpleUi() {
+    if (booted) return;
+    const dashboard = document.querySelector("#dashboard");
+    if (!dashboard || dashboard.classList.contains("hidden")) return;
+    booted = true;
+    renderHome().catch(error => {
+      const content = document.querySelector("#content");
+      if (content) content.innerHTML = `<div class="simple-empty">${esc(error.message || "Could not load Home")}</div>`;
+    });
+  }
+
+  document.addEventListener("click", event => {
+    const simple = event.target.closest("[data-simple-page]");
+    if (simple) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (simple.dataset.simplePage === "home") renderHome();
+      if (simple.dataset.simplePage === "activity") renderActivity();
+      return;
+    }
+    if (event.target.closest("#simple-topbar-ask")) {
+      event.preventDefault();
+      openAssistant();
+    }
+  }, true);
+
+  const dashboard = document.querySelector("#dashboard");
+  if (dashboard) {
+    new MutationObserver(bootSimpleUi).observe(dashboard, {attributes:true, attributeFilter:["class"]});
+  }
+  document.addEventListener("DOMContentLoaded", bootSimpleUi);
+  setTimeout(bootSimpleUi, 0);
+
+  window.operlySimpleHome = renderHome;
+  window.operlySimpleActivity = renderActivity;
+  window.operlyOpenAssistant = openAssistant;
+  window.operlyOpenBuild = openBuild;
+})();
