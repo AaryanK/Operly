@@ -10,6 +10,12 @@ from packages.custom_software.graph_planning import (
 )
 
 
+def _is_operly_internal_question(question: str) -> bool:
+    """Compatibility facade for the owner-vs-platform decision policy."""
+    text = str(question or "").strip()
+    return bool(text) and not material_user_questions([text])
+
+
 # Compatibility helper retained for tests/callers that imported the old private name.
 def _material_user_questions(analysis):
     return material_user_questions(list(getattr(analysis, "questions_requiring_user_input", []) or []))
