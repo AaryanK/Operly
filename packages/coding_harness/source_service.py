@@ -13,17 +13,16 @@ from packages.database.custom_software_models import GeneratedSourceBundle
 
 def _plan_specification(plan) -> str:
     data = plan.model_dump(mode="json") if hasattr(plan, "model_dump") else dict(plan)
+    # The coding harness consumes the semantic authority produced by recursive
+    # planning, not legacy presentation fields such as roles/entities/stack.
+    # Those compatibility views may exist for older UI/runtime paths but must
+    # never become hidden coding requirements.
     selected = {
         "projectName": data.get("projectName"),
         "summary": data.get("summary"),
         "effectiveRequirements": data.get("effectiveRequirements") or [],
         "requirementLedger": data.get("requirementLedger") or [],
         "planTree": data.get("planTree") or [],
-        "stack": data.get("stack"),
-        "roles": data.get("roles") or [],
-        "entities": data.get("entities") or [],
-        "workflows": data.get("workflows") or [],
-        "surfaces": data.get("surfaces") or [],
         "globalValidation": data.get("globalValidation"),
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
     }
@@ -89,6 +88,8 @@ async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, p
         "verificationIntent": result.verification,
         "toolTrace": [item.__dict__ for item in result.trace[-200:]],
         "originalPrompt": prompt,
+        "semanticInput": "validated_requirement_ledger_and_plan_tree",
+        "legacyPresentationFieldsUsed": False,
         "secretValuesStored": False,
     }
     row = GeneratedSourceBundle(
