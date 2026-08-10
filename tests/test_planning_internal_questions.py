@@ -17,3 +17,9 @@ def test_material_product_placement_question_still_reaches_owner():
     assert not _is_operly_internal_question(
         "Should this capability be added to the existing customer website or created as a private internal tool?"
     )
+
+
+def test_business_definition_question_still_reaches_owner():
+    assert not _is_operly_internal_question(
+        "What constitutes a qualified lead for this business?"
+    )
