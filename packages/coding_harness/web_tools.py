@@ -1,11 +1,12 @@
 """Bounded Ollama web-search tools for the OPERLY coding agent.
 
-These tools intentionally sit behind the coding-agent tool registry.  The model
-may choose to research current framework/API documentation, but web content is
-returned as untrusted evidence and never gains filesystem or execution authority.
+These tools intentionally sit behind the coding-agent tool registry. The model may
+choose to research current framework/API documentation, but web content is returned
+as untrusted evidence and never gains filesystem or execution authority.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -34,6 +35,22 @@ def _timeout_seconds() -> int:
 
 def _bounded(value: Any, limit: int) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _public_http_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise CodingWebToolError("web_fetch requires an http(s) URL")
+    host = parsed.hostname.strip("[]").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        raise CodingWebToolError("web_fetch accepts public web targets only")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address and (address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast):
+        raise CodingWebToolError("web_fetch accepts public web targets only")
+    return value
 
 
 async def ollama_web_search(query: str, max_results: int = 5) -> dict[str, Any]:
@@ -75,10 +92,7 @@ async def ollama_web_search(query: str, max_results: int = 5) -> dict[str, Any]:
 
 async def ollama_web_fetch(url: str) -> dict[str, Any]:
     """Fetch one public HTTP(S) page through Ollama's hosted web-fetch API."""
-    value = _bounded(url, 3000)
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise CodingWebToolError("web_fetch requires an http(s) URL")
+    value = _public_http_url(_bounded(url, 3000))
     headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
     timeout = aiohttp.ClientTimeout(total=_timeout_seconds())
     try:
