@@ -1,4 +1,4 @@
-"""Persist coding-harness source and edits as immutable OPERLY source bundles."""
+"""Persist coding-agent source and edits as immutable OPERLY source bundles."""
 from __future__ import annotations
 
 import hashlib
@@ -90,10 +90,17 @@ async def _persist_result(
         raise CodingHarnessError(str(error)) from error
 
     provenance = {
-        "harness": "opencode_style_v2",
+        "harness": "operly_tool_loop_v1",
+        "inspiration": "opencode_session_tool_loop",
         "modelProvider": "ollama",
-        "agentMode": {"plan": "read_only", "build": "project_edit", "repair": "runner_feedback"},
+        "agentMode": {
+            "planning": "read_only_permission_mode_available",
+            "coding": "persistent_project_tool_loop",
+            "repair": "same_agent_with_runner_feedback",
+            "visual": "studio_dom_observation_to_source_mapping",
+        },
         "terminalExecution": "isolated_runner_only",
+        "webTools": "ollama_web_search_and_fetch_when_enabled",
         "sourceOperation": kind,
         "parentSourceBundleId": parent.id if parent else None,
         "instruction": (instruction or "")[:20_000],
@@ -102,7 +109,7 @@ async def _persist_result(
         "summary": result.summary[:4_000],
         "verificationIntent": result.verification,
         "changedPaths": result.changed_paths,
-        "toolTrace": [item.__dict__ for item in result.trace[-300:]],
+        "toolTrace": [item.__dict__ for item in result.trace[-400:]],
         "originalPrompt": prompt,
         "semanticInput": "validated_requirement_ledger_and_plan_tree",
         "legacyPresentationFieldsUsed": False,
@@ -148,7 +155,7 @@ async def _persist_with_contract_repair(
     instruction: str | None = None,
     failure_evidence: dict | None = None,
 ):
-    """Feed deterministic source-contract failures back into the same workspace."""
+    """Feed deterministic source-contract failures back into the same agent/workspace semantics."""
     specification = _plan_specification(plan)
     current = result
     budget = _contract_repair_budget()
@@ -203,9 +210,12 @@ async def edit_source_for_plan(
 ):
     agent = OpenCodeStyleCodingAgent(client=client)
     task = str(instruction or "").strip()
-    if context:
-        task += "\n\nEDITOR CONTEXT:\n" + json.dumps(context, ensure_ascii=False, sort_keys=True)[:15_000]
-    result = await agent.edit(_plan_specification(plan), source_files_from_record(source), task)
+    result = await agent.edit(
+        _plan_specification(plan),
+        source_files_from_record(source),
+        task,
+        context=context or {},
+    )
     return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind=edit_kind, parent=source, instruction=instruction)
 
 
