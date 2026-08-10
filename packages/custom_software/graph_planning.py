@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 
 from packages.custom_software.live_planning import (
     Contract,
@@ -54,10 +54,25 @@ _MECHANICAL_QUESTION_TERMS = (
     "storage engine",
     "serialization",
     "database technology",
-    "what constitutes",
     "what is considered an important architectural decision",
     "necessary third-party api",
     "necessary third party api",
+)
+
+_DEFERRED_MECHANICS = (
+    "rest api",
+    "http api",
+    "grpc",
+    "mcp",
+    "database",
+    "sql",
+    "json",
+    "xml",
+    "csv",
+    "yaml",
+    "local storage",
+    "file system",
+    "filesystem",
 )
 
 
@@ -70,6 +85,12 @@ def material_user_questions(questions: list[str]) -> list[str]:
             continue
         normalized = " ".join(text.lower().split())
         if any(term in normalized for term in _MECHANICAL_QUESTION_TERMS):
+            continue
+        if "important architectural decision" in normalized:
+            continue
+        if "third-party" in normalized and any(
+            term in normalized for term in ("necessary", "required", "constitutes", "criteria")
+        ):
             continue
         if "operly" in normalized and any(
             term in normalized
@@ -246,6 +267,33 @@ def _graph_errors(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> lis
             if requirement.requirement_id in linked
         ]
         errors.extend(f"{graph_node.node_id}: {finding}" for finding in scope_errors(node, linked_requirements))
+
+        requirement_text = " ".join(
+            " ".join(
+                [
+                    str(requirement.source_excerpt or ""),
+                    str(requirement.normalized_requirement or ""),
+                ]
+            )
+            for requirement in analysis.requirements
+            if requirement.requirement_id in linked
+        ).lower()
+        active_text = " ".join(
+            [
+                graph_node.title,
+                graph_node.objective,
+                graph_node.responsibility,
+                *graph_node.inputs,
+                *graph_node.outputs,
+                *graph_node.persistence_behavior,
+                *graph_node.security_constraints,
+            ]
+        ).lower()
+        for mechanic in _DEFERRED_MECHANICS:
+            if mechanic in active_text and mechanic not in requirement_text:
+                errors.append(
+                    f"{graph_node.node_id}: implementation mechanic deferred to coding harness: {mechanic}"
+                )
 
     missing = mandatory_ids - covered
     if missing:
