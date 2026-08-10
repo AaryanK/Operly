@@ -1,48 +1,84 @@
-# Operly release checklist
+# OPERLY release checklist
 
-## Architecture-first generation gate
+Do not deploy unless every applicable item below is complete and recorded for the
+candidate commit.
 
-- [ ] Back up the target database with the release-scoped backup confirmation.
-- [ ] Rehearse Alembic head `0009_sandbox_job_lifecycle` against disposable SQLite and PostgreSQL.
-- [ ] Review plan and architecture-pack migrations; never run browser acceptance against `operly.db`.
-- [ ] Confirm every generated implementation is bound to an explicitly approved plan version.
-- [ ] Confirm unsupported plans fail closed when the isolated runner is absent.
-- [ ] Verify quotation, inventory, and field-service tenant boundaries and stale-write rejection.
-- [ ] Record the deployed commit SHA from `/api/health`; deploy atomically and retain the previous image for rollback.
+## Source and automated verification
 
-## Managed application builder and custom software
+- [ ] Record the candidate commit SHA and confirm `/api/health` reports it.
+- [ ] Review the working tree and exclude local databases, secrets, generated
+      previews, and test artifacts.
+- [ ] Run the complete automated test suite and record totals and warnings.
+- [ ] Run authenticated browser acceptance for Home, Build, Activity, Settings,
+      login, logout, and workspace switching.
+- [ ] Inspect desktop, tablet, and mobile layouts.
 
-- [ ] Run SQLite upgrade to `0009_sandbox_job_lifecycle` twice.
-- [ ] Rehearse PostgreSQL fresh, legacy, current, and unsafe states with the release-scoped backup gate.
-- [ ] Execute authenticated login, theme, component override, customer app, workflow, and selection scenarios.
-- [ ] Verify desktop, tablet, and mobile canvas viewports.
-- [ ] Confirm cross-workspace application, ChangeSet, version, preview, and record access is denied.
-- [ ] Generate a field-service product from Studio and verify public intake, signed customer status, dispatch transitions, and artifact selection.
-- [ ] Preview and apply a selected visual change; verify unrelated backend artifact hashes are preserved.
-- [ ] Confirm public and dispatcher pages deny framing while authenticated Studio previews allow same-origin framing.
-- [ ] Confirm agentic requests fail closed unless the isolated runner URL and token are configured.
-- [ ] Review the sandbox runner's dependency scan, test report, artifact graph, immutable digest, resource usage, and preview URL before promotion.
-- [ ] Do not deploy before backup verification and authenticated deployment testing.
+## Database
 
-- [ ] Full automated suite passes; totals and warnings recorded.
-- [ ] Timestamped database backup exists and restoration was tested.
-- [ ] Migration succeeds twice on a copy; record and integrity checks pass.
-- [ ] `python -m packages.database.migrate release-check --backup-path ...` passes.
-- [ ] `DATABASE_URL` is the `${{Postgres.DATABASE_URL}}` Railway service reference.
-- [ ] A Railway PostgreSQL manual backup or verified `pg_dump` exists.
-- [ ] PostgreSQL rehearsal tests ran against an isolated disposable database.
-- [ ] Exposed PostgreSQL credentials were rotated and web/Discord references updated.
-- [ ] Railway pre-deploy migration targets PostgreSQL; assets remain at `/app/studio_assets`.
-- [ ] Authenticated local Studio acceptance passes after a server restart.
-- [ ] Desktop, tablet, and mobile layouts were actually inspected.
-- [ ] Isolation, authorization, stale proposals, duplicate Apply, invalid JSON,
-      rejection, history, and rollback were verified.
-- [ ] Production uses HTTPS, scoped trusted hosts/CORS, strong secrets, and
-      persistent database storage.
-- [ ] Current and rollback Railway revisions are recorded.
-- [ ] Health, landing, login, and TLS checks pass.
-- [ ] Authenticated production smoke uses an owner-supplied account.
-- [ ] Temporary acceptance credentials and data are removed.
+- [ ] Confirm the Alembic head matches the latest file in `alembic/versions`
+      (currently `0012_live_recursive_planning`).
+- [ ] Create a timestamped PostgreSQL backup and test restoration.
+- [ ] Rehearse a fresh migration and an upgrade from the deployed revision against
+      disposable PostgreSQL databases.
+- [ ] Run migration and integrity checks twice to prove idempotent startup.
+- [ ] Confirm production `DATABASE_URL` points to persistent PostgreSQL rather than
+      SQLite or a test database.
 
-Do not deploy unless PostgreSQL rehearsal, credential rotation, Railway backup,
-service reference, and current deployment revision are independently confirmed.
+## Authentication and isolation
+
+- [ ] Use HTTPS, a strong unique `SESSION_SECRET`, secure cookies, trusted hosts,
+      and the intended CORS origin.
+- [ ] Confirm bootstrap or temporary credentials have been removed or rotated.
+- [ ] Verify users cannot read or mutate another workspace's conversations, tasks,
+      approvals, plans, source snapshots, builds, projects, records, or previews.
+- [ ] Verify workspace switching requires an existing membership.
+- [ ] Verify CSRF protection on authenticated mutations and throttling on public
+      and login endpoints.
+
+## Planning and coding harness
+
+- [ ] Exercise a request that proceeds without clarification and one that requires
+      a genuine owner decision.
+- [ ] Verify capability dependencies, acceptance criteria, whole-graph review, and
+      approved-plan version binding.
+- [ ] Verify coding context compaction, bounded tool output, permission modes, and
+      repeated-tool-call termination.
+- [ ] Verify source edits create immutable snapshots and cannot escape the project
+      source boundary.
+- [ ] Verify build failure evidence reaches the bounded repair loop.
+- [ ] Verify stale writes, duplicate build requests, cancellation, cleanup, and
+      preview deletion behave safely.
+
+## Runner and generated previews
+
+- [ ] Keep `OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER` disabled in production.
+- [ ] Configure the external runner URL and token if builds are enabled.
+- [ ] Confirm the runner uses ephemeral filesystems, resource limits,
+      deny-by-default networking, dependency controls, and preview-scoped secrets.
+- [ ] Review build logs, tests, artifact inventory, immutable digest, resource
+      usage, startup result, and health check.
+- [ ] Confirm generated applications cannot execute inside the FastAPI process.
+- [ ] Confirm generation fails closed when the isolated runner is unavailable.
+- [ ] Confirm preview URLs are isolated and expire or clean up as intended.
+- [ ] Do not represent preview generation as production deployment.
+
+## Supporting product surfaces
+
+- [ ] Verify Discord ingestion and tenant-scoped message recall if the connector is
+      enabled.
+- [ ] Verify task completion and approval decisions are audited.
+- [ ] Verify public website and field-service endpoints enforce rate limits,
+      validation, tenant boundaries, and framing policy.
+- [ ] Verify managed application records, workflows, versions, and rollback remain
+      application- and workspace-scoped.
+
+## Deployment and rollback
+
+- [ ] Record the current production revision and its rollback procedure.
+- [ ] Deploy migrations before or atomically with compatible application code.
+- [ ] Verify health, landing, login, authenticated navigation, one planning request,
+      and one non-destructive preview flow in production.
+- [ ] Monitor API errors, runner failures, database connections, and authentication
+      failures after deployment.
+- [ ] Retain the previous application image and verified database backup until the
+      release observation window closes.
