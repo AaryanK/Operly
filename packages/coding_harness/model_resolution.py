@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from packages.model_runtime.ollama_client import OllamaClient
+from packages.coding_harness.model_client import CodingModelClient, coding_model_client
 
 
 class CapabilityResolutionError(ValueError):
@@ -119,15 +119,11 @@ def _parse(raw: dict[str, Any], capabilities: Mapping[str, str]) -> CapabilityRe
     if not reason:
         raise CapabilityResolutionError("Capability resolution requires a reason")
 
-    return CapabilityResolution(
-        known_feature_ids=tuple(known),
-        unknown_requirements=tuple(unknown_rows),
-        reason=reason,
-    )
+    return CapabilityResolution(known_feature_ids=tuple(known), unknown_requirements=tuple(unknown_rows), reason=reason)
 
 
 class ModelCapabilityResolver:
-    def __init__(self, client: OllamaClient | None = None) -> None:
+    def __init__(self, client: CodingModelClient | None = None) -> None:
         self.client = client
 
     async def resolve(self, prompt: str) -> CapabilityResolution:
@@ -135,15 +131,12 @@ class ModelCapabilityResolver:
         if not request:
             raise CapabilityResolutionError("A non-empty coding request is required")
 
-        payload = {
-            "availableCapabilities": KNOWN_CAPABILITIES,
-            "userRequest": request,
-        }
+        payload = {"availableCapabilities": KNOWN_CAPABILITIES, "userRequest": request}
         messages: list[dict[str, str]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
         ]
-        client = self.client or OllamaClient()
+        client = self.client or coding_model_client()
         response = await client.chat(messages, [])
 
         first_error: Exception | None = None
@@ -153,14 +146,8 @@ class ModelCapabilityResolver:
             except (json.JSONDecodeError, CapabilityResolutionError) as exc:
                 first_error = exc
                 if attempt:
-                    raise CapabilityResolutionError(
-                        "The model returned an invalid coding-capability resolution after repair"
-                    ) from exc
-                repair = {
-                    "instruction": "Repair the response. Return only the required JSON object.",
-                    "error": str(exc)[:1000],
-                    "allowedCapabilityIds": sorted(KNOWN_CAPABILITIES),
-                }
+                    raise CapabilityResolutionError("The model returned an invalid coding-capability resolution after repair") from exc
+                repair = {"instruction": "Repair the response. Return only the required JSON object.", "error": str(exc)[:1000], "allowedCapabilityIds": sorted(KNOWN_CAPABILITIES)}
                 messages.extend([
                     {"role": "assistant", "content": str(response.get("content") or "")[:8000]},
                     {"role": "user", "content": json.dumps(repair, separators=(",", ":"))},
