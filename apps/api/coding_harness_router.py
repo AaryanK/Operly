@@ -1,7 +1,10 @@
+import json
+import mimetypes
 import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +16,8 @@ from packages.coding_harness.execution_loop import build_with_repair
 from packages.coding_harness.model_resolution import CapabilityResolutionError
 from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
 from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
+from packages.coding_harness.source_jobs import job_json, launch_source_job
+from packages.custom_software.source_bundles import BundlePolicyError, normalized_path
 from packages.custom_software.live_planning import PlannerUnavailable, PlanningBlocked
 from packages.custom_software.plan_service import (
     PlanConflict,
@@ -27,7 +32,7 @@ from packages.custom_software.runner_adapters import ExternalRunnerAdapter, Loca
 from packages.custom_software.runner_service import build_json
 from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
 from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
-from packages.database.custom_software_models import RunnerPreviewRecord
+from packages.database.custom_software_models import GeneratedSourceBundle, RunnerPreviewRecord, SandboxGenerationJob, SandboxJobEvent
 from packages.model_runtime import OllamaError
 
 router = APIRouter(tags=["coding-harness"])
@@ -168,6 +173,72 @@ async def create_harness_source(plan_id: str, payload: GenerateApprovedPlanInput
         await db.rollback(); raise HTTPException(status_code=503, detail=error.public_message) from error
     except CodingHarnessError as error:
         await db.rollback(); raise HTTPException(status_code=422, detail={"code": "coding_harness_blocked", "message": str(error)}) from error
+
+
+@router.post("/api/coding-harness/plans/{plan_id}/source-jobs", status_code=202)
+async def create_source_job(plan_id: str, payload: GenerateApprovedPlanInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    """Queue source generation so the browser request is never held open by the model loop."""
+    _assert_owner(auth)
+    if payload.planId != plan_id:
+        raise HTTPException(422, "Plan identifier mismatch")
+    row, _ = await _approved_plan(db, auth, plan_id, payload.approvedVersion)
+    resource = json.dumps({"kind": "coding_source", "version": 1})
+    active = await db.scalar(
+        select(SandboxGenerationJob).where(
+            SandboxGenerationJob.tenant_id == auth.tenant.id,
+            SandboxGenerationJob.plan_id == row.id,
+            SandboxGenerationJob.approved_plan_version == payload.approvedVersion,
+            SandboxGenerationJob.resource_json == resource,
+            SandboxGenerationJob.state.in_(["queued", "generating"]),
+        ).order_by(SandboxGenerationJob.created_at.desc())
+    )
+    if active:
+        return job_json(active)
+    job = SandboxGenerationJob(
+        tenant_id=auth.tenant.id,
+        plan_id=row.id,
+        approved_plan_version=payload.approvedVersion,
+        state="queued",
+        attempts=1,
+        resource_json=resource,
+        created_by=auth.user.id,
+    )
+    db.add(job)
+    await db.flush()
+    db.add(SandboxJobEvent(tenant_id=auth.tenant.id, job_id=job.id, state="queued", details_json=json.dumps({"message": "Source generation queued"})))
+    await db.commit()
+    await db.refresh(job)
+    launch_source_job(job.id)
+    return job_json(job)
+
+
+@router.get("/api/coding-harness/source-jobs/{job_id}")
+async def get_source_job(job_id: str, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    job = await db.get(SandboxGenerationJob, job_id)
+    if job is None or job.tenant_id != auth.tenant.id or json.loads(job.resource_json or "{}").get("kind") != "coding_source":
+        raise HTTPException(404, "Source generation job not found")
+    return job_json(job)
+
+
+@router.get("/api/coding-harness/sources/{source_id}/preview/{path:path}")
+async def preview_static_source(source_id: str, path: str, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    """Serve inert static-web bundle files directly; no generated process executes here."""
+    source = await db.get(GeneratedSourceBundle, source_id)
+    if source is None or source.tenant_id != auth.tenant.id:
+        raise HTTPException(404, "Generated source not found")
+    provenance = json.loads(source.provenance_json or "{}")
+    if provenance.get("detectedRuntimeProfile") != "static-web-js":
+        raise HTTPException(409, "This source requires Build & verify before it can be previewed")
+    requested = path or "index.html"
+    try:
+        requested = normalized_path(requested)
+    except BundlePolicyError as error:
+        raise HTTPException(404, "Preview file not found") from error
+    records = {str(item["path"]): str(item["content"]) for item in json.loads(source.files_json)}
+    if requested not in records:
+        raise HTTPException(404, "Preview file not found")
+    media_type = mimetypes.guess_type(requested)[0] or "application/octet-stream"
+    return Response(records[requested], media_type=media_type)
 
 
 @router.get("/api/coding-harness/plans/{plan_id}/source")

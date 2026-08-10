@@ -51,6 +51,16 @@
     section.append(grid);
     (source.verificationIntent || []).forEach(item => section.append(studioNode("p", `Verify: ${item}`)));
 
+    if (source.runtimeProfile === "static-web-js") {
+      const frame = document.createElement("iframe");
+      frame.title = "Generated source preview";
+      frame.src = `/api/coding-harness/sources/${source.id}/preview/index.html`;
+      frame.className = "construction-preview coding-source-preview";
+      section.append(studioNode("h4", "Source preview"), studioNode("p", "Rendered directly from the immutable source bundle. Build & verify still runs tests and health gates before release."), frame);
+    } else {
+      section.append(studioNode("p", "This source requires Build & verify before a live preview can be started.", "coding-source-preview-note"));
+    }
+
     const editor = studioNode("div", undefined, "harness-edit-box");
     const textarea = document.createElement("textarea");
     textarea.placeholder = "Change the page, frontend behavior, backend, API, or code…";
@@ -296,6 +306,39 @@
     try { renderSource(await api(`/coding-harness/plans/${result.id}/source`)); } catch (_) {}
   }
 
+  function renderCodingProgress(content, state, elapsedSeconds, detail = "") {
+    let panel = content.querySelector(".coding-harness-progress");
+    if (!panel) {
+      panel = studioNode("section", undefined, "plan-section coding-harness-progress");
+      panel.setAttribute("role", "status"); panel.setAttribute("aria-live", "polite");
+      const actions = content.querySelector(".plan-actions");
+      if (actions) content.insertBefore(panel, actions); else content.append(panel);
+    }
+    panel.replaceChildren(
+      studioNode("h3", state === "queued" ? "Coding queued" : state === "generating" ? "Coding your Solution" : state === "failed" ? "Coding stopped" : "Source ready"),
+      studioNode("p", detail || (state === "generating" ? "The coding agent is creating and validating files in a persistent source workspace." : "Preparing the coding workspace.")),
+      studioNode("p", `${elapsedSeconds}s elapsed · You can leave this screen and return; status is stored by OPERLY.`, "coding-progress-meta")
+    );
+  }
+
+  async function generateSourceInBackground(result, content, code) {
+    const startedAt = Date.now();
+    let job = await api(`/coding-harness/plans/${result.id}/source-jobs`, {method: "POST", body: JSON.stringify({planId: result.id, approvedVersion: result.approvedVersion})});
+    while (["queued", "generating"].includes(job.state)) {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      renderCodingProgress(content, job.state, elapsed); code.textContent = `Coding · ${elapsed}s`;
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      job = await api(`/coding-harness/source-jobs/${job.id}`);
+    }
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    if (job.state !== "completed" || !job.result?.source) {
+      renderCodingProgress(content, "failed", elapsed, job.failure || "Source generation failed without usable output.");
+      throw new Error(job.failure || "Source generation failed");
+    }
+    renderCodingProgress(content, "completed", elapsed, "The immutable source workspace is ready and previewable.");
+    renderSource(job.result.source);
+  }
+
   function cleanPlanPresentation(result) {
     const content = document.querySelector("#content"); if (!content) return;
     content.querySelectorAll(".plan-section").forEach(section => { const grid = section.querySelector(":scope > .plan-grid"); if (grid && grid.children.length === 0) section.remove(); });
@@ -316,7 +359,7 @@
     const code = studioNode("button", "Code with harness", "button primary"); code.dataset.codingHarnessCode = "1";
     code.onclick = async () => {
       code.disabled = true; const previous = code.textContent; code.textContent = "Coding…";
-      try { renderSource(await api(`/coding-harness/plans/${result.id}/source`, {method: "POST", body: JSON.stringify({planId: result.id, approvedVersion: result.approvedVersion})})); code.textContent = "Regenerate source"; }
+      try { await generateSourceInBackground(result, content, code); code.textContent = "Regenerate source"; }
       catch (error) { code.textContent = previous; alert(error.message); }
       finally { code.disabled = false; }
     };

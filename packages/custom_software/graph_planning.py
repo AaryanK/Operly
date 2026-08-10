@@ -301,6 +301,55 @@ def _graph_errors(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> lis
     return _unique(errors)
 
 
+def _deterministic_graph_repair(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> CapabilityGraph:
+    """Repair structural model mistakes without inventing product decisions.
+
+    Semantic review still runs afterward. This pass only removes dangling graph
+    references and guarantees that every mandatory ledger item has an executable
+    owner, preventing stochastic identifier mistakes from aborting the whole plan.
+    """
+    requirement_ids = {item.requirement_id for item in analysis.requirements}
+    node_ids = {node.node_id for node in graph.nodes}
+    repaired: list[CapabilityGraphNode] = []
+    covered: set[str] = set()
+    for node in graph.nodes:
+        linked = _unique([item for item in node.requirement_ids if item in requirement_ids])
+        if not linked:
+            continue
+        dependencies = _unique([item for item in node.dependencies if item in node_ids and item != node.node_id])
+        repaired_node = node.model_copy(update={"requirement_ids": linked, "dependencies": dependencies})
+        repaired.append(repaired_node)
+        covered.update(linked)
+
+    mandatory = [item for item in analysis.requirements if item.priority.lower() != "optional"]
+    used_ids = {node.node_id for node in repaired}
+    for requirement in mandatory:
+        if requirement.requirement_id in covered:
+            continue
+        base = "coverage_" + "".join(character.lower() if character.isalnum() else "_" for character in requirement.requirement_id).strip("_")
+        node_id = base or "coverage_requirement"
+        suffix = 2
+        while node_id in used_ids:
+            node_id = f"{base}_{suffix}"; suffix += 1
+        used_ids.add(node_id)
+        acceptance = _unique(list(requirement.acceptance_criteria))
+        repaired.append(CapabilityGraphNode(
+            node_id=node_id,
+            title=f"Requirement {requirement.requirement_id} capability",
+            objective=requirement.normalized_requirement,
+            responsibility=requirement.normalized_requirement,
+            requirement_ids=[requirement.requirement_id],
+            dependencies=[],
+            inputs=["approved requirement input"],
+            outputs=[f"implemented behavior for {requirement.requirement_id}"],
+            invariants=acceptance or [requirement.normalized_requirement],
+            failure_cases=[f"The behavior required by {requirement.requirement_id} is unavailable or incorrect"],
+            security_constraints=[],
+            persistence_behavior=[],
+        ))
+    return CapabilityGraph(nodes=repaired)
+
+
 def _review_to_global(review: GraphReview) -> GlobalValidatorOutput:
     return GlobalValidatorOutput(
         approved=review.approved,
@@ -440,6 +489,11 @@ class GraphPlanningOrchestrator(LivePlanningOrchestrator):
                 current=graph,
                 findings=self._review_findings(review, deterministic),
             )
+            deterministic = _graph_errors(graph, analysis)
+            review = await self._review(analysis, graph, deterministic)
+
+        if deterministic:
+            graph = _deterministic_graph_repair(graph, analysis)
             deterministic = _graph_errors(graph, analysis)
             review = await self._review(analysis, graph, deterministic)
 
