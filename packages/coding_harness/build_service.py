@@ -69,7 +69,13 @@ async def submit_source_build(
 
     bundle = source_bundle_from_record(source)
     adapter = adapter or ExternalRunnerAdapter()
-    submission = _submission(source, plan, idempotency_key)
+    try:
+        submission = _submission(source, plan, idempotency_key)
+    except ValueError as error:
+        runtime = getattr(getattr(plan, "stack", None), "runtime", None) or "unknown"
+        raise SourceRecordError(
+            f"Approved runtime '{runtime}' does not yet have an isolated runner profile"
+        ) from error
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
