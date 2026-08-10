@@ -28,7 +28,7 @@ _BLOCKING_FIELDS = (
 _CONCRETE_MECHANISMS = {
     "json", "xml", "csv", "yaml", "database", "sql", "http", "grpc",
     "websocket", "file upload", "pagination", "character encoding",
-    "encoding matrix",
+    "encoding matrix", "rest api", "graphql", "sqlite", "postgresql",
 }
 _ERROR_WORDS = {"error", "invalid", "division", "zero", "message"}
 
@@ -50,12 +50,7 @@ def _linked_requirement_text(context) -> str:
 
 
 def _required_error_scope(term: str, requirement_text: str) -> bool:
-    """Protect minimal error behavior when the user explicitly required it.
-
-    This does not authorize concrete storage/protocol/serialization mechanisms.
-    It only prevents concepts such as error types/messages from being pruned out
-    of an explicit invalid-input or division-by-zero requirement.
-    """
+    """Protect minimal error behavior when the user explicitly required it."""
     if not any(word in requirement_text for word in _ERROR_WORDS):
         return False
     if not any(word in term for word in _ERROR_WORDS):
@@ -67,14 +62,35 @@ def _has_blockers(verdict: ValidatorOutput) -> bool:
     return any(bool(getattr(verdict, field)) for field in _BLOCKING_FIELDS)
 
 
-class ScopeConvergingPlanningClient:
-    """Post-process only contradictory/no-op validator prune decisions.
+def _deterministic_scope_terms(findings: list[str]) -> list[str]:
+    """Extract concrete mechanisms from deterministic scope findings.
 
-    A first actionable prune is untouched. If the same semantic scope finding was
-    already simplified, deterministic scope validation is now clean, and the model
-    itself says the node is implementation-ready with no other blockers, the
-    controller converts the repeated prune into approval. The correction is stored
-    in retry_history so provenance remains visible.
+    The live planner's canonicalizer removes literal scope terms. Validator prose can
+    be broader than the deterministic finding (for example "persistent storage"
+    while the deterministic guard reports "unjustified scope expansion: database").
+    Supplying both makes the first minimal replacement actually remove the offending
+    mechanism instead of burning repeated refinement turns.
+    """
+    terms: list[str] = []
+    for finding in findings:
+        text = " ".join(str(finding).lower().split())
+        if ":" in text and "scope" in text:
+            tail = text.split(":", 1)[1].strip()
+            if tail:
+                terms.append(tail)
+        for mechanism in _CONCRETE_MECHANISMS:
+            if mechanism in text:
+                terms.append(mechanism)
+    return list(dict.fromkeys(term for term in terms if term))
+
+
+class ScopeConvergingPlanningClient:
+    """Post-process contradictory/no-op validator prune decisions.
+
+    First, deterministic scope findings are merged into the model's prune target so
+    canonicalization removes the exact offending mechanism on the next replacement.
+    Once scope is deterministically clean, repeated prune decisions are converted to
+    approval when the model itself reports readiness and no other blockers remain.
     """
 
     def __init__(self, delegate) -> None:
@@ -99,6 +115,30 @@ class ScopeConvergingPlanningClient:
             return result
 
         deterministic = [str(item) for item in (context.constraints or {}).get("deterministic_scope_findings", [])]
+        deterministic_terms = _deterministic_scope_terms(deterministic)
+
+        # Make the model's prune target mechanically complete. This does not add
+        # semantic scope; it only names mechanisms the deterministic validator has
+        # already rejected.
+        merged_scope = list(dict.fromkeys([*verdict.irrelevant_scope_expansion, *deterministic_terms]))
+        history = list(result.retry_history)
+        if merged_scope != verdict.irrelevant_scope_expansion:
+            history.append({
+                "controller": "scope_convergence",
+                "reason": "merge_deterministic_scope_targets",
+                "deterministic_scope_findings": deterministic,
+                "added_scope_terms": [term for term in deterministic_terms if term not in verdict.irrelevant_scope_expansion],
+            })
+            verdict = verdict.model_copy(update={
+                "disposition": "replace_with_minimal_contract",
+                "ready_for_implementation": False,
+                "irrelevant_scope_expansion": merged_scope,
+                "minimal_contract_guidance": list(dict.fromkeys([
+                    *verdict.minimal_contract_guidance,
+                    "Remove every deterministic scope target and use only typed OPERLY platform defaults for implementation mechanics.",
+                ])),
+            })
+
         current_scope = _normalized_scope(verdict.irrelevant_scope_expansion)
         requirement_text = _linked_requirement_text(context)
         actionable_scope = {
@@ -119,21 +159,21 @@ class ScopeConvergingPlanningClient:
         no_actionable_scope = not actionable_scope and not deterministic
         converged = (prior_simplification and no_actionable_scope) or (repeated and not deterministic)
 
-        if not converged or not verdict.ready_for_implementation or _has_blockers(verdict):
-            return result
+        if converged and verdict.ready_for_implementation and not _has_blockers(verdict):
+            original = verdict.disposition
+            verdict = verdict.model_copy(update={
+                "disposition": "approve",
+                "irrelevant_scope_expansion": [],
+            })
+            history.append({
+                "controller": "scope_convergence",
+                "reason": "repeated_or_resolved_scope_prune",
+                "original_disposition": original,
+                "new_disposition": "approve",
+                "deterministic_scope_findings": deterministic,
+                "protected_requirement_scope": sorted(current_scope - actionable_scope),
+            })
 
-        original = verdict.disposition
-        verdict.disposition = "approve"
-        verdict.irrelevant_scope_expansion = []
-        history = list(result.retry_history)
-        history.append({
-            "controller": "scope_convergence",
-            "reason": "repeated_or_resolved_scope_prune",
-            "original_disposition": original,
-            "new_disposition": "approve",
-            "deterministic_scope_findings": deterministic,
-            "protected_requirement_scope": sorted(current_scope - actionable_scope),
-        })
         return result.model_copy(update={
             "structured_output": verdict.model_dump(mode="json"),
             "retry_history": history,
