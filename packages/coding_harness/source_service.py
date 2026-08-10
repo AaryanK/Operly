@@ -13,21 +13,73 @@ from packages.custom_software.source_bundles import SourceFile, build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle
 
 
+def _compact_requirement(item: dict) -> dict:
+    exact = str(item.get("exactText") or "").strip()
+    normalized = str(item.get("normalizedMeaning") or exact).strip()
+    result = {
+        "id": item.get("id"),
+        "requirement": normalized,
+        "mandatory": bool(item.get("mandatory", True)),
+        "acceptance": list(item.get("acceptanceCriteria") or []),
+        "nodeIds": list(item.get("relatedPlanNodeIds") or []),
+    }
+    if exact and exact != normalized:
+        result["source"] = exact
+    exclusions = list(item.get("exclusions") or [])
+    if exclusions:
+        result["exclusions"] = exclusions
+    return result
+
+
+def _compact_node(item: dict) -> dict:
+    return {
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "objective": item.get("objective") or item.get("description"),
+        "responsibilities": list(item.get("responsibilities") or []),
+        "requirementIds": list(item.get("originalRequirementIds") or []),
+        "dependencies": list(item.get("dependencies") or []),
+        "inputs": list(item.get("inputs") or []),
+        "outputs": list(item.get("outputs") or []),
+        "invariants": list(item.get("invariants") or []),
+        "failureCases": list(item.get("failureCases") or []),
+        "security": list(item.get("securityRequirements") or []),
+        "persistence": list(item.get("persistenceBehavior") or []),
+        "tests": list(item.get("requiredTests") or []),
+    }
+
+
 def _plan_specification(plan) -> str:
+    """Return only the semantic contract the coding loop needs.
+
+    Historical presentation fields, duplicate effective-requirement lists, planner
+    validation prose and provenance stay in persistence. Re-sending them on every
+    coding turn wastes context without giving the coding agent new authority.
+    """
     data = plan.model_dump(mode="json") if hasattr(plan, "model_dump") else dict(plan)
+    requirements = [
+        _compact_requirement(item)
+        for item in (data.get("requirementLedger") or [])
+        if isinstance(item, dict)
+    ]
+    graph = [
+        _compact_node(item)
+        for item in (data.get("planTree") or [])
+        if isinstance(item, dict)
+    ]
     selected = {
         "projectName": data.get("projectName"),
-        "summary": data.get("summary"),
-        "effectiveRequirements": data.get("effectiveRequirements") or [],
-        "requirementLedger": data.get("requirementLedger") or [],
-        "planTree": data.get("planTree") or [],
+        "objective": data.get("summary") or data.get("primaryGoal"),
+        "requirements": requirements,
+        "capabilityGraph": graph,
         "globalValidation": data.get("globalValidation"),
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
         "operlyExecutionContract": {
-            "tests": "Critical tests must run non-interactively in the isolated runner and must exercise generated application code.",
+            "tests": "Critical acceptance tests run non-interactively in the isolated runner and exercise generated application code.",
             "staticWeb": "For browser HTML/CSS/vanilla JavaScript, keep domain logic importable from tests and use Node built-ins only for runner verification.",
             "pythonStdlibWeb": "For Python standard-library web applications, provide app.py, build.py, and executable Python tests without third-party packages.",
             "execution": "Never execute code in the OPERLY control plane. The runner selects deterministic execution mechanics from the completed source tree.",
+            "implementationFreedom": "Choose framework, storage, protocol and internal interface mechanics from the approved behavior and available runtime unless the requirement ledger explicitly constrains them.",
         },
     }
     return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -111,7 +163,7 @@ async def _persist_result(
         "changedPaths": result.changed_paths,
         "toolTrace": [item.__dict__ for item in result.trace[-400:]],
         "originalPrompt": prompt,
-        "semanticInput": "validated_requirement_ledger_and_plan_tree",
+        "semanticInput": "compact_requirement_ledger_and_dynamic_capability_graph",
         "legacyPresentationFieldsUsed": False,
         "detectedRuntimeProfile": runtime_profile_id,
         "secretValuesStored": False,
