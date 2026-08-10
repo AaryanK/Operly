@@ -88,6 +88,7 @@ async def submit_source_build(
     source: GeneratedSourceBundle,
     idempotency_key: str,
     adapter: RunnerAdapter | None = None,
+    attempt: int = 1,
 ):
     existing = await db.scalar(select(RunnerBuildRecord).where(RunnerBuildRecord.tenant_id == tenant_id, RunnerBuildRecord.idempotency_key == idempotency_key))
     if existing:
@@ -111,12 +112,12 @@ async def submit_source_build(
         runner_implementation=adapter.implementation,
         isolation_profile=adapter.isolation_profile,
         submission_json=submission.model_dump_json(),
-        attempt=1,
+        attempt=max(1, int(attempt)),
         created_by=user_id,
     )
     db.add(row)
     await db.flush()
-    await _event(db, row, "created", message="Coding harness build record created")
+    await _event(db, row, "created", message=f"Coding harness build record created for attempt {row.attempt}")
     await _event(db, row, "queued", message=f"Harness-authored source submitted with negotiated runtime {submission.stackId}")
     await db.commit()
 
