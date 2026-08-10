@@ -84,7 +84,7 @@ class LocalRunnerAcceptance(unittest.IsolatedAsyncioTestCase):
   row,_,plan=await create_plan(db,self.tenant.id,self.user.id,PROMPT);await approve(db,row,1);return row,plan
  async def test_real_generated_process_health_domain_persistence_and_cleanup(self):
   async with self.sessions() as db:
-   row,plan=await self.setup_plan(db);build=await submit_build(db,self.tenant.id,self.user.id,row,plan,"local-runner-ok",self.runner);self.assertEqual(build.state,"preview_ready");result=json.loads(build.result_json);self.assertTrue(result["healthCheckSuccess"]);self.assertTrue(result["acceptanceCheckSuccess"]);self.assertTrue(result["testReport"]["acceptance"]["pageMarker"])
+   row,plan=await self.setup_plan(db);build=await submit_build(db,self.tenant.id,self.user.id,row,plan,"local-runner-ok",self.runner);self.assertEqual(build.state,"preview_ready");result=json.loads(build.result_json);self.assertTrue(result["healthCheckSuccess"]);self.assertTrue(result["acceptanceCheckSuccess"]);self.assertTrue(result["testReport"]["acceptance"]["passed"])
    from sqlalchemy import select
    from packages.database.custom_software_models import RunnerPreviewRecord
    preview=await db.scalar(select(RunnerPreviewRecord).where(RunnerPreviewRecord.build_id==build.id));same,_=await active_preview(db,self.tenant.id,preview.id);self.assertEqual(same.id,preview.id)
