@@ -1,13 +1,14 @@
 """Coding-model provider boundary.
 
-OPERLY currently uses Ollama for coding-agent turns.  The harness depends only on
+OPERLY currently uses Ollama for coding-agent turns. The harness depends only on
 this tiny chat contract so additional providers can be introduced later without
-changing workspace, execution, or repair semantics.
+changing workspace, execution, repair, or context-window semantics.
 """
 from __future__ import annotations
 
 from typing import Any, Protocol
 
+from packages.coding_harness.context_window import ContextBoundCodingClient
 from packages.model_runtime import OllamaClient
 
 
@@ -20,10 +21,5 @@ class CodingModelClient(Protocol):
 
 
 def coding_model_client() -> CodingModelClient:
-    """Return the configured coding model client.
-
-    Ollama is intentionally the only production provider today.  Keeping provider
-    selection here prevents provider-specific behavior from leaking into the
-    coding harness itself.
-    """
-    return OllamaClient()
+    """Return the configured coding model client behind bounded session context."""
+    return ContextBoundCodingClient(OllamaClient())
