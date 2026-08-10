@@ -1,10 +1,12 @@
-"""Project live recursive planning output into the legacy SoftwarePlan envelope.
+"""Project validated live planning output into the historical SoftwarePlan envelope.
 
-The recursive planner is the semantic authority in live mode.  This module keeps
-legacy presentation fields from inventing roles, entities, workflows, or stack
-choices that were never present in the validated live contracts.
+Live recursive planning is the semantic authority.  The compatibility shell in
+this module exists only because older APIs/UI still consume ``SoftwarePlan``.  It
+must never call another planner or invent product semantics.
 """
 from __future__ import annotations
+
+import re
 
 
 def _unique(values):
@@ -18,14 +20,92 @@ def _unique(values):
     return result
 
 
-def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> dict:
-    """Return a compatibility envelope derived only from validated live output.
+def neutral_live_envelope(prompt: str, objective: str | None = None) -> dict:
+    """Return a schema-only live-mode shell with no guessed product semantics.
 
-    ``build_software_plan`` is still used to satisfy the historical SoftwarePlan
-    shape, but none of its guessed semantic fields are allowed to survive into a
-    live plan.  The authoritative implementation contract is the requirement
-    ledger plus the validated recursive plan tree.
+    This deliberately does not inspect the request for domains, roles, entities,
+    stacks, templates, or application types.  Those values are projected later
+    only from validated live requirements/contracts.
     """
+    goal = " ".join(str(objective or prompt or "Generated Software").split()).strip()
+    name = re.sub(r"[^A-Za-z0-9 &-]+", " ", goal).strip()[:80] or "Generated Software"
+    return {
+        "schemaVersion": 1,
+        "projectName": name,
+        "summary": goal,
+        "productCategory": "custom software",
+        "targetUsers": [],
+        "businessDomain": "user-defined",
+        "primaryGoal": goal,
+        "successCriteria": [
+            "all mandatory requirements mapped",
+            "all implementation leaves validated",
+            "whole-system validation passed",
+        ],
+        "primaryArchitecture": "live_recursive_requirement_graph",
+        "secondaryArchitectures": [],
+        "implementationMode": "sandbox_generated",
+        "confidence": 0.0,
+        "rationale": "Compatibility envelope only; validated live contracts are semantic authority.",
+        "roles": [],
+        "entities": [],
+        "relationships": [],
+        "workflows": [],
+        "surfaces": [],
+        "backendCapabilities": [],
+        "integrations": [],
+        "design": {
+            "family": "minimal",
+            "visualPersonality": "implementation-defined from approved requirements",
+            "navigationFamily": "implementation-defined",
+            "heroFamily": "implementation-defined",
+            "typographyPairing": "implementation-defined",
+            "typeScale": "responsive",
+            "contentDensity": "comfortable",
+            "spacingSystem": "responsive",
+            "gridSystem": "responsive",
+            "surfaceStyle": "implementation-defined",
+            "cardStyle": "implementation-defined",
+            "ctaStrategy": "task-priority",
+            "mediaStrategy": "requirement-driven",
+            "motionStrategy": "reduced-motion-safe",
+            "responsiveBehavior": "preserve required workflows across viewports",
+            "accessibilityGoals": ["keyboard operation", "visible focus", "semantic structure"],
+        },
+        "runtime": {
+            "strategy": "sandbox_generated",
+            "reason": "Generated source is executed only through the isolated runner boundary.",
+            "primaryPack": None,
+            "secondaryPacks": [],
+        },
+        "securityConstraints": [],
+        "unsupportedRequirements": [],
+        "risks": [],
+        "testRequirements": [],
+        "deploymentRequirements": ["isolated preview verification before release"],
+        "effectiveRequirements": [],
+        "capabilities": [],
+        "architectureNodes": [],
+        "stack": None,
+        "requirementEvidence": [],
+        "reusedPrimitives": [],
+        "generatedComponents": [],
+        "provenance": {
+            "semanticAuthority": "validated_recursive_plan",
+            "compatibilityEnvelope": "neutral_live",
+        },
+        "requirementLedger": [],
+        "planTree": [],
+        "planningMetrics": None,
+        "semanticDiff": None,
+        "globalValidation": {},
+        "planningMode": "live_llm",
+        "planningBudget": {},
+    }
+
+
+def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> dict:
+    """Project only validated live output into the compatibility shell."""
     projected = dict(base)
 
     effective = [
@@ -76,9 +156,9 @@ def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> di
 
     projected.update(
         {
-            # These old structured views are not semantic authorities in live
-            # mode. Empty is safer than fabricated defaults. The recursive tree
-            # carries the actual roles/data/workflows when the request needs them.
+            # Historical structured views stay empty in live mode unless a
+            # validated live projection explicitly exists for them.  The
+            # recursive plan tree is the implementation contract.
             "targetUsers": [],
             "roles": [],
             "entities": [],
@@ -97,8 +177,8 @@ def project_live_envelope(base: dict, analysis, nodes, ledger: list[dict]) -> di
             "securityConstraints": security,
             "rationale": (
                 "Live architecture is projected only from the validated requirement "
-                "ledger and recursive implementation contracts; legacy planner "
-                "defaults are not semantic input."
+                "ledger and recursive implementation contracts; no second planner "
+                "or legacy semantic defaults are used."
             ),
         }
     )
