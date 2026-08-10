@@ -6,7 +6,8 @@ import json
 
 from sqlalchemy import func, select
 
-from packages.coding_harness.opencode_agent import OpenCodeStyleCodingAgent
+from packages.coding_harness.opencode_agent import CodingHarnessError, OpenCodeStyleCodingAgent
+from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
 from packages.custom_software.source_bundles import build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle
 
@@ -25,6 +26,14 @@ def _plan_specification(plan) -> str:
         "planTree": data.get("planTree") or [],
         "globalValidation": data.get("globalValidation"),
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
+        # This is an OPERLY execution-boundary contract, not a product feature.
+        # The model remains free to choose the source structure, while generated
+        # tests must be runnable by a finite isolated profile without manual UI.
+        "operlyExecutionContract": {
+            "tests": "All critical tests must run non-interactively in the isolated runner; manual browser-console verification is not an executable test.",
+            "staticWeb": "If you choose browser HTML/CSS/vanilla JavaScript, keep calculation/domain logic DOM-free where practical and test it with Node's built-in node:test and node:assert modules. Do not require third-party packages.",
+            "execution": "Do not execute code in the OPERLY control plane. The runner selects execution mechanics from the completed source tree.",
+        },
     }
     return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -79,6 +88,10 @@ async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, p
         source_version,
         prompt_digest,
     )
+    try:
+        runtime_profile_id = validate_runtime_contract(bundle)
+    except RuntimeResolutionError as error:
+        raise CodingHarnessError(str(error)) from error
     provenance = {
         "harness": "opencode_style_v1",
         "agentMode": {"plan": "read_only", "build": "project_edit"},
@@ -90,6 +103,7 @@ async def generate_source_for_plan(db, tenant_id: str, user_id: str, plan_row, p
         "originalPrompt": prompt,
         "semanticInput": "validated_requirement_ledger_and_plan_tree",
         "legacyPresentationFieldsUsed": False,
+        "detectedRuntimeProfile": runtime_profile_id,
         "secretValuesStored": False,
     }
     row = GeneratedSourceBundle(
@@ -134,6 +148,7 @@ def source_record_json(row) -> dict:
         "harness": provenance.get("harness"),
         "agentMode": provenance.get("agentMode"),
         "terminalExecution": provenance.get("terminalExecution"),
+        "runtimeProfile": provenance.get("detectedRuntimeProfile"),
         "summary": provenance.get("summary"),
         "verificationIntent": provenance.get("verificationIntent", []),
     }
