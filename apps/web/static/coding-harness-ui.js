@@ -32,9 +32,37 @@
     }
   }
 
+  function cleanPlanPresentation(result) {
+    const content = document.querySelector("#content");
+    if (!content) return;
+
+    content.querySelectorAll(".plan-section").forEach(section => {
+      const grid = section.querySelector(":scope > .plan-grid");
+      if (grid && grid.children.length === 0) section.remove();
+    });
+
+    const actions = content.querySelector(".plan-actions");
+    if (!actions) return;
+    const approve = [...actions.querySelectorAll("button")].find(button =>
+      button.textContent.trim() === "Approve this plan" ||
+      button.textContent.trim() === "Approve & continue"
+    );
+    if (!approve) return;
+
+    const metricsPass = result?.plan?.planningMetrics?.globalValidationPassed === true;
+    const finalPass = result?.plan?.globalValidation?.passed !== false;
+    const ready = metricsPass && finalPass;
+    approve.disabled = !ready;
+    approve.textContent = ready ? "Approve & continue" : "Approval blocked";
+    approve.title = ready ? "Approve this validated plan and continue to coding" : "Global validation must pass before approval";
+  }
+
   function enhanceHarness() {
     const result = typeof customSoftwareState !== "undefined" ? customSoftwareState.plan : null;
-    if (!result || result.status !== "approved") return;
+    if (!result) return;
+    cleanPlanPresentation(result);
+    if (result.status !== "approved") return;
+
     const plan = result.plan || {};
     if (plan.implementationMode === "architecture_pack") return;
     const content = document.querySelector("#content");
