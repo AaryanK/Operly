@@ -4,6 +4,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
+# Local and self-hosted launches should behave the same as CLI diagnostics.
+# Existing process variables keep precedence, so managed deployments remain in
+# control of their injected secrets and configuration.
+load_dotenv(override=False)
+
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware

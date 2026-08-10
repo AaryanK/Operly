@@ -58,7 +58,7 @@ INCOMPLETE_GRAPH = {
             "objective": "Compare selected scenarios.",
             "responsibility": "Render two selected scenarios side by side.",
             "requirement_ids": ["R-002"],
-            "dependencies": ["SCENARIOS"],
+            "dependencies": ["SCENARIOS", "MODEL_INVENTED_MISSING_NODE"],
             "inputs": ["two selected scenarios"],
             "outputs": ["side-by-side comparison"],
             "invariants": ["Comparison does not mutate either scenario."],
@@ -141,3 +141,4 @@ def test_missing_requirement_links_use_small_coverage_patch_not_graph_regenerati
     nodes = {node.node_id: node for node in outcome["nodes"]}
     assert nodes["SCENARIOS"].linked_requirement_ids == ["R-001", "R-003"]
     assert nodes["COMPARE"].linked_requirement_ids == ["R-002"]
+    assert nodes["COMPARE"].dependencies == ["SCENARIOS"]

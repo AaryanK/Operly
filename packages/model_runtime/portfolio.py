@@ -13,14 +13,17 @@ class ModelRoute:
 
 
 _DEFAULTS = {
-    "requirements_analyst": ModelRoute("ollama", "nemotron-3-ultra", ("nemotron-3-super", "gemma4:31b")),
-    "planner": ModelRoute("ollama", "nemotron-3-ultra", ("nemotron-3-super", "gpt-oss:120b")),
-    "global_validator": ModelRoute("ollama", "gpt-oss:120b", ("nemotron-3-ultra", "nemotron-3-super")),
-    "coding": ModelRoute("ollama", "minimax-m3", ("nemotron-3-ultra", "gpt-oss:120b")),
-    "repair": ModelRoute("ollama", "nemotron-3-super", ("minimax-m3", "gpt-oss:120b")),
-    "capability_placement": ModelRoute("ollama", "nemotron-3-super", ("gemma4:31b", "gpt-oss:20b")),
-    "business_agent": ModelRoute("ollama", "gemma4:31b", ("nemotron-3-nano:30b", "gpt-oss:20b")),
-    "bounded_task": ModelRoute("ollama", "nemotron-3-nano:30b", ("gpt-oss:20b", "gemma4:31b")),
+    role: ModelRoute("ollama", "gemma4:31b")
+    for role in (
+        "requirements_analyst",
+        "planner",
+        "global_validator",
+        "coding",
+        "repair",
+        "capability_placement",
+        "business_agent",
+        "bounded_task",
+    )
 }
 
 

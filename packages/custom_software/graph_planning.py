@@ -14,6 +14,7 @@ OPERLY does not spend model calls restating the same acceptance criteria.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import model_validator
@@ -51,6 +52,7 @@ _MECHANICAL_QUESTION_TERMS = (
     "technical nature",
     "framework",
     "storage mechanism",
+    "persistence mechanism",
     "storage engine",
     "serialization",
     "database technology",
@@ -59,25 +61,43 @@ _MECHANICAL_QUESTION_TERMS = (
     "necessary third party api",
 )
 
-_DEFERRED_MECHANICS = (
-    "rest api",
-    "http api",
-    "grpc",
-    "mcp",
-    "database",
-    "sql",
-    "json",
-    "xml",
-    "csv",
-    "yaml",
-    "local storage",
-    "file system",
-    "filesystem",
+_OWNER_DECISION_TERMS = (
+    "security",
+    "permission",
+    "legal",
+    "compliance",
+    "regulated",
+    "jurisdiction",
+    "data ownership",
+    "external cost",
+    "budget",
+    "billing",
+    "authentication",
+)
+
+_EXPLICIT_PLACEMENT_TERMS = (
+    "standalone application",
+    "integrated into",
+    "internal tool",
+    "where should",
+    "where must",
+)
+
+_UNSAFE_ASSUMPTION_TERMS = (
+    "conflicting requirement",
+    "contradictory requirement",
+    "mutually exclusive",
+    "cannot both",
+    "irreversible",
+    "destructive",
+    "delete existing",
+    "replace existing",
 )
 
 
-def material_user_questions(questions: list[str]) -> list[str]:
-    """Return only questions the owner must decide, not OPERLY implementation mechanics."""
+def material_user_questions(questions: list[str], requirement_context: str | None = None) -> list[str]:
+    """Return only questions OPERLY cannot safely resolve itself."""
+    context = " ".join(str(requirement_context or "").lower().split())
     result: list[str] = []
     for question in questions:
         text = str(question or "").strip()
@@ -86,18 +106,16 @@ def material_user_questions(questions: list[str]) -> list[str]:
         normalized = " ".join(text.lower().split())
         if any(term in normalized for term in _MECHANICAL_QUESTION_TERMS):
             continue
-        if "important architectural decision" in normalized:
-            continue
-        if "third-party" in normalized and any(
-            term in normalized for term in ("necessary", "required", "constitutes", "criteria")
-        ):
-            continue
-        if "operly" in normalized and any(
-            term in normalized
-            for term in ("interface", "protocol", "api", "mcp", "technical", "implementation")
-        ):
-            continue
-        result.append(text)
+        must_ask = any(term in normalized for term in _OWNER_DECISION_TERMS)
+        must_ask = must_ask or any(term in normalized for term in _EXPLICIT_PLACEMENT_TERMS)
+        must_ask = must_ask or any(term in normalized for term in _UNSAFE_ASSUMPTION_TERMS)
+        if must_ask and requirement_context is not None:
+            explicit_risk = any(term in normalized and term in context for term in _OWNER_DECISION_TERMS)
+            explicit_placement = any(term in context for term in _EXPLICIT_PLACEMENT_TERMS) or "do not assume" in context
+            explicit_conflict = any(term in normalized for term in _UNSAFE_ASSUMPTION_TERMS)
+            must_ask = explicit_risk or (explicit_placement and any(term in normalized for term in _EXPLICIT_PLACEMENT_TERMS)) or explicit_conflict
+        if must_ask:
+            result.append(text)
     return result[:2]
 
 
@@ -268,33 +286,6 @@ def _graph_errors(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> lis
         ]
         errors.extend(f"{graph_node.node_id}: {finding}" for finding in scope_errors(node, linked_requirements))
 
-        requirement_text = " ".join(
-            " ".join(
-                [
-                    str(requirement.source_excerpt or ""),
-                    str(requirement.normalized_requirement or ""),
-                ]
-            )
-            for requirement in analysis.requirements
-            if requirement.requirement_id in linked
-        ).lower()
-        active_text = " ".join(
-            [
-                graph_node.title,
-                graph_node.objective,
-                graph_node.responsibility,
-                *graph_node.inputs,
-                *graph_node.outputs,
-                *graph_node.persistence_behavior,
-                *graph_node.security_constraints,
-            ]
-        ).lower()
-        for mechanic in _DEFERRED_MECHANICS:
-            if mechanic in active_text and mechanic not in requirement_text:
-                errors.append(
-                    f"{graph_node.node_id}: implementation mechanic deferred to coding harness: {mechanic}"
-                )
-
     missing = mandatory_ids - covered
     if missing:
         errors.append("mandatory requirements not mapped: " + ", ".join(sorted(missing)))
@@ -326,6 +317,25 @@ def _deterministic_graph_repair(graph: CapabilityGraph, analysis: RequirementsAn
     for requirement in mandatory:
         if requirement.requirement_id in covered:
             continue
+        requirement_text = " ".join(
+            [requirement.normalized_requirement, requirement.category, *requirement.acceptance_criteria]
+        )
+        requirement_tokens = _semantic_tokens(requirement_text)
+        ranked = sorted(
+            (
+                (_semantic_match_score(requirement_tokens, requirement.category, node), index)
+                for index, node in enumerate(repaired)
+            ),
+            reverse=True,
+        )
+        if ranked and ranked[0][0] > 0:
+            index = ranked[0][1]
+            target = repaired[index]
+            repaired[index] = target.model_copy(
+                update={"requirement_ids": _unique([*target.requirement_ids, requirement.requirement_id])}
+            )
+            covered.add(requirement.requirement_id)
+            continue
         base = "coverage_" + "".join(character.lower() if character.isalnum() else "_" for character in requirement.requirement_id).strip("_")
         node_id = base or "coverage_requirement"
         suffix = 2
@@ -348,6 +358,47 @@ def _deterministic_graph_repair(graph: CapabilityGraph, analysis: RequirementsAn
             persistence_behavior=[],
         ))
     return CapabilityGraph(nodes=repaired)
+
+
+_SEMANTIC_STOP_WORDS = {
+    "allow", "application", "behavior", "create", "display", "include", "provide",
+    "required", "shall", "system", "user", "using", "with", "from", "into", "each",
+}
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", str(value or "").lower()):
+        if len(token) < 4 or token in _SEMANTIC_STOP_WORDS:
+            continue
+        for suffix in ("ations", "ation", "ments", "ment", "ing", "ers", "er", "ed", "s"):
+            if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+                token = token[: -len(suffix)]
+                break
+        tokens.add(token)
+    return tokens
+
+
+def _semantic_match_score(requirement_tokens: set[str], category: str, node: CapabilityGraphNode) -> int:
+    node_text = " ".join(
+        [node.title, node.objective, node.responsibility, *node.inputs, *node.outputs]
+    )
+    node_tokens = _semantic_tokens(node_text)
+    score = len(requirement_tokens & node_tokens) * 10
+    category_text = str(category or "").lower()
+    lowered = node_text.lower()
+    category_hints = {
+        "input": ("input", "form", "manager"),
+        "calculation": ("calculat", "engine", "metric"),
+        "interface": ("ui", "render", "view", "present"),
+        "persistence": ("persist", "storage", "state", "data"),
+        "provenance": ("test", "verif", "audit"),
+        "behavior": ("engine", "manager", "controller"),
+    }
+    for category_name, hints in category_hints.items():
+        if category_name in category_text and any(hint in lowered for hint in hints):
+            score += 3
+    return score
 
 
 def _review_to_global(review: GraphReview) -> GlobalValidatorOutput:
@@ -391,7 +442,7 @@ class GraphPlanningOrchestrator(LivePlanningOrchestrator):
             },
         )
         analysis = await self._call("requirements_analyst", context, RequirementsAnalysis)
-        questions = material_user_questions(analysis.questions_requiring_user_input)
+        questions = material_user_questions(analysis.questions_requiring_user_input, prompt)
         if questions:
             raise PlanningNeedsUserInput(questions)
         return analysis
@@ -457,7 +508,11 @@ class GraphPlanningOrchestrator(LivePlanningOrchestrator):
             },
         )
         review = await self._call("global_validator", context, GraphReview, "graph")
-        questions = material_user_questions(review.user_questions)
+        requirement_context = " ".join(
+            f"{item.source_excerpt} {item.normalized_requirement}"
+            for item in analysis.requirements
+        )
+        questions = material_user_questions(review.user_questions, requirement_context)
         if questions:
             raise PlanningNeedsUserInput(questions)
         return review

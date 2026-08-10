@@ -23,6 +23,7 @@ class DirectBuildModel:
             "content": "Implementing directly against the approved specification.",
             "tool_calls": [
                 {"function": {"name": "write", "arguments": {"path": "app.py", "content": "def add(a,b): return a+b\n"}}},
+                {"function": {"name": "write", "arguments": {"path": "build.py", "content": "print('build')\n"}}},
                 {"function": {"name": "write", "arguments": {"path": "test_app.py", "content": "import unittest\nfrom app import add\nclass T(unittest.TestCase):\n def test_add(self): self.assertEqual(add(2,3),5)\n"}}},
                 {"function": {"name": "finish", "arguments": {"summary": "Implemented."}}},
             ],
@@ -105,7 +106,36 @@ class MissingTestRecoveryModel:
             "content": "",
             "tool_calls": [
                 {"function": {"name": "write", "arguments": {"path": "test_app.py", "content": "from app import winner\ndef test_winner(): assert winner() == 'A'\n"}}},
+                {"function": {"name": "write", "arguments": {"path": "build.py", "content": "print('build')\n"}}},
                 {"function": {"name": "finish", "arguments": {"summary": "Implemented with tests.", "verification": ["python -m unittest"]}}},
+            ],
+        }
+
+
+class RuntimeContractRecoveryModel:
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "write", "arguments": {"path": "index.html", "content": "<!doctype html><script>window.ready=true</script>"}}},
+                    {"function": {"name": "write", "arguments": {"path": "index.test.js", "content": "const test=require('node:test');test('placeholder',()=>{});"}}},
+                    {"function": {"name": "finish", "arguments": {"summary": "Done"}}},
+                ],
+            }
+        assert any("No isolated runner profile matches" in str(item.get("content", "")) for item in messages if item.get("role") == "tool")
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "write", "arguments": {"path": "app.js", "content": "module.exports={ready:true};"}}},
+                {"function": {"name": "write", "arguments": {"path": "index.test.js", "content": "const test=require('node:test');const assert=require('node:assert/strict');const app=require('./app.js');test('ready',()=>assert.equal(app.ready,true));"}}},
+                {"function": {"name": "finish", "arguments": {"summary": "Runtime-valid source"}}},
             ],
         }
 
@@ -115,16 +145,25 @@ def test_build_can_start_directly_with_project_tools():
     result = asyncio.run(OpenCodeStyleCodingAgent(client=model, max_steps=6).build("Approved tiny Python specification"))
     assert model.calls == 1
     assert "write" in model.tool_names[0]
-    assert result.changed_paths == ["app.py", "test_app.py"]
+    assert result.changed_paths == ["app.py", "build.py", "test_app.py"]
 
 
 def test_rejected_finish_returns_evidence_and_agent_adds_missing_tests():
     model = MissingTestRecoveryModel()
     result = asyncio.run(OpenCodeStyleCodingAgent(client=model, max_steps=6).build("Approved decision capability"))
     assert model.calls == 2
-    assert [item.path for item in result.files] == ["app.py", "test_app.py"]
+    assert [item.path for item in result.files] == ["app.py", "build.py", "test_app.py"]
     assert any(item.tool == "finish" and not item.ok for item in result.trace)
     assert any(item.tool == "finish" and item.ok for item in result.trace)
+
+
+def test_finish_enforces_full_runtime_contract_inside_same_coding_session():
+    model = RuntimeContractRecoveryModel()
+    result = asyncio.run(OpenCodeStyleCodingAgent(client=model, max_steps=6).build("Approved browser application"))
+
+    assert model.calls == 2
+    assert [item.path for item in result.files] == ["app.js", "index.html", "index.test.js"]
+    assert [item.ok for item in result.trace if item.tool == "finish"] == [False, True]
 
 
 def test_progress_callback_reports_model_and_real_tool_activity():
@@ -142,8 +181,9 @@ def test_progress_callback_reports_model_and_real_tool_activity():
 
 def test_visual_edit_observes_selected_dom_context_before_source_change():
     files = [
-        SourceFile("index.html", b"<h1>Welcome</h1>", "seed"),
-        SourceFile("test_app.py", b"def test_placeholder(): assert True\n", "seed"),
+        SourceFile("index.html", b"<h1>Welcome</h1><script src='app.js'></script>", "seed"),
+        SourceFile("app.js", b"module.exports={title:'Welcome'};", "seed"),
+        SourceFile("tests/app.test.js", b"const test=require('node:test');require('../app.js');test('loads',()=>{});", "seed"),
     ]
     context = {
         "selection": {"selector": "#hero-title", "tag": "h1", "text": "Welcome"},

@@ -37,8 +37,8 @@ def test_planning_timeout_moves_to_next_role_model(monkeypatch):
         return await real_wait_for(awaitable, timeout)
 
     monkeypatch.setattr(live.asyncio, "wait_for", timeout_first)
-    monkeypatch.setenv("OPERLY_MODEL_REQUIREMENTS_ANALYST", "nemotron-3-ultra")
-    monkeypatch.setenv("OPERLY_MODEL_REQUIREMENTS_ANALYST_FALLBACKS", "nemotron-3-super,gemma4:31b")
+    monkeypatch.setenv("OPERLY_MODEL_REQUIREMENTS_ANALYST", "gemma4:31b")
+    monkeypatch.setenv("OPERLY_MODEL_REQUIREMENTS_ANALYST_FALLBACKS", "nemotron-3-nano:30b,gpt-oss:20b")
 
     result = asyncio.run(live.OllamaPlanningClient().generate_structured(
         role="requirements_analyst",
@@ -50,5 +50,5 @@ def test_planning_timeout_moves_to_next_role_model(monkeypatch):
 
     assert result.failure_classification is None
     assert result.structured_output == {"value": "ok"}
-    assert result.model_id == "nemotron-3-super"
-    assert FakeOllamaClient.calls == ["nemotron-3-super"]
+    assert result.model_id == "nemotron-3-nano:30b"
+    assert FakeOllamaClient.calls == ["nemotron-3-nano:30b"]

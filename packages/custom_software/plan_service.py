@@ -1,4 +1,6 @@
+import asyncio
 import json
+import os
 from sqlalchemy import desc, select
 from pydantic import ValidationError
 
@@ -17,6 +19,7 @@ from packages.custom_software.live_planning import (
     PlanningBlocked,
     planning_mode,
 )
+from packages.model_runtime.ollama_client import OllamaError
 from packages.custom_software.live_projection import neutral_live_envelope, project_live_envelope
 from packages.custom_software.planning_orchestrator import (
     PlanningNeedsUserInput,
@@ -29,6 +32,16 @@ class PlanConflict(ValueError):
     pass
 
 
+def _planning_concurrency() -> int:
+    try:
+        return max(1, min(int(os.getenv("OPERLY_MAX_CONCURRENT_PLANS", "1")), 8))
+    except ValueError:
+        return 1
+
+
+_LIVE_PLANNING_GATE = asyncio.Semaphore(_planning_concurrency())
+
+
 async def _run_live_plan(db, row, tenant_id, prompt):
     async def persist_result(role, node_id, result):
         db.add(_invocation(row, tenant_id, role, node_id, result))
@@ -37,7 +50,14 @@ async def _run_live_plan(db, row, tenant_id, prompt):
     orchestrator = RecursiveRepairPlanningOrchestrator(
         NormalizingPlanningClient(OllamaPlanningClient()), on_result=persist_result
     )
-    outcome = await orchestrator.run(prompt)
+    # Cloud model endpoints can reject or destabilize simultaneous structured
+    # planning loops. Queue plans locally by default; operators may raise the
+    # limit after validating their provider and database capacity.
+    async with _LIVE_PLANNING_GATE:
+        try:
+            outcome = await orchestrator.run(prompt)
+        except OllamaError as error:
+            raise PlannerUnavailable(error.public_message) from error
     outcome["invocations"] = orchestrator.results
     return _live_plan(prompt, outcome)
 
@@ -96,7 +116,14 @@ def _clarified_prompt(original_prompt, history):
         for question in questions:
             sections.append(f"- OPERLY asked: {question}")
         sections.append(f"- Owner answered: {answer}")
-    sections.append("Treat the owner's clarification as authoritative context for this same planning request.")
+    sections.extend(
+        [
+            "Treat the owner's clarification as authoritative context for this same planning request.",
+            "When the owner delegates a decision to OPERLY, choose sensible conventional defaults from the request and platform boundaries.",
+            "Do not ask another question for details that can be safely inferred, such as labels, categories, fields, metrics, severity names, or presentation defaults.",
+            "Return a complete implementation-ready plan now. Ask again only for an unresolved security, permission, legal, cost, or data-ownership decision.",
+        ]
+    )
     return "\n".join(sections)
 
 

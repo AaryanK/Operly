@@ -88,3 +88,8 @@ def validate_runtime_contract(bundle: SourceBundle) -> str:
             "Static-web tests must import or require generated application JavaScript; tautological tests that do not exercise the codebase are rejected"
         )
     return profile_id
+
+
+def validate_source_files(files) -> str:
+    """Validate an in-memory coding workspace before the agent may finish."""
+    return validate_runtime_contract(SourceBundle(tuple(files), {}, "in-memory"))

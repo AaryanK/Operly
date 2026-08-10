@@ -135,13 +135,12 @@ Production additionally requires HTTPS, strong unique secrets, PostgreSQL,
 completed migrations, a verified backup, and an independently isolated runner if
 software builds are enabled.
 
-The default Ollama portfolio uses `nemotron-3-ultra` for requirements and
-planning, `gpt-oss:120b` for independent validation, `minimax-m3` for coding,
-`nemotron-3-super` for repair and capability placement, `gemma4:31b` for the
-business agent, and `nemotron-3-nano:30b` for bounded low-cost work. The
-`gpt-oss:20b` model participates as a smaller fallback. Routing is expressed as
-provider plus model, so adding OpenRouter or another provider does not require
-changing planner or coding-agent contracts.
+The default Ollama configuration uses `gemma4:31b` for every role with no
+automatic model fallback. This keeps interactive behavior, latency, and usage
+measurable while the orchestration loop is optimized. Role routing remains
+expressed as provider plus model, so individual roles can later be overridden
+or moved to OpenRouter or another provider without changing planner or coding
+agent contracts.
 
 ## Database and tests
 

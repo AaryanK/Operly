@@ -1,7 +1,6 @@
+import asyncio
 import json
 from types import SimpleNamespace
-
-import pytest
 
 import packages.coding_harness.execution_loop as loop
 from packages.coding_harness.build_service import RunnerProfileUnsupported
@@ -15,8 +14,7 @@ class FakeDB:
         return None
 
 
-@pytest.mark.asyncio
-async def test_runtime_capability_mismatch_is_repaired_into_supported_source(monkeypatch):
+async def _runtime_capability_mismatch_scenario(monkeypatch):
     source1 = SimpleNamespace(id="s1", source_version=1)
     source2 = SimpleNamespace(id="s2", source_version=2)
     row = SimpleNamespace(id="p1", approved_version=1)
@@ -51,8 +49,11 @@ async def test_runtime_capability_mismatch_is_repaired_into_supported_source(mon
     assert repairs[0]["toSourceVersion"] == 2
 
 
-@pytest.mark.asyncio
-async def test_runner_test_failure_is_fed_back_to_same_source_workspace(monkeypatch):
+def test_runtime_capability_mismatch_is_repaired_into_supported_source(monkeypatch):
+    asyncio.run(_runtime_capability_mismatch_scenario(monkeypatch))
+
+
+async def _runner_test_failure_scenario(monkeypatch):
     source1 = SimpleNamespace(id="s1", source_version=1)
     source2 = SimpleNamespace(id="s2", source_version=2)
     row = SimpleNamespace(id="p1", approved_version=1)
@@ -80,3 +81,7 @@ async def test_runner_test_failure_is_fed_back_to_same_source_workspace(monkeypa
     assert build is passed
     assert source is source2
     assert repairs == [{"repairNumber": 1, "classification": "test_failure", "failedBuildId": "b1", "fromSourceVersion": 1, "toSourceVersion": 2, "changedPaths": ["js/engine.js"], "summary": "Fixed calculation"}]
+
+
+def test_runner_test_failure_is_fed_back_to_same_source_workspace(monkeypatch):
+    asyncio.run(_runner_test_failure_scenario(monkeypatch))

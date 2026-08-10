@@ -16,6 +16,7 @@ from packages.custom_software.graph_planning import (
     _approved_node_validation,
     _compact_graph,
     _compact_requirements,
+    _deterministic_graph_repair,
     _graph_errors,
     _review_to_global,
     _to_proposed_nodes,
@@ -163,6 +164,7 @@ class CoverageAwareGraphPlanningOrchestrator(GraphPlanningOrchestrator):
             coverage_repairs = 1
             graph = await self._repair_coverage(analysis, graph, missing)
 
+        graph = _deterministic_graph_repair(graph, analysis)
         deterministic = _graph_errors(graph, analysis)
         review = await self._review(analysis, graph, deterministic)
 
@@ -176,6 +178,7 @@ class CoverageAwareGraphPlanningOrchestrator(GraphPlanningOrchestrator):
                 findings=self._review_findings(review, deterministic),
             )
             graph = preserve_coverage_links(prior_graph, graph)
+            graph = _deterministic_graph_repair(graph, analysis)
             deterministic = _graph_errors(graph, analysis)
             review = await self._review(analysis, graph, deterministic)
 
