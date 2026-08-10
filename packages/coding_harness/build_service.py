@@ -6,8 +6,11 @@ from datetime import datetime
 
 from sqlalchemy import select
 
+from packages.coding_harness.runtime_resolution import RuntimeResolutionError, infer_runtime_profile
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter, RunnerAdapter
-from packages.custom_software.runner_service import _event, _submission, apply_runner_response
+from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy, ResourcePolicy
+from packages.custom_software.runner_service import _event, apply_runner_response
+from packages.custom_software.runtime_profiles import runtime_profile
 from packages.custom_software.source_bundles import SourceFile, build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle, RunnerBuildRecord
 
@@ -44,6 +47,31 @@ def source_bundle_from_record(source: GeneratedSourceBundle):
     return rebuilt
 
 
+def _submission_for_source(source: GeneratedSourceBundle, bundle, idempotency_key: str) -> BuildSubmission:
+    try:
+        profile_id = infer_runtime_profile(bundle)
+        profile = runtime_profile(profile_id)
+    except (RuntimeResolutionError, ValueError) as error:
+        raise SourceRecordError(str(error)) from error
+    resources = ResourcePolicy.model_validate(profile["resources"])
+    return BuildSubmission(
+        workspaceId=source.tenant_id,
+        applicationId=source.application_id,
+        planVersion=source.plan_version,
+        sourceVersion=source.source_version,
+        stackId=profile_id,
+        sourceBundleDigest=source.bundle_digest,
+        operations=profile["operations"],
+        healthCheck=HealthCheck.model_validate(profile["health"]),
+        resources=resources,
+        network=NetworkPolicy(mode="none"),
+        requiredPorts=profile["ports"],
+        artifactPaths=profile["artifactPaths"],
+        maxDurationSeconds=resources.durationSeconds,
+        idempotencyKey=idempotency_key,
+    )
+
+
 async def submit_source_build(
     db,
     tenant_id: str,
@@ -68,14 +96,8 @@ async def submit_source_build(
         raise SourceRecordError("Source bundle is not based on the approved plan version")
 
     bundle = source_bundle_from_record(source)
+    submission = _submission_for_source(source, bundle, idempotency_key)
     adapter = adapter or ExternalRunnerAdapter()
-    try:
-        submission = _submission(source, plan, idempotency_key)
-    except ValueError as error:
-        runtime = getattr(getattr(plan, "stack", None), "runtime", None) or "unknown"
-        raise SourceRecordError(
-            f"Approved runtime '{runtime}' does not yet have an isolated runner profile"
-        ) from error
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
@@ -91,7 +113,12 @@ async def submit_source_build(
     db.add(row)
     await db.flush()
     await _event(db, row, "created", message="Coding harness build record created")
-    await _event(db, row, "queued", message="Harness-authored source submitted to isolated runner")
+    await _event(
+        db,
+        row,
+        "queued",
+        message=f"Harness-authored source submitted with detected runtime {submission.stackId}",
+    )
     await db.commit()
 
     try:
@@ -103,9 +130,9 @@ async def submit_source_build(
             "failed",
             event_type="runner_unavailable",
             message="runner_unavailable",
-            details={"message": str(error)},
+            details={"message": str(error), "runtime": submission.stackId},
         )
-        row.result_json = json.dumps({"code": "runner_unavailable"})
+        row.result_json = json.dumps({"code": "runner_unavailable", "runtime": submission.stackId})
         row.completed_at = datetime.utcnow()
         await db.commit()
         await db.refresh(row)
