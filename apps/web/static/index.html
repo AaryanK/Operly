@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/dashboard-customize.css?v=20260804-responsive">
   <link rel="stylesheet" href="/static/regression.css?v=20260805-login-regression">
   <link rel="stylesheet" href="/static/studio-ui.css?v=20260809-focused-studio">
+  <link rel="stylesheet" href="/static/simple-ui.css?v=20260809-simple-operly">
 </head>
 <body>
   <div id="landing" class="screen">
@@ -87,34 +88,10 @@
     <aside class="sidebar" id="sidebar">
       <div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
       <nav id="nav">
-        <div class="nav-section-label">Workspace</div>
-        <button data-page="overview" class="active">Overview</button>
-        <button data-page="assistant">OPERLY AI</button>
-        <button data-page="studio">Studio</button>
-
-        <div class="nav-section-label">Work</div>
-        <button data-page="tasks">Tasks</button>
-        <button data-page="approvals">Approvals</button>
+        <button data-simple-page="home" class="active">Home</button>
+        <button data-page="studio">Build</button>
+        <button data-simple-page="activity">Activity <span id="simple-activity-badge" class="simple-activity-badge hidden"></span></button>
         <button data-page="settings">Settings</button>
-
-        <details class="nav-more">
-          <summary>More</summary>
-          <div>
-            <button data-page="inbox">Inbox</button>
-            <button data-page="memory">Business brain</button>
-            <button data-page="integrations">Integrations</button>
-            <button data-page="operationsCenter">Operations</button>
-            <button data-page="audit">Audit</button>
-            <button data-page="operatingPlan">Operating plan</button>
-            <button data-page="induction">Induction</button>
-            <button data-page="crm">CRM</button>
-            <button data-page="catalog">Catalog</button>
-            <button data-page="sales">Sales</button>
-            <button data-page="calendar">Calendar</button>
-            <button data-page="team">Team</button>
-            <button data-page="reports">Reports</button>
-          </div>
-        </details>
       </nav>
       <div class="sidebar-bottom">
         <label class="workspace-switch-label">Workspace<select id="workspace-switch" aria-label="Switch workspace"></select></label>
@@ -131,7 +108,10 @@
         <button id="mobile-nav-toggle" class="mobile-nav-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">☰</button>
         <div>
           <small id="tenant-kicker"></small>
-          <h1 id="page-title">Overview</h1>
+          <h1 id="page-title">Home</h1>
+        </div>
+        <div class="simple-topbar-actions">
+          <button id="simple-topbar-ask" class="button primary simple-topbar-ask">Ask OPERLY</button>
         </div>
         <div class="builder-controls">
           <div class="mode-switch" role="group" aria-label="Dashboard mode"><button id="mode-operate" class="active">Operate</button><button id="mode-customize">Customize</button></div>
@@ -165,5 +145,6 @@
   <script src="/static/dashboard-customize.js"></script>
   <script src="/static/studio-ui.js?v=20260809-focused-studio"></script>
   <script src="/static/studio-ui-bridge.js?v=20260809-focused-studio"></script>
+  <script src="/static/simple-ui.js?v=20260809-simple-operly"></script>
 </body>
 </html>
