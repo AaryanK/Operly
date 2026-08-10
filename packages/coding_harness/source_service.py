@@ -80,6 +80,7 @@ def _plan_specification(plan) -> str:
             "staticWeb": "For browser HTML/CSS/vanilla JavaScript, keep domain logic importable from tests and use Node built-ins only for runner verification.",
             "visualQuality": "Browser applications need intentional hierarchy, spacing, typography, labeled and keyboard-focusable controls, useful empty and error states, and no horizontal overflow at 360px or desktop widths.",
             "workflowCoverage": "Tests exercise critical workflows, calculations, validation, and persistence from the requirement ledger rather than only checking file or symbol existence.",
+            "interactionContracts": "Every rendered interactive control has a unique data-operly-interaction id exactly covered by operly.interactions.json, wired through a named handler to a named domain operation, with success, rejection, state, UI, runtime-error, and reload/persistence behavior exercised by node:test.",
             "pythonStdlibWeb": "For Python standard-library web applications, provide app.py, build.py, and executable Python tests without third-party packages.",
             "execution": "Never execute code in the OPERLY control plane. The runner selects deterministic execution mechanics from the completed source tree.",
             "implementationFreedom": "Choose framework, storage, protocol and internal interface mechanics from the approved behavior and available runtime unless the requirement ledger explicitly constrains them.",

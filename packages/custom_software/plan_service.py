@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from sqlalchemy import desc, select
 from pydantic import ValidationError
 
@@ -30,6 +31,36 @@ from packages.custom_software.planning_output_normalizer import NormalizingPlann
 
 class PlanConflict(ValueError):
     pass
+
+
+_INTERACTION_WORDS = re.compile(
+    r"\b(add|approve|book|button|cancel|choose|click|compare|create|delete|dialog|edit|export|form|input|login|navigate|record|remove|save|search|select|submit|update|upload)\b",
+    re.IGNORECASE,
+)
+
+
+def _unique_strings(values):
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _is_interactive_requirement(requirement) -> bool:
+    text = " ".join(
+        [str(requirement.category), requirement.normalized_requirement, requirement.source_excerpt]
+    )
+    return bool(_INTERACTION_WORDS.search(text))
+
+
+def _interaction_test_ids(requirement) -> list[str]:
+    return [f"interaction_{requirement.requirement_id.lower().replace('-', '_')}"] if _is_interactive_requirement(requirement) else []
+
+
+def _interaction_acceptance(requirement) -> list[str]:
+    criteria = list(requirement.acceptance_criteria)
+    if _is_interactive_requirement(requirement):
+        criteria.append(
+            "Executable interaction test proves the rendered control invokes its domain operation, handles success and rejection, changes state and UI when required, emits no runtime error, and honors reload persistence."
+        )
+    return _unique_strings(criteria)
 
 
 def _planning_concurrency() -> int:
@@ -334,7 +365,7 @@ def _live_plan(prompt, outcome):
                 "normalizedMeaning": req.normalized_requirement,
                 "mandatory": req.priority.lower() != "optional",
                 "category": req.category,
-                "acceptanceCriteria": req.acceptance_criteria,
+                "acceptanceCriteria": _interaction_acceptance(req),
                 "relatedPlanNodeIds": linked,
                 "relatedArtifactIds": [
                     artifact
@@ -342,12 +373,12 @@ def _live_plan(prompt, outcome):
                     if req.requirement_id in node.linked_requirement_ids
                     for artifact in node.required_artifacts
                 ],
-                "relatedTestIds": [
+                "relatedTestIds": _unique_strings([
                     test
                     for node in nodes
                     if req.requirement_id in node.linked_requirement_ids
                     for test in node.required_tests
-                ],
+                ] + _interaction_test_ids(req)),
                 "coverageStatus": "implementation_ready" if linked else "unplanned",
                 "verificationStatus": "unverified",
                 "planningMode": "live_llm",
@@ -377,14 +408,22 @@ def _live_plan(prompt, outcome):
                 "constraints": node.assumptions,
                 "securityRequirements": node.security_constraints,
                 "failureCases": node.failure_cases,
-                "acceptanceCriteria": [
+                "acceptanceCriteria": _unique_strings([
                     criterion
                     for req in analysis.requirements
                     if req.requirement_id in node.linked_requirement_ids
-                    for criterion in req.acceptance_criteria
-                ],
+                    for criterion in _interaction_acceptance(req)
+                ]),
                 "requiredArtifacts": node.required_artifacts,
-                "requiredTests": node.required_tests,
+                "requiredTests": _unique_strings(
+                    list(node.required_tests)
+                    + [
+                        test_id
+                        for req in analysis.requirements
+                        if req.requirement_id in node.linked_requirement_ids
+                        for test_id in _interaction_test_ids(req)
+                    ]
+                ),
                 "status": "implementation_ready",
                 "validation": {
                     "readyForImplementation": True,

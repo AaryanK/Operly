@@ -59,3 +59,47 @@ def test_existing_python_profile_remains_source_driven():
         ("test_app.py", "import unittest"),
     ])
     assert validate_runtime_contract(bundle) == "python-stdlib-web"
+
+
+def test_visible_dead_button_is_rejected_even_when_preview_and_unit_test_shape_exist():
+    bundle = _bundle([
+        ("index.html", "<!doctype html><button>New Customer</button><script src='app.js'></script>"),
+        ("app.js", "module.exports={createCustomer:x=>x};"),
+        ("app.test.js", "const test=require('node:test');require('./app.js');test('loads',()=>{});"),
+    ])
+    with pytest.raises(RuntimeResolutionError, match="data-operly-interaction"):
+        validate_runtime_contract(bundle)
+
+
+def test_annotated_control_without_real_handler_is_rejected():
+    manifest = '{"schemaVersion":1,"interactions":[{"id":"customer-new","control":"button","event":"click","handler":"handleNewCustomer","operation":"createCustomer","success":"customer created","rejection":"validation shown","stateChange":"customer added","stateProbe":"customerCount","uiEvidence":"row appears","uiProjection":"renderCustomers","persistence":"reload_preserved","reloadOperation":"loadCustomers","testId":"interaction_r_001","requirementIds":["R-001"]}]}'
+    bundle = _bundle([
+        ("index.html", "<!doctype html><button data-operly-interaction='customer-new'>New Customer</button><script src='app.js'></script>"),
+        ("app.js", "module.exports={createCustomer:x=>x};"),
+        ("app.test.js", "const test=require('node:test');require('./app.js');test('interaction_r_001 customer-new createCustomer',()=>{});"),
+        ("operly.interactions.json", manifest),
+    ])
+    with pytest.raises(RuntimeResolutionError, match="not wired"):
+        validate_runtime_contract(bundle)
+
+
+def test_fully_traced_interaction_contract_is_accepted():
+    manifest = '{"schemaVersion":1,"interactions":[{"id":"customer-new","control":"button","event":"click","handler":"handleNewCustomer","operation":"createCustomer","success":"customer created","rejection":"validation shown","stateChange":"customer added","stateProbe":"customerCount","uiEvidence":"row appears","uiProjection":"renderCustomers","persistence":"reload_preserved","reloadOperation":"loadCustomers","testId":"interaction_r_001","requirementIds":["R-001"]}]}'
+    bundle = _bundle([
+        ("index.html", "<!doctype html><button data-operly-interaction='customer-new'>New Customer</button><script src='app.js'></script>"),
+        ("app.js", "let customers=[]; function createCustomer(s){customers.push({...s,created:true});return customers.at(-1)} function customerCount(){return customers.length} function renderCustomers(){return customers.map(x=>x.created?'row':'').join('')} function loadCustomers(){return customers} function handleNewCustomer(){const result=createCustomer({});renderCustomers();return result} if(typeof document!=='undefined')document.querySelector('[data-operly-interaction=customer-new]').addEventListener('click',handleNewCustomer); module.exports={createCustomer,customerCount,renderCustomers,loadCustomers,handleNewCustomer};"),
+        ("app.test.js", "const test=require('node:test');const assert=require('node:assert/strict');const {handleNewCustomer,customerCount,renderCustomers,loadCustomers}=require('./app.js');test('interaction_r_001 customer-new handleNewCustomer createCustomer customerCount renderCustomers loadCustomers',()=>{handleNewCustomer();assert.equal(customerCount(),1);assert.equal(renderCustomers(),'row');assert.equal(loadCustomers().length,1)});"),
+        ("operly.interactions.json", manifest),
+    ])
+    assert validate_runtime_contract(bundle) == "static-web-js"
+
+
+def test_python_web_preview_with_dead_visible_action_is_rejected():
+    bundle = _bundle([
+        ("app.py", "PAGE=\"\"\"<!doctype html><button>Record Transaction</button>\"\"\""),
+        ("build.py", "print('build')"),
+        ("test_app.py", "import unittest\nclass Tests(unittest.TestCase):\n def test_loads(self): self.assertTrue(True)"),
+    ])
+
+    with pytest.raises(RuntimeResolutionError, match="data-operly-interaction"):
+        validate_runtime_contract(bundle)

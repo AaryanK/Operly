@@ -10,6 +10,7 @@ import json
 import posixpath
 
 from packages.custom_software.source_bundles import SourceBundle
+from packages.coding_harness.interaction_contracts import InteractionContractError, validate_interaction_contract
 
 
 class RuntimeResolutionError(ValueError):
@@ -75,6 +76,10 @@ def validate_runtime_contract(bundle: SourceBundle) -> str:
     """Return a profile only when its executable quality gate is structurally real."""
     profile_id = infer_runtime_profile(bundle)
     if profile_id == "python-stdlib-web":
+        try:
+            validate_interaction_contract(bundle)
+        except InteractionContractError as error:
+            raise RuntimeResolutionError(str(error)) from error
         return profile_id
 
     _validate_static_dependencies(bundle)
@@ -87,6 +92,10 @@ def validate_runtime_contract(bundle: SourceBundle) -> str:
         raise RuntimeResolutionError(
             "Static-web tests must import or require generated application JavaScript; tautological tests that do not exercise the codebase are rejected"
         )
+    try:
+        validate_interaction_contract(bundle)
+    except InteractionContractError as error:
+        raise RuntimeResolutionError(str(error)) from error
     return profile_id
 
 

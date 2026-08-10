@@ -55,6 +55,14 @@ node. Acceptance criteria and artifact identities are derived deterministically
 where possible. The coding agent works through bounded file tools and cannot run
 generated code inside the OPERLY API process.
 
+Generated browser software is complete only when every visible interactive
+control is covered by `operly.interactions.json`. That executable contract traces
+the rendered control through its event handler and domain operation to
+success/rejection behavior, state mutation, UI evidence, and reload-persistence
+policy. Source-file presence, a rendered preview, or a generic smoke test is not
+completion evidence; dead, placeholder, throwing, cosmetic-only, and untested
+controls fail source and runner acceptance.
+
 See [`packages/coding_harness/ARCHITECTURE.md`](packages/coding_harness/ARCHITECTURE.md)
 for the detailed planning, coding, runner, repair, and visual-editing model.
 

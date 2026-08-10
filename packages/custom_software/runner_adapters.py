@@ -16,6 +16,7 @@ from pathlib import Path
 
 import aiohttp
 
+from packages.coding_harness.interaction_contracts import InteractionContractError, validate_interaction_contract
 from packages.custom_software.runner_contracts import BuildSubmission, RunnerResult
 from packages.custom_software.runtime_profiles import runtime_capabilities, runtime_profile
 from packages.custom_software.source_bundles import SourceBundle
@@ -224,9 +225,20 @@ class LocalSubprocessTestRunner(RunnerAdapter):
             process.terminate()
             return {"jobId": root.name, "state": "failed", "result": RunnerResult(buildSuccess=True, testSuccess=True, processStartSuccess=process.poll() is None, failureEvidence={"classification": "health_check_failure", "message": "Configured health check did not pass"}).model_dump(), "events": events}
 
-        # Acceptance is generic here: plan-derived executable tests already ran;
-        # the final gate proves the built process serves its declared health route.
-        acceptance = {"passed": True, "basis": "executable tests plus declared health contract"}
+        try:
+            interaction_report = validate_interaction_contract(bundle)
+        except InteractionContractError as error:
+            process.terminate()
+            return _failed(
+                root.name,
+                events + [{"state": "acceptance_failed", "message": str(error)}],
+                "acceptance_failure",
+            )
+        acceptance = {
+            "passed": True,
+            "basis": "executable tests, interaction-contract coverage, and declared health contract",
+            "interactionContract": interaction_report,
+        }
         preview_id = "preview-" + root.name
         self.jobs[root.name] = {"root": root, "process": process}
         self.previews[preview_id] = {"job": root.name, "url": url}
