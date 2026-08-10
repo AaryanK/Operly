@@ -1,5 +1,6 @@
 import json
 from sqlalchemy import desc, select
+from pydantic import ValidationError
 
 from packages.custom_software.planner import build_software_plan, revise_plan
 from packages.custom_software.schema import SoftwarePlan
@@ -11,7 +12,7 @@ from packages.custom_software.live_planning import (
     PlanningBlocked,
     planning_mode,
 )
-from packages.custom_software.live_projection import project_live_envelope
+from packages.custom_software.live_projection import neutral_live_envelope, project_live_envelope
 from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 from packages.custom_software.planning_output_normalizer import NormalizingPlanningClient
 
@@ -43,11 +44,19 @@ async def create_plan(db, tenant_id, user_id, prompt):
         try:
             outcome = await orchestrator.run(prompt)
             outcome["invocations"] = orchestrator.results
+            planned = _live_plan(prompt, outcome)
+        except ValidationError as error:
+            row.status = "planning_blocked"
+            await db.commit()
+            details = "; ".join(
+                f"{'.'.join(str(part) for part in item.get('loc', []))}: {item.get('msg', 'invalid')}"
+                for item in error.errors()[:8]
+            )
+            raise PlanningBlocked(f"live plan projection failed schema validation: {details}") from error
         except Exception:
             row.status = "planning_blocked"
             await db.commit()
             raise
-        planned = _live_plan(prompt, outcome)
     else:
         planned = build_software_plan(prompt)
         data = planned.model_dump()
@@ -203,8 +212,10 @@ def _live_plan(prompt, outcome):
     input_tokens = sum(result.input_tokens for _, _, result in invocations)
     output_tokens = sum(result.output_tokens for _, _, result in invocations)
 
+    # Live mode no longer re-runs the deterministic/legacy planner.  The shell
+    # is schema-only; all semantic content below comes from validated live output.
     base = project_live_envelope(
-        build_software_plan(prompt).model_dump(), analysis, nodes, ledger
+        neutral_live_envelope(prompt, analysis.root_objective), analysis, nodes, ledger
     )
     base["provenance"] = {
         **base.get("provenance", {}),
@@ -219,7 +230,7 @@ def _live_plan(prompt, outcome):
         "globalRepairRounds": outcome.get("global_repair_rounds", 0),
         "dependencyResolutionCount": len(outcome.get("dependency_resolution_traces", [])),
         "semanticAuthority": "validated_recursive_plan",
-        "legacySemanticDefaultsDiscarded": True,
+        "legacyPlannerInvokedForLiveProjection": False,
     }
     base.update(
         {
