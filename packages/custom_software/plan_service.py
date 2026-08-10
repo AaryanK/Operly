@@ -13,6 +13,7 @@ from packages.custom_software.live_planning import (
 )
 from packages.custom_software.live_projection import project_live_envelope
 from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
+from packages.custom_software.planning_output_normalizer import NormalizingPlanningClient
 
 
 class PlanConflict(ValueError):
@@ -37,7 +38,7 @@ async def create_plan(db, tenant_id, user_id, prompt):
             await db.commit()
 
         orchestrator = RecursiveRepairPlanningOrchestrator(
-            OllamaPlanningClient(), on_result=persist_result
+            NormalizingPlanningClient(OllamaPlanningClient()), on_result=persist_result
         )
         try:
             outcome = await orchestrator.run(prompt)
@@ -202,9 +203,6 @@ def _live_plan(prompt, outcome):
     input_tokens = sum(result.input_tokens for _, _, result in invocations)
     output_tokens = sum(result.output_tokens for _, _, result in invocations)
 
-    # The deterministic planner is used only to provide the historical outer
-    # SoftwarePlan shape. Its guessed roles/entities/stack are explicitly
-    # discarded before a live plan is persisted or passed to the coding harness.
     base = project_live_envelope(
         build_software_plan(prompt).model_dump(), analysis, nodes, ledger
     )
