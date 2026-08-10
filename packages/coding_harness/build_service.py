@@ -6,7 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from packages.coding_harness.runtime_resolution import RuntimeResolutionError, infer_runtime_profile
+from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter, RunnerAdapter
 from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy, ResourcePolicy
 from packages.custom_software.runner_service import _event, apply_runner_response
@@ -49,7 +49,7 @@ def source_bundle_from_record(source: GeneratedSourceBundle):
 
 def _submission_for_source(source: GeneratedSourceBundle, bundle, idempotency_key: str) -> BuildSubmission:
     try:
-        profile_id = infer_runtime_profile(bundle)
+        profile_id = validate_runtime_contract(bundle)
         profile = runtime_profile(profile_id)
     except (RuntimeResolutionError, ValueError) as error:
         raise SourceRecordError(str(error)) from error
