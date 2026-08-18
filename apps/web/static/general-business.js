@@ -88,7 +88,7 @@
           <div class="pipeline">
             ${leads.map((lead) => `
               <article>
-                <div><strong>${escapeHtml(lead.title)}</strong><p>${money(lead.value)}</p></div>
+                <div><strong>${escapeHtml(lead.title)}</strong><p>${money(lead.value)}</p>${lead.next_action ? `<small>Next: ${escapeHtml(lead.next_action)}</small>` : ""}</div>
                 <select data-lead-stage="${lead.id}">
                   ${["new","qualified","proposal","won","lost"].map((stage) =>
                     `<option value="${stage}" ${lead.stage === stage ? "selected" : ""}>${stage}</option>`

@@ -61,13 +61,14 @@ class CompanyOperatingSystemTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_registry_policy_and_complete_vertical_slice(self):
         registry = default_registry()
-        self.assertEqual(registry.resolve(self.tenant.id, "read_analytics").name, "operly_analytics")
+        self.assertEqual(registry.resolve(self.tenant.id, "analytics.query").name, "operly_analytics")
         plan = await plan_business_objective(self.tenant.id, "Increase incoming leads", self.db, registry)
-        self.assertEqual([node["implementation_mode"] for node in plan["nodes"]], ["existing_capability", "existing_capability"])
+        self.assertEqual(plan["planning_mode"], "persistent_llm_plugin_loop")
+        self.assertEqual(plan["nodes"], [])
         service = ActionService(self.db, registry)
-        analytics = await service.propose(tenant_id=self.tenant.id, objective=plan["objective"], capability="read_analytics",
+        analytics = await service.propose(tenant_id=self.tenant.id, objective=plan["objective"], capability="analytics.query",
             arguments={}, rationale="baseline", expected_outcome="metrics", risk_level="read_only")
-        website = await service.propose(tenant_id=self.tenant.id, objective=plan["objective"], capability="update_website",
+        website = await service.propose(tenant_id=self.tenant.id, objective=plan["objective"], capability="website.edit",
             arguments={"title": "Book Acme today"}, rationale="conversion", expected_outcome="more leads", risk_level="medium")
         self.assertEqual(analytics.status, ActionStatus.VERIFIED)
         self.assertEqual(website.status, ActionStatus.WAITING_APPROVAL)

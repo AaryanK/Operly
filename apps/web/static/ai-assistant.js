@@ -52,7 +52,7 @@
           </div>
         </aside>
         <section class="ai-chat">
-          <div class="ai-chat-head"><h3>Business agent</h3><p>Same Ollama model and tools used by Discord.</p></div>
+          <div class="ai-chat-head"><h3>Business agent</h3><p>Inspects your business, proposes plugin actions, and asks before consequential work.</p></div>
           <div id="ai-messages" class="ai-messages">
             <div class="ai-welcome">
               <span class="brand-mark">O</span>
@@ -62,13 +62,14 @@
                 <button data-ai-suggestion="Give me a business summary">Business summary</button>
                 <button data-ai-suggestion="List our open tasks">Open tasks</button>
                 <button data-ai-suggestion="Show anything that needs attention">Needs attention</button>
+                <button data-ai-suggestion="Help me get more customers from the leads I already have">Follow up stale leads</button>
               </div>
             </div>
           </div>
           <div>
             ${applications.length ? `<label class="ai-application-picker">Application<select id="ai-application">${applications.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}</select></label>` : ""}
             <form id="ai-form" class="ai-composer">
-              <textarea id="ai-input" placeholder="Example: Add Ram as a contact and create a $500 lead." required></textarea>
+              <textarea id="ai-input" placeholder="Example: Help me get more customers from the leads I already have." required></textarea>
               <button class="button primary">Send</button>
             </form>
             <div class="ai-security-note">Secrets stay server-side. Every tool call is tenant-bound, validated and audited.</div>

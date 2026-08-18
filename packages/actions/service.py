@@ -1,3 +1,4 @@
+import asyncio
 import json
 from enum import StrEnum
 from typing import Any
@@ -5,8 +6,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.actions.policy import PolicyDecisionType, evaluate_action
+from packages.actions.policy import PolicyDecision, PolicyDecisionType, evaluate_action
+from packages.capabilities.contracts import ApprovalPolicy
 from packages.capabilities.providers import ProviderContext
+from packages.capabilities.validation import validate_arguments
 from packages.company.events import append_event
 from packages.database.company_models import BusinessActionRecord
 from packages.database.models import Approval
@@ -18,18 +21,34 @@ class ActionStatus(StrEnum):
 
 
 class ActionService:
-    def __init__(self, db: AsyncSession, registry): self.db, self.registry = db, registry
+    def __init__(self, db: AsyncSession, registry, *, authority: set[str] | None = None, actor_id: str | None = None):
+        self.db, self.registry, self.authority, self.actor_id = db, registry, authority, actor_id
     async def _event(self, action, event_type, payload=None):
         return await append_event(self.db, tenant_id=action.tenant_id, event_type=event_type,
                                   payload={"action_id": action.id, "capability": action.capability, "status": action.status, **(payload or {})},
                                   correlation_id=action.correlation_id, causation_id=action.id, source="actions")
     async def propose(self, *, tenant_id: str, objective: str, capability: str, arguments: dict[str, Any], rationale: str,
-                      expected_outcome: str, risk_level: str) -> BusinessActionRecord:
+                      expected_outcome: str, risk_level: str, causation_id: str | None = None,
+                      idempotency_key: str | None = None) -> BusinessActionRecord:
+        if idempotency_key:
+            existing=await self.db.scalar(select(BusinessActionRecord).where(BusinessActionRecord.tenant_id==tenant_id,
+                                                                              BusinessActionRecord.idempotency_key==idempotency_key))
+            if existing:return existing
+        provider=self.registry.resolve(tenant_id,capability,authority=self.authority)
+        definition=next(item for item in provider.capabilities if item.id==capability or item.name==capability)
+        validate_arguments(definition.input_schema,arguments)
+        risk_level=definition.risk_level
         action = BusinessActionRecord(tenant_id=tenant_id, objective=objective, capability=capability,
                                       arguments_json=json.dumps(arguments, sort_keys=True), rationale=rationale,
-                                      expected_outcome=expected_outcome, risk_level=risk_level)
+                                      expected_outcome=expected_outcome, risk_level=risk_level,causation_id=causation_id,
+                                      idempotency_key=idempotency_key)
         self.db.add(action); await self.db.flush(); await self._event(action, "action.proposed")
-        decision = evaluate_action(action); action.policy_decision = decision.decision.value
+        decision = evaluate_action(action)
+        if definition.approval_policy == ApprovalPolicy.AUTO:
+            decision = PolicyDecision(PolicyDecisionType.ALLOW,"Plugin contract allows automatic execution")
+        elif definition.approval_policy == ApprovalPolicy.ALWAYS:
+            decision = PolicyDecision(PolicyDecisionType.REQUIRE_APPROVAL,"Plugin contract always requires approval")
+        action.policy_decision = decision.decision.value
         if decision.decision == PolicyDecisionType.DENY:
             action.status = ActionStatus.REJECTED; await self._event(action, "action.rejected", {"reason": decision.reason})
         elif decision.decision == PolicyDecisionType.REQUIRE_APPROVAL:
@@ -41,20 +60,27 @@ class ActionService:
             await self.execute(action)
         return action
     async def execute(self, action: BusinessActionRecord) -> BusinessActionRecord:
-        provider = self.registry.resolve(action.tenant_id, action.capability); action.provider = provider.name
+        provider = self.registry.resolve(action.tenant_id, action.capability, authority=self.authority); action.provider = provider.name
         action.status = ActionStatus.EXECUTING; await self._event(action, "action.executing")
         arguments = json.loads(action.arguments_json)
-        try: result = await provider.execute(ProviderContext(action.tenant_id, self.db), action.capability, arguments)
+        provider_context=ProviderContext(action.tenant_id,self.db,self.actor_id,
+                                         self.registry.provider_config(action.tenant_id,action.capability))
+        try: result = await asyncio.wait_for(provider.execute(provider_context, action.capability, arguments),timeout=30)
         except Exception as error:
             action.status = ActionStatus.FAILED; action.result_json = json.dumps({"error": str(error)}); await self._event(action, "action.failed"); return action
         action.result_json = json.dumps({"success": result.success, "changed": result.changed, "evidence": result.evidence,
                                          "external_reference": result.external_reference}, sort_keys=True)
+        if result.success:
+            try: validate_arguments(next(item for item in provider.capabilities if item.id==action.capability or item.name==action.capability).output_schema,result.evidence)
+            except ValueError as error:
+                action.status=ActionStatus.FAILED;action.result_json=json.dumps({"success":False,"error":f"Invalid plugin output: {error}"})
+                await self._event(action,"action.failed",{"reason":"invalid_plugin_output"});return action
         if not result.success:
             action.status = ActionStatus.FAILED; await self._event(action, "action.failed", result.evidence); return action
         action.status = ActionStatus.EXECUTED; await self._event(action, "action.executed", result.evidence)
         action.status = ActionStatus.VERIFYING
         await self._event(action, "action.verifying")
-        verified = await provider.verify(ProviderContext(action.tenant_id, self.db), action.capability, arguments, result)
+        verified = await provider.verify(provider_context, action.capability, arguments, result)
         action.verification_json = json.dumps({"success": verified.success, "changed": verified.changed, "evidence": verified.evidence}, sort_keys=True)
         action.status = ActionStatus.VERIFIED if verified.success else ActionStatus.VERIFICATION_FAILED
         await self._event(action, "action.verified" if verified.success else "action.verification_failed", verified.evidence)

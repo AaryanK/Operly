@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
-from packages.actions.planner import plan_business_objective
 from packages.actions.service import ActionService
+from packages.business_brain import AgentInput, get_agent_service
 from packages.capabilities.providers import default_registry
 from packages.company.events import query_events
 from packages.company.state import get_company_state
@@ -27,6 +27,7 @@ def action_payload(row):
             "expected_outcome": row.expected_outcome, "risk_level": row.risk_level, "status": row.status,
             "policy_decision": row.policy_decision, "approval_id": row.approval_id, "result": json.loads(row.result_json),
             "verification": json.loads(row.verification_json), "correlation_id": row.correlation_id,
+            "causation_id": row.causation_id, "idempotency_key": row.idempotency_key,
             "created_at": row.created_at.isoformat(), "updated_at": row.updated_at.isoformat()}
 
 
@@ -49,15 +50,10 @@ async def company_events(event_type: str | None = None, correlation_id: str | No
 
 @router.post("/company/plan")
 async def create_plan(payload: PlanInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
-    registry = default_registry(); plan = await plan_business_objective(auth.tenant.id, payload.objective, db, registry)
-    service = ActionService(db, registry); actions = []
-    for node in plan["nodes"]:
-        if node["implementation_mode"] == "existing_capability":
-            actions.append(await service.propose(tenant_id=auth.tenant.id, objective=payload.objective,
-                capability=node["capability"], arguments=node["arguments"], rationale=node["rationale"],
-                expected_outcome=node["expected_outcome"], risk_level=node["risk_level"]))
-    await db.commit()
-    return {**plan, "actions": [action_payload(row) for row in actions]}
+    # Compatibility endpoint: reasoning now runs in the same persistent model/tool loop as Home chat.
+    return await get_agent_service().run(AgentInput(tenant_id=auth.tenant.id,principal_id=f"web-user:{auth.user.id}",
+        actor_name=auth.user.display_name,channel="web",text=payload.objective,
+        metadata={"user_id":auth.user.id,"role":auth.role,"entrypoint":"company_plan"}))
 
 
 @router.get("/actions")

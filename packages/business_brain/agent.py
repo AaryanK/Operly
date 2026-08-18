@@ -25,6 +25,7 @@ from packages.database.application_builder_models import ManagedApplication
 from packages.application_builder.routing import route_application_request
 from packages.application_builder.schema import BuilderContext, ProposalRequest
 from packages.application_builder.service import ApplicationBuilderService
+from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 
 
 SYSTEM_PROMPT = """
@@ -48,6 +49,14 @@ SECURITY BOUNDARIES:
 
 Use multiple tools when necessary. Stop after completing the request or explaining
 what is still required.
+
+BUSINESS REASONING:
+- Choose among the supplied plugins from evidence; do not use keyword routing.
+- Inspect relevant company or CRM state before proposing consequential work.
+- Read-only plugins execute automatically. Consequential plugins return WAITING_APPROVAL;
+  report that state accurately and never claim queued work was externally delivered.
+- Continue reasoning from each plugin observation in this same conversation.
+- Use solution.generate only when available plugins genuinely cannot satisfy the objective.
 """.strip()
 
 
@@ -56,6 +65,7 @@ class AgentService:
         route = model_route("business_agent")
         self.client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
         self.registry = build_registry()
+        self.plugin_harness = PluginAgentHarness()
         self.rate_limiter = SlidingWindowRateLimiter(
             limit=20,
             window_seconds=60,
@@ -162,13 +172,15 @@ class AgentService:
             actor_name=request.actor_name,
             channel=request.channel,
             conversation_id=conversation.id,
-            metadata=dict(request.metadata),
+            metadata={**dict(request.metadata), "objective": user_text},
         )
+        plugin_context = PluginInvocationContext(request.tenant_id, str(request.metadata.get("user_id") or "") or None,
+                                                 str(request.metadata.get("role") or "employee"), user_text)
 
         for _ in range(self.max_steps):
             assistant_message = await self.client.chat(
                 messages,
-                self.registry.schemas(),
+                [*self.registry.schemas(), *self.plugin_harness.schemas(plugin_context)],
             )
             messages.append(assistant_message)
 
@@ -207,11 +219,11 @@ class AgentService:
                 if not isinstance(arguments, dict):
                     arguments = {}
 
-                result = await self.registry.execute(
-                    name,
-                    tool_context,
-                    arguments,
-                )
+                if self.plugin_harness.handles(name):
+                    result = await self.plugin_harness.invoke(name, arguments, plugin_context,
+                                                              call_id=str(call.get("id") or "") or None)
+                else:
+                    result = await self.registry.execute(name, tool_context, arguments)
 
                 tool_content = json.dumps(
                     result,

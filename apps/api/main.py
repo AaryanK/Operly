@@ -431,9 +431,24 @@ async def decide_approval(
     if row is None:
         raise HTTPException(status_code=404, detail="Approval not found")
 
-    row.status = payload.status
+    details = json.loads(row.payload_json or "{}")
+    business_action_id = details.get("business_action_id")
+    if business_action_id:
+        from packages.actions.service import ActionService
+        from packages.capabilities.agent_harness import ROLE_AUTHORITY
+        from packages.capabilities.providers import default_registry
+        service = ActionService(db, default_registry(), authority=set(ROLE_AUTHORITY.get(auth.role, set())), actor_id=auth.user.id)
+        try:
+            if payload.status == "approved":
+                await service.approve(auth.tenant.id, business_action_id)
+            else:
+                await service.reject(auth.tenant.id, business_action_id)
+        except (LookupError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    else:
+        row.status = payload.status
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "business_action_id": business_action_id}
 
 
 @app.get("/api/integrations")

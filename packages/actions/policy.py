@@ -17,9 +17,11 @@ class PolicyDecision:
 def evaluate_action(action, tenant_context=None) -> PolicyDecision:
     del tenant_context
     capability = action.capability
-    if capability == "read_analytics" or capability == "draft_content":
+    if capability in {"read_analytics", "analytics.query", "company.read_state", "company.search_events",
+                      "crm.search_leads", "website.inspect", "messaging.draft"}:
         return PolicyDecision(PolicyDecisionType.ALLOW, "Read-only or draft operation")
-    if capability in {"publish_website", "publish_content", "send_bulk_messages", "delete_important_records", "update_website"}:
+    if capability in {"publish_website", "publish_content", "send_bulk_messages", "delete_important_records",
+                      "update_website", "website.edit", "messaging.send"}:
         return PolicyDecision(PolicyDecisionType.REQUIRE_APPROVAL, "Consequential public or record-changing operation")
     if capability == "spend_money": return PolicyDecision(PolicyDecisionType.DENY, "Autonomous spending is unsupported")
     return PolicyDecision(PolicyDecisionType.ALLOW if action.risk_level in {"read_only", "low"} else PolicyDecisionType.REQUIRE_APPROVAL,
