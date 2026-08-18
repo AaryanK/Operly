@@ -8,8 +8,8 @@ from packages.database.db import session_scope
 
 
 ROLE_AUTHORITY={
- "owner":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:send","solution:read","solution:generate"},
- "manager":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:send","solution:read"},
+ "owner":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:send","calendar:write","solution:read","solution:generate"},
+ "manager":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:send","calendar:write","solution:read"},
  "agent":{"company:read","analytics:read","crm:read","crm:write","website:read","messaging:draft","solution:read"},
  "employee":{"company:read","analytics:read","crm:read","website:read","solution:read"},
 }
@@ -25,17 +25,30 @@ class PluginInvocationContext:
 
 class PluginAgentHarness:
     """Execution authority between the reasoning model and every plugin."""
-    def __init__(self,registry=None): self.registry=registry or default_registry()
-    def authority(self,role:str)->set[str]: return set(ROLE_AUTHORITY.get(role,ROLE_AUTHORITY["employee"]))
-    def schemas(self,context:PluginInvocationContext)->list[dict[str,Any]]:
-        return [item.model_tool_schema() for item in self.registry.metadata(context.tenant_id,authority=self.authority(context.role))]
-    def handles(self,name:str)->bool: return any(item.id==name for item in self.registry.definitions())
-    async def invoke(self,name:str,arguments:dict[str,Any],context:PluginInvocationContext,*,call_id:str|None=None)->dict[str,Any]:
-        authority=self.authority(context.role)
+    def __init__(self,registry=None): self.registry=registry
+    async def registry_for(self,context):
+        if self.registry:return self.registry
+        from sqlalchemy import select
+        from packages.database.connector_models import TenantConnector
+        from packages.connectors.google_provider import GMAIL_SEND,CALENDAR
+        enabled=set()
         async with session_scope() as db:
-            service=ActionService(db,self.registry,authority=authority,actor_id=context.user_id)
+            rows=(await db.scalars(select(TenantConnector).where(TenantConnector.tenant_id==context.tenant_id,TenantConnector.enabled.is_(True),TenantConnector.status=="connected"))).all()
+            for row in rows:
+                scopes=set(json.loads(row.granted_scopes_json or "[]"))
+                if GMAIL_SEND in scopes:enabled.add("messaging.send")
+                if CALENDAR in scopes:enabled.add("calendar.create_event")
+        return default_registry(enabled)
+    def authority(self,role:str)->set[str]: return set(ROLE_AUTHORITY.get(role,ROLE_AUTHORITY["employee"]))
+    async def schemas(self,context:PluginInvocationContext)->list[dict[str,Any]]:
+        registry=await self.registry_for(context);return [item.model_tool_schema() for item in registry.metadata(context.tenant_id,authority=self.authority(context.role))]
+    def handles(self,name:str)->bool: return name in {"messaging.send","calendar.create_event"} or bool(self.registry and any(item.id==name for item in self.registry.definitions())) or name.count(".")==1
+    async def invoke(self,name:str,arguments:dict[str,Any],context:PluginInvocationContext,*,call_id:str|None=None)->dict[str,Any]:
+        authority=self.authority(context.role);registry=await self.registry_for(context)
+        async with session_scope() as db:
+            service=ActionService(db,registry,authority=authority,actor_id=context.user_id)
             try:
-                definition=next(item for item in self.registry.metadata(context.tenant_id,authority=authority) if item.id==name)
+                definition=next(item for item in registry.metadata(context.tenant_id,authority=authority) if item.id==name)
             except StopIteration:
                 return {"ok":False,"error":"Unknown or unauthorized plugin"}
             rationale=str(arguments.pop("_rationale","") or f"Model selected {name} for the owner objective")[:2000]
@@ -56,7 +69,7 @@ class PluginAgentHarness:
         """Reusable adaptive model loop; observations remain in the same model session."""
         trace=[]
         for _ in range(max_steps):
-            message=await client.chat(messages,self.schemas(context));messages.append(message)
+            message=await client.chat(messages,await self.schemas(context));messages.append(message)
             calls=message.get("tool_calls") or []
             if not calls:return {"message":message.get("content") or "Done.","trace":trace,"messages":messages}
             for call in calls:

@@ -46,6 +46,7 @@ class BusinessActionRecord(Base):
     correlation_id: Mapped[str] = mapped_column(String(36), default=uid, nullable=False, index=True)
     causation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    approved_arguments_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

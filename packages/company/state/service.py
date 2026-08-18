@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.company.events import query_events
 from packages.database.business_models import CatalogItem, Contact, Lead
 from packages.database.custom_software_models import GeneratedProject
-from packages.database.models import Integration, Tenant
+from packages.database.models import Approval, Integration, Tenant
+from packages.database.connector_models import TenantConnector
+from packages.database.business_models import Appointment
 
 
 @dataclass(slots=True)
@@ -37,6 +39,7 @@ async def get_company_state(tenant_id: str, db: AsyncSession) -> CompanyState:
     projects = (await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id == tenant_id)
                                  .order_by(GeneratedProject.created_at.desc()))).all()
     integrations = (await db.scalars(select(Integration).where(Integration.tenant_id == tenant_id))).all()
+    connectors=(await db.scalars(select(TenantConnector).where(TenantConnector.tenant_id==tenant_id))).all()
     events = await query_events(db, tenant_id, limit=25)
     latest = projects[0] if projects else None
     brand = json.loads(latest.brand_json) if latest else {}
@@ -48,11 +51,14 @@ async def get_company_state(tenant_id: str, db: AsyncSession) -> CompanyState:
     return CompanyState(
         identity={"id": tenant.id, "name": tenant.name, "timezone": tenant.timezone}, brand=brand,
         products_services=[{"id": x.id, "name": x.name, "type": x.item_type, "price": x.price} for x in offerings],
-        contact_channels=[{"provider": x.provider, "status": x.status} for x in integrations], goals=goals,
+        contact_channels=[{"provider":x.provider,"status":x.status,"enabled":x.enabled,"health":x.health_status,"account":x.provider_account_id} for x in connectors] or [{"provider": x.provider, "status": x.status} for x in integrations], goals=goals,
         constraints=constraints,
         digital_presence={"website": {"status": "preview" if latest else "absent", "url": f"/generated/{latest.slug}" if latest else None,
                                                 "current_solution_id": latest.id if latest else None},
                           "social": [], "listings": [], "messaging": [x.provider for x in integrations if x.status == "connected"]},
         recent_activity=[{"id": e.id, "type": e.event_type, "occurred_at": e.occurred_at.isoformat(), "payload": e.payload} for e in events],
         metrics={"leads": await db.scalar(select(func.count(Lead.id)).where(Lead.tenant_id == tenant_id)) or 0,
+                 "stale_leads":await db.scalar(select(func.count(Lead.id)).where(Lead.tenant_id==tenant_id,Lead.stage.not_in(["won","lost"]))) or 0,
+                 "pending_approvals":await db.scalar(select(func.count(Approval.id)).where(Approval.tenant_id==tenant_id,Approval.status=="pending")) or 0,
+                 "upcoming_appointments":await db.scalar(select(func.count(Appointment.id)).where(Appointment.tenant_id==tenant_id,Appointment.status=="scheduled")) or 0,
                  "contacts": await db.scalar(select(func.count(Contact.id)).where(Contact.tenant_id == tenant_id)) or 0})

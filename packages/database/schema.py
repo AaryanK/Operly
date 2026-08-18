@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0014_plugin_harness"
+ALEMBIC_HEAD = "0015_real_connectors"
 
 
 def import_all_models() -> None:
@@ -14,6 +14,7 @@ def import_all_models() -> None:
     from packages.database import custom_software_models  # noqa: F401
     from packages.database import architecture_pack_models  # noqa: F401
     from packages.database import company_models  # noqa: F401
+    from packages.database import connector_models  # noqa: F401
 
 
 def synchronous_database_url(url: str) -> str:

@@ -39,7 +39,7 @@ class FakeClient:
 
 
 class FakeLoopHarness(PluginAgentHarness):
-    def schemas(self,context):return []
+    async def schemas(self,context):return []
     async def invoke(self,name,arguments,context,call_id=None):return {"ok":True,"plugin":name,"arguments":arguments}
 
 
@@ -86,8 +86,8 @@ class PluginHarnessTests(unittest.IsolatedAsyncioTestCase):
         send2=await service.propose(tenant_id=self.tenant.id,objective="convert existing leads",capability="messaging.send",
             arguments={"lead_id":"lead-a","message":"I can hold a consultation this week."},rationale="re-engage",
             expected_outcome="reply",risk_level="high")
-        executed=await service.approve(self.tenant.id,send2.id);self.assertEqual(executed.status,ActionStatus.VERIFIED)
-        self.assertEqual(json.loads(executed.verification_json)["evidence"]["status"],"queued")
+        executed=await service.approve(self.tenant.id,send2.id);self.assertEqual(executed.status,ActionStatus.FAILED)
+        self.assertIn("Connect Google",json.loads(executed.result_json)["error"])
 
     async def test_execution_and_verification_failures(self):
         registry=CapabilityRegistry();registry.register(FailureProvider());service=ActionService(self.db,registry)

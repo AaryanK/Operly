@@ -56,7 +56,7 @@ class MigrationTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def upgrade(self,path):command.upgrade(config(url(path)),"head");validate(url(path))
     def test_fresh_upgrade_and_idempotency(self):
-        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0014_plugin_harness")
+        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0015_real_connectors")
     def test_revision_identifiers_fit_production_version_storage(self):
         from alembic.config import Config
         from alembic.script import ScriptDirectory
@@ -88,7 +88,7 @@ class MigrationTests(unittest.TestCase):
             engine.dispose()
         self.upgrade(path)
         with closing(sqlite3.connect(path)) as db:
-            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0014_plugin_harness")
+            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0015_real_connectors")
             columns={row[1] for row in db.execute("pragma table_info(generated_projects)")}
             self.assertTrue({"plan_id","approved_plan_version","architecture_pack"}<=columns)
     def test_upgrade_repairs_legacy_managed_records_with_0002_stamp(self):
@@ -164,7 +164,7 @@ class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
         engine=create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
             await connection.exec_driver_sql("CREATE TABLE alembic_version(version_num VARCHAR(32) NOT NULL)")
-            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0014_plugin_harness')")
+            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0015_real_connectors')")
             await assert_schema_current(connection)
         await engine.dispose()
 

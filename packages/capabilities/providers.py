@@ -17,6 +17,7 @@ class ProviderContext:
     db: Any
     actor_id: str | None = None
     provider_config: dict[str, Any] | None = None
+    execution_id: str | None = None
 
 
 class BaseProvider:
@@ -131,15 +132,11 @@ class MessagingProvider(BaseProvider):
     capabilities=(
       CapabilityDefinition("messaging.draft","messaging_draft","Create a personalized follow-up draft for a lead",
         {"type":"object","properties":{"lead_id":{"type":"string"},"message":{"type":"string"}},"required":["lead_id","message"],"additionalProperties":False},
-        {"type":"object"},risk_level="low",permissions=("messaging:draft",),approval_policy=ApprovalPolicy.AUTO,reversible=True),
-      CapabilityDefinition("messaging.send","messaging_send","Queue an approved lead follow-up in Operly's outbound work queue",
-        {"type":"object","properties":{"lead_id":{"type":"string"},"message":{"type":"string"}},"required":["lead_id","message"],"additionalProperties":False},
-        {"type":"object"},risk_level="high",permissions=("messaging:send",),approval_policy=ApprovalPolicy.ALWAYS,execution_mode=ExecutionMode.EXTERNAL))
+        {"type":"object"},risk_level="low",permissions=("messaging:draft",),approval_policy=ApprovalPolicy.AUTO,reversible=True),)
     async def execute(self,context,capability_name,arguments):
         lead=await context.db.scalar(select(Lead).where(Lead.id==str(arguments["lead_id"]),Lead.tenant_id==context.tenant_id))
         if not lead:return CapabilityResult(False,False,{"reason":"lead_not_found"})
-        kind="follow_up_draft" if capability_name=="messaging.draft" else "outbound_follow_up"
-        status="draft" if capability_name=="messaging.draft" else "queued"
+        kind="follow_up_draft";status="draft"
         row=BusinessDocument(tenant_id=context.tenant_id,title=f"Follow-up: {lead.title}",document_type=kind,
             content=str(arguments["message"])[:10000],status=status);context.db.add(row)
         lead.next_action=f"Follow-up {status}: {row.title}";await context.db.flush()
@@ -178,8 +175,11 @@ class SolutionProvider(BaseProvider):
                                                                  "status":row.status if row else None})
 
 
-def default_registry():
+def default_registry(enabled_plugins=None):
     from packages.capabilities.registry import CapabilityRegistry
-    registry = CapabilityRegistry()
+    def enabled(tenant,definition):return definition.integration_provider is None or enabled_plugins is None or definition.id in enabled_plugins
+    registry = CapabilityRegistry(enabled_resolver=enabled)
     for provider in (CompanyProvider(), OperlyAnalyticsProvider(), OperlyWebsiteProvider(), OperlyCRMProvider(), MessagingProvider(), SolutionProvider()): registry.register(provider)
+    from packages.connectors.google_provider import GmailProvider,GoogleCalendarProvider
+    registry.register(GmailProvider());registry.register(GoogleCalendarProvider())
     return registry

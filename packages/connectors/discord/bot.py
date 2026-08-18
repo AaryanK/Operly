@@ -14,6 +14,8 @@ from sqlalchemy import desc, select
 
 from packages.database.db import init_db, session_scope
 from packages.database.models import Approval, DiscordGuild, Memory, Message, Task, Tenant
+from packages.database.connector_models import TenantConnector
+from packages.company.events import append_event
 
 load_dotenv()
 
@@ -71,6 +73,7 @@ async def ensure_tenant(
                     guild_name=guild.name,
                 )
             )
+            db.add(TenantConnector(tenant_id=tenant.id,connector_type="messaging",provider="discord",display_name=guild.name,status="connected",enabled=True,provider_account_id=str(guild.id),granted_scopes_json='["messages.read","messages.send"]',health_status="healthy"))
             return tenant.id
 
     # DMs must not share a single "dm" tenant.
@@ -112,6 +115,7 @@ async def save_message(message: discord.Message, tenant_id: str, content: str, i
             content=content,
             is_bot=is_bot,
         ))
+        await append_event(db,tenant_id=tenant_id,event_type="customer.message.sent" if is_bot else "customer.message.received",payload={"provider":"discord","message_id":str(message.id),"channel_id":str(message.channel.id)},source="discord")
 
 
 async def recent_context(tenant_id: str, channel_id: int, limit: int = 30) -> str:

@@ -138,6 +138,9 @@ Start from [`.env.example`](.env.example). Important settings include:
 | `OPERLY_SANDBOX_RUNNER_URL`, `OPERLY_SANDBOX_RUNNER_TOKEN` | External isolated runner |
 | `OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER` | Development/test runner; never production |
 | `DISCORD_BOT_TOKEN` | Optional Discord connector |
+| `OPERLY_CONNECTOR_SECRET_KEY` | Encrypts tenant OAuth credentials at rest |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Google Workspace OAuth application |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Exact registered Google OAuth callback |
 
 Production additionally requires HTTPS, strong unique secrets, PostgreSQL,
 completed migrations, a verified backup, and an independently isolated runner if

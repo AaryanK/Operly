@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from enum import StrEnum
 from typing import Any
@@ -24,9 +25,17 @@ class ActionService:
     def __init__(self, db: AsyncSession, registry, *, authority: set[str] | None = None, actor_id: str | None = None):
         self.db, self.registry, self.authority, self.actor_id = db, registry, authority, actor_id
     async def _event(self, action, event_type, payload=None):
-        return await append_event(self.db, tenant_id=action.tenant_id, event_type=event_type,
+        event=await append_event(self.db, tenant_id=action.tenant_id, event_type=event_type,
                                   payload={"action_id": action.id, "capability": action.capability, "status": action.status, **(payload or {})},
                                   correlation_id=action.correlation_id, causation_id=action.id, source="actions")
+        normalized={
+          ("messaging.send","action.proposed"):"message.send_requested",
+          ("messaging.send","action.approved"):"message.send_approved",
+          ("messaging.send","action.failed"):"message.send_failed",
+          ("calendar.create_event","action.failed"):"calendar.event_failed",
+        }.get((action.capability,event_type))
+        if normalized:await append_event(self.db,tenant_id=action.tenant_id,event_type=normalized,payload={"action_id":action.id,**(payload or {})},correlation_id=action.correlation_id,causation_id=action.id,source="actions")
+        return event
     async def propose(self, *, tenant_id: str, objective: str, capability: str, arguments: dict[str, Any], rationale: str,
                       expected_outcome: str, risk_level: str, causation_id: str | None = None,
                       idempotency_key: str | None = None) -> BusinessActionRecord:
@@ -63,8 +72,10 @@ class ActionService:
         provider = self.registry.resolve(action.tenant_id, action.capability, authority=self.authority); action.provider = provider.name
         action.status = ActionStatus.EXECUTING; await self._event(action, "action.executing")
         arguments = json.loads(action.arguments_json)
+        if action.approved_arguments_digest and action.approved_arguments_digest!=hashlib.sha256(action.arguments_json.encode()).hexdigest():
+            action.status=ActionStatus.FAILED;await self._event(action,"action.failed",{"reason":"approved_payload_changed"});return action
         provider_context=ProviderContext(action.tenant_id,self.db,self.actor_id,
-                                         self.registry.provider_config(action.tenant_id,action.capability))
+                                         self.registry.provider_config(action.tenant_id,action.capability),action.id)
         try: result = await asyncio.wait_for(provider.execute(provider_context, action.capability, arguments),timeout=30)
         except Exception as error:
             action.status = ActionStatus.FAILED; action.result_json = json.dumps({"error": str(error)}); await self._event(action, "action.failed"); return action
@@ -89,7 +100,8 @@ class ActionService:
         action = await self._get(tenant_id, action_id)
         if action.status != ActionStatus.WAITING_APPROVAL: raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id); approval.status = "approved"
-        action.status = ActionStatus.APPROVED; await self._event(action, "action.approved"); return await self.execute(action)
+        action.approved_arguments_digest=hashlib.sha256(action.arguments_json.encode()).hexdigest()
+        action.status = ActionStatus.APPROVED; await self._event(action, "action.approved",{"arguments_digest":action.approved_arguments_digest}); return await self.execute(action)
     async def reject(self, tenant_id: str, action_id: str):
         action = await self._get(tenant_id, action_id)
         if action.status != ActionStatus.WAITING_APPROVAL: raise ValueError("Action is not waiting for approval")

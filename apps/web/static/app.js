@@ -192,13 +192,16 @@ async function integrations() {
 }
 
 async function settings() {
-  const connectors = await api("/integrations");
+  const connected = await api("/connectors");
+  const google = connected.find(item => item.provider === "google");
+  const discord = connected.find(item => item.provider === "discord");
+  const connectors = [google || {provider:"google",display_name:"Google Workspace",status:"disconnected",health_status:"unknown",capabilities:[]}, discord || {provider:"discord",display_name:"Discord",status:"disconnected",health_status:"unknown",capabilities:[]}];
   const connectorCards = connectors.map((item) => `
     <article class="connector-card">
       <span class="pill status ${esc(item.status)}">${esc(item.status.replaceAll("_", " "))}</span>
-      <h3>${esc(item.label)}</h3>
-      <p>${esc(item.detail || "Not connected")}</p>
-      <div class="connector-boundary"><strong>Event and action channel</strong><span>${esc((item.capabilities || []).map(value => value.replaceAll("_", " ")).join(" · ") || "Messages and workflow triggers")}</span></div>
+      <h3>${esc(item.display_name)}</h3><p>${esc(item.account || "Not connected")}</p>
+      <div class="connector-boundary"><strong>Health: ${esc(item.health_status)}</strong><span>${esc((item.capabilities || []).join(" · ") || "No granted capabilities")}</span></div>
+      <div class="approval-actions">${item.status === "connected" ? `<button class="button secondary" data-test-connector="${item.id}">Test</button><button class="button secondary" data-disable-connector="${item.id}">Disable</button><button class="button secondary" data-disconnect-connector="${item.id}">Disconnect</button>` : item.provider === "google" ? `<button class="button primary" id="connect-google">Connect Gmail & Calendar</button>` : ""}</div>
     </article>`).join("");
   $("#content").innerHTML = `
     <div class="page-head"><div><span class="kicker green">Business nervous system</span><h2>Connectors & workspace</h2><p>Connectors listen for events and run approved backend actions. They may publish controlled updates into a Solution, but they do not directly redesign or freely mutate its frontend.</p></div></div>
@@ -210,6 +213,10 @@ async function settings() {
       <p><span class="pill status connected">Tenant isolation active</span></p>
       <button class="button primary">Save settings</button>
     </form>`;
+  $("#connect-google")?.addEventListener("click",async()=>{const result=await api("/connectors/google/connect",{method:"POST"});location.href=result.authorization_url});
+  $$('[data-test-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.testConnector}/test`,{method:'POST'});await settings()}));
+  $$('[data-disable-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.disableConnector}/disable`,{method:'POST'});await settings()}));
+  $$('[data-disconnect-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.disconnectConnector}`,{method:'DELETE'});await settings()}));
   $("#settings-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const tenant = await api("/settings/tenant", {

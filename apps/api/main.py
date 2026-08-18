@@ -29,6 +29,7 @@ from apps.api.custom_software_router import router as custom_software_router
 from apps.api.architecture_pack_router import router as architecture_pack_router
 from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
+from apps.api.connectors_router import router as connectors_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
@@ -554,6 +555,7 @@ app.include_router(custom_software_router)
 app.include_router(architecture_pack_router)
 app.include_router(coding_harness_router)
 app.include_router(company_router)
+app.include_router(connectors_router)
 
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 

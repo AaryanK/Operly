@@ -42,8 +42,9 @@ SECURITY BOUNDARIES:
 5. Never access or mention another tenant.
 6. Do not fabricate IDs, prices, stock levels, customers, orders or appointments.
 7. Draft orders and quotes do not send messages, charge money or issue refunds.
-8. External sending, deletion, payments, refunds, credential changes and permission
-   changes are unavailable and must not be simulated.
+8. External actions are available only through supplied connector plugins and must
+   follow their approval result. Payments, refunds, deletion, credential changes
+   and permission changes remain unavailable and must not be simulated.
 9. Ask for missing critical details instead of guessing.
 10. Keep the answer concise and operational.
 
@@ -180,7 +181,7 @@ class AgentService:
         for _ in range(self.max_steps):
             assistant_message = await self.client.chat(
                 messages,
-                [*self.registry.schemas(), *self.plugin_harness.schemas(plugin_context)],
+                [*self.registry.schemas(), *await self.plugin_harness.schemas(plugin_context)],
             )
             messages.append(assistant_message)
 
