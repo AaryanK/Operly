@@ -9,7 +9,7 @@ from packages.actions.service import ActionService,ActionStatus
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
 from packages.capabilities.providers import default_registry
 from packages.connectors.google_provider import GMAIL_SEND,CALENDAR
-from packages.connectors.secrets import store_secret
+from packages.connectors.secrets import read_secret,store_secret
 from packages.database.business_models import Contact,Lead
 from packages.database.connector_models import TenantConnector
 from packages.database.db import Base
@@ -45,3 +45,9 @@ class RealConnectorTests(unittest.IsolatedAsyncioTestCase):
  async def test_missing_scope_provider_failure_and_approval_payload_binding(self):
   await self.connect(scopes=(CALENDAR,));service=self.service();action=await service.propose(tenant_id=self.tenant.id,objective="send",capability="messaging.send",arguments={"lead_id":self.lead.id,"message":"A"},rationale="r",expected_outcome="x",risk_level="high");action.arguments_json=json.dumps({"lead_id":self.lead.id,"message":"B"})
   action=await service.approve(self.tenant.id,action.id);self.assertEqual(action.status,ActionStatus.FAILED)
+ async def test_google_reconnect_updates_existing_connector_and_rotates_secret(self):
+  from apps.api.connectors_router import upsert_google_connector
+  row=await self.connect(enabled=False,status="disabled");old_ref=row.credential_reference
+  updated=await upsert_google_connector(self.db,self.tenant.id,{"email":"owner@real.test"},{"access_token":"new-token","refresh_token":"new-refresh","expires_at":9999999999},[GMAIL_SEND,CALENDAR]);await self.db.commit()
+  rows=(await self.db.scalars(select(TenantConnector).where(TenantConnector.tenant_id==self.tenant.id,TenantConnector.provider=="google"))).all()
+  self.assertEqual(len(rows),1);self.assertEqual(updated.id,row.id);self.assertTrue(updated.enabled);self.assertEqual(updated.status,"connected");self.assertNotEqual(updated.credential_reference,old_ref);self.assertEqual((await read_secret(self.db,self.tenant.id,updated.credential_reference))["access_token"],"new-token")

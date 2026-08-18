@@ -20,6 +20,19 @@ def redirect_uri():return os.getenv("GOOGLE_OAUTH_REDIRECT_URI",os.getenv("PUBLI
 def owner(auth):
  if auth.role!="owner":raise HTTPException(403,"Only owners can manage connectors")
 
+async def upsert_google_connector(db,tenant_id,profile,tokens,scopes):
+ account=profile.get("email") or profile.get("sub")
+ row=await db.scalar(select(TenantConnector).where(TenantConnector.tenant_id==tenant_id,TenantConnector.provider=="google",TenantConnector.provider_account_id==account))
+ ref=await store_secret(db,tenant_id,tokens)
+ if row:
+  old_ref=row.credential_reference;row.connector_type="google_workspace";row.display_name="Google Workspace";row.status="connected";row.enabled=True;row.credential_reference=ref;row.granted_scopes_json=json.dumps(scopes);row.configuration_json=row.configuration_json or json.dumps({"calendar_id":"primary"});row.health_status="healthy";row.last_health_check=datetime.utcnow();row.last_error=None
+  await db.flush()
+  if old_ref and old_ref!=ref:
+   old_secret=await db.get(ConnectorSecret,old_ref)
+   if old_secret:await db.delete(old_secret)
+  return row
+ row=TenantConnector(tenant_id=tenant_id,connector_type="google_workspace",provider="google",display_name="Google Workspace",status="connected",enabled=True,credential_reference=ref,provider_account_id=account,granted_scopes_json=json.dumps(scopes),configuration_json=json.dumps({"calendar_id":"primary"}),health_status="healthy",last_health_check=datetime.utcnow());db.add(row);await db.flush();return row
+
 @router.get("")
 async def connectors(auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
  rows=(await db.scalars(select(TenantConnector).where(TenantConnector.tenant_id==auth.tenant.id).order_by(TenantConnector.created_at))).all()
@@ -47,7 +60,7 @@ async def google_callback(code:str=Query(...),state:str=Query(...)):
   async with s.get("https://openidconnect.googleapis.com/v1/userinfo",headers={"Authorization":f"Bearer {tokens['access_token']}"}) as r:profile=await r.json()
  tokens["expires_at"]=datetime.now(timezone.utc).timestamp()+int(tokens.get("expires_in",3600));scopes=str(tokens.get("scope","")).split()
  async with session_scope() as db:
-  ref=await store_secret(db,data["tenant_id"],tokens);row=TenantConnector(tenant_id=data["tenant_id"],connector_type="google_workspace",provider="google",display_name="Google Workspace",status="connected",enabled=True,credential_reference=ref,provider_account_id=profile.get("email") or profile.get("sub"),granted_scopes_json=json.dumps(scopes),configuration_json=json.dumps({"calendar_id":"primary"}),health_status="healthy",last_health_check=datetime.utcnow());db.add(row);await db.flush();await append_event(db,tenant_id=data["tenant_id"],event_type="connector.connected",payload={"connector_id":row.id,"provider":"google","account":row.provider_account_id,"capabilities":[x for x,s in (("messaging.send",GMAIL_SEND),("calendar.create_event",CALENDAR)) if s in scopes]},actor_type="user",actor_id=data["user_id"],source="connectors")
+  row=await upsert_google_connector(db,data["tenant_id"],profile,tokens,scopes);await append_event(db,tenant_id=data["tenant_id"],event_type="connector.connected",payload={"connector_id":row.id,"provider":"google","account":row.provider_account_id,"capabilities":[x for x,s in (("messaging.send",GMAIL_SEND),("calendar.create_event",CALENDAR)) if s in scopes]},actor_type="user",actor_id=data["user_id"],source="connectors")
  return RedirectResponse("/dashboard?connector=connected",303)
 
 @router.post("/{connector_id}/disable")
