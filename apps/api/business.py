@@ -6,6 +6,10 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from packages.actions.service import ActionService
+from packages.capabilities.agent_harness import ROLE_AUTHORITY
+from packages.capabilities.providers import default_registry
+from packages.connectors.google_provider import GMAIL_SEND, google_connector
 from packages.database.business_models import (
     ActivityEvent,
     Appointment,
@@ -42,6 +46,11 @@ class LeadInput(BaseModel):
 
 class StageInput(BaseModel):
     stage: str
+
+
+class FollowUpInput(BaseModel):
+    subject: str = Field(min_length=1, max_length=998)
+    message: str = Field(min_length=1, max_length=20_000)
 
 
 class CatalogInput(BaseModel):
@@ -227,13 +236,8 @@ async def leads(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (
-        await db.scalars(
-            select(Lead)
-            .where(Lead.tenant_id == auth.tenant.id)
-            .order_by(desc(Lead.created_at))
-        )
-    ).all()
+    rows = (await db.execute(select(Lead, Contact).outerjoin(Contact, Lead.contact_id == Contact.id)
+        .where(Lead.tenant_id == auth.tenant.id).order_by(desc(Lead.created_at)))).all()
     return [
         {
             "id": row.id,
@@ -244,8 +248,10 @@ async def leads(
             "assigned_to": row.assigned_to,
             "next_action": row.next_action,
             "created_at": row.created_at.isoformat(),
+            "contact_name": contact.name if contact else None,
+            "contact_email": contact.email if contact else None,
         }
-        for row in rows
+        for row, contact in rows
     ]
 
 
@@ -309,6 +315,35 @@ async def update_lead_stage(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/leads/{lead_id}/follow-up")
+async def prepare_lead_follow_up(
+    lead_id: str,
+    payload: FollowUpInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    lead = await db.scalar(select(Lead).where(Lead.id == lead_id, Lead.tenant_id == auth.tenant.id))
+    contact = await db.get(Contact, lead.contact_id) if lead and lead.contact_id else None
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if contact is None or contact.tenant_id != auth.tenant.id or not contact.email:
+        raise HTTPException(status_code=422, detail="This lead needs a contact with an email address")
+    try:
+        await google_connector(db, auth.tenant.id, GMAIL_SEND)
+        service = ActionService(db, default_registry({"messaging.send"}),
+            authority=set(ROLE_AUTHORITY.get(auth.role, set())), actor_id=auth.user.id)
+        action = await service.propose(tenant_id=auth.tenant.id,
+            objective=f"Follow up with {contact.name} about {lead.title}", capability="messaging.send",
+            arguments={"lead_id": lead.id, "subject": payload.subject, "message": payload.message},
+            rationale=f"Owner prepared an email to {contact.name} <{contact.email}>",
+            expected_outcome="Gmail accepts the approved follow-up message", risk_level="high")
+    except (LookupError, PermissionError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    await db.commit()
+    return {"action_id": action.id, "approval_id": action.approval_id, "status": action.status,
+        "recipient": contact.email}
 
 
 @router.get("/catalog")

@@ -68,6 +68,14 @@
     return {openTasks, pending};
   }
 
+  function approvalDetails(item) {
+    const details = item.details || {}, args = details.arguments || {};
+    if (item.action === "messaging.send") {
+      return `<p><strong>${esc(args.subject || "Follow-up email")}</strong></p><p>${esc(args.message || "")}</p><small>${esc(details.rationale || "Review the email before sending")}</small>`;
+    }
+    return `<p>${esc(Object.values(details).filter(value => typeof value !== "object").join(" · ") || "No details")}</p>`;
+  }
+
   async function renderHome() {
     leaveStudioFocus();
     document.querySelector("#operly-chat-dock")?.classList.remove("page-suppressed");
@@ -77,15 +85,16 @@
     if (!content) return;
     content.innerHTML = `<div class="simple-loading">Loading your workspace…</div>`;
 
-    const [tasksResult, approvalsResult, projectsResult, sitesResult, appsResult] = await Promise.allSettled([
+    const [tasksResult, approvalsResult, projectsResult, sitesResult, appsResult, leadsResult] = await Promise.allSettled([
       api("/tasks"), api("/approvals"), api("/custom-software/projects"),
-      api("/studio/projects"), api("/application-builder/applications")
+      api("/studio/projects"), api("/application-builder/applications"), api("/business/leads")
     ]);
     const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
     const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
     const generated = projectsResult.status === "fulfilled" && Array.isArray(projectsResult.value) ? projectsResult.value : [];
     const sites = sitesResult.status === "fulfilled" && Array.isArray(sitesResult.value) ? sitesResult.value : [];
     const managed = appsResult.status === "fulfilled" && Array.isArray(appsResult.value) ? appsResult.value : [];
+    const leads = leadsResult.status === "fulfilled" && Array.isArray(leadsResult.value) ? leadsResult.value.filter(item => item.contact_email && !["won","lost"].includes(item.stage)) : [];
     const solutions = [
       ...generated.map(item => ({...item, solutionKind:"generated", solutionType:(item.vertical || "custom solution").replaceAll("_", " ")})),
       ...sites.map(item => ({...item, solutionKind:"website", solutionType:"website"})),
@@ -106,6 +115,21 @@
             <button type="button" id="simple-build" class="button primary">Launch a Solution</button>
           </div>
         </form>
+      </section>
+
+      <section class="simple-block simple-follow-up">
+        <div class="simple-section-head"><div><span class="simple-eyebrow">GMAIL</span><h3>Follow up with a lead</h3></div><span>Approval required before sending</span></div>
+        ${leads.length ? `<form id="simple-follow-up-form" class="simple-follow-up-form">
+          <label>Lead<select id="follow-up-lead" required>${leads.map(lead => `<option value="${esc(lead.id)}">${esc(lead.title)} — ${esc(lead.contact_name || lead.contact_email)}</option>`).join("")}</select></label>
+          <label>Subject<input id="follow-up-subject" maxlength="998" value="Following up" required></label>
+          <label class="full">Message<textarea id="follow-up-message" rows="5" maxlength="20000" placeholder="Write the exact email that should be sent…" required></textarea></label>
+          <div class="full simple-follow-up-actions"><span id="follow-up-status">Nothing sends until you approve it in Activity.</span><button class="button primary" type="submit">Prepare for approval</button></div>
+        </form>` : `<form id="simple-new-follow-up-lead" class="simple-follow-up-form">
+          <label>Name<input id="new-follow-up-name" maxlength="200" placeholder="Customer name" required></label>
+          <label>Email<input id="new-follow-up-email" type="email" maxlength="320" placeholder="customer@example.com" required></label>
+          <label class="full">Opportunity<input id="new-follow-up-title" maxlength="300" placeholder="What are you following up about?" required></label>
+          <div class="full simple-follow-up-actions"><span>Add the recipient first; then compose the approval-gated email.</span><button class="button primary" type="submit">Add follow-up lead</button></div>
+        </form>`}
       </section>
 
       <section class="simple-block">
@@ -140,6 +164,21 @@
     document.querySelector("#simple-build")?.addEventListener("click", () => openBuild(command?.value || ""));
     document.querySelector("#simple-command-form")?.addEventListener("submit", event => { event.preventDefault(); openAssistant(command?.value || ""); });
     document.querySelector("#simple-new-build")?.addEventListener("click", () => openBuild());
+    document.querySelector("#simple-follow-up-form")?.addEventListener("submit", async event => {
+      event.preventDefault(); const button=event.submitter; if(button)button.disabled=true;
+      const status=document.querySelector("#follow-up-status");
+      try {
+        const result=await api(`/business/leads/${document.querySelector("#follow-up-lead").value}/follow-up`,{method:"POST",body:JSON.stringify({subject:document.querySelector("#follow-up-subject").value,message:document.querySelector("#follow-up-message").value})});
+        if(status)status.textContent=`Prepared for ${result.recipient}. Opening approval…`; await renderActivity();
+      } catch(error) { if(status)status.textContent=error.message; if(button)button.disabled=false; }
+    });
+    document.querySelector("#simple-new-follow-up-lead")?.addEventListener("submit", async event => {
+      event.preventDefault(); const button=event.submitter; if(button)button.disabled=true;
+      try {
+        const contact=await api("/business/contacts",{method:"POST",body:JSON.stringify({name:document.querySelector("#new-follow-up-name").value,email:document.querySelector("#new-follow-up-email").value})});
+        await api("/business/leads",{method:"POST",body:JSON.stringify({title:document.querySelector("#new-follow-up-title").value,contact_id:contact.id,stage:"new",value:0})}); await renderHome();
+      } catch(error) { alert(error.message); if(button)button.disabled=false; }
+    });
     document.querySelectorAll("[data-solution-id]").forEach(button => button.addEventListener("click", () => {
       const open = button.dataset.solutionKind === "website" ? window.openStudioProject
         : button.dataset.solutionKind === "managed" ? window.openManagedApplication
@@ -176,7 +215,7 @@
           <div class="simple-list">
             ${approvals.length ? approvals.slice(0,8).map(item => `
               <article class="simple-list-row">
-                <div><span class="simple-status ${esc(item.status)}">${esc(item.status)}</span><h4>${esc(item.action)}</h4><p>${esc(Object.values(item.details || {}).join(" · ") || "No details")}</p></div>
+                <div><span class="simple-status ${esc(item.status)}">${esc(item.status)}</span><h4>${esc(item.action)}</h4>${approvalDetails(item)}</div>
                 ${item.status === "pending" ? `<div class="simple-row-actions"><button class="button secondary" data-simple-approval="rejected" data-id="${esc(item.id)}">Reject</button><button class="button primary" data-simple-approval="approved" data-id="${esc(item.id)}">Approve</button></div>` : ""}
               </article>`).join("") : `<div class="simple-empty">No approvals yet.</div>`}
           </div>
