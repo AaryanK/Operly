@@ -1,0 +1,76 @@
+import json
+from enum import StrEnum
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from packages.actions.policy import PolicyDecisionType, evaluate_action
+from packages.capabilities.providers import ProviderContext
+from packages.company.events import append_event
+from packages.database.company_models import BusinessActionRecord
+from packages.database.models import Approval
+
+
+class ActionStatus(StrEnum):
+    PROPOSED="PROPOSED"; WAITING_APPROVAL="WAITING_APPROVAL"; APPROVED="APPROVED"; EXECUTING="EXECUTING"
+    EXECUTED="EXECUTED"; VERIFYING="VERIFYING"; VERIFIED="VERIFIED"; REJECTED="REJECTED"; FAILED="FAILED"; VERIFICATION_FAILED="VERIFICATION_FAILED"
+
+
+class ActionService:
+    def __init__(self, db: AsyncSession, registry): self.db, self.registry = db, registry
+    async def _event(self, action, event_type, payload=None):
+        return await append_event(self.db, tenant_id=action.tenant_id, event_type=event_type,
+                                  payload={"action_id": action.id, "capability": action.capability, "status": action.status, **(payload or {})},
+                                  correlation_id=action.correlation_id, causation_id=action.id, source="actions")
+    async def propose(self, *, tenant_id: str, objective: str, capability: str, arguments: dict[str, Any], rationale: str,
+                      expected_outcome: str, risk_level: str) -> BusinessActionRecord:
+        action = BusinessActionRecord(tenant_id=tenant_id, objective=objective, capability=capability,
+                                      arguments_json=json.dumps(arguments, sort_keys=True), rationale=rationale,
+                                      expected_outcome=expected_outcome, risk_level=risk_level)
+        self.db.add(action); await self.db.flush(); await self._event(action, "action.proposed")
+        decision = evaluate_action(action); action.policy_decision = decision.decision.value
+        if decision.decision == PolicyDecisionType.DENY:
+            action.status = ActionStatus.REJECTED; await self._event(action, "action.rejected", {"reason": decision.reason})
+        elif decision.decision == PolicyDecisionType.REQUIRE_APPROVAL:
+            approval = Approval(tenant_id=tenant_id, action=capability,
+                                payload_json=json.dumps({"business_action_id": action.id, "rationale": rationale, "arguments": arguments}))
+            self.db.add(approval); await self.db.flush(); action.approval_id = approval.id; action.status = ActionStatus.WAITING_APPROVAL
+            await self._event(action, "action.waiting_approval", {"approval_id": approval.id})
+        else:
+            await self.execute(action)
+        return action
+    async def execute(self, action: BusinessActionRecord) -> BusinessActionRecord:
+        provider = self.registry.resolve(action.tenant_id, action.capability); action.provider = provider.name
+        action.status = ActionStatus.EXECUTING; await self._event(action, "action.executing")
+        arguments = json.loads(action.arguments_json)
+        try: result = await provider.execute(ProviderContext(action.tenant_id, self.db), action.capability, arguments)
+        except Exception as error:
+            action.status = ActionStatus.FAILED; action.result_json = json.dumps({"error": str(error)}); await self._event(action, "action.failed"); return action
+        action.result_json = json.dumps({"success": result.success, "changed": result.changed, "evidence": result.evidence,
+                                         "external_reference": result.external_reference}, sort_keys=True)
+        if not result.success:
+            action.status = ActionStatus.FAILED; await self._event(action, "action.failed", result.evidence); return action
+        action.status = ActionStatus.EXECUTED; await self._event(action, "action.executed", result.evidence)
+        action.status = ActionStatus.VERIFYING
+        await self._event(action, "action.verifying")
+        verified = await provider.verify(ProviderContext(action.tenant_id, self.db), action.capability, arguments, result)
+        action.verification_json = json.dumps({"success": verified.success, "changed": verified.changed, "evidence": verified.evidence}, sort_keys=True)
+        action.status = ActionStatus.VERIFIED if verified.success else ActionStatus.VERIFICATION_FAILED
+        await self._event(action, "action.verified" if verified.success else "action.verification_failed", verified.evidence)
+        return action
+    async def approve(self, tenant_id: str, action_id: str):
+        action = await self._get(tenant_id, action_id)
+        if action.status != ActionStatus.WAITING_APPROVAL: raise ValueError("Action is not waiting for approval")
+        approval = await self.db.get(Approval, action.approval_id); approval.status = "approved"
+        action.status = ActionStatus.APPROVED; await self._event(action, "action.approved"); return await self.execute(action)
+    async def reject(self, tenant_id: str, action_id: str):
+        action = await self._get(tenant_id, action_id)
+        if action.status != ActionStatus.WAITING_APPROVAL: raise ValueError("Action is not waiting for approval")
+        approval = await self.db.get(Approval, action.approval_id); approval.status = "rejected"
+        action.status = ActionStatus.REJECTED; await self._event(action, "action.rejected"); return action
+    async def _get(self, tenant_id, action_id):
+        action = await self.db.scalar(select(BusinessActionRecord).where(BusinessActionRecord.id == action_id,
+                                                                         BusinessActionRecord.tenant_id == tenant_id))
+        if action is None: raise LookupError("Action not found")
+        return action
