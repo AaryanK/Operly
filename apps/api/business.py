@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,6 +52,10 @@ class StageInput(BaseModel):
 class FollowUpInput(BaseModel):
     subject: str = Field(min_length=1, max_length=998)
     message: str = Field(min_length=1, max_length=20_000)
+
+class CurateInput(BaseModel):
+    rough_idea: str = Field(min_length=1, max_length=6000)
+    tone: str = Field(default="professional and friendly", max_length=100)
 
 
 class CatalogInput(BaseModel):
@@ -344,6 +349,15 @@ async def prepare_lead_follow_up(
     await db.commit()
     return {"action_id": action.id, "approval_id": action.approval_id, "status": action.status,
         "recipient": contact.email}
+
+@router.post("/leads/{lead_id}/curate")
+async def curate_lead_message(lead_id: str, payload: CurateInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    service=ActionService(db,default_registry(),authority=set(ROLE_AUTHORITY.get(auth.role,set())),actor_id=auth.user.id)
+    try:action=await service.propose(tenant_id=auth.tenant.id,objective="Curate a grounded lead follow-up",capability="messaging.curate",arguments={"lead_id":lead_id,**payload.model_dump()},rationale="Owner requested writing assistance",expected_outcome="Editable subject and message draft",risk_level="low")
+    except (LookupError,PermissionError,ValueError) as error:raise HTTPException(422,str(error)) from error
+    await db.commit();result=json.loads(action.result_json or "{}")
+    if action.status!="VERIFIED":raise HTTPException(503,result.get("error") or "Message curation failed")
+    return result.get("evidence",{})
 
 
 @router.get("/catalog")

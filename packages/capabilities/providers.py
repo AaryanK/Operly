@@ -181,5 +181,6 @@ def default_registry(enabled_plugins=None):
     registry = CapabilityRegistry(enabled_resolver=enabled)
     for provider in (CompanyProvider(), OperlyAnalyticsProvider(), OperlyWebsiteProvider(), OperlyCRMProvider(), MessagingProvider(), SolutionProvider()): registry.register(provider)
     from packages.connectors.google_provider import GmailProvider,GoogleCalendarProvider
-    registry.register(GmailProvider());registry.register(GoogleCalendarProvider())
+    from packages.capabilities.message_curation import MessageCurationProvider
+    registry.register(MessageCurationProvider());registry.register(GmailProvider());registry.register(GoogleCalendarProvider())
     return registry

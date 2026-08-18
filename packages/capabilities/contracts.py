@@ -32,6 +32,12 @@ class CapabilityDefinition:
     integration_provider: str | None = None
     credential_scopes: tuple[str, ...] = ()
     reversible: bool = False
+    category: str | None = None
+    display_name: str | None = None
+    event_capabilities: tuple[str, ...] = ()
+    health_check: dict[str, Any] | None = None
+    allowed_network_domains: tuple[str, ...] = ()
+    configuration_schema: dict[str, Any] | None = None
 
     def model_tool_schema(self) -> dict[str, Any]:
         return {"type": "function", "function": {"name": self.id, "description": self.description,

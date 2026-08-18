@@ -3,7 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
@@ -13,6 +13,8 @@ from packages.capabilities.providers import default_registry
 from packages.company.events import query_events
 from packages.company.state import get_company_state
 from packages.database.company_models import BusinessActionRecord
+from packages.database.business_models import Quote
+from packages.company.attention import attention_items
 
 router = APIRouter(prefix="/api", tags=["company operating system"])
 
@@ -34,6 +36,16 @@ def action_payload(row):
 @router.get("/company/state")
 async def company_state(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     return (await get_company_state(auth.tenant.id, db)).to_dict()
+
+@router.get("/company/attention")
+async def company_attention(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    return await attention_items(db, auth.tenant.id)
+
+@router.get("/home/command-center")
+async def home_command_center(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    state=await get_company_state(auth.tenant.id,db)
+    quote_value=await db.scalar(select(func.coalesce(func.sum(Quote.total),0)).where(Quote.tenant_id==auth.tenant.id,Quote.status.in_(["draft","sent","pending"])))
+    return {"summary":{**state.metrics,"open_opportunities":sum(v for k,v in state.operations["leads_by_stage"].items() if k not in {"won","lost"}),"open_tasks":len(state.operations["open_tasks"]),"outstanding_quote_value":float(quote_value or 0)},"attention":state.attention,"recent_actions":state.operations["recent_actions"][:8]}
 
 
 @router.get("/company/events")

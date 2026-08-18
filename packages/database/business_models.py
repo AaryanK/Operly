@@ -44,6 +44,10 @@ class Lead(Base):
     assigned_to: Mapped[str | None] = mapped_column(String(200), nullable=True)
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_contacted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stage_changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class CatalogItem(Base):
