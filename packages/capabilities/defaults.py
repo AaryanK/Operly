@@ -5,14 +5,14 @@ from packages.capabilities.providers import (
     CompanyProvider,
     MessagingProvider,
     OperlyAnalyticsProvider,
-    OperlyWebsiteProvider,
     PresenceOperationsProvider,
     ResearchProvider,
-    SolutionProvider,
 )
 from packages.capabilities.registry import CapabilityRegistry
 from packages.capabilities.reminder_provider import ReminderProvider
+from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
+from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
 
@@ -36,7 +36,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         CompanyProvider(),
         ResearchProvider(),
         OperlyAnalyticsProvider(),
-        OperlyWebsiteProvider(),
+        UnifiedWebsiteProvider(),
         UnifiedBusinessProvider(),
         WorkspaceProvider(),
         OperationsProvider(),
@@ -44,7 +44,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         ReminderProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
-        SolutionProvider(),
+        UnifiedSolutionProvider(),
         PresenceOperationsProvider(),
         GmailProvider(),
         GoogleCalendarProvider(),
