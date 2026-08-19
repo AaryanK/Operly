@@ -24,6 +24,7 @@ class OperationsProvider(BaseProvider):
             {"type": "object"},
             risk_level="medium",
             permissions=("operations:write",),
+            approval_policy=ApprovalPolicy.AUTO,
         ),
         CapabilityDefinition(
             "operations.audit",
@@ -33,6 +34,7 @@ class OperationsProvider(BaseProvider):
             {"type": "object"},
             risk_level="medium",
             permissions=("operations:write",),
+            approval_policy=ApprovalPolicy.AUTO,
         ),
         CapabilityDefinition(
             "operations.generate_plan",
@@ -47,6 +49,7 @@ class OperationsProvider(BaseProvider):
             {"type": "object"},
             risk_level="medium",
             permissions=("operations:write",),
+            approval_policy=ApprovalPolicy.AUTO,
         ),
     )
 
