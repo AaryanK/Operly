@@ -1,7 +1,7 @@
 import unittest
 
 from apps.api.connectors_router import google_capabilities
-from packages.capabilities.agent_harness import ROLE_AUTHORITY
+from packages.capabilities.agent_harness import PluginAgentHarness, ROLE_AUTHORITY
 from packages.connectors.google_provider import (
     CALENDAR,
     CALENDAR_FREEBUSY,
@@ -87,13 +87,43 @@ class GoogleWorkspaceCapabilityTests(unittest.TestCase):
         self.assertEqual(calendar["calendar.list_events"].approval_policy.value, "auto")
         self.assertEqual(calendar["calendar.freebusy"].approval_policy.value, "auto")
 
-    def test_roles_separate_google_reads_from_mutations(self):
-        self.assertIn("messaging:read", ROLE_AUTHORITY["employee"])
-        self.assertIn("calendar:read", ROLE_AUTHORITY["employee"])
-        self.assertNotIn("messaging:send", ROLE_AUTHORITY["employee"])
-        self.assertNotIn("calendar:write", ROLE_AUTHORITY["employee"])
-        self.assertIn("messaging:send", ROLE_AUTHORITY["owner"])
-        self.assertIn("calendar:write", ROLE_AUTHORITY["owner"])
+    def test_roles_separate_private_google_accounts_from_shared_tenant_messages(self):
+        harness = PluginAgentHarness()
+        employee = ROLE_AUTHORITY["employee"]
+        owner = ROLE_AUTHORITY["owner"]
+        manager = ROLE_AUTHORITY["manager"]
+        bounded_agent = ROLE_AUTHORITY["agent"]
+
+        # Employees can still read shared Operly/Discord message history without
+        # inheriting access to a tenant-connected Gmail mailbox or Calendar.
+        self.assertIn("messages:read", employee)
+        self.assertIn("messaging:read", employee)
+        self.assertNotIn("gmail:read", employee)
+        self.assertNotIn("gmail:write", employee)
+        self.assertNotIn("gmail:draft", employee)
+        self.assertNotIn("calendar:read", employee)
+        self.assertFalse(harness.capability_authorized("gmail.search", employee))
+        self.assertFalse(harness.capability_authorized("gmail.read_message", employee))
+        self.assertFalse(harness.capability_authorized("gmail.modify_labels", employee))
+        self.assertFalse(harness.capability_authorized("gmail.create_draft", employee))
+
+        for authority in (owner, manager):
+            self.assertIn("gmail:read", authority)
+            self.assertIn("gmail:write", authority)
+            self.assertIn("gmail:draft", authority)
+            self.assertIn("calendar:read", authority)
+            self.assertIn("calendar:write", authority)
+            self.assertTrue(harness.capability_authorized("gmail.search", authority))
+            self.assertTrue(harness.capability_authorized("gmail.modify_labels", authority))
+
+        self.assertIn("gmail:read", bounded_agent)
+        self.assertIn("gmail:draft", bounded_agent)
+        self.assertNotIn("gmail:write", bounded_agent)
+        self.assertIn("calendar:read", bounded_agent)
+        self.assertNotIn("calendar:write", bounded_agent)
+
+        self.assertNotIn("messaging:send", employee)
+        self.assertIn("messaging:send", owner)
 
 
 if __name__ == "__main__":
