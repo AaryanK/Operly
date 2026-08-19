@@ -42,6 +42,12 @@ load_dotenv(override=False)
 
 RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip().strip("/")
 RAILWAY_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else ""
+RUNNING_ON_RAILWAY = bool(
+    RAILWAY_PUBLIC_DOMAIN
+    or os.getenv("RAILWAY_ENVIRONMENT_ID")
+    or os.getenv("RAILWAY_PROJECT_ID")
+    or os.getenv("RAILWAY_SERVICE_ID")
+)
 PUBLIC_BASE_URL = (
     os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     or RAILWAY_PUBLIC_URL
@@ -150,6 +156,10 @@ if public_host:
     allowed_hosts.add(public_host)
 if RAILWAY_PUBLIC_DOMAIN:
     allowed_hosts.add(RAILWAY_PUBLIC_DOMAIN)
+if RUNNING_ON_RAILWAY:
+    # Railway-generated public domains use this suffix. Keep TrustedHost enabled,
+    # but allow preview/copy domains even when PUBLIC_BASE_URL points elsewhere.
+    allowed_hosts.add("*.up.railway.app")
 if not PRODUCTION:
     allowed_hosts.update({"localhost", "127.0.0.1", "testserver"})
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(allowed_hosts))
