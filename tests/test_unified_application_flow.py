@@ -34,6 +34,11 @@ def test_canonical_registry_exposes_migrated_plugins_once():
         "studio.list_versions",
         "studio.publish_version",
         "studio.public_url",
+        "website.inspect",
+        "website.edit",
+        "solution.inspect",
+        "solution.generate",
+        "solution.create_digital_presence",
         "reminders.create",
     }
     assert expected.issubset(set(ids))
@@ -60,6 +65,18 @@ def test_legacy_undotted_agent_tools_are_not_in_canonical_registry():
         "create_reminder",
         "request_approval",
     }.isdisjoint(ids)
+
+
+def test_solution_and_website_plugins_use_canonical_providers():
+    registry = default_registry(set())
+    authority = {
+        "solution:read",
+        "solution:generate",
+        "website:read",
+        "website:write",
+    }
+    assert registry.resolve("tenant", "solution.inspect", authority=authority).name == "operly_solutions"
+    assert registry.resolve("tenant", "website.inspect", authority=authority).name == "operly_website"
 
 
 def test_discord_delivery_metadata_is_runtime_private():
