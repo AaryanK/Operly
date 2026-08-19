@@ -40,7 +40,13 @@ from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 
 load_dotenv(override=False)
 
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip().strip("/")
+RAILWAY_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else ""
+PUBLIC_BASE_URL = (
+    os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    or RAILWAY_PUBLIC_URL
+    or "http://localhost:8000"
+)
 PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {
     "production",
     "prod",
@@ -52,10 +58,18 @@ async def bootstrap_admin() -> None:
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
-    if not password:
-        raise RuntimeError("ADMIN_PASSWORD is missing")
 
     async with session_scope() as db:
+        # A copied/preview deployment may intentionally omit the bootstrap
+        # password while pointing at an already initialized database.
+        if not password:
+            existing_owner = await db.scalar(
+                select(TenantMember).where(TenantMember.role == "owner")
+            )
+            if existing_owner:
+                return
+            raise RuntimeError("ADMIN_PASSWORD is missing and no owner exists")
+
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
         if user is None:
             user = AppUser(
@@ -133,20 +147,25 @@ app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
 
-trusted_host = urlparse(PUBLIC_BASE_URL).hostname or "localhost"
-railway_health_host = "healthcheck.railway.app"
-allowed_hosts = [trusted_host, railway_health_host]
+allowed_hosts = {"healthcheck.railway.app"}
+public_host = urlparse(PUBLIC_BASE_URL).hostname
+if public_host:
+    allowed_hosts.add(public_host)
+if RAILWAY_PUBLIC_DOMAIN:
+    allowed_hosts.add(RAILWAY_PUBLIC_DOMAIN)
 if not PRODUCTION:
-    allowed_hosts.extend(["localhost", "127.0.0.1", "testserver"])
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    allowed_hosts.update({"localhost", "127.0.0.1", "testserver"})
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(allowed_hosts))
 app.add_middleware(SecurityHeadersMiddleware)
 
-allowed_origins = [PUBLIC_BASE_URL]
+allowed_origins = {PUBLIC_BASE_URL}
+if RAILWAY_PUBLIC_URL:
+    allowed_origins.add(RAILWAY_PUBLIC_URL)
 if not PRODUCTION:
-    allowed_origins.append("http://localhost:5173")
+    allowed_origins.add("http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=sorted(allowed_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
