@@ -42,6 +42,26 @@ class ExternalIdentity(Base):
     )
 
 
+class IdentityLinkChallenge(Base):
+    __tablename__ = "identity_link_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ChannelInstallation(Base):
     __tablename__ = "channel_installations"
 
