@@ -242,6 +242,23 @@ class ContextService:
             await db.scalars(cls._ranked_query(statement, query).limit(min(limit, 30)))
         ).all()
 
+    @staticmethod
+    def _merge_preload(
+        relevant: list[ContextRecord],
+        recent: list[ContextRecord],
+        limit: int,
+    ) -> list[ContextRecord]:
+        rows: list[ContextRecord] = []
+        seen: set[str] = set()
+        for row in [*relevant, *recent]:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+        return list(reversed(rows))
+
     @classmethod
     async def load_for_agent(
         cls,
@@ -254,37 +271,69 @@ class ContextService:
         query: str = "",
         per_scope: int = 8,
     ) -> LoadedContext:
-        human = (
-            await cls.search_human(
+        relevant_limit = max(1, per_scope // 2)
+        recent_limit = per_scope
+
+        if user_id:
+            human_relevant = await cls.search_human(
                 db,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 query=query,
-                limit=per_scope,
+                limit=relevant_limit,
             )
-            if user_id
-            else []
-        )
-        tenant = (
-            await cls.search_tenant(
+            human_recent = await cls.search_human(
+                db,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                query="",
+                limit=recent_limit,
+            )
+            human = cls._merge_preload(human_relevant, human_recent, per_scope)
+        else:
+            human = []
+
+        if allow_tenant_context:
+            tenant_relevant = await cls.search_tenant(
                 db,
                 tenant_id=tenant_id,
                 query=query,
-                limit=per_scope,
+                limit=relevant_limit,
             )
-            if allow_tenant_context
-            else []
-        )
-        conversation = await cls.search_conversation(
+            tenant_recent = await cls.search_tenant(
+                db,
+                tenant_id=tenant_id,
+                query="",
+                limit=recent_limit,
+            )
+            tenant = cls._merge_preload(tenant_relevant, tenant_recent, per_scope)
+        else:
+            tenant = []
+
+        conversation_relevant = await cls.search_conversation(
             db,
             tenant_id=tenant_id,
             conversation_id=conversation_id,
             user_id=user_id,
             query=query,
-            limit=per_scope,
+            limit=relevant_limit,
         )
+        conversation_recent = await cls.search_conversation(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            query="",
+            limit=recent_limit,
+        )
+        conversation = cls._merge_preload(
+            conversation_relevant,
+            conversation_recent,
+            per_scope,
+        )
+
         return LoadedContext(
-            human=list(reversed(human)),
-            tenant=list(reversed(tenant)),
-            conversation=list(reversed(conversation)),
+            human=human,
+            tenant=tenant,
+            conversation=conversation,
         )
