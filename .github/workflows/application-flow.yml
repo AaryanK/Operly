@@ -1,0 +1,93 @@
+name: application-flow
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "packages/actions/**"
+      - "packages/business/**"
+      - "packages/business_brain/**"
+      - "packages/capabilities/**"
+      - "packages/connectors/**"
+      - "packages/database/**"
+      - "packages/workspace/**"
+      - "Dockerfile"
+      - "tests/test_authentication.py"
+      - "tests/test_railway_auth_origin.py"
+      - "tests/test_capability_harness_journey.py"
+      - "tests/test_company_intelligence.py"
+      - "tests/test_company_operating_system.py"
+      - "tests/test_unified_application_flow.py"
+      - ".github/workflows/application-flow.yml"
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile application flow
+        run: >-
+          python -m py_compile
+          apps/api/main.py
+          apps/api/csrf.py
+          apps/api/business.py
+          apps/api/company_router.py
+          apps/api/solutions_router.py
+          apps/api/workspace_router.py
+          apps/api/approvals_router.py
+          apps/api/integrations_router.py
+          apps/api/system_router.py
+          packages/business/service.py
+          packages/workspace/service.py
+          packages/database/db.py
+          packages/business_brain/agent.py
+          packages/actions/service.py
+          packages/capabilities/agent_harness.py
+          packages/capabilities/defaults.py
+          packages/capabilities/runtime_context.py
+          packages/capabilities/business_provider.py
+          packages/capabilities/workspace_provider.py
+          packages/capabilities/operations_provider.py
+          packages/capabilities/studio_provider.py
+          packages/capabilities/reminder_provider.py
+          packages/capabilities/solution_provider.py
+          packages/capabilities/website_provider.py
+      - name: Run application-flow tests
+        env:
+          ADMIN_PASSWORD: test-admin-password-1234
+          SESSION_SECRET: test-session-secret-that-is-long-enough
+          AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
+          OPERLY_ENV: test
+        run: >-
+          python -m pytest -q
+          tests/test_authentication.py
+          tests/test_railway_auth_origin.py
+          tests/test_capability_harness_journey.py
+          tests/test_company_intelligence.py
+          tests/test_company_operating_system.py
+          tests/test_unified_application_flow.py
+      - name: Smoke Railway-style production startup
+        env:
+          OPERLY_ENV: production
+          DATABASE_URL: sqlite+aiosqlite:///./ci-railway-smoke.db
+          SESSION_SECRET: ci-session-secret-that-is-long-and-unique
+          AUTH_TOKEN_PEPPER: ci-auth-token-pepper-that-is-over-thirty-two-bytes
+          RAILWAY_PUBLIC_DOMAIN: smoke.operly.test
+        run: |
+          uvicorn apps.api.main:app --host 127.0.0.1 --port 8765 >/tmp/operly-smoke.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error -H 'Host: smoke.operly.test' http://127.0.0.1:8765/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/operly-smoke.log
+          exit 1

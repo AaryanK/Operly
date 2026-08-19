@@ -38,14 +38,69 @@ def _failure(code: str = "CSRF_VALIDATION_FAILED") -> JSONResponse:
     )
 
 
+def _normalized_origin(value: str) -> tuple[str, str, int | None] | None:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    if scheme not in {"http", "https"} or not hostname:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname, port
+
+
+def _request_origin(request: Request) -> tuple[str, str, int | None] | None:
+    # TrustedHostMiddleware validates the Host header before application routes.
+    # Compare the browser Origin to the host that actually received this request
+    # instead of assuming PUBLIC_BASE_URL is the only valid deployment hostname.
+    host_header = request.headers.get("host", "").strip()
+    if not host_header:
+        return None
+    try:
+        parsed = urlparse(f"//{host_header}")
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+    if scheme not in {"http", "https"}:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname, port
+
+
 def _cross_site(request: Request) -> bool:
-    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site == "cross-site":
         return True
+
     origin = request.headers.get("origin")
     if not origin:
         return False
+
+    browser_origin = _normalized_origin(origin)
+    request_origin = _request_origin(request)
+    if browser_origin and request_origin and browser_origin == request_origin:
+        return False
+
+    # Also accept the explicitly configured canonical origin. This preserves
+    # custom-domain deployments while allowing same-origin Railway preview/copy
+    # hosts to authenticate without changing PUBLIC_BASE_URL first.
     configured = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-    return origin.rstrip("/") != configured
+    configured_origin = _normalized_origin(configured)
+    return not (browser_origin and configured_origin and browser_origin == configured_origin)
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):

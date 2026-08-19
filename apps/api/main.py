@@ -1,4 +1,3 @@
-import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -6,71 +5,75 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-
-# Local and self-hosted launches should behave the same as CLI diagnostics.
-# Existing process variables keep precedence, so managed deployments remain in
-# control of their injected secrets and configuration.
-load_dotenv(override=False)
-
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import desc, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from apps.api.dependencies import AuthContext, get_auth_context, get_db
-from apps.api.operations_router import router as operations_router
-from apps.api.studio_router import router as studio_router
-from apps.api.dashboard_studio_router import router as dashboard_studio_router
-from apps.api.application_builder_router import router as application_builder_router
 from apps.api.agent_router import router as agent_router
-from apps.api.custom_software_router import router as custom_software_router
+from apps.api.application_builder_router import router as application_builder_router
+from apps.api.approvals_router import router as approvals_router
 from apps.api.architecture_pack_router import router as architecture_pack_router
+from apps.api.business import router as business_router
 from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
 from apps.api.connectors_router import router as connectors_router
-from apps.api.solutions_router import public_router as solutions_public_router,router as solutions_router
 from apps.api.csrf import CSRFMiddleware
-from apps.api.security_headers import SecurityHeadersMiddleware
+from apps.api.custom_software_router import router as custom_software_router
+from apps.api.dashboard_studio_router import router as dashboard_studio_router
+from apps.api.integrations_router import router as integrations_router
+from apps.api.operations_router import router as operations_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
-from apps.api.session import router as session_router
-from apps.api.business import router as business_router
-from apps.api.schemas import (
-    ApprovalDecision,
-    MemoryCreate,
-    TaskCreate,
-    TenantUpdate,
-)
 from apps.api.security import hash_password
+from apps.api.security_headers import SecurityHeadersMiddleware
+from apps.api.session import router as session_router
+from apps.api.solutions_router import public_router as solutions_public_router
+from apps.api.solutions_router import router as solutions_router
+from apps.api.studio_router import router as studio_router
+from apps.api.system_router import router as system_router
+from apps.api.workspace_router import router as workspace_router
 from packages.database.db import init_db, session_scope
-from packages.database.models import (
-    AppUser,
-    AuthIdentity,
-    Approval,
-    DiscordGuild,
-    Integration,
-    Memory,
-    Message,
-    Task,
-    Tenant,
-    TenantMember,
+from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+
+load_dotenv(override=False)
+
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip().strip("/")
+RAILWAY_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else ""
+RUNNING_ON_RAILWAY = bool(
+    RAILWAY_PUBLIC_DOMAIN
+    or os.getenv("RAILWAY_ENVIRONMENT_ID")
+    or os.getenv("RAILWAY_PROJECT_ID")
+    or os.getenv("RAILWAY_SERVICE_ID")
 )
+PUBLIC_BASE_URL = (
+    os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    or RAILWAY_PUBLIC_URL
+    or "http://localhost:8000"
+)
+PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {
+    "production",
+    "prod",
+}
 
 
 async def bootstrap_admin() -> None:
+    """Create the configured bootstrap owner when credentials are supplied.
+
+    ADMIN_PASSWORD is optional. A fresh deployment can start without it and use
+    the normal signup flow to create its first workspace owner.
+    """
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
 
     if not password:
-        raise RuntimeError("ADMIN_PASSWORD is missing")
+        return
 
     async with session_scope() as db:
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
-
         if user is None:
             user = AppUser(
                 email=email,
@@ -106,7 +109,6 @@ async def bootstrap_admin() -> None:
             return
 
         tenants = (await db.scalars(select(Tenant).order_by(Tenant.created_at))).all()
-
         if len(tenants) == 1:
             tenant = tenants[0]
         else:
@@ -114,28 +116,24 @@ async def bootstrap_admin() -> None:
             db.add(tenant)
             await db.flush()
 
-        db.add(
-            TenantMember(
-                tenant_id=tenant.id,
-                user_id=user.id,
-                role="owner",
-            )
-        )
+        db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner"))
 
 
 def validate_runtime_configuration() -> None:
     if not os.getenv("SESSION_SECRET"):
         raise RuntimeError("SESSION_SECRET is missing")
-    if production:
-        token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
-        if len(token_pepper.encode("utf-8")) < 32:
-            raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
-        if token_pepper == os.getenv("SESSION_SECRET"):
-            raise RuntimeError("AUTH_TOKEN_PEPPER and SESSION_SECRET must be different")
-        if not public_base_url.startswith("https://"):
-            raise RuntimeError("PUBLIC_BASE_URL must use HTTPS in production")
-        if public_base_url == "https://operly.example":
-            raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
+    if not PRODUCTION:
+        return
+
+    token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
+    if len(token_pepper.encode("utf-8")) < 32:
+        raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
+    if token_pepper == os.getenv("SESSION_SECRET"):
+        raise RuntimeError("AUTH_TOKEN_PEPPER and SESSION_SECRET must be different")
+    if not PUBLIC_BASE_URL.startswith("https://"):
+        raise RuntimeError("PUBLIC_BASE_URL must use HTTPS in production")
+    if PUBLIC_BASE_URL == "https://operly.example":
+        raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
 
 
 @asynccontextmanager
@@ -146,450 +144,68 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(
-    title="OPERLY API",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="OPERLY API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
 
-public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-production = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
-deployed_commit_sha = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or os.getenv("SOURCE_VERSION") or "unknown").strip()[:64]
-allowed_origins = [public_base_url]
-if not production:
-    allowed_origins.append("http://localhost:5173")
-trusted_host = urlparse(public_base_url).hostname or "localhost"
-railway_health_host = "healthcheck.railway.app"
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=[trusted_host,railway_health_host] if production else [trusted_host,railway_health_host,"localhost","127.0.0.1","testserver"])
+allowed_hosts = {"healthcheck.railway.app"}
+public_host = urlparse(PUBLIC_BASE_URL).hostname
+if public_host:
+    allowed_hosts.add(public_host)
+if RAILWAY_PUBLIC_DOMAIN:
+    allowed_hosts.add(RAILWAY_PUBLIC_DOMAIN)
+if RUNNING_ON_RAILWAY:
+    # Railway-generated public domains use this suffix. Keep TrustedHost enabled,
+    # but allow preview/copy domains even when PUBLIC_BASE_URL points elsewhere.
+    allowed_hosts.add("*.up.railway.app")
+if not PRODUCTION:
+    allowed_hosts.update({"localhost", "127.0.0.1", "testserver"})
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(allowed_hosts))
 app.add_middleware(SecurityHeadersMiddleware)
+
+allowed_origins = {PUBLIC_BASE_URL}
+if RAILWAY_PUBLIC_URL:
+    allowed_origins.add(RAILWAY_PUBLIC_URL)
+if not PRODUCTION:
+    allowed_origins.add("http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=sorted(allowed_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-
-@app.get("/api/health")
-async def health():
-    return {"ok": True, "service": "operly", "commit_sha": deployed_commit_sha}
-
-
-@app.get("/api/me")
-async def me(auth: AuthContext = Depends(get_auth_context)):
-    return {
-        "user": {
-            "id": auth.user.id,
-            "email": auth.user.email,
-            "display_name": auth.user.display_name,
-        },
-        "tenant": {
-            "id": auth.tenant.id,
-            "name": auth.tenant.name,
-            "timezone": auth.tenant.timezone,
-        },
-        "role": auth.role,
-    }
-
-
-@app.get("/api/dashboard")
-async def dashboard(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
+# Composition root: routers own HTTP concerns; packages own business behavior.
+for router in (
+    system_router,
+    session_router,
+    workspace_router,
+    approvals_router,
+    integrations_router,
+    business_router,
+    agent_router,
+    company_router,
+    connectors_router,
+    operations_router,
+    studio_router,
+    dashboard_studio_router,
+    application_builder_router,
+    custom_software_router,
+    architecture_pack_router,
+    coding_harness_router,
+    solutions_router,
+    solutions_public_router,
 ):
-    tenant_id = auth.tenant.id
+    app.include_router(router)
 
-    message_count = await db.scalar(
-        select(func.count(Message.id)).where(Message.tenant_id == tenant_id)
-    )
-    open_tasks = await db.scalar(
-        select(func.count(Task.id)).where(
-            Task.tenant_id == tenant_id,
-            Task.status == "open",
-        )
-    )
-    memory_count = await db.scalar(
-        select(func.count(Memory.id)).where(Memory.tenant_id == tenant_id)
-    )
-    pending_approvals = await db.scalar(
-        select(func.count(Approval.id)).where(
-            Approval.tenant_id == tenant_id,
-            Approval.status == "pending",
-        )
-    )
-
-    recent = (
-        await db.scalars(
-            select(Message)
-            .where(Message.tenant_id == tenant_id)
-            .order_by(desc(Message.created_at))
-            .limit(8)
-        )
-    ).all()
-
-    return {
-        "stats": {
-            "messages": message_count or 0,
-            "open_tasks": open_tasks or 0,
-            "memories": memory_count or 0,
-            "pending_approvals": pending_approvals or 0,
-        },
-        "recent_messages": [
-            {
-                "id": row.id,
-                "author_name": row.author_name,
-                "content": row.content,
-                "is_bot": row.is_bot,
-                "channel_id": str(row.channel_id),
-                "created_at": row.created_at.isoformat(),
-            }
-            for row in recent
-        ],
-    }
-
-
-@app.get("/api/messages")
-async def list_messages(
-    search: str | None = Query(default=None, max_length=200),
-    limit: int = Query(default=100, ge=1, le=250),
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    query = select(Message).where(Message.tenant_id == auth.tenant.id)
-
-    if search:
-        pattern = f"%{search.strip()}%"
-        query = query.where(
-            or_(
-                Message.content.ilike(pattern),
-                Message.author_name.ilike(pattern),
-            )
-        )
-
-    rows = (
-        await db.scalars(
-            query.order_by(desc(Message.created_at)).limit(limit)
-        )
-    ).all()
-
-    return [
-        {
-            "id": row.id,
-            "message_id": str(row.message_id),
-            "channel_id": str(row.channel_id),
-            "author_name": row.author_name,
-            "content": row.content,
-            "is_bot": row.is_bot,
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
-
-
-@app.get("/api/tasks")
-async def list_tasks(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    rows = (
-        await db.scalars(
-            select(Task)
-            .where(Task.tenant_id == auth.tenant.id)
-            .order_by(desc(Task.created_at))
-        )
-    ).all()
-
-    return [
-        {
-            "id": row.id,
-            "title": row.title,
-            "status": row.status,
-            "due_at": row.due_at.isoformat() if row.due_at else None,
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
-
-
-@app.post("/api/tasks")
-async def create_task(
-    payload: TaskCreate,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    row = Task(
-        tenant_id=auth.tenant.id,
-        title=payload.title.strip(),
-        due_at=payload.due_at,
-        status="open",
-    )
-    db.add(row)
-    await db.commit()
-    await db.refresh(row)
-
-    return {
-        "id": row.id,
-        "title": row.title,
-        "status": row.status,
-        "due_at": row.due_at.isoformat() if row.due_at else None,
-        "created_at": row.created_at.isoformat(),
-    }
-
-
-@app.patch("/api/tasks/{task_id}/complete")
-async def complete_task(
-    task_id: str,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    row = await db.scalar(
-        select(Task).where(
-            Task.id == task_id,
-            Task.tenant_id == auth.tenant.id,
-        )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    row.status = "completed"
-    await db.commit()
-    return {"ok": True}
-
-
-@app.get("/api/memories")
-async def list_memories(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    rows = (
-        await db.scalars(
-            select(Memory)
-            .where(Memory.tenant_id == auth.tenant.id)
-            .order_by(desc(Memory.created_at))
-        )
-    ).all()
-
-    return [
-        {
-            "id": row.id,
-            "kind": row.kind,
-            "content": row.content,
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
-
-
-@app.post("/api/memories")
-async def create_memory(
-    payload: MemoryCreate,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    row = Memory(
-        tenant_id=auth.tenant.id,
-        kind=payload.kind.strip() or "fact",
-        content=payload.content.strip(),
-    )
-    db.add(row)
-    await db.commit()
-    await db.refresh(row)
-
-    return {
-        "id": row.id,
-        "kind": row.kind,
-        "content": row.content,
-        "created_at": row.created_at.isoformat(),
-    }
-
-
-@app.get("/api/approvals")
-async def list_approvals(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    rows = (
-        await db.scalars(
-            select(Approval)
-            .where(Approval.tenant_id == auth.tenant.id)
-            .order_by(desc(Approval.created_at))
-        )
-    ).all()
-
-    return [
-        {
-            "id": row.id,
-            "action": row.action,
-            "status": row.status,
-            "details": json.loads(row.payload_json or "{}"),
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
-
-
-@app.patch("/api/approvals/{approval_id}")
-async def decide_approval(
-    approval_id: str,
-    payload: ApprovalDecision,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    if payload.status not in {"approved", "rejected"}:
-        raise HTTPException(status_code=400, detail="Invalid decision")
-
-    row = await db.scalar(
-        select(Approval).where(
-            Approval.id == approval_id,
-            Approval.tenant_id == auth.tenant.id,
-        )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Approval not found")
-
-    details = json.loads(row.payload_json or "{}")
-    business_action_id = details.get("business_action_id")
-    if business_action_id:
-        from packages.actions.service import ActionService
-        from packages.capabilities.agent_harness import ROLE_AUTHORITY
-        from packages.capabilities.providers import default_registry
-        service = ActionService(db, default_registry(), authority=set(ROLE_AUTHORITY.get(auth.role, set())), actor_id=auth.user.id)
-        try:
-            if payload.status == "approved":
-                await service.approve(auth.tenant.id, business_action_id)
-            else:
-                await service.reject(auth.tenant.id, business_action_id)
-                from packages.database.product_models import SolutionImprovementProposal
-                proposal = await db.scalar(select(SolutionImprovementProposal).where(SolutionImprovementProposal.tenant_id == auth.tenant.id, SolutionImprovementProposal.action_id == business_action_id))
-                if proposal:
-                    proposal.status = "rejected"
-        except (LookupError, ValueError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-    else:
-        row.status = payload.status
-    await db.commit()
-    return {"ok": True, "business_action_id": business_action_id}
-
-
-@app.get("/api/integrations")
-async def integrations(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    guilds = (
-        await db.scalars(
-            select(DiscordGuild).where(
-                DiscordGuild.tenant_id == auth.tenant.id,
-                DiscordGuild.enabled.is_(True),
-            )
-        )
-    ).all()
-
-    connected = (
-        await db.scalars(
-            select(Integration).where(
-                Integration.tenant_id == auth.tenant.id
-            )
-        )
-    ).all()
-    status_map = {row.provider: row.status for row in connected}
-
-    return [
-        {
-            "provider": "discord",
-            "label": "Discord",
-            "status": "connected" if guilds else status_map.get("discord", "disconnected"),
-            "detail": guilds[0].guild_name if guilds else None,
-            "role": "event_and_action_channel",
-            "capabilities": ["messages", "reminders", "workflow_triggers", "approvals", "controlled_solution_updates"],
-            "frontendAuthority": "controlled_updates_only",
-        },
-        {
-            "provider": "whatsapp",
-            "label": "WhatsApp",
-            "status": status_map.get("whatsapp", "coming_soon"),
-            "detail": None,
-            "role": "event_and_action_channel",
-            "capabilities": ["messages", "reminders", "workflow_triggers", "controlled_solution_updates"],
-            "frontendAuthority": "controlled_updates_only",
-        },
-        {
-            "provider": "instagram",
-            "label": "Instagram",
-            "status": status_map.get("instagram", "coming_soon"),
-            "detail": None,
-            "role": "event_and_action_channel",
-            "capabilities": ["messages", "workflow_triggers", "publishing"],
-            "frontendAuthority": "controlled_updates_only",
-        },
-        {
-            "provider": "facebook",
-            "label": "Facebook",
-            "status": status_map.get("facebook", "coming_soon"),
-            "detail": None,
-            "role": "event_and_action_channel",
-            "capabilities": ["messages", "workflow_triggers", "publishing"],
-            "frontendAuthority": "controlled_updates_only",
-        },
-        {
-            "provider": "x",
-            "label": "X",
-            "status": status_map.get("x", "coming_soon"),
-            "detail": None,
-            "role": "event_and_action_channel",
-            "capabilities": ["messages", "workflow_triggers", "publishing"],
-            "frontendAuthority": "controlled_updates_only",
-        },
-    ]
-
-
-@app.patch("/api/settings/tenant")
-async def update_tenant(
-    payload: TenantUpdate,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    tenant = await db.get(Tenant, auth.tenant.id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    tenant.name = payload.name.strip()
-    tenant.timezone = payload.timezone.strip() or "UTC"
-    await db.commit()
-
-    return {
-        "id": tenant.id,
-        "name": tenant.name,
-        "timezone": tenant.timezone,
-    }
-
-app.include_router(business_router)
-app.include_router(session_router)
-app.include_router(agent_router)
-app.include_router(operations_router)
-app.include_router(studio_router)
-app.include_router(dashboard_studio_router)
-app.include_router(application_builder_router)
-app.include_router(custom_software_router)
-app.include_router(architecture_pack_router)
-app.include_router(coding_harness_router)
-app.include_router(company_router)
-app.include_router(connectors_router)
-app.include_router(solutions_router)
-app.include_router(solutions_public_router)
-
+# The static application remains the production UI for this migration branch.
+# apps/web/src is intentionally not served until feature parity is proven.
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
+app.mount("/static", StaticFiles(directory=WEB_STATIC), name="static")
 
-app.mount(
-    "/static",
-    StaticFiles(directory=WEB_STATIC),
-    name="static",
-)
 
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
