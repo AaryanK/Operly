@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from packages.actions.service import ActionService
@@ -34,6 +34,7 @@ ROLE_AUTHORITY = {
         "quotes:write",
         "operations:read",
         "operations:write",
+        "reminders:write",
     },
     "manager": {
         "company:read",
@@ -59,6 +60,7 @@ ROLE_AUTHORITY = {
         "quotes:write",
         "operations:read",
         "operations:write",
+        "reminders:write",
     },
     "agent": {
         "company:read",
@@ -76,6 +78,7 @@ ROLE_AUTHORITY = {
         "memory:write",
         "messages:read",
         "operations:read",
+        "reminders:write",
     },
     "employee": {
         "company:read",
@@ -96,6 +99,8 @@ class PluginInvocationContext:
     user_id: str | None
     role: str
     objective: str
+    channel: str = "web"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PluginAgentHarness:
@@ -203,6 +208,10 @@ class PluginAgentHarness:
                     idempotency_key=(
                         f"{context.tenant_id}:{call_id}" if call_id else None
                     ),
+                    runtime_context={
+                        "channel": context.channel,
+                        "metadata": dict(context.metadata),
+                    },
                 )
             except (ValueError, PermissionError, LookupError) as error:
                 return {"ok": False, "error": str(error)}
