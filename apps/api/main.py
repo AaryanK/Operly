@@ -17,6 +17,7 @@ from apps.api.application_builder_router import router as application_builder_ro
 from apps.api.approvals_router import router as approvals_router
 from apps.api.architecture_pack_router import router as architecture_pack_router
 from apps.api.business import router as business_router
+from apps.api.channel_identity_router import router as channel_identity_router
 from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
 from apps.api.connectors_router import router as connectors_router
@@ -189,6 +190,7 @@ for router in (
     agent_router,
     company_router,
     connectors_router,
+    channel_identity_router,
     operations_router,
     studio_router,
     dashboard_studio_router,
