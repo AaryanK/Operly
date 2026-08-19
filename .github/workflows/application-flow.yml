@@ -34,6 +34,7 @@ jobs:
           apps/api/main.py
           apps/api/business.py
           apps/api/company_router.py
+          apps/api/solutions_router.py
           apps/api/workspace_router.py
           apps/api/approvals_router.py
           apps/api/integrations_router.py
@@ -50,6 +51,8 @@ jobs:
           packages/capabilities/operations_provider.py
           packages/capabilities/studio_provider.py
           packages/capabilities/reminder_provider.py
+          packages/capabilities/solution_provider.py
+          packages/capabilities/website_provider.py
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
