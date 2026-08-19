@@ -48,6 +48,7 @@ class StudioProvider(BaseProvider):
             {"type": "object"},
             risk_level="medium",
             permissions=("website:write",),
+            approval_policy=ApprovalPolicy.AUTO,
             reversible=True,
         ),
         CapabilityDefinition(
