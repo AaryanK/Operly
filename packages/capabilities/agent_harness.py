@@ -18,7 +18,10 @@ ROLE_AUTHORITY = {
         "website:write",
         "messaging:draft",
         "messaging:curate",
+        "messaging:read",
+        "messaging:write",
         "messaging:send",
+        "calendar:read",
         "calendar:write",
         "solution:read",
         "solution:generate",
@@ -35,6 +38,12 @@ ROLE_AUTHORITY = {
         "operations:read",
         "operations:write",
         "reminders:write",
+        "context:human:read",
+        "context:human:write",
+        "context:tenant:read",
+        "context:tenant:write",
+        "context:conversation:read",
+        "context:conversation:write",
     },
     "manager": {
         "company:read",
@@ -46,7 +55,10 @@ ROLE_AUTHORITY = {
         "website:write",
         "messaging:draft",
         "messaging:curate",
+        "messaging:read",
+        "messaging:write",
         "messaging:send",
+        "calendar:read",
         "calendar:write",
         "solution:read",
         "tasks:read",
@@ -61,6 +73,12 @@ ROLE_AUTHORITY = {
         "operations:read",
         "operations:write",
         "reminders:write",
+        "context:human:read",
+        "context:human:write",
+        "context:tenant:read",
+        "context:tenant:write",
+        "context:conversation:read",
+        "context:conversation:write",
     },
     "agent": {
         "company:read",
@@ -71,6 +89,8 @@ ROLE_AUTHORITY = {
         "website:read",
         "messaging:draft",
         "messaging:curate",
+        "messaging:read",
+        "calendar:read",
         "solution:read",
         "tasks:read",
         "tasks:write",
@@ -79,6 +99,12 @@ ROLE_AUTHORITY = {
         "messages:read",
         "operations:read",
         "reminders:write",
+        "context:human:read",
+        "context:human:write",
+        "context:tenant:read",
+        "context:tenant:write",
+        "context:conversation:read",
+        "context:conversation:write",
     },
     "employee": {
         "company:read",
@@ -89,6 +115,13 @@ ROLE_AUTHORITY = {
         "tasks:read",
         "messages:read",
         "memory:read",
+        "messaging:read",
+        "calendar:read",
+        "context:human:read",
+        "context:human:write",
+        "context:tenant:read",
+        "context:conversation:read",
+        "context:conversation:write",
     },
 }
 
@@ -115,7 +148,14 @@ class PluginAgentHarness:
 
         from sqlalchemy import select
 
-        from packages.connectors.google_provider import CALENDAR, GMAIL_SEND
+        from packages.connectors.google_provider import (
+            CALENDAR,
+            CALENDAR_FREEBUSY,
+            CALENDAR_LIST_READONLY,
+            GMAIL_MODIFY,
+            GMAIL_READONLY,
+            GMAIL_SEND,
+        )
         from packages.database.connector_models import TenantConnector
 
         enabled_external: set[str] = set()
@@ -131,15 +171,33 @@ class PluginAgentHarness:
             ).all()
             for row in rows:
                 scopes = set(json.loads(row.granted_scopes_json or "[]"))
-                if GMAIL_SEND in scopes:
-                    enabled_external.add("messaging.send")
+                if scopes & {GMAIL_SEND, GMAIL_MODIFY}:
+                    enabled_external.update({"messaging.send", "gmail.send_email"})
+                if scopes & {GMAIL_READONLY, GMAIL_MODIFY}:
+                    enabled_external.update({"gmail.search", "gmail.read_message"})
+                if GMAIL_MODIFY in scopes:
+                    enabled_external.update({"gmail.modify_labels", "gmail.create_draft"})
                 if CALENDAR in scopes:
-                    enabled_external.add("calendar.create_event")
+                    enabled_external.update(
+                        {
+                            "calendar.create_event",
+                            "calendar.list_events",
+                            "calendar.update_event",
+                            "calendar.delete_event",
+                        }
+                    )
+                if CALENDAR_FREEBUSY in scopes:
+                    enabled_external.add("calendar.freebusy")
+                if CALENDAR_LIST_READONLY in scopes:
+                    enabled_external.add("calendar.list_calendars")
 
         return default_registry(enabled_external)
 
     def authority(self, role: str) -> set[str]:
-        return set(ROLE_AUTHORITY.get(role, ROLE_AUTHORITY["employee"]))
+        # Unknown channel roles are intentionally deny-by-default. A Discord or
+        # future connector participant must resolve to a real TenantMember role
+        # before model-visible capabilities become available.
+        return set(ROLE_AUTHORITY.get(role, set()))
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         registry = await self.registry_for(context)
@@ -189,7 +247,7 @@ class PluginAgentHarness:
 
             rationale = str(
                 arguments.pop("_rationale", "")
-                or f"Model selected {name} for the owner objective"
+                or f"Model selected {name} for the current objective"
             )[:2000]
             expected = str(
                 arguments.pop("_expected_outcome", "") or definition.description
