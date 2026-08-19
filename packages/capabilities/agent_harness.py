@@ -133,6 +133,14 @@ ROLE_AUTHORITY = {
 }
 
 
+_PRIVATE_CONNECTOR_AUTHORITY = {
+    "gmail.search": "gmail:read",
+    "gmail.read_message": "gmail:read",
+    "gmail.modify_labels": "gmail:write",
+    "gmail.create_draft": "gmail:draft",
+}
+
+
 @dataclass(slots=True)
 class PluginInvocationContext:
     tenant_id: str
@@ -206,14 +214,27 @@ class PluginAgentHarness:
         # before model-visible capabilities become available.
         return set(ROLE_AUTHORITY.get(role, set()))
 
+    @staticmethod
+    def capability_authorized(capability_id: str, authority: set[str]) -> bool:
+        """Apply extra privacy authority for tenant-connected personal accounts.
+
+        Gmail mailbox capabilities are intentionally stricter than ordinary tenant
+        message search. A member may read shared Discord/Operly messages without
+        automatically inheriting access to an owner's connected Gmail mailbox.
+        """
+        required = _PRIVATE_CONNECTOR_AUTHORITY.get(capability_id)
+        return required is None or required in authority
+
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         registry = await self.registry_for(context)
+        authority = self.authority(context.role)
         return [
             item.model_tool_schema()
             for item in registry.metadata(
                 context.tenant_id,
-                authority=self.authority(context.role),
+                authority=authority,
             )
+            if self.capability_authorized(item.id, authority)
         ]
 
     def handles(self, name: str) -> bool:
@@ -230,6 +251,8 @@ class PluginAgentHarness:
         call_id: str | None = None,
     ) -> dict[str, Any]:
         authority = self.authority(context.role)
+        if not self.capability_authorized(name, authority):
+            return {"ok": False, "error": "Unknown or unauthorized plugin"}
         registry = await self.registry_for(context)
         arguments = dict(arguments)
 
