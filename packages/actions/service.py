@@ -33,6 +33,7 @@ class ActionService:
           ("messaging.send","action.approved"):"message.send_approved",
           ("messaging.send","action.failed"):"message.send_failed",
           ("calendar.create_event","action.failed"):"calendar.event_failed",
+          ("solution.apply_improvement","action.rejected"):"solution.change.rejected",
         }.get((action.capability,event_type))
         if normalized:await append_event(self.db,tenant_id=action.tenant_id,event_type=normalized,payload={"action_id":action.id,**(payload or {})},correlation_id=action.correlation_id,causation_id=action.id,source="actions")
         return event

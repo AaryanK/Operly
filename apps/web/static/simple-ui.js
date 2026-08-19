@@ -85,9 +85,9 @@
     if (!content) return;
     content.innerHTML = `<div class="simple-loading">Loading your workspace…</div>`;
 
-    const [tasksResult, approvalsResult, projectsResult, sitesResult, appsResult, leadsResult] = await Promise.allSettled([
+    const [tasksResult, approvalsResult, projectsResult, sitesResult, appsResult, leadsResult, profileResult, questionsResult] = await Promise.allSettled([
       api("/tasks"), api("/approvals"), api("/custom-software/projects"),
-      api("/studio/projects"), api("/application-builder/applications"), api("/business/leads")
+      api("/studio/projects"), api("/application-builder/applications"), api("/business/leads"), api("/company/profile"), api("/company/questions")
     ]);
     const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
     const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
@@ -95,6 +95,9 @@
     const sites = sitesResult.status === "fulfilled" && Array.isArray(sitesResult.value) ? sitesResult.value : [];
     const managed = appsResult.status === "fulfilled" && Array.isArray(appsResult.value) ? appsResult.value : [];
     const leads = leadsResult.status === "fulfilled" && Array.isArray(leadsResult.value) ? leadsResult.value.filter(item => item.contact_email && !["won","lost"].includes(item.stage)) : [];
+    const companyProfile = profileResult.status === "fulfilled" ? (profileResult.value.profile || {}) : {};
+    const companyFields = profileResult.status === "fulfilled" ? (profileResult.value.fields || {}) : {};
+    const companyQuestions = questionsResult.status === "fulfilled" && Array.isArray(questionsResult.value) ? questionsResult.value.filter(item => !item.answered) : [];
     const solutions = [
       ...generated.map(item => ({...item, solutionKind:"generated", solutionType:(item.vertical || "custom solution").replaceAll("_", " ")})),
       ...sites.map(item => ({...item, solutionKind:"website", solutionType:"website"})),
@@ -104,6 +107,9 @@
     const workspace = document.querySelector("#workspace-name")?.textContent || "your workspace";
 
     content.innerHTML = `
+      <section class="company-learning ${Object.keys(companyProfile).length ? "has-profile" : "is-new"}">
+        ${Object.keys(companyProfile).length ? `<div class="simple-section-head"><div><span class="simple-eyebrow">YOUR BUSINESS</span><h3>${esc(companyProfile.display_name || companyProfile.business_name || companyProfile.legal_name || "Company profile")}</h3></div><span>${companyQuestions.length ? `I still need ${companyQuestions.length} ${companyQuestions.length === 1 ? "thing" : "things"} from you.` : "You’re all caught up."}</span></div><div class="company-found">${Object.entries(companyProfile).slice(0,6).map(([key,value]) => `<article><span>✓ ${esc(key.replaceAll("_"," "))}</span><strong>${esc(typeof value === "object" ? JSON.stringify(value) : value)}</strong>${companyFields[key]?.source_type ? `<small>${companyFields[key].owner_confirmed ? "Confirmed by you" : `Found on ${esc(companyFields[key].source_type.replaceAll("_"," "))}`}</small>` : ""}</article>`).join("")}</div>${companyQuestions.length ? `<div class="company-questions"><h4>A few useful questions</h4>${companyQuestions.map(item => `<form class="company-answer" data-question="${esc(item.id)}"><label>${esc(item.question)}<small>${esc(item.why_it_matters)}</small><input name="answer" required maxlength="1000" placeholder="Your answer"></label><button class="button primary" type="submit">Save answer</button></form>`).join("")}</div>` : ""}` : `<span class="simple-eyebrow">LET’S GET TO KNOW YOUR BUSINESS</span><h2>Tell OPERLY your business name, website, or what you’re trying to start.</h2><p>We’ll learn what we can first, then ask only for the important details we couldn’t find.</p><form id="company-discover-form" class="company-discover-form"><input id="company-discover-input" required minlength="2" maxlength="2000" placeholder="Business name, website, location, or a short description"><button class="button primary" type="submit">Learn about my business</button></form><div id="company-discover-status" class="company-discover-status"></div>`}
+      </section>
       <section class="simple-home-hero">
         <span class="simple-eyebrow">${esc(workspace)}</span>
         <h2>What should OPERLY compose for your business?</h2>
@@ -117,7 +123,7 @@
         </form>
       </section>
 
-      <section class="simple-block simple-follow-up">
+      <section class="simple-block simple-follow-up ${leads.length ? "" : "hidden"}">
         <div class="simple-section-head"><div><span class="simple-eyebrow">GMAIL</span><h3>Follow up with a lead</h3></div><span>Approval required before sending</span></div>
         ${leads.length ? `<form id="simple-follow-up-form" class="simple-follow-up-form">
           <label>Lead<select id="follow-up-lead" required>${leads.map(lead => `<option value="${esc(lead.id)}">${esc(lead.title)} — ${esc(lead.contact_name || lead.contact_email)}</option>`).join("")}</select></label>
@@ -160,6 +166,8 @@
       </section>`;
 
     const command = document.querySelector("#simple-command");
+    document.querySelector("#company-discover-form")?.addEventListener("submit", async event => {event.preventDefault();const button=event.submitter,status=document.querySelector("#company-discover-status");button.disabled=true;status.innerHTML="<span class='company-spinner'></span> Learning about your business…";try{const result=await api("/company/discover",{method:"POST",body:JSON.stringify({business:document.querySelector("#company-discover-input").value,max_pages:5})});if(result.status==="failed")throw new Error(result.error || "Research could not be completed");status.textContent=`Found ${result.found.length} useful details. Preparing your questions…`;await renderHome()}catch(error){status.textContent=error.message;button.disabled=false}});
+    document.querySelectorAll(".company-answer").forEach(form => form.addEventListener("submit",async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api("/company/answers",{method:"POST",body:JSON.stringify({question_id:form.dataset.question,answer:new FormData(form).get("answer")})});await renderHome()}catch(error){alert(error.message);button.disabled=false}}));
     document.querySelector("#simple-ask")?.addEventListener("click", () => openAssistant(command?.value || ""));
     document.querySelector("#simple-build")?.addEventListener("click", () => openBuild(command?.value || ""));
     document.querySelector("#simple-command-form")?.addEventListener("submit", event => { event.preventDefault(); openAssistant(command?.value || ""); });
@@ -199,17 +207,21 @@
     if (!content) return;
     content.innerHTML = `<div class="simple-loading">Loading activity…</div>`;
 
-    const [messagesResult, tasksResult, approvalsResult] = await Promise.allSettled([
-      api("/messages"), api("/tasks"), api("/approvals")
+    const [messagesResult, tasksResult, approvalsResult, solutionsResult] = await Promise.allSettled([
+      api("/messages"), api("/tasks"), api("/approvals"), api("/solutions")
     ]);
     const messages = messagesResult.status === "fulfilled" && Array.isArray(messagesResult.value) ? messagesResult.value : [];
     const tasks = tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value) ? tasksResult.value : [];
     const approvals = approvalsResult.status === "fulfilled" && Array.isArray(approvalsResult.value) ? approvalsResult.value : [];
+    const solutions = solutionsResult.status === "fulfilled" && Array.isArray(solutionsResult.value) ? solutionsResult.value : [];
+    const presence = solutions.find(item => item.solution_type === "digital_presence");
+    const improvements = presence ? await api(`/solutions/${presence.id}/improvements`).catch(() => []) : [];
     const {openTasks, pending} = attentionSummary(tasks, approvals);
 
     content.innerHTML = `
       <section class="simple-page-intro"><span class="simple-eyebrow">WORKSPACE</span><h2>Activity</h2><p>Decisions, work, and recent conversations in one place.</p></section>
       <div class="simple-activity-layout">
+        ${improvements.length ? `<section class="simple-activity-section"><div class="simple-section-head"><div><h3>Website care</h3><span>${improvements.filter(x=>x.status==="proposed").length} to review</span></div></div><div class="simple-list">${improvements.slice(0,8).map(item=>`<article class="simple-list-row"><div><span class="simple-status ${esc(item.status)}">${esc(item.status.replaceAll("_"," "))}</span><h4>${item.status==="verified"?"Updated successfully":"OPERLY found an inconsistency"}</h4><p><b>Your business profile says:</b> ${esc((item.supporting_evidence.owner_confirmed_profile||[]).map(x=>x.value).join(", "))} ✓</p><p><b>Your website currently:</b> Does not mention it</p><p><b>${item.status==="verified"?"Published":"Proposed update"}:</b> ${esc(item.proposed_change.summary||"")}</p>${item.status==="verified"?`<small>Published version ${esc(item.after_version||"")} · Site health verified</small>`:""}</div>${item.status==="proposed"?`<button class="button primary" data-review-improvement="${esc(item.id)}" data-solution="${esc(item.solution_id)}">Review change</button>`:""}</article>`).join("")}</div></section>`:""}
         <section class="simple-activity-section">
           <div class="simple-section-head"><div><h3>Approvals</h3><span>${pending.length} pending</span></div></div>
           <div class="simple-list">
@@ -248,6 +260,7 @@
         await renderActivity();
       } catch (error) { button.disabled = false; alert(error.message); }
     }));
+    document.querySelectorAll("[data-review-improvement]").forEach(button => button.addEventListener("click", async () => {button.disabled=true;try{await api(`/solutions/${button.dataset.solution}/improvements/${button.dataset.reviewImprovement}/review`,{method:"POST",body:"{}"});await renderActivity()}catch(error){button.disabled=false;alert(error.message)}}));
     document.querySelectorAll("[data-simple-complete]").forEach(button => button.addEventListener("click", async () => {
       button.disabled = true;
       try {
@@ -256,6 +269,15 @@
       } catch (error) { button.disabled = false; alert(error.message); }
     }));
     refreshActivityBadge(tasks, approvals);
+  }
+
+  async function renderPresence() {
+    leaveStudioFocus();document.querySelector("#operly-chat-dock")?.classList.remove("page-suppressed");setActive("presence");setTitle("Presence");
+    const content=document.querySelector("#content");if(!content)return;content.innerHTML=`<div class="simple-loading">Checking your business presence…</div>`;
+    const [solutionsResult,profileResult,connectorsResult]=await Promise.allSettled([api("/solutions"),api("/company/profile"),api("/connectors")]);
+    const solutions=solutionsResult.status==="fulfilled"&&Array.isArray(solutionsResult.value)?solutionsResult.value:[];const profile=profileResult.status==="fulfilled"?(profileResult.value.profile||{}):{};const presence=solutions.find(x=>x.solution_type==="digital_presence");const connectors=connectorsResult.status==="fulfilled"&&Array.isArray(connectorsResult.value)?connectorsResult.value:[];
+    content.innerHTML=`<section class="presence-hero"><span class="simple-eyebrow">YOUR BUSINESS ONLINE</span><h2>${esc(profile.display_name||profile.business_name||profile.legal_name||"Your digital presence")}</h2>${presence?`<div class="presence-status"><div><span>Website</span><strong>${esc(presence.status.replaceAll("_"," "))}</strong><small>${presence.production.state==="live"?"Your website is live.":presence.status==="failed"?"Publishing failed. No unverified version was made public.":presence.status==="publishing"?"Publishing and checking your website…":"Your verified preview is private until you publish."}</small></div><div class="presence-actions">${presence.preview.url?`<a class="button secondary" href="${esc(presence.preview.url)}" target="_blank">Preview</a>`:""}${presence.production.state==="live"&&presence.production.url?`<a class="button primary" href="${esc(presence.production.url)}" target="_blank">View live</a><button class="button secondary" id="presence-rollback">Rollback</button>`:`<button class="button primary" id="presence-publish">Publish</button>`}<button class="button secondary" id="presence-change">Change something</button></div></div><div id="presence-publish-message" class="company-discover-status"></div>`:`<p>Your business information is ready. Create a real preview using everything OPERLY already knows.</p><button class="button primary" id="create-presence" ${Object.keys(profile).length?"":"disabled"}>Get my business online</button>${Object.keys(profile).length?"":"<small>Finish company understanding first.</small>"}`}</section><div class="presence-grid"><section><span class="simple-eyebrow">BUSINESS INFORMATION</span><h3>${Object.keys(profile).length?"Up to date ✓":"Still learning"}</h3><p>${esc(profile.description||"Add your business details from Home so your presence starts accurate.")}</p></section><section><span class="simple-eyebrow">CONNECTED CHANNELS</span><h3>${connectors.filter(x=>x.status==="connected").length?"Connected":"No channels connected yet"}</h3><p>${connectors.filter(x=>x.status==="connected").map(x=>esc(x.display_name||x.label||x.connector_type)).join(" · ")||"Connect Google or email when it helps your business."}</p></section></div>${solutions.filter(x=>x.id!==presence?.id).length?`<section class="presence-existing"><h3>Other business tools</h3>${solutions.filter(x=>x.id!==presence?.id).map(x=>`<article><div><strong>${esc(x.name)}</strong><small>${esc(x.status.replaceAll("_"," "))}</small></div>${x.preview.url?`<a class="simple-link" href="${esc(x.preview.url)}" target="_blank">Open</a>`:""}</article>`).join("")}</section>`:""}`;
+    document.querySelector("#create-presence")?.addEventListener("click",async event=>{event.currentTarget.disabled=true;event.currentTarget.textContent="Building your preview…";try{await api("/solutions",{method:"POST",body:JSON.stringify({solution_type:"digital_presence"})});await renderPresence()}catch(error){alert(error.message);event.currentTarget.disabled=false}});document.querySelector("#presence-publish")?.addEventListener("click",async event=>{const message=document.querySelector("#presence-publish-message");event.currentTarget.disabled=true;event.currentTarget.textContent="Publishing…";message.textContent="Publishing and checking your website…";try{const result=await api(`/solutions/${presence.id}/approve`,{method:"POST"});if(result.job.status!=="succeeded")throw new Error(result.job.failure_classification==="provider_unconfigured"?"Publishing is not configured yet.":"Publishing failed during health verification. Your previous live version is still serving.");await renderPresence()}catch(error){message.textContent=error.message;event.currentTarget.disabled=false;event.currentTarget.textContent="Publish"}});document.querySelector("#presence-rollback")?.addEventListener("click",async event=>{const message=document.querySelector("#presence-publish-message");event.currentTarget.disabled=true;event.currentTarget.textContent="Rolling back…";try{const result=await api(`/solutions/${presence.id}/rollback`,{method:"POST",body:"{}"});if(result.job.status!=="succeeded")throw new Error("Rollback could not be verified. Your current site is still serving.");await renderPresence()}catch(error){message.textContent=error.message;event.currentTarget.disabled=false;event.currentTarget.textContent="Rollback"}});document.querySelector("#presence-change")?.addEventListener("click",()=>openAssistant(`Change my digital presence${presence?` (${presence.id})`:""}: `));
   }
 
   function refreshActivityBadge(tasks, approvals) {
@@ -283,6 +305,7 @@
       event.preventDefault();
       event.stopImmediatePropagation();
       if (simple.dataset.simplePage === "home") renderHome();
+      if (simple.dataset.simplePage === "presence") renderPresence();
       if (simple.dataset.simplePage === "activity") renderActivity();
       return;
     }
@@ -301,6 +324,7 @@
 
   window.operlySimpleHome = renderHome;
   window.operlySimpleActivity = renderActivity;
+  window.operlySimplePresence = renderPresence;
   window.operlyOpenAssistant = openAssistant;
   window.operlyOpenBuild = openBuild;
 })();

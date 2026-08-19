@@ -8,9 +8,9 @@ from packages.database.db import session_scope
 
 
 ROLE_AUTHORITY={
- "owner":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:curate","messaging:send","calendar:write","solution:read","solution:generate"},
- "manager":{"company:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:curate","messaging:send","calendar:write","solution:read"},
- "agent":{"company:read","analytics:read","crm:read","crm:write","website:read","messaging:draft","messaging:curate","solution:read"},
+ "owner":{"company:read","research:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:curate","messaging:send","calendar:write","solution:read","solution:generate","solution:write"},
+ "manager":{"company:read","research:read","analytics:read","crm:read","crm:write","website:read","website:write","messaging:draft","messaging:curate","messaging:send","calendar:write","solution:read"},
+ "agent":{"company:read","research:read","analytics:read","crm:read","crm:write","website:read","messaging:draft","messaging:curate","solution:read"},
  "employee":{"company:read","analytics:read","crm:read","website:read","solution:read"},
 }
 

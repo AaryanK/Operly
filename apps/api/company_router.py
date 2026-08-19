@@ -13,6 +13,9 @@ from packages.capabilities.providers import default_registry
 from packages.company.events import query_events
 from packages.company.state import get_company_state
 from packages.database.company_models import BusinessActionRecord
+from packages.database.product_models import CompanyEvidence, CompanyProfile
+from packages.company.intelligence import answer_question, generate_questions, observe_evidence, profile_payload, synthesize_profile
+from packages.company.research import research_company
 from packages.database.business_models import Quote
 from packages.company.attention import attention_items
 
@@ -21,6 +24,15 @@ router = APIRouter(prefix="/api", tags=["company operating system"])
 
 class PlanInput(BaseModel):
     objective: str = Field(min_length=3, max_length=1000)
+
+class DiscoverInput(BaseModel):
+    business: str = Field(min_length=2,max_length=2000)
+    max_pages: int = Field(default=5,ge=1,le=10)
+class AnswerInput(BaseModel):
+    question_id: str
+    answer: object
+class ProfilePatch(BaseModel):
+    fields: dict[str,object]
 
 
 def action_payload(row):
@@ -36,6 +48,36 @@ def action_payload(row):
 @router.get("/company/state")
 async def company_state(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     return (await get_company_state(auth.tenant.id, db)).to_dict()
+
+@router.post("/company/discover")
+async def discover_company(payload:DiscoverInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    result=await research_company(db,auth.tenant.id,payload.business,max_pages=payload.max_pages);await db.commit();return result
+
+@router.get("/company/profile")
+async def get_profile(auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    return profile_payload(await db.get(CompanyProfile,auth.tenant.id))
+
+@router.get("/company/evidence")
+async def get_evidence(auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    rows=(await db.scalars(select(CompanyEvidence).where(CompanyEvidence.tenant_id==auth.tenant.id).order_by(CompanyEvidence.observed_at.desc()).limit(250))).all()
+    return [{"id":x.id,"field":x.field_key,"value":json.loads(x.value_json),"source_type":x.source_type,"source_url":x.source_url,"source_reference":x.source_reference,"confidence":x.confidence,"observed_at":x.observed_at.isoformat(),"owner_confirmed":x.owner_confirmed,"superseded":x.superseded,"stale":x.stale} for x in rows]
+
+@router.get("/company/questions")
+async def get_questions(auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    rows=await generate_questions(db,auth.tenant.id);await db.commit();return rows
+
+@router.post("/company/answers")
+async def post_answer(payload:AnswerInput,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:result=await answer_question(db,auth.tenant.id,payload.question_id,payload.answer)
+    except LookupError as error:raise HTTPException(404,str(error)) from error
+    await db.commit();return result
+
+@router.patch("/company/profile")
+async def patch_profile(payload:ProfilePatch,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
+    try:
+     for key,value in payload.fields.items():await observe_evidence(db,auth.tenant.id,key,value,"owner",confidence=1,owner_confirmed=True,source_reference=f"owner:{auth.user.id}")
+    except ValueError as error:raise HTTPException(422,str(error)) from error
+    result=await synthesize_profile(db,auth.tenant.id);await generate_questions(db,auth.tenant.id);await db.commit();return result
 
 @router.get("/company/attention")
 async def company_attention(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
