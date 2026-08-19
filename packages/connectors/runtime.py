@@ -28,7 +28,7 @@ class ConnectorRuntime:
             return
 
         if os.getenv("DISCORD_BOT_TOKEN", "").strip():
-            from packages.connectors.discord.bot_shared import start_embedded, stop_embedded
+            from packages.connectors.discord.runtime import start_embedded, stop_embedded
 
             task = asyncio.create_task(start_embedded(), name="operly-discord-adapter")
             self._tasks.append(task)
