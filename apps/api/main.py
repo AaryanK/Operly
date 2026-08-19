@@ -54,22 +54,19 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
-    """Create the configured bootstrap owner only when the deployment needs one."""
+    """Create the configured bootstrap owner when credentials are supplied.
+
+    ADMIN_PASSWORD is optional. A fresh deployment can start without it and use
+    the normal signup flow to create its first workspace owner.
+    """
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
 
-    async with session_scope() as db:
-        # A copied/preview deployment may intentionally omit the bootstrap
-        # password while pointing at an already initialized database.
-        if not password:
-            existing_owner = await db.scalar(
-                select(TenantMember).where(TenantMember.role == "owner")
-            )
-            if existing_owner:
-                return
-            raise RuntimeError("ADMIN_PASSWORD is missing and no owner exists")
+    if not password:
+        return
 
+    async with session_scope() as db:
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
         if user is None:
             user = AppUser(
