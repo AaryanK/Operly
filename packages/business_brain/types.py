@@ -11,6 +11,8 @@ class AgentInput:
     text: str
     conversation_id: str | None = None
     images: list[str] = field(default_factory=list)
+    attachment_context: str = ""
+    attachment_names: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
