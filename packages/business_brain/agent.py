@@ -149,10 +149,12 @@ class AgentService:
         messages.append(user_message)
 
         plugin_context = PluginInvocationContext(
-            request.tenant_id,
-            str(request.metadata.get("user_id") or "") or None,
-            str(request.metadata.get("role") or "employee"),
-            user_text,
+            tenant_id=request.tenant_id,
+            user_id=str(request.metadata.get("user_id") or "") or None,
+            role=str(request.metadata.get("role") or "employee"),
+            objective=user_text,
+            channel=request.channel,
+            metadata=dict(request.metadata),
         )
 
         for _ in range(self.max_steps):
