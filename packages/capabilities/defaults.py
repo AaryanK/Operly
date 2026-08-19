@@ -1,4 +1,5 @@
 from packages.capabilities.business_provider import UnifiedBusinessProvider
+from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.message_curation import MessageCurationProvider
 from packages.capabilities.operations_provider import OperationsProvider
 from packages.capabilities.providers import (
@@ -36,6 +37,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         CompanyProvider(),
         ResearchProvider(),
         OperlyAnalyticsProvider(),
+        ContextProvider(),
         UnifiedWebsiteProvider(),
         UnifiedBusinessProvider(),
         WorkspaceProvider(),
