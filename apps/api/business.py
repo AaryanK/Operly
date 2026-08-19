@@ -3,23 +3,21 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.actions.service import ActionService
+from packages.business.service import BusinessService
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
-from packages.capabilities.providers import default_registry
+from packages.capabilities.defaults import default_registry
 from packages.connectors.google_provider import GMAIL_SEND, google_connector
 from packages.database.business_models import (
     ActivityEvent,
     Appointment,
     BusinessDocument,
     BusinessOrder,
-    CatalogItem,
     Contact,
-    InventoryMovement,
-    Lead,
     Quote,
     TeamMember,
 )
@@ -52,6 +50,7 @@ class StageInput(BaseModel):
 class FollowUpInput(BaseModel):
     subject: str = Field(min_length=1, max_length=998)
     message: str = Field(min_length=1, max_length=20_000)
+
 
 class CurateInput(BaseModel):
     rough_idea: str = Field(min_length=1, max_length=6000)
@@ -114,25 +113,12 @@ class DocumentInput(BaseModel):
     content: str = ""
 
 
-async def log_event(
-    db: AsyncSession,
-    tenant_id: str,
-    event_type: str,
-    entity_type: str,
-    entity_id: str | None,
-    summary: str,
-    actor: str,
-) -> None:
-    db.add(
-        ActivityEvent(
-            tenant_id=tenant_id,
-            event_type=event_type,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            summary=summary,
-            actor=actor,
-        )
-    )
+def not_found(error: LookupError) -> HTTPException:
+    return HTTPException(status_code=404, detail=str(error))
+
+
+def invalid(error: ValueError) -> HTTPException:
+    return HTTPException(status_code=422, detail=str(error))
 
 
 @router.get("/summary")
@@ -140,50 +126,7 @@ async def summary(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = auth.tenant.id
-
-    async def count(model, *conditions):
-        return (
-            await db.scalar(
-                select(func.count(model.id)).where(
-                    model.tenant_id == tenant_id,
-                    *conditions,
-                )
-            )
-        ) or 0
-
-    low_stock = await db.scalar(
-        select(func.count(CatalogItem.id)).where(
-            CatalogItem.tenant_id == tenant_id,
-            CatalogItem.item_type == "product",
-            CatalogItem.stock_qty <= CatalogItem.reorder_level,
-            CatalogItem.active.is_(True),
-        )
-    )
-
-    pipeline_value = await db.scalar(
-        select(func.coalesce(func.sum(Lead.value), 0)).where(
-            Lead.tenant_id == tenant_id,
-            Lead.stage.not_in(["won", "lost"]),
-        )
-    )
-
-    return {
-        "contacts": await count(Contact),
-        "open_leads": await count(Lead, Lead.stage.not_in(["won", "lost"])),
-        "catalog_items": await count(CatalogItem, CatalogItem.active.is_(True)),
-        "low_stock": low_stock or 0,
-        "open_orders": await count(
-            BusinessOrder,
-            BusinessOrder.status.not_in(["completed", "cancelled"]),
-        ),
-        "upcoming_appointments": await count(
-            Appointment,
-            Appointment.status == "scheduled",
-            Appointment.starts_at >= datetime.utcnow(),
-        ),
-        "pipeline_value": float(pipeline_value or 0),
-    }
+    return await BusinessService.summary(db, auth.tenant.id)
 
 
 @router.get("/contacts")
@@ -191,13 +134,7 @@ async def contacts(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (
-        await db.scalars(
-            select(Contact)
-            .where(Contact.tenant_id == auth.tenant.id)
-            .order_by(desc(Contact.created_at))
-        )
-    ).all()
+    rows = await BusinessService.list_contacts(db, auth.tenant.id)
     return [
         {
             "id": row.id,
@@ -220,18 +157,15 @@ async def create_contact(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = Contact(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "contact",
-        row.id,
-        f"Contact created: {row.name}",
-        auth.user.display_name,
-    )
+    try:
+        row = await BusinessService.create_contact(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
+        )
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"id": row.id}
 
@@ -241,8 +175,7 @@ async def leads(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (await db.execute(select(Lead, Contact).outerjoin(Contact, Lead.contact_id == Contact.id)
-        .where(Lead.tenant_id == auth.tenant.id).order_by(desc(Lead.created_at)))).all()
+    rows = await BusinessService.list_leads(db, auth.tenant.id)
     return [
         {
             "id": row.id,
@@ -266,28 +199,17 @@ async def create_lead(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if payload.contact_id:
-        contact = await db.scalar(
-            select(Contact).where(
-                Contact.id == payload.contact_id,
-                Contact.tenant_id == auth.tenant.id,
-            )
+    try:
+        row = await BusinessService.create_lead(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
         )
-        if contact is None:
-            raise HTTPException(status_code=400, detail="Invalid contact")
-
-    row = Lead(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "lead",
-        row.id,
-        f"Lead created: {row.title}",
-        auth.user.display_name,
-    )
+    except LookupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"id": row.id}
 
@@ -299,25 +221,18 @@ async def update_lead_stage(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(Lead).where(
-            Lead.id == lead_id,
-            Lead.tenant_id == auth.tenant.id,
+    try:
+        await BusinessService.update_lead_stage(
+            db,
+            auth.tenant.id,
+            lead_id,
+            payload.stage,
+            actor=auth.user.display_name,
         )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    row.stage = payload.stage
-    await log_event(
-        db,
-        auth.tenant.id,
-        "updated",
-        "lead",
-        row.id,
-        f"Lead moved to {payload.stage}: {row.title}",
-        auth.user.display_name,
-    )
+    except LookupError as error:
+        raise not_found(error) from error
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"ok": True}
 
@@ -329,7 +244,12 @@ async def prepare_lead_follow_up(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    lead = await db.scalar(select(Lead).where(Lead.id == lead_id, Lead.tenant_id == auth.tenant.id))
+    lead = await db.scalar(
+        select(__import__("packages.database.business_models", fromlist=["Lead"]).Lead).where(
+            __import__("packages.database.business_models", fromlist=["Lead"]).Lead.id == lead_id,
+            __import__("packages.database.business_models", fromlist=["Lead"]).Lead.tenant_id == auth.tenant.id,
+        )
+    )
     contact = await db.get(Contact, lead.contact_id) if lead and lead.contact_id else None
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -337,27 +257,62 @@ async def prepare_lead_follow_up(
         raise HTTPException(status_code=422, detail="This lead needs a contact with an email address")
     try:
         await google_connector(db, auth.tenant.id, GMAIL_SEND)
-        service = ActionService(db, default_registry({"messaging.send"}),
-            authority=set(ROLE_AUTHORITY.get(auth.role, set())), actor_id=auth.user.id)
-        action = await service.propose(tenant_id=auth.tenant.id,
-            objective=f"Follow up with {contact.name} about {lead.title}", capability="messaging.send",
+        service = ActionService(
+            db,
+            default_registry({"messaging.send"}),
+            authority=set(ROLE_AUTHORITY.get(auth.role, set())),
+            actor_id=auth.user.id,
+        )
+        action = await service.propose(
+            tenant_id=auth.tenant.id,
+            objective=f"Follow up with {contact.name} about {lead.title}",
+            capability="messaging.send",
             arguments={"lead_id": lead.id, "subject": payload.subject, "message": payload.message},
             rationale=f"Owner prepared an email to {contact.name} <{contact.email}>",
-            expected_outcome="Gmail accepts the approved follow-up message", risk_level="high")
+            expected_outcome="Gmail accepts the approved follow-up message",
+            risk_level="high",
+        )
     except (LookupError, PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     await db.commit()
-    return {"action_id": action.id, "approval_id": action.approval_id, "status": action.status,
-        "recipient": contact.email}
+    return {
+        "action_id": action.id,
+        "approval_id": action.approval_id,
+        "status": action.status,
+        "recipient": contact.email,
+    }
+
 
 @router.post("/leads/{lead_id}/curate")
-async def curate_lead_message(lead_id: str, payload: CurateInput, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
-    service=ActionService(db,default_registry(),authority=set(ROLE_AUTHORITY.get(auth.role,set())),actor_id=auth.user.id)
-    try:action=await service.propose(tenant_id=auth.tenant.id,objective="Curate a grounded lead follow-up",capability="messaging.curate",arguments={"lead_id":lead_id,**payload.model_dump()},rationale="Owner requested writing assistance",expected_outcome="Editable subject and message draft",risk_level="low")
-    except (LookupError,PermissionError,ValueError) as error:raise HTTPException(422,str(error)) from error
-    await db.commit();result=json.loads(action.result_json or "{}")
-    if action.status!="VERIFIED":raise HTTPException(503,result.get("error") or "Message curation failed")
-    return result.get("evidence",{})
+async def curate_lead_message(
+    lead_id: str,
+    payload: CurateInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    service = ActionService(
+        db,
+        default_registry(),
+        authority=set(ROLE_AUTHORITY.get(auth.role, set())),
+        actor_id=auth.user.id,
+    )
+    try:
+        action = await service.propose(
+            tenant_id=auth.tenant.id,
+            objective="Curate a grounded lead follow-up",
+            capability="messaging.curate",
+            arguments={"lead_id": lead_id, **payload.model_dump()},
+            rationale="Owner requested writing assistance",
+            expected_outcome="Editable subject and message draft",
+            risk_level="low",
+        )
+    except (LookupError, PermissionError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await db.commit()
+    result = json.loads(action.result_json or "{}")
+    if action.status != "VERIFIED":
+        raise HTTPException(status_code=503, detail=result.get("error") or "Message curation failed")
+    return result.get("evidence", {})
 
 
 @router.get("/catalog")
@@ -365,13 +320,7 @@ async def catalog(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (
-        await db.scalars(
-            select(CatalogItem)
-            .where(CatalogItem.tenant_id == auth.tenant.id)
-            .order_by(desc(CatalogItem.created_at))
-        )
-    ).all()
+    rows = await BusinessService.list_catalog(db, auth.tenant.id)
     return [
         {
             "id": row.id,
@@ -395,21 +344,15 @@ async def create_catalog_item(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if payload.item_type not in {"product", "service"}:
-        raise HTTPException(status_code=400, detail="Invalid item type")
-
-    row = CatalogItem(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "catalog_item",
-        row.id,
-        f"{row.item_type.title()} created: {row.name}",
-        auth.user.display_name,
-    )
+    try:
+        row = await BusinessService.create_catalog_item(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
+        )
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"id": row.id}
 
@@ -421,35 +364,19 @@ async def adjust_inventory(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(CatalogItem).where(
-            CatalogItem.id == item_id,
-            CatalogItem.tenant_id == auth.tenant.id,
-        )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    if row.item_type != "product":
-        raise HTTPException(status_code=400, detail="Services have no inventory")
-
-    row.stock_qty += payload.quantity_change
-    db.add(
-        InventoryMovement(
-            tenant_id=auth.tenant.id,
-            item_id=row.id,
-            quantity_change=payload.quantity_change,
+    try:
+        row = await BusinessService.adjust_inventory(
+            db,
+            auth.tenant.id,
+            item_id,
+            payload.quantity_change,
             reason=payload.reason,
+            actor=auth.user.display_name,
         )
-    )
-    await log_event(
-        db,
-        auth.tenant.id,
-        "inventory_adjusted",
-        "catalog_item",
-        row.id,
-        f"Inventory changed by {payload.quantity_change}: {row.name}",
-        auth.user.display_name,
-    )
+    except LookupError as error:
+        raise not_found(error) from error
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"ok": True, "stock_qty": row.stock_qty}
 
@@ -485,18 +412,15 @@ async def create_order(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = BusinessOrder(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "order",
-        row.id,
-        f"Order created for {row.total:.2f}",
-        auth.user.display_name,
-    )
+    try:
+        row = await BusinessService.create_order(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     await db.commit()
     return {"id": row.id}
 
@@ -509,10 +433,7 @@ async def update_order_status(
     db: AsyncSession = Depends(get_db),
 ):
     row = await db.scalar(
-        select(BusinessOrder).where(
-            BusinessOrder.id == order_id,
-            BusinessOrder.tenant_id == auth.tenant.id,
-        )
+        select(BusinessOrder).where(BusinessOrder.id == order_id, BusinessOrder.tenant_id == auth.tenant.id)
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -528,9 +449,7 @@ async def quotes(
 ):
     rows = (
         await db.scalars(
-            select(Quote)
-            .where(Quote.tenant_id == auth.tenant.id)
-            .order_by(desc(Quote.created_at))
+            select(Quote).where(Quote.tenant_id == auth.tenant.id).order_by(desc(Quote.created_at))
         )
     ).all()
     return [
@@ -554,18 +473,17 @@ async def create_quote(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = Quote(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "quote",
-        row.id,
-        f"Quote created: {row.title}",
-        auth.user.display_name,
-    )
+    try:
+        row = await BusinessService.create_quote(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"id": row.id}
 
@@ -577,12 +495,7 @@ async def update_quote_status(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(Quote).where(
-            Quote.id == quote_id,
-            Quote.tenant_id == auth.tenant.id,
-        )
-    )
+    row = await db.scalar(select(Quote).where(Quote.id == quote_id, Quote.tenant_id == auth.tenant.id))
     if row is None:
         raise HTTPException(status_code=404, detail="Quote not found")
     row.status = payload.status
@@ -623,18 +536,17 @@ async def create_appointment(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = Appointment(tenant_id=auth.tenant.id, **payload.model_dump())
-    db.add(row)
-    await db.flush()
-    await log_event(
-        db,
-        auth.tenant.id,
-        "created",
-        "appointment",
-        row.id,
-        f"Appointment scheduled: {row.title}",
-        auth.user.display_name,
-    )
+    try:
+        row = await BusinessService.schedule_appointment(
+            db,
+            auth.tenant.id,
+            **payload.model_dump(),
+            actor=auth.user.display_name,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise invalid(error) from error
     await db.commit()
     return {"id": row.id}
 
@@ -666,19 +578,11 @@ async def team(
 ):
     rows = (
         await db.scalars(
-            select(TeamMember)
-            .where(TeamMember.tenant_id == auth.tenant.id)
-            .order_by(TeamMember.name)
+            select(TeamMember).where(TeamMember.tenant_id == auth.tenant.id).order_by(TeamMember.name)
         )
     ).all()
     return [
-        {
-            "id": row.id,
-            "name": row.name,
-            "email": row.email,
-            "role": row.role,
-            "active": row.active,
-        }
+        {"id": row.id, "name": row.name, "email": row.email, "role": row.role, "active": row.active}
         for row in rows
     ]
 
@@ -692,7 +596,7 @@ async def create_team_member(
     row = TeamMember(tenant_id=auth.tenant.id, **payload.model_dump())
     db.add(row)
     await db.flush()
-    await log_event(
+    await BusinessService.log_event(
         db,
         auth.tenant.id,
         "created",
@@ -739,7 +643,7 @@ async def create_document(
     row = BusinessDocument(tenant_id=auth.tenant.id, **payload.model_dump())
     db.add(row)
     await db.flush()
-    await log_event(
+    await BusinessService.log_event(
         db,
         auth.tenant.id,
         "created",
