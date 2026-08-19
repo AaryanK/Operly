@@ -22,6 +22,19 @@ class ConnectorRuntime:
         value = (self.mode or os.getenv("OPERLY_CONNECTOR_RUNTIME", "off")).strip().lower()
         return value in {"embedded", "on", "true", "1"}
 
+    @staticmethod
+    def _report_task_exit(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            print(f"OPERLY connector task exited: {task.get_name()}")
+        else:
+            print(
+                "OPERLY connector task failed: "
+                f"{task.get_name()} ({type(error).__name__}: {error})"
+            )
+
     async def start(self) -> None:
         if not self.enabled:
             print("OPERLY connector runtime disabled")
@@ -31,6 +44,7 @@ class ConnectorRuntime:
             from packages.connectors.discord.runtime import start_embedded, stop_embedded
 
             task = asyncio.create_task(start_embedded(), name="operly-discord-adapter")
+            task.add_done_callback(self._report_task_exit)
             self._tasks.append(task)
             self._stoppers.append(stop_embedded)
             await asyncio.sleep(0)
