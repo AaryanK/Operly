@@ -14,6 +14,7 @@ on:
       - "tests/test_capability_harness_journey.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
+      - "tests/test_unified_application_flow.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -40,12 +41,15 @@ jobs:
           packages/business/service.py
           packages/workspace/service.py
           packages/business_brain/agent.py
+          packages/actions/service.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
+          packages/capabilities/runtime_context.py
           packages/capabilities/business_provider.py
           packages/capabilities/workspace_provider.py
           packages/capabilities/operations_provider.py
           packages/capabilities/studio_provider.py
+          packages/capabilities/reminder_provider.py
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -57,3 +61,4 @@ jobs:
           tests/test_capability_harness_journey.py
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
+          tests/test_unified_application_flow.py
