@@ -1,15 +1,11 @@
-const TOKEN_KEY = "operly_session";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+function cookie(name: string): string | null {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const value = document.cookie.split("; ").find((part) => part.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
 }
 
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
+function csrfToken(): string | null {
+  return cookie("__Host-operly_csrf") || cookie("operly_csrf") || cookie("operly_preauth_csrf");
 }
 
 export async function api<T>(
@@ -17,20 +13,22 @@ export async function api<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
-
-  const token = getToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (options.body) {
+    headers.set("Content-Type", "application/json");
+  }
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
   }
 
   const response = await fetch(`/api${path}`, {
     ...options,
     headers,
+    credentials: "same-origin",
   });
 
   if (response.status === 401) {
-    clearToken();
     window.dispatchEvent(new Event("operly:logout"));
   }
 
@@ -38,7 +36,7 @@ export async function api<T>(
     let detail = `Request failed (${response.status})`;
     try {
       const body = await response.json();
-      detail = body.detail || detail;
+      detail = body.detail?.message || body.detail || detail;
     } catch {
       // Keep fallback.
     }

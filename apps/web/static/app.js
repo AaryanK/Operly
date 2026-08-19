@@ -1,9 +1,17 @@
-const TOKEN_KEY = "operly_session";
-const state = { me: null, page: "overview" };
+const state = { me: null, page: "overview", workflow: {}, linkToken: null, authBootstrap: null };
 
-function csrfToken() {
-  const match = document.cookie.match(/(?:^|; )operly_csrf=([^;]*)/);
-  return match ? decodeURIComponent(match[1]) : "";
+function csrfToken(path = "") {
+  const cookies = Object.fromEntries(document.cookie.split(";").map((item) => {
+    const [name, ...value] = item.trim().split("=");
+    return [name, decodeURIComponent(value.join("="))];
+  }).filter(([name]) => name));
+  const preauthPath = [
+    "/auth/signup", "/auth/login", "/auth/verify-email",
+    "/auth/resend-verification", "/auth/forgot-password",
+    "/auth/reset-password", "/auth/google"
+  ].includes(path);
+  if (preauthPath) return cookies.operly_preauth_csrf || cookies["__Host-operly_csrf"] || cookies.operly_csrf || "";
+  return cookies["__Host-operly_csrf"] || cookies.operly_csrf || cookies.operly_preauth_csrf || "";
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -27,7 +35,7 @@ async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const method = (options.method || "GET").toUpperCase();
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    const csrf = csrfToken();
+    const csrf = csrfToken(path);
     if (csrf) headers["X-CSRF-Token"] = csrf;
   }
   const response = await fetch(`/api${path}`, {
@@ -35,9 +43,7 @@ async function api(path, options = {}) {
     headers,
     credentials: "same-origin"
   });
-  if (response.status === 401) {
-    show("#login");
-  }
+  if (response.status === 401 && state.me) navigate("/login");
   let body = null;
   try { body = await response.json(); } catch {}
   if (!response.ok) { const detail=body?.detail; const validation=detail?.validation; const items=[...(validation?.initial?.errors||[]),...(validation?.errors||[])].map(item=>{const r=item.resolution;const resolved=r?` [child: ${r.child}; supplied parent: ${r.suppliedParent}; matched page: ${r.matchedPage}; page root found: ${r.pageRootFound}; synthesis attempted: ${r.synthesisAttempted}]`:"";return `${item.stage} ${item.path}: ${item.message}${resolved}`}).join(" · "); const error=new Error((typeof detail==="string"?detail:detail?.message||detail?.code||`Request failed (${response.status})`)+(items?` — ${items}`:"")); error.details=detail; throw error; }
@@ -65,6 +71,7 @@ async function enterDashboard() {
   $("#workspace-role").textContent = state.me.role;
   $("#tenant-kicker").textContent = state.me.tenant.name;
   show("#dashboard");
+  if (location.pathname !== "/app") history.replaceState({}, "", "/app");
   await loadWorkspaces();
   await renderPage("overview");
 }
@@ -230,7 +237,7 @@ async function settings() {
   });
 }
 
-$$("[data-open-login]").forEach((b) => b.addEventListener("click", () => show("#login")));
+// Authentication navigation is initialized by auth.js.
 $$("[data-home]").forEach((b) => b.addEventListener("click", () => show("#landing")));
 $("#nav").addEventListener("click", (e) => {
   const button = e.target.closest("[data-page]");
@@ -241,13 +248,6 @@ $("#mobile-nav-backdrop").addEventListener("click", () => setMobileNavigation(fa
 document.addEventListener("click", (event) => { if (event.target.closest("#nav [data-page]")) setMobileNavigation(false); }, true);
 window.addEventListener("keydown", (event) => { if (event.key === "Escape") setMobileNavigation(false); });
 window.addEventListener("resize", () => { if (window.innerWidth > 700) setMobileNavigation(false); });
-$("#logout").addEventListener("click", async () => {
-  try {
-    await api("/session/logout", { method: "POST" });
-  } catch {}
-  state.me = null;
-  show("#landing");
-});
 $("#workspace-switch").addEventListener("change", async (event) => {
   event.target.disabled = true;
   try {
@@ -256,19 +256,4 @@ $("#workspace-switch").addEventListener("change", async (event) => {
   } catch (error) { alert(error.message); await loadWorkspaces(); }
   finally { event.target.disabled = false; }
 });
-$("#login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("#login-error").classList.add("hidden");
-  try {
-    await api("/session/login", {
-      method: "POST",
-      body: JSON.stringify({ email: $("#email").value, password: $("#password").value })
-    });
-    await enterDashboard();
-  } catch (error) {
-    $("#login-error").textContent = error.message;
-    $("#login-error").classList.remove("hidden");
-  }
-});
-
-enterDashboard().catch(() => show("#landing"));
+// Public authentication flows and initialization live in auth.js.

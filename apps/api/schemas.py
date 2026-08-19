@@ -1,11 +1,59 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class LoginInput(BaseModel):
-    email: str
-    password: str
+class StrictInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class LoginInput(StrictInput):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class SignupInput(StrictInput):
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class ChallengeInput(StrictInput):
+    challenge_id: str | None = Field(default=None, min_length=32, max_length=64)
+    email: str | None = Field(default=None, min_length=3, max_length=320)
+    code: str | None = Field(default=None, pattern=r"^\d{6}$")
+    token: str | None = Field(default=None, min_length=32, max_length=256)
+
+    @model_validator(mode="after")
+    def valid_proof(self):
+        if self.token or (self.code and (self.challenge_id or self.email)):
+            return self
+        raise ValueError("Provide a valid code or link")
+
+
+class ResendVerificationInput(StrictInput):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ForgotPasswordInput(StrictInput):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ResetPasswordInput(ChallengeInput):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class ChangePasswordInput(StrictInput):
+    current_password: str | None = Field(default=None, max_length=1024)
+    new_password: str = Field(min_length=1, max_length=1024)
+
+
+class GoogleCredentialInput(StrictInput):
+    credential: str = Field(min_length=100, max_length=16_384)
+
+
+class WorkspaceSwitchInput(StrictInput):
+    tenant_id: str = Field(min_length=32, max_length=64)
 
 
 class TaskCreate(BaseModel):

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 
-import { api, clearToken, getToken, setToken } from "./api";
+import { api } from "./api";
 import { Icon } from "./icons";
 import "./styles.css";
 
@@ -187,11 +187,10 @@ function Login({ onSuccess, onBack }: { onSuccess: () => void; onBack: () => voi
     setBusy(true);
     setError("");
     try {
-      const result = await api<{ token: string }>("/auth/login", {
+      await api<{ ok: boolean }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      setToken(result.token);
       onSuccess();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Login failed");
@@ -682,9 +681,7 @@ function formatTime(value: string) {
 }
 
 function App() {
-  const [mode, setMode] = useState<"landing" | "login" | "dashboard">(
-    getToken() ? "dashboard" : "landing",
-  );
+  const [mode, setMode] = useState<"loading" | "landing" | "login" | "dashboard">("loading");
 
   useEffect(() => {
     const logout = () => setMode("login");
@@ -692,11 +689,23 @@ function App() {
     return () => window.removeEventListener("operly:logout", logout);
   }, []);
 
-  function logout() {
-    clearToken();
-    setMode("landing");
-  }
+  useEffect(() => {
+    api("/auth/bootstrap")
+      .then(() => api("/me"))
+      .then(() => setMode("dashboard"))
+      .catch(() => setMode("landing"));
+  }, []);
 
+  const logout = useCallback(async () => {
+    try {
+      await api("/auth/logout", { method: "POST", body: "{}" });
+      setMode("landing");
+    } catch (caught) {
+      window.alert(caught instanceof Error ? caught.message : "Sign out failed");
+    }
+  }, []);
+
+  if (mode === "loading") return null;
   if (mode === "landing") return <Landing onLogin={() => setMode("login")}/>;
   if (mode === "login") return <Login onSuccess={() => setMode("dashboard")} onBack={() => setMode("landing")}/>;
   return <Dashboard onLogout={logout}/>;

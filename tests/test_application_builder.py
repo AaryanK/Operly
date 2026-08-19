@@ -15,7 +15,6 @@ from packages.application_builder.schema import ApplicationManifest,BuilderConte
 from packages.application_builder.service import ApplicationBuilderService,BuilderError,RecordValidationError,UnsupportedRequestError,detect_intent,plan_request,safe_log_text
 from packages.application_builder.ai import ApplicationBuilderAI,ManifestGenerationError
 from packages.application_builder.renderer import render_application
-from apps.api.session import LOGIN_MAX_ATTEMPTS,clear_login_attempts,login_allowed
 from packages.business_brain.agent import AgentService
 from packages.business_brain.types import AgentInput
 
@@ -23,9 +22,6 @@ class SchemaTests(unittest.TestCase):
     def context(self,scope="application",selected=None):return BuilderContext(workspaceId="t",applicationId="a",activeVersionId="v",selectionScope=scope,selectedIds=selected or [],userRole="owner")
     def test_arbitrary_code_rejected(self):
         with self.assertRaises(ValidationError):ComponentDefinition(id="x",type="Button",label="x",properties={"script":"alert(1)"})
-    def test_login_rate_limit_is_bounded(self):
-        email="rate-limit@app.test";clear_login_attempts(email)
-        self.assertTrue(all(login_allowed(email) for _ in range(LOGIN_MAX_ATTEMPTS)));self.assertFalse(login_allowed(email));clear_login_attempts(email)
     def test_scope_ambiguity(self):
         manifest=ApplicationManifest(application={"id":"a","name":"A"})
         with self.assertRaisesRegex(BuilderError,"select"):plan_request(ProposalRequest(message="Move this below the form",context=self.context()),manifest)

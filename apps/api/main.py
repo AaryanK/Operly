@@ -1,6 +1,7 @@
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,19 +35,20 @@ from apps.api.solutions_router import public_router as solutions_public_router,r
 from apps.api.csrf import CSRFMiddleware
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
+from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.session import router as session_router
 from apps.api.business import router as business_router
 from apps.api.schemas import (
     ApprovalDecision,
-    LoginInput,
     MemoryCreate,
     TaskCreate,
     TenantUpdate,
 )
-from apps.api.security import create_token, hash_password, verify_password
+from apps.api.security import hash_password
 from packages.database.db import init_db, session_scope
 from packages.database.models import (
     AppUser,
+    AuthIdentity,
     Approval,
     DiscordGuild,
     Integration,
@@ -74,9 +76,28 @@ async def bootstrap_admin() -> None:
                 email=email,
                 display_name="Owner",
                 password_hash=hash_password(password),
+                email_verified_at=datetime.utcnow(),
             )
             db.add(user)
             await db.flush()
+
+        password_identity = await db.scalar(
+            select(AuthIdentity).where(
+                AuthIdentity.user_id == user.id,
+                AuthIdentity.provider == "password",
+            )
+        )
+        if user.password_hash and password_identity is None:
+            db.add(
+                AuthIdentity(
+                    user_id=user.id,
+                    provider="password",
+                    provider_subject=user.email,
+                    provider_email=user.email,
+                )
+            )
+        if user.email_verified_at is None:
+            user.email_verified_at = user.created_at
 
         membership = await db.scalar(
             select(TenantMember).where(TenantMember.user_id == user.id)
@@ -106,6 +127,11 @@ def validate_runtime_configuration() -> None:
     if not os.getenv("SESSION_SECRET"):
         raise RuntimeError("SESSION_SECRET is missing")
     if production:
+        token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
+        if len(token_pepper.encode("utf-8")) < 32:
+            raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
+        if token_pepper == os.getenv("SESSION_SECRET"):
+            raise RuntimeError("AUTH_TOKEN_PEPPER and SESSION_SECRET must be different")
         if not public_base_url.startswith("https://"):
             raise RuntimeError("PUBLIC_BASE_URL must use HTTPS in production")
         if public_base_url == "https://operly.example":
@@ -127,6 +153,7 @@ app = FastAPI(
 )
 
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
 
 public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -143,22 +170,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
 
 @app.get("/api/health")
 async def health():
     return {"ok": True, "service": "operly", "commit_sha": deployed_commit_sha}
-
-
-@app.post("/api/auth/login", include_in_schema=False)
-async def legacy_login_disabled():
-    raise HTTPException(
-        status_code=410,
-        detail="Use /api/session/login",
-    )
 
 
 @app.get("/api/me")

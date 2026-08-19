@@ -21,7 +21,7 @@
   <div id="landing" class="screen">
     <header class="landing-header">
       <div class="brand dark"><span class="brand-mark">O</span><b>OPERLY</b></div>
-      <button class="button primary" data-open-login>Open OPERLY</button>
+      <div class="landing-actions"><button class="button secondary" data-route="/login">Sign in</button><button class="button primary" data-route="/signup">Get started</button></div>
     </header>
 
     <main class="hero">
@@ -29,7 +29,7 @@
         <span class="kicker">Business, operating intelligently.</span>
         <h1>One AI layer for <em>your entire business.</em></h1>
         <p>Connect customer channels, business memory, tasks and approvals in one tenant-isolated workspace.</p>
-        <button class="button lime large" data-open-login>Launch your workspace →</button>
+        <button class="button lime large" data-route="/signup">Get started →</button>
       </section>
       <section class="product-preview">
         <div class="preview-sidebar"><div class="brand"><span class="brand-mark">O</span></div><i></i><i></i><i></i><i></i></div>
@@ -49,16 +49,95 @@
     <footer class="public-footer"><span class="brand-mark" aria-hidden="true">O</span><p>Developed and maintained by <strong>Dragonzpyder Industries</strong></p></footer>
   </div>
 
-  <div id="login" class="screen hidden">
-    <div class="login-art">
-      <button class="back" data-home>← Home</button><div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
-      <div><span class="kicker">Owner access</span><h1>Your business command center.</h1><p>Messages, tasks, memory and approvals—one secure workspace.</p></div>
+  <div id="login" class="screen auth-screen hidden">
+    <div class="auth-shell">
+      <button class="back" data-route="/">← Home</button>
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <form id="login-form" class="auth-card" novalidate>
+        <span class="kicker green">Sign in</span><h1>Welcome back</h1><p>Open your secure business workspace.</p>
+        <div id="google-login-button" class="google-button" aria-label="Continue with Google"></div>
+        <div class="auth-divider"><span>or</span></div>
+        <label for="login-email">Email<input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" maxlength="320" required></label>
+        <label for="login-password">Password<span class="password-field"><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="1024" required><button type="button" class="password-toggle" data-toggle-password="login-password" aria-label="Show password">Show</button></span></label>
+        <button class="text-link form-link" type="button" data-route="/forgot-password">Forgot password?</button>
+        <div id="login-error" class="error hidden" role="alert"></div>
+        <button class="button primary large submit-button" type="submit">Sign in</button>
+        <p class="auth-switch">New to OPERLY? <button type="button" class="text-link" data-route="/signup">Create an account</button></p>
+      </form>
     </div>
-    <form id="login-form" class="login-form">
-      <span class="kicker green">Sign in</span><h1>Open your workspace</h1><p>Use the credentials configured in your `.env` file.</p>
-      <label>Email<input id="email" type="email" value="admin@operly.local" required></label><label>Password<input id="password" type="password" required></label>
-      <div id="login-error" class="error hidden"></div><button class="button primary large" type="submit">Enter OPERLY →</button>
-    </form>
+  </div>
+
+  <div id="signup" class="screen auth-screen hidden">
+    <div class="auth-shell">
+      <button class="back" data-route="/">← Home</button>
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <form id="signup-form" class="auth-card" novalidate>
+        <span class="kicker green">Get started</span><h1>Create your OPERLY account</h1><p>Your first workspace is created with your account.</p>
+        <div id="google-signup-button" class="google-button" aria-label="Continue with Google"></div>
+        <div class="auth-divider"><span>or</span></div>
+        <label for="signup-name">Name<input id="signup-name" name="name" autocomplete="name" maxlength="200" required></label>
+        <label for="signup-email">Email<input id="signup-email" name="email" type="email" autocomplete="username" inputmode="email" maxlength="320" required></label>
+        <label for="signup-password">Password<span class="password-field"><input id="signup-password" name="new-password" type="password" autocomplete="new-password" maxlength="1024" aria-describedby="password-help" required><button type="button" class="password-toggle" data-toggle-password="signup-password" aria-label="Show password">Show</button></span></label>
+        <small id="password-help" class="field-help">Use 12 or more characters. Passphrases and password managers work well.</small>
+        <label for="signup-confirm">Confirm password<span class="password-field"><input id="signup-confirm" name="confirm-password" type="password" autocomplete="new-password" maxlength="1024" required><button type="button" class="password-toggle" data-toggle-password="signup-confirm" aria-label="Show password">Show</button></span></label>
+        <div id="signup-error" class="error hidden" role="alert"></div>
+        <button class="button primary large submit-button" type="submit">Create account</button>
+        <p class="auth-switch">Already have an account? <button type="button" class="text-link" data-route="/login">Sign in</button></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="verify-email" class="screen auth-screen hidden">
+    <div class="auth-shell compact">
+      <button class="back" data-route="/signup">← Back</button>
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <form id="verify-form" class="auth-card" novalidate>
+        <span class="kicker green">One more step</span><h1>Verify your email</h1><p>Enter the six-digit code from your OPERLY email, or use the verification button in that message.</p>
+        <label for="verify-code">Verification code<input id="verify-code" class="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></label>
+        <div id="verify-error" class="error hidden" role="alert"></div><div id="verify-status" class="success hidden" role="status"></div>
+        <button class="button primary large submit-button" type="submit">Verify email</button>
+        <button id="resend-verification" class="text-link centered" type="button">Send a new code</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="forgot-password" class="screen auth-screen hidden">
+    <div class="auth-shell compact">
+      <button class="back" data-route="/login">← Sign in</button>
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <form id="forgot-form" class="auth-card" novalidate>
+        <span class="kicker green">Account recovery</span><h1>Forgot your password?</h1><p>Enter your email and we’ll send secure reset instructions if it matches an account.</p>
+        <label for="forgot-email">Email<input id="forgot-email" type="email" autocomplete="username" inputmode="email" maxlength="320" required></label>
+        <div id="forgot-error" class="error hidden" role="alert"></div><div id="forgot-status" class="success hidden" role="status"></div>
+        <button class="button primary large submit-button" type="submit">Send reset instructions</button>
+        <button class="text-link centered" type="button" data-route="/reset-password">I already have a code</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="reset-password" class="screen auth-screen hidden">
+    <div class="auth-shell compact">
+      <button class="back" data-route="/login">← Sign in</button>
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <form id="reset-form" class="auth-card" novalidate>
+        <span class="kicker green">Choose a new password</span><h1>Reset your password</h1><p>Use the secure link from your email, or enter your email and six-digit code.</p>
+        <div id="reset-code-fields"><label for="reset-email">Email<input id="reset-email" type="email" autocomplete="username" inputmode="email" maxlength="320"></label><label for="reset-code">Reset code<input id="reset-code" class="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></label></div>
+        <label for="reset-password-input">New password<span class="password-field"><input id="reset-password-input" type="password" autocomplete="new-password" maxlength="1024" required><button type="button" class="password-toggle" data-toggle-password="reset-password-input" aria-label="Show password">Show</button></span></label>
+        <label for="reset-confirm">Confirm new password<span class="password-field"><input id="reset-confirm" type="password" autocomplete="new-password" maxlength="1024" required><button type="button" class="password-toggle" data-toggle-password="reset-confirm" aria-label="Show password">Show</button></span></label>
+        <div id="reset-error" class="error hidden" role="alert"></div>
+        <button class="button primary large submit-button" type="submit">Reset password</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="onboarding" class="screen auth-screen hidden">
+    <div class="auth-shell compact">
+      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <section class="auth-card onboarding-card">
+        <span class="onboarding-check" aria-hidden="true">✓</span><span class="kicker green">You’re ready</span><h1>Welcome to OPERLY</h1><p>Your secure workspace is ready. Start by opening your business command center.</p>
+        <button id="open-workspace" class="button primary large">Open my workspace</button>
+      </section>
+    </div>
   </div>
 
   <div id="dashboard" class="screen hidden app-shell">
@@ -88,7 +167,8 @@
     <dialog id="change-review" class="builder-dialog" aria-labelledby="change-review-title"></dialog><dialog id="version-dialog" class="builder-dialog" aria-labelledby="version-title"></dialog>
   </div>
 
-  <script src="/static/app.js?v=20260810-solutions-v1"></script>
+  <script src="/static/app.js?v=20260819-auth-v3"></script>
+  <script src="/static/auth.js?v=20260819-auth-v3"></script>
   <script src="/static/operations-phase.js"></script><script src="/static/operations-phase-bridge.js"></script>
   <script src="/static/ai-assistant.js"></script><script src="/static/ai-assistant-bridge.js"></script>
   <script src="/static/general-business.js"></script><script src="/static/general-business-bridge.js"></script>

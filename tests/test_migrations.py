@@ -56,7 +56,7 @@ class MigrationTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def upgrade(self,path):command.upgrade(config(url(path)),"head");validate(url(path))
     def test_fresh_upgrade_and_idempotency(self):
-        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0020_presence_operations")
+        path=self.root/"fresh.db";self.upgrade(path);self.upgrade(path);self.assertEqual(revisions(url(path))[0],"0021_auth_security")
     def test_revision_identifiers_fit_production_version_storage(self):
         from alembic.config import Config
         from alembic.script import ScriptDirectory
@@ -88,7 +88,7 @@ class MigrationTests(unittest.TestCase):
             engine.dispose()
         self.upgrade(path)
         with closing(sqlite3.connect(path)) as db:
-            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0020_presence_operations")
+            self.assertEqual(db.execute("select version_num from alembic_version").fetchone()[0],"0021_auth_security")
             columns={row[1] for row in db.execute("pragma table_info(generated_projects)")}
             self.assertTrue({"plan_id","approved_plan_version","architecture_pack"}<=columns)
     def test_upgrade_repairs_legacy_managed_records_with_0002_stamp(self):
@@ -164,7 +164,7 @@ class StartupRevisionTests(unittest.IsolatedAsyncioTestCase):
         engine=create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
             await connection.exec_driver_sql("CREATE TABLE alembic_version(version_num VARCHAR(32) NOT NULL)")
-            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0020_presence_operations')")
+            await connection.exec_driver_sql("INSERT INTO alembic_version VALUES('0021_auth_security')")
             await assert_schema_current(connection)
         await engine.dispose()
 
@@ -177,10 +177,10 @@ class SecurityHeaderTests(unittest.IsolatedAsyncioTestCase):
         return await middleware.dispatch(request,next_response)
     async def test_standard_headers_and_local_no_hsts(self):
         response=await self.response();self.assertEqual(response.headers["x-content-type-options"],"nosniff");self.assertNotIn("strict-transport-security",response.headers)
-    async def test_production_https_hsts_without_subdomains_or_preload(self):
+    async def test_production_https_hsts_includes_subdomains(self):
         with patch.dict(os.environ,{"OPERLY_ENV":"production"}):response=await self.response("https")
-        self.assertEqual(response.headers["strict-transport-security"],"max-age=31536000")
-        self.assertNotIn("includeSubDomains",response.headers["strict-transport-security"]);self.assertNotIn("preload",response.headers["strict-transport-security"])
+        self.assertEqual(response.headers["strict-transport-security"],"max-age=31536000; includeSubDomains")
+        self.assertNotIn("preload",response.headers["strict-transport-security"])
     async def test_authenticated_studio_preview_allows_only_same_origin_framing(self):
         response=await self.response(path="/apps/application-id/preview")
         self.assertEqual(response.headers["x-frame-options"],"SAMEORIGIN");self.assertIn("frame-ancestors 'self'",response.headers["content-security-policy"])
