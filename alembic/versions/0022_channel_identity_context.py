@@ -36,6 +36,29 @@ def upgrade():
         op.create_index("ix_external_identities_user_id", "external_identities", ["user_id"])
         op.create_index("ix_external_identity_user_provider", "external_identities", ["user_id", "provider"])
 
+    if "identity_link_challenges" not in tables:
+        op.create_table(
+            "identity_link_challenges",
+            sa.Column("id", sa.String(36), primary_key=True),
+            sa.Column("provider", sa.String(40), nullable=False),
+            sa.Column("mode", sa.String(30), nullable=False),
+            sa.Column("user_id", sa.String(36), sa.ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True),
+            sa.Column("external_user_id", sa.String(255), nullable=True),
+            sa.Column("display_name", sa.String(200), nullable=True),
+            sa.Column("secret_hash", sa.String(64), nullable=False, unique=True),
+            sa.Column("code_hash", sa.String(64), nullable=True),
+            sa.Column("expires_at", sa.DateTime(), nullable=False),
+            sa.Column("consumed_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+        )
+        for column in ("provider", "mode", "user_id", "external_user_id", "secret_hash", "code_hash", "expires_at", "consumed_at"):
+            op.create_index(
+                f"ix_identity_link_challenges_{column}",
+                "identity_link_challenges",
+                [column],
+                unique=column == "secret_hash",
+            )
+
     if "channel_installations" not in tables:
         op.create_table(
             "channel_installations",
@@ -102,4 +125,5 @@ def downgrade():
     op.drop_table("context_records")
     op.drop_table("channel_conversation_states")
     op.drop_table("channel_installations")
+    op.drop_table("identity_link_challenges")
     op.drop_table("external_identities")
