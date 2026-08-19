@@ -235,6 +235,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(LookupError):await self.service.list_records(db,self.tenant.id,"owner",app.id,"missing")
 
 class FrontendContractTests(unittest.TestCase):
+    def test_auth_recovery_and_company_answers_stay_in_context(self):
+        auth=Path("apps/web/static/auth.js").read_text(encoding="utf-8")
+        simple=Path("apps/web/static/simple-ui.js").read_text(encoding="utf-8")
+        for token in ["ACCOUNT_PENDING_VERIFICATION","EMAIL_DELIVERY_FAILED","EMAIL_NOT_VERIFIED","ACCOUNT_LINK_REQUIRES_VERIFICATION","openVerificationRecovery"]:self.assertIn(token,auth)
+        answer_handler=simple.split('document.querySelectorAll(".company-answer")',1)[1].split('document.querySelector("#simple-ask")',1)[0]
+        self.assertIn("form.replaceWith(saved)",answer_handler)
+        self.assertIn('saved.setAttribute("role", "status")',answer_handler)
+        self.assertNotIn("renderHome",answer_handler)
     def test_canvas_layers_scope_and_viewports(self):
         source=Path("apps/web/static/studio.js").read_text(encoding="utf-8")
         for token in ["OPERLY_SELECT","event.data.multi","selectionScope","selectedIds","componentTree","desktop","tablet","mobile","Apply atomically"]:self.assertIn(token,source)

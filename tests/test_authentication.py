@@ -165,6 +165,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
 
         duplicate = await self.signup("owner@EXAMPLE.com")
         self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json()["detail"]["code"], "ACCOUNT_PENDING_VERIFICATION")
         async with self.sessions() as db:
             self.assertEqual(await db.scalar(select(func.count(AppUser.id))), 1)
             self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 1)
@@ -198,6 +199,9 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         failed = await self.signup("delivery@example.com")
         self.assertEqual(failed.status_code, 503)
         self.assertEqual(failed.json()["detail"]["code"], "EMAIL_DELIVERY_FAILED")
+        duplicate = await self.signup("delivery@example.com")
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json()["detail"]["code"], "ACCOUNT_PENDING_VERIFICATION")
         async with self.sessions() as db:
             user = await db.scalar(select(AppUser).where(AppUser.email == "delivery@example.com"))
             challenge = await db.scalar(select(AuthChallenge).where(AuthChallenge.user_id == user.id))
