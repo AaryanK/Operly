@@ -51,6 +51,12 @@ function navigate(path, workflow = {}) {
   showRoute(path);
 }
 
+function openVerificationRecovery(email, message) {
+  navigate("/verify-email", { email });
+  setFormMessage("#verify-status", "");
+  setFormMessage("#verify-error", message);
+}
+
 async function refreshAuthBootstrap() {
   state.authBootstrap = await api("/auth/bootstrap");
   await renderGoogleButtons();
@@ -126,7 +132,20 @@ async function handleGoogleCredential(result) {
       await enterDashboard();
     }
   } catch (error) {
-    setFormMessage(errorTarget, error.message);
+    const code = error.details?.code;
+    const recoveryEmail = state.workflow.email || (
+      location.pathname === "/signup"
+        ? $("#signup-email")?.value.trim()
+        : $("#login-email")?.value.trim()
+    );
+    if (code === "ACCOUNT_LINK_REQUIRES_VERIFICATION" && recoveryEmail) {
+      openVerificationRecovery(
+        recoveryEmail,
+        "This email already has an unverified OPERLY account. Request a new code before linking Google."
+      );
+    } else {
+      setFormMessage(errorTarget, error.message);
+    }
     await refreshAuthBootstrap().catch(() => {});
   }
 }
@@ -172,7 +191,14 @@ $("#login-form").addEventListener("submit", async (event) => {
     });
     await enterDashboard();
   } catch (error) {
-    setFormMessage("#login-error", error.message);
+    if (error.details?.code === "EMAIL_NOT_VERIFIED") {
+      openVerificationRecovery(
+        $("#login-email").value.trim(),
+        "Your password is correct, but this account still needs email verification. Request a new code to continue."
+      );
+    } else {
+      setFormMessage("#login-error", error.message);
+    }
   } finally {
     setFormBusy(form, false);
   }
@@ -188,17 +214,23 @@ $("#signup-form").addEventListener("submit", async (event) => {
   }
   setFormBusy(form, true, "Creating account…");
   try {
+    const email = $("#signup-email").value.trim();
     const result = await api("/auth/signup", {
       method: "POST",
       body: JSON.stringify({
         display_name: $("#signup-name").value,
-        email: $("#signup-email").value,
+        email,
         password: $("#signup-password").value
       })
     });
     navigate("/verify-email", { challenge_id: result.challenge_id, email: result.email });
   } catch (error) {
-    setFormMessage("#signup-error", error.message);
+    const code = error.details?.code;
+    if (["EMAIL_DELIVERY_FAILED", "ACCOUNT_PENDING_VERIFICATION"].includes(code)) {
+      openVerificationRecovery($("#signup-email").value.trim(), error.message);
+    } else {
+      setFormMessage("#signup-error", error.message);
+    }
   } finally {
     setFormBusy(form, false);
   }

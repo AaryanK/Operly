@@ -132,6 +132,9 @@ Start from [`.env.example`](.env.example). Important settings include:
 | `SESSION_SECRET` | Signs authenticated sessions; required |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Bootstrap owner account |
 | `PUBLIC_BASE_URL` | Canonical origin and production host policy |
+| `MAIL_PROVIDER` | Transactional email transport: `zoho_mail_api` on Railway Hobby, or `smtp` where SMTP egress is available |
+| `ZOHO_MAIL_ACCOUNT_ID`, `ZOHO_MAIL_CLIENT_ID`, `ZOHO_MAIL_CLIENT_SECRET`, `ZOHO_MAIL_REFRESH_TOKEN` | Zoho Mail REST API sender and OAuth credentials |
+| `ZOHO_ACCOUNTS_BASE_URL`, `ZOHO_MAIL_API_BASE_URL` | Regional Zoho OAuth and Mail API endpoints |
 | `OLLAMA_URL`, `OLLAMA_API_KEY`, `OLLAMA_MODEL` | Ollama endpoint and default compatibility model |
 | `OPERLY_MODEL_<ROLE>`, `OPERLY_MODEL_<ROLE>_FALLBACKS` | Provider-neutral role portfolio for planning, validation, coding, repair, placement, agents, and bounded tasks |
 | `OPERLY_PLANNING_MODE` | Selects the planning implementation |

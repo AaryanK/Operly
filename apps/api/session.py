@@ -93,6 +93,20 @@ def _normalized_email(value: str) -> str:
         raise auth_error(422, "INVALID_EMAIL", str(error)) from error
 
 
+def _existing_account_error(user: AppUser) -> HTTPException:
+    if user.email_verified_at is None:
+        return auth_error(
+            409,
+            "ACCOUNT_PENDING_VERIFICATION",
+            "This account is waiting for email verification. Request a new code to continue.",
+        )
+    return auth_error(
+        409,
+        "ACCOUNT_EXISTS",
+        "An account with this email already exists. Sign in or reset your password.",
+    )
+
+
 def _ip_hash(request: Request) -> str:
     value = request.client.host if request.client else "unknown"
     return privacy_hash(value, purpose="ip")
@@ -427,8 +441,9 @@ async def signup(payload: SignupInput, request: Request, db: AsyncSession = Depe
     except PasswordPolicyError as error:
         raise auth_error(422, "WEAK_PASSWORD", str(error)) from error
     await _rate_limit(db, "signup", request, account=email, combined_limit=4, ip_limit=20, account_limit=12, window_seconds=600)
-    if await db.scalar(select(AppUser).where(AppUser.email == email)):
-        raise auth_error(409, "ACCOUNT_EXISTS", "An account with this email already exists. Sign in or reset your password.")
+    existing_user = await db.scalar(select(AppUser).where(AppUser.email == email))
+    if existing_user:
+        raise _existing_account_error(existing_user)
 
     user = AppUser(
         email=email,
@@ -451,6 +466,9 @@ async def signup(payload: SignupInput, request: Request, db: AsyncSession = Depe
         await db.commit()
     except IntegrityError as error:
         await db.rollback()
+        existing_user = await db.scalar(select(AppUser).where(AppUser.email == email))
+        if existing_user:
+            raise _existing_account_error(existing_user) from error
         raise auth_error(409, "ACCOUNT_EXISTS", "An account with this email already exists. Sign in or reset your password.") from error
 
     if not await _deliver_verification(db, challenge, user, token, code):

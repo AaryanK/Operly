@@ -167,7 +167,41 @@
 
     const command = document.querySelector("#simple-command");
     document.querySelector("#company-discover-form")?.addEventListener("submit", async event => {event.preventDefault();const button=event.submitter,status=document.querySelector("#company-discover-status");button.disabled=true;status.innerHTML="<span class='company-spinner'></span> Learning about your business…";try{const result=await api("/company/discover",{method:"POST",body:JSON.stringify({business:document.querySelector("#company-discover-input").value,max_pages:5})});if(result.status==="failed")throw new Error(result.error || "Research could not be completed");status.textContent=`Found ${result.found.length} useful details. Preparing your questions…`;await renderHome()}catch(error){status.textContent=error.message;button.disabled=false}});
-    document.querySelectorAll(".company-answer").forEach(form => form.addEventListener("submit",async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api("/company/answers",{method:"POST",body:JSON.stringify({question_id:form.dataset.question,answer:new FormData(form).get("answer")})});await renderHome()}catch(error){alert(error.message);button.disabled=false}}));
+    document.querySelectorAll(".company-answer").forEach(form => form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = event.submitter;
+      const answer = new FormData(form).get("answer");
+      const input = form.querySelector('[name="answer"]');
+      button.disabled = true;
+      input.disabled = true;
+      try {
+        await api("/company/answers", {
+          method: "POST",
+          body: JSON.stringify({ question_id: form.dataset.question, answer })
+        });
+        const saved = document.createElement("div");
+        saved.className = "company-answer-saved";
+        saved.setAttribute("role", "status");
+        saved.textContent = "Saved ✓";
+        form.replaceWith(saved);
+        const remaining = document.querySelectorAll(".company-answer").length;
+        const summary = document.querySelector(".company-learning .simple-section-head > span");
+        if (summary) {
+          summary.textContent = remaining
+            ? `I still need ${remaining} ${remaining === 1 ? "thing" : "things"} from you.`
+            : "You’re all caught up.";
+        }
+      } catch (error) {
+        const message = document.createElement("span");
+        message.className = "company-answer-error";
+        message.setAttribute("role", "alert");
+        message.textContent = error.message;
+        form.querySelector(".company-answer-error")?.remove();
+        form.append(message);
+        button.disabled = false;
+        input.disabled = false;
+      }
+    }));
     document.querySelector("#simple-ask")?.addEventListener("click", () => openAssistant(command?.value || ""));
     document.querySelector("#simple-build")?.addEventListener("click", () => openBuild(command?.value || ""));
     document.querySelector("#simple-command-form")?.addEventListener("submit", event => { event.preventDefault(); openAssistant(command?.value || ""); });
