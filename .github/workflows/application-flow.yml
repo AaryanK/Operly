@@ -68,3 +68,22 @@ jobs:
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
           tests/test_unified_application_flow.py
+      - name: Smoke Railway-style production startup
+        env:
+          OPERLY_ENV: production
+          DATABASE_URL: sqlite+aiosqlite:///./ci-railway-smoke.db
+          SESSION_SECRET: ci-session-secret-that-is-long-and-unique
+          AUTH_TOKEN_PEPPER: ci-auth-token-pepper-that-is-over-thirty-two-bytes
+          RAILWAY_PUBLIC_DOMAIN: smoke.operly.test
+        run: |
+          uvicorn apps.api.main:app --host 127.0.0.1 --port 8765 >/tmp/operly-smoke.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error -H 'Host: smoke.operly.test' http://127.0.0.1:8765/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/operly-smoke.log
+          exit 1
