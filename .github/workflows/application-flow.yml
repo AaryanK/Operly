@@ -9,7 +9,9 @@ on:
       - "packages/business_brain/**"
       - "packages/capabilities/**"
       - "packages/connectors/**"
+      - "packages/database/**"
       - "packages/workspace/**"
+      - "Dockerfile"
       - "tests/test_authentication.py"
       - "tests/test_capability_harness_journey.py"
       - "tests/test_company_intelligence.py"
@@ -41,6 +43,7 @@ jobs:
           apps/api/system_router.py
           packages/business/service.py
           packages/workspace/service.py
+          packages/database/db.py
           packages/business_brain/agent.py
           packages/actions/service.py
           packages/capabilities/agent_harness.py
