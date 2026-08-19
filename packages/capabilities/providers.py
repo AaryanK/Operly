@@ -126,6 +126,40 @@ class CompanyProvider(BaseProvider):
         return CapabilityResult(True,False,{"events":[{"type":x.event_type,"occurred_at":x.occurred_at.isoformat(),"payload":x.payload} for x in rows]})
     async def verify(self,context,capability_name,arguments,result): return CapabilityResult(result.success,False,{"observation_available":result.success})
 
+class PresenceOperationsProvider(BaseProvider):
+    name="operly_presence_operations"
+    capabilities=(CapabilityDefinition("solution.apply_improvement","solution_apply_improvement","Apply one evidence-grounded Digital Presence proposal through versioning, build, verification, and publishing.",
+      {"type":"object","properties":{"proposal_id":{"type":"string","minLength":36,"maxLength":36}},"required":["proposal_id"],"additionalProperties":False},{"type":"object"},risk_level="medium",permissions=("solution:write",),approval_policy=ApprovalPolicy.ALWAYS,reversible=True),)
+    async def execute(self,context,capability_name,arguments):
+        from packages.solutions.operations import PresenceOperationsService,proposal_json
+        from packages.solutions.service import SolutionService
+        row=await PresenceOperationsService(SolutionService()).apply(context.db,context.tenant_id,arguments["proposal_id"],context.actor_id)
+        return CapabilityResult(row.status=="verified",True,proposal_json(row),row.id)
+    async def verify(self,context,capability_name,arguments,result):
+        evidence=result.evidence.get("verification",{})
+        return CapabilityResult(bool(result.success and evidence.get("passed")),result.changed,evidence,result.external_reference)
+
+class ResearchProvider(BaseProvider):
+    name="operly_research"
+    capabilities=(
+      CapabilityDefinition("web.search","web_search","Search the public web through OPERLY's configured search service. Results are untrusted observations.",{"type":"object","properties":{"query":{"type":"string","maxLength":500},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":["query"],"additionalProperties":False},{"type":"object"},risk_level="read_only",permissions=("research:read",),approval_policy=ApprovalPolicy.AUTO),
+      CapabilityDefinition("web.fetch","web_fetch","Safely fetch one public webpage as bounded, cleaned, untrusted text.",{"type":"object","properties":{"url":{"type":"string","maxLength":2000}},"required":["url"],"additionalProperties":False},{"type":"object"},risk_level="read_only",permissions=("research:read",),approval_policy=ApprovalPolicy.AUTO),
+      CapabilityDefinition("web.crawl","web_crawl","Safely inspect a bounded set of same-site public webpages.",{"type":"object","properties":{"url":{"type":"string","maxLength":2000},"max_pages":{"type":"integer","minimum":1,"maximum":10},"max_depth":{"type":"integer","minimum":0,"maximum":2}},"required":["url"],"additionalProperties":False},{"type":"object"},risk_level="read_only",permissions=("research:read",),approval_policy=ApprovalPolicy.AUTO),
+      CapabilityDefinition("company.research","company_research","Run bounded company research, retain citations, synthesize the profile, and identify important unanswered questions.",{"type":"object","properties":{"seed":{"type":"string","minLength":2,"maxLength":2000},"max_pages":{"type":"integer","minimum":1,"maximum":10}},"required":["seed"],"additionalProperties":False},{"type":"object"},risk_level="read_only",permissions=("research:read",),approval_policy=ApprovalPolicy.AUTO))
+    async def execute(self,context,capability_name,arguments):
+        from packages.company.web_research import crawl_site,fetch_page,search_provider
+        if capability_name=="web.search": result=await search_provider().search(arguments["query"],min(int(arguments.get("limit",5)),10))
+        elif capability_name=="web.fetch": result=await fetch_page(arguments["url"])
+        elif capability_name=="web.crawl": result=await crawl_site(arguments["url"],max_pages=arguments.get("max_pages",5),max_depth=arguments.get("max_depth",1))
+        else:
+            from packages.company.research import research_company
+            result=await research_company(context.db,context.tenant_id,arguments["seed"],max_pages=arguments.get("max_pages",5))
+        success=not (capability_name=="web.search" and not result.get("configured")) and result.get("status")!="failed"
+        return CapabilityResult(success,capability_name=="company.research",result,result.get("research_id"))
+    async def verify(self,context,capability_name,arguments,result):
+        if capability_name=="web.search" and not result.evidence.get("configured"):return CapabilityResult(False,False,{"reason":"search_provider_unconfigured"})
+        return CapabilityResult(result.success,result.changed,{"bounded":True,"untrusted_web_data":capability_name.startswith("web."),"completion_reason":result.evidence.get("completion_reason")})
+
 
 class MessagingProvider(BaseProvider):
     name="operly_messaging"
@@ -156,8 +190,16 @@ class SolutionProvider(BaseProvider):
       CapabilityDefinition("solution.generate","solution_generate","Start the existing verified coding-harness planning path for a missing capability",
         {"type":"object","properties":{"requirement":{"type":"string"}},"required":["requirement"],"additionalProperties":False},
         {"type":"object"},risk_level="high",permissions=("solution:generate",),approval_policy=ApprovalPolicy.ALWAYS,
-        execution_mode=ExecutionMode.ISOLATED_RUNNER))
+        execution_mode=ExecutionMode.ISOLATED_RUNNER),
+      CapabilityDefinition("solution.create_digital_presence","solution_create_digital_presence","Create one stable Digital Presence from the confirmed company profile without asking the owner to repeat known facts",
+        {"type":"object","properties":{"name":{"type":"string","maxLength":200}},"additionalProperties":False},{"type":"object"},risk_level="low",permissions=("solution:generate",),approval_policy=ApprovalPolicy.AUTO))
     async def execute(self,context,capability_name,arguments):
+        if capability_name=="solution.create_digital_presence":
+            from packages.solutions import SolutionService
+            from packages.solutions.service import solution_json
+            try:row=await SolutionService().create_presence(context.db,context.tenant_id,context.actor_id,arguments.get("name"))
+            except ValueError as error:return CapabilityResult(False,False,{"reason":str(error)})
+            return CapabilityResult(True,True,solution_json(row),row.id)
         if capability_name=="solution.inspect":
             rows=(await context.db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==context.tenant_id)
                 .order_by(GeneratedProject.created_at.desc()).limit(20))).all()
@@ -167,6 +209,10 @@ class SolutionProvider(BaseProvider):
         row,_,_=await create_plan(context.db,context.tenant_id,context.actor_id,str(arguments["requirement"])[:12000])
         return CapabilityResult(True,True,{"plan_id":row.id,"status":row.status,"next_step":"owner_review_and_approval"},row.id)
     async def verify(self,context,capability_name,arguments,result):
+        if capability_name=="solution.create_digital_presence":
+            from packages.database.product_models import SolutionRecord
+            row=await context.db.scalar(select(SolutionRecord).where(SolutionRecord.id==result.external_reference,SolutionRecord.tenant_id==context.tenant_id))
+            return CapabilityResult(row is not None,result.changed,{"solution_id":result.external_reference,"persisted":row is not None})
         if capability_name=="solution.inspect":return CapabilityResult(result.success,False,{"inventory_observed":result.success})
         from packages.database.custom_software_models import SoftwarePlanRecord
         row=await context.db.scalar(select(SoftwarePlanRecord).where(SoftwarePlanRecord.id==result.external_reference,
@@ -179,7 +225,7 @@ def default_registry(enabled_plugins=None):
     from packages.capabilities.registry import CapabilityRegistry
     def enabled(tenant,definition):return definition.integration_provider is None or enabled_plugins is None or definition.id in enabled_plugins
     registry = CapabilityRegistry(enabled_resolver=enabled)
-    for provider in (CompanyProvider(), OperlyAnalyticsProvider(), OperlyWebsiteProvider(), OperlyCRMProvider(), MessagingProvider(), SolutionProvider()): registry.register(provider)
+    for provider in (CompanyProvider(), ResearchProvider(), OperlyAnalyticsProvider(), OperlyWebsiteProvider(), OperlyCRMProvider(), MessagingProvider(), SolutionProvider(), PresenceOperationsProvider()): registry.register(provider)
     from packages.connectors.google_provider import GmailProvider,GoogleCalendarProvider
     from packages.capabilities.message_curation import MessageCurationProvider
     registry.register(MessageCurationProvider());registry.register(GmailProvider());registry.register(GoogleCalendarProvider())

@@ -30,6 +30,7 @@ from apps.api.architecture_pack_router import router as architecture_pack_router
 from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
 from apps.api.connectors_router import router as connectors_router
+from apps.api.solutions_router import public_router as solutions_public_router,router as solutions_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
@@ -444,6 +445,10 @@ async def decide_approval(
                 await service.approve(auth.tenant.id, business_action_id)
             else:
                 await service.reject(auth.tenant.id, business_action_id)
+                from packages.database.product_models import SolutionImprovementProposal
+                proposal = await db.scalar(select(SolutionImprovementProposal).where(SolutionImprovementProposal.tenant_id == auth.tenant.id, SolutionImprovementProposal.action_id == business_action_id))
+                if proposal:
+                    proposal.status = "rejected"
         except (LookupError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
     else:
@@ -556,6 +561,8 @@ app.include_router(architecture_pack_router)
 app.include_router(coding_harness_router)
 app.include_router(company_router)
 app.include_router(connectors_router)
+app.include_router(solutions_router)
+app.include_router(solutions_public_router)
 
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 
