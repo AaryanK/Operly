@@ -4,19 +4,25 @@ on:
   pull_request:
     paths:
       - "apps/api/**"
+      - "apps/web/static/**"
+      - "alembic/versions/**"
       - "packages/actions/**"
       - "packages/business/**"
       - "packages/business_brain/**"
       - "packages/capabilities/**"
+      - "packages/channels/**"
       - "packages/connectors/**"
+      - "packages/context/**"
       - "packages/database/**"
       - "packages/workspace/**"
       - "Dockerfile"
       - "tests/test_authentication.py"
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
+      - "tests/test_channel_context.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
+      - "tests/test_google_workspace_capabilities.py"
       - "tests/test_unified_application_flow.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
@@ -37,19 +43,31 @@ jobs:
           apps/api/main.py
           apps/api/csrf.py
           apps/api/business.py
+          apps/api/channel_identity_router.py
           apps/api/company_router.py
+          apps/api/connectors_router.py
           apps/api/solutions_router.py
           apps/api/workspace_router.py
           apps/api/approvals_router.py
           apps/api/integrations_router.py
           apps/api/system_router.py
+          alembic/versions/0022_channel_identity_context.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
+          packages/database/channel_models.py
           packages/business_brain/agent.py
           packages/actions/service.py
+          packages/channels/envelope.py
+          packages/channels/identity.py
+          packages/channels/linking.py
+          packages/channels/service.py
+          packages/context/service.py
+          packages/connectors/google_provider.py
+          packages/connectors/discord/bot_shared.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
+          packages/capabilities/context_provider.py
           packages/capabilities/runtime_context.py
           packages/capabilities/business_provider.py
           packages/capabilities/workspace_provider.py
@@ -58,6 +76,8 @@ jobs:
           packages/capabilities/reminder_provider.py
           packages/capabilities/solution_provider.py
           packages/capabilities/website_provider.py
+      - name: Check browser JavaScript syntax
+        run: node --check apps/web/static/app.js
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -69,8 +89,10 @@ jobs:
           tests/test_authentication.py
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
+          tests/test_channel_context.py
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
+          tests/test_google_workspace_capabilities.py
           tests/test_unified_application_flow.py
       - name: Smoke Railway-style production startup
         env:
