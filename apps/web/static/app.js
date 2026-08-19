@@ -1,4 +1,4 @@
-const state = { me: null, page: "overview", workflow: {}, linkToken: null, authBootstrap: null };
+const state = { me: null, page: "overview", workflow: {}, linkToken: null, authBootstrap: null, pendingIdentityLink: null };
 
 function csrfToken(path = "") {
   const cookies = Object.fromEntries(document.cookie.split(";").map((item) => {
@@ -65,15 +65,17 @@ function esc(value = "") {
 function empty(text) { return `<div class="empty">${esc(text)}</div>`; }
 
 async function enterDashboard() {
+  const params = new URLSearchParams(location.search);
+  state.pendingIdentityLink = params.get("identity_link") || state.pendingIdentityLink;
   state.me = await api("/me");
   $("#workspace-name").textContent = state.me.tenant.name;
   $("#workspace-avatar").textContent = state.me.tenant.name.slice(0, 1).toUpperCase();
   $("#workspace-role").textContent = state.me.role;
   $("#tenant-kicker").textContent = state.me.tenant.name;
   show("#dashboard");
-  if (location.pathname !== "/app") history.replaceState({}, "", "/app");
+  if (location.pathname !== "/app" && !state.pendingIdentityLink) history.replaceState({}, "", "/app");
   await loadWorkspaces();
-  await renderPage("overview");
+  await renderPage(state.pendingIdentityLink ? "settings" : "overview");
 }
 
 async function loadWorkspaces() {
@@ -199,20 +201,58 @@ async function integrations() {
 }
 
 async function settings() {
-  const connected = await api("/connectors");
+  const [connectorResult, identityResult] = await Promise.allSettled([api("/connectors"), api("/identities")]);
+  const connected = connectorResult.status === "fulfilled" && Array.isArray(connectorResult.value) ? connectorResult.value : [];
+  const identities = identityResult.status === "fulfilled" && Array.isArray(identityResult.value) ? identityResult.value : [];
   const google = connected.find(item => item.provider === "google");
-  const discord = connected.find(item => item.provider === "discord");
-  const connectors = [google || {provider:"google",display_name:"Google Workspace",status:"disconnected",health_status:"unknown",capabilities:[]}, discord || {provider:"discord",display_name:"Discord",status:"disconnected",health_status:"unknown",capabilities:[]}];
-  const connectorCards = connectors.map((item) => `
+  const discordIdentity = identities.find(item => item.provider === "discord");
+  let claimInfo = null;
+  let claimError = "";
+  if (state.pendingIdentityLink) {
+    try {
+      claimInfo = await api(`/identities/discord/claim-info?token=${encodeURIComponent(state.pendingIdentityLink)}`);
+    } catch (error) {
+      claimError = error.message;
+    }
+  }
+  const googleCard = google ? `
     <article class="connector-card">
-      <span class="pill status ${esc(item.status)}">${esc(item.status.replaceAll("_", " "))}</span>
-      <h3>${esc(item.display_name)}</h3><p>${esc(item.account || "Not connected")}</p>
-      <div class="connector-boundary"><strong>Health: ${esc(item.health_status)}</strong><span>${esc((item.capabilities || []).join(" · ") || "No granted capabilities")}</span></div>
-      <div class="approval-actions">${item.status === "connected" ? `<button class="button secondary" data-test-connector="${item.id}">Test</button><button class="button secondary" data-disable-connector="${item.id}">Disable</button><button class="button secondary" data-disconnect-connector="${item.id}">Disconnect</button>` : item.provider === "google" ? `<button class="button primary" id="connect-google">Connect Gmail & Calendar</button>` : ""}</div>
-    </article>`).join("");
+      <span class="pill status ${esc(google.status)}">${esc(google.status.replaceAll("_", " "))}</span>
+      <h3>Google Workspace</h3><p>${esc(google.account || "Connected")}</p>
+      <div class="connector-boundary"><strong>${google.permission_tier === "assistant" ? "Full assistant permissions" : "Basic permissions"}</strong><span>${esc((google.capabilities || []).join(" · ") || "No granted capabilities")}</span></div>
+      <div class="approval-actions">
+        <button class="button secondary" data-test-connector="${google.id}">Test</button>
+        ${google.permission_tier !== "assistant" ? `<button class="button primary" data-google-tier="assistant">Upgrade assistant access</button>` : `<button class="button secondary" data-google-tier="assistant">Reconnect permissions</button>`}
+        <button class="button secondary" data-disable-connector="${google.id}">Disable</button>
+        <button class="button secondary" data-disconnect-connector="${google.id}">Disconnect</button>
+      </div>
+    </article>` : `
+    <article class="connector-card">
+      <span class="pill status disconnected">disconnected</span>
+      <h3>Google Workspace</h3><p>Choose how much access Operly should have.</p>
+      <div class="connector-boundary"><strong>Basic</strong><span>Send approved email and work with calendar events without reading your mailbox.</span></div>
+      <div class="connector-boundary"><strong>Full assistant</strong><span>Adds mailbox search/read/drafts/labels and calendar free-busy. Gmail mailbox access uses Google's restricted OAuth scopes.</span></div>
+      <div class="approval-actions"><button class="button secondary" data-google-tier="basic">Connect basic</button><button class="button primary" data-google-tier="assistant">Connect full assistant</button></div>
+    </article>`;
+  const discordCard = `
+    <article class="connector-card">
+      <span class="pill status ${discordIdentity ? "connected" : "disconnected"}">${discordIdentity ? "linked" : "not linked"}</span>
+      <h3>Your Discord identity</h3>
+      <p>${discordIdentity ? esc(discordIdentity.display_name || "Discord account linked") : "Link the same human across Discord and Operly."}</p>
+      <div class="connector-boundary"><strong>Cross-channel identity</strong><span>Private DM context belongs to you; shared tenant context is loaded only when your workspace membership is verified.</span></div>
+      <div class="approval-actions">${discordIdentity ? `<button class="button secondary" data-unlink-identity="${discordIdentity.id}">Unlink Discord</button>` : `<button class="button primary" id="create-discord-code">Get Discord pairing code</button>`}</div>
+      <div id="discord-pairing-result"></div>
+    </article>`;
+  const pendingClaim = state.pendingIdentityLink ? `
+    <section class="panel settings identity-claim-panel">
+      <h3>Confirm Discord identity link</h3>
+      ${claimInfo ? `<p>Link Discord identity <strong>${esc(claimInfo.display_name || "Discord user")}</strong> to your Operly account <strong>${esc(claimInfo.operly_user)}</strong>?</p><p>This does not automatically share your private DM history with a workspace.</p><div class="approval-actions"><button class="button primary" id="confirm-discord-claim">Confirm link</button><button class="button secondary" id="cancel-discord-claim">Cancel</button></div>` : `<p>${esc(claimError || "This link could not be verified.")}</p><button class="button secondary" id="cancel-discord-claim">Dismiss</button>`}
+    </section>` : "";
+
   $("#content").innerHTML = `
-    <div class="page-head"><div><span class="kicker green">Business nervous system</span><h2>Connectors & workspace</h2><p>Connectors listen for events and run approved backend actions. They may publish controlled updates into a Solution, but they do not directly redesign or freely mutate its frontend.</p></div></div>
-    <section class="connector-grid">${connectorCards}</section>
+    <div class="page-head"><div><span class="kicker green">Business nervous system</span><h2>Connectors, identity & workspace</h2><p>Use the same Operly identity across channels. The runtime resolves the human, workspace and privacy scope before the agent receives a request.</p></div></div>
+    ${pendingClaim}
+    <section class="connector-grid">${googleCard}${discordCard}</section>
     <form id="settings-form" class="panel settings">
       <h3>Workspace identity</h3>
       <label>Business name<input id="tenant-name" value="${esc(state.me.tenant.name)}" required></label>
@@ -220,7 +260,41 @@ async function settings() {
       <p><span class="pill status connected">Tenant isolation active</span></p>
       <button class="button primary">Save settings</button>
     </form>`;
-  $("#connect-google")?.addEventListener("click",async()=>{const result=await api("/connectors/google/connect",{method:"POST"});location.href=result.authorization_url});
+
+  $$('[data-google-tier]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await api(`/connectors/google/connect?tier=${encodeURIComponent(button.dataset.googleTier)}`, {method:"POST"});
+      location.href = result.authorization_url;
+    } catch (error) { alert(error.message); button.disabled = false; }
+  }));
+  $("#create-discord-code")?.addEventListener("click", async event => {
+    event.currentTarget.disabled = true;
+    const target = $("#discord-pairing-result");
+    try {
+      const result = await api("/identities/discord/link-code", {method:"POST"});
+      target.innerHTML = `<div class="connector-boundary"><strong>Pairing code: <code>${esc(result.code)}</code></strong><span>In Discord send <code>!operly link ${esc(result.code)}</code>. Expires ${esc(formatDate(result.expires_at))}.</span></div>`;
+    } catch (error) { target.textContent = error.message; event.currentTarget.disabled = false; }
+  });
+  $("#confirm-discord-claim")?.addEventListener("click", async event => {
+    event.currentTarget.disabled = true;
+    try {
+      await api("/identities/discord/claim", {method:"POST", body:JSON.stringify({token:state.pendingIdentityLink})});
+      state.pendingIdentityLink = null;
+      history.replaceState({}, "", "/app");
+      await settings();
+    } catch (error) { alert(error.message); event.currentTarget.disabled = false; }
+  });
+  $("#cancel-discord-claim")?.addEventListener("click", async () => {
+    state.pendingIdentityLink = null;
+    history.replaceState({}, "", "/app");
+    await settings();
+  });
+  $$('[data-unlink-identity]').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm("Unlink this Discord identity from your Operly user?")) return;
+    await api(`/identities/${button.dataset.unlinkIdentity}`, {method:'DELETE'});
+    await settings();
+  }));
   $$('[data-test-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.testConnector}/test`,{method:'POST'});await settings()}));
   $$('[data-disable-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.disableConnector}/disable`,{method:'POST'});await settings()}));
   $$('[data-disconnect-connector]').forEach(b=>b.addEventListener('click',async()=>{await api(`/connectors/${b.dataset.disconnectConnector}`,{method:'DELETE'});await settings()}));
