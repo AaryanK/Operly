@@ -36,6 +36,7 @@ from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_router import router as studio_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_router import router as workspace_router
+from packages.connectors.runtime import connector_runtime
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 
@@ -142,7 +143,11 @@ async def lifespan(app: FastAPI):
     validate_runtime_configuration()
     await init_db()
     await bootstrap_admin()
-    yield
+    await connector_runtime.start()
+    try:
+        yield
+    finally:
+        await connector_runtime.stop()
 
 
 app = FastAPI(title="OPERLY API", version="0.1.0", lifespan=lifespan)
