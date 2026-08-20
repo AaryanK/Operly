@@ -21,6 +21,7 @@ on:
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
       - "tests/test_channel_context.py"
+      - "tests/test_connector_runtime.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
       - "tests/test_google_workspace_capabilities.py"
@@ -66,7 +67,9 @@ jobs:
           packages/channels/linking.py
           packages/channels/service.py
           packages/context/service.py
+          packages/connectors/runtime.py
           packages/connectors/google_provider.py
+          packages/connectors/discord/runtime.py
           packages/connectors/discord/bot_shared.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
@@ -95,6 +98,7 @@ jobs:
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
           tests/test_channel_context.py
+          tests/test_connector_runtime.py
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
           tests/test_google_workspace_capabilities.py
