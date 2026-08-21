@@ -54,6 +54,12 @@ class ChannelService:
             membership, tenant = memberships[0]
         else:
             return TenantResolution(None, None, user_id, False, [{"id": t.id, "name": t.name} for _, t in memberships])
+
+        workspace_changed = bool(
+            state
+            and state.active_tenant_id
+            and state.active_tenant_id != tenant.id
+        )
         await IdentityService.upsert_conversation_state(
             db,
             provider=envelope.provider,
@@ -61,6 +67,7 @@ class ChannelService:
             external_conversation_id=envelope.external_conversation_id,
             user_id=user_id,
             active_tenant_id=tenant.id,
+            clear_agent_conversation=workspace_changed,
             metadata={"direct": True},
         )
         return TenantResolution(tenant.id, membership.role, user_id, True, [])
