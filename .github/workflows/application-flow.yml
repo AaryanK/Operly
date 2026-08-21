@@ -69,6 +69,7 @@ jobs:
           alembic/versions/0024_principals_clients_mcp.py
           alembic/versions/0025_principal_conversations.py
           alembic/versions/0026_action_provenance.py
+          alembic/versions/0027_global_human_memory.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
