@@ -55,3 +55,13 @@ if (!document.querySelector('script[data-operly-modern]')) {
   script.dataset.operlyModern = "1";
   document.head.append(script);
 }
+
+// Personal identity settings and workspace-owned channel/integration settings
+// are separate security scopes. This layer renders those scopes explicitly.
+if (!document.querySelector('script[data-operly-settings-scopes]')) {
+  const script = document.createElement("script");
+  script.src = "/static/settings-scopes.js?v=20260821-scopes-v1";
+  script.defer = true;
+  script.dataset.operlySettingsScopes = "1";
+  document.head.append(script);
+}
