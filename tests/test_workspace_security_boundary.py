@@ -28,6 +28,7 @@ from packages.database.channel_models import ChannelInstallation
 from packages.database.db import Base
 from packages.database.models import AppUser, Memory, Message, Task, Tenant, TenantMember
 from packages.database.schema import import_all_models
+from packages.security.execution_context import resolve_execution_context
 from packages.security.permissions import resolve_workspace_permissions
 
 
@@ -123,6 +124,30 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Workspace: ANHITRA", prompt)
         self.assertIn("Workspace role: owner", prompt)
         self.assertIn("Workspace context authorized: yes", prompt)
+
+    async def test_execution_context_ignores_spoofed_role_metadata(self):
+        owner_id, tenant_id = await self.seed_owner()
+        async with self.sessions() as db:
+            employee = AppUser(
+                email="employee@example.com",
+                display_name="Employee",
+                active=True,
+            )
+            db.add(employee)
+            await db.flush()
+            db.add(TenantMember(tenant_id=tenant_id, user_id=employee.id, role="employee"))
+            await db.commit()
+            execution = await resolve_execution_context(
+                db,
+                workspace_id=tenant_id,
+                user_id=employee.id,
+                channel="discord",
+                metadata={"role": "owner", "user_id": owner_id},
+            )
+
+        self.assertEqual(execution.role, "employee")
+        self.assertNotIn("gmail:read", execution.permissions)
+        self.assertNotIn("workspace:roles:manage", execution.permissions)
 
     async def test_unknown_channel_space_does_not_create_workspace_installation(self):
         async with self.sessions() as db:
