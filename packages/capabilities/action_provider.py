@@ -22,8 +22,30 @@ def _action_summary(row: BusinessActionRecord) -> dict:
     }
 
 
+def _resource_summary(row: BusinessActionRecord) -> dict | None:
+    result = json.loads(row.result_json or "{}")
+    reference = result.get("external_reference")
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    if not reference and not evidence:
+        return None
+    identifiers = {
+        key: value
+        for key, value in evidence.items()
+        if key.endswith("_id") or key in {"id", "draft_id", "message_id", "thread_id", "contact_id", "lead_id", "task_id"}
+    }
+    return {
+        "action_id": row.id,
+        "capability": row.capability,
+        "status": row.status,
+        "resource_type": row.resource_type,
+        "external_reference": reference,
+        "identifiers": identifiers,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 class ActionLifecycleProvider(BaseProvider):
-    """Durable action state exposed to the model through governed capabilities."""
+    """Durable action and recent-resource state exposed through governed capabilities."""
 
     name = "operly_actions"
     capabilities = (
@@ -74,6 +96,20 @@ class ActionLifecycleProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
         ),
         CapabilityDefinition(
+            "runtime.recent_resources",
+            "runtime_recent_resources",
+            "List durable resource references produced by recent verified/current actions in this workspace. Use this to resolve 'it', 'that draft', 'the contact I just added', and similar references instead of inventing IDs.",
+            {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}},
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            permissions=("actions:read",),
+            approval_policy=ApprovalPolicy.AUTO,
+        ),
+        CapabilityDefinition(
             "actions.approve",
             "actions_approve",
             "Approve exactly one action that is currently WAITING_APPROVAL. The target action is executed at most once; terminal actions cannot be approved again.",
@@ -106,15 +142,21 @@ class ActionLifecycleProvider(BaseProvider):
     )
 
     async def execute(self, context, capability_name, arguments):
-        if capability_name in {"actions.list", "actions.pending"}:
+        if capability_name in {"actions.list", "actions.pending", "runtime.recent_resources"}:
             limit = max(1, min(int(arguments.get("limit", 10)), 25))
             statement = select(BusinessActionRecord).where(
                 BusinessActionRecord.tenant_id == context.tenant_id
             )
-            status = "WAITING_APPROVAL" if capability_name == "actions.pending" else str(arguments.get("status") or "").strip()
-            if status:
-                statement = statement.where(BusinessActionRecord.status == status.upper())
+            if capability_name == "actions.pending":
+                statement = statement.where(BusinessActionRecord.status == "WAITING_APPROVAL")
+            elif capability_name == "actions.list":
+                status = str(arguments.get("status") or "").strip()
+                if status:
+                    statement = statement.where(BusinessActionRecord.status == status.upper())
             rows = (await context.db.scalars(statement.order_by(desc(BusinessActionRecord.created_at)).limit(limit))).all()
+            if capability_name == "runtime.recent_resources":
+                resources = [item for row in rows if (item := _resource_summary(row)) is not None]
+                return CapabilityResult(True, False, {"resources": resources})
             return CapabilityResult(True, False, {"actions": [_action_summary(row) for row in rows]})
 
         target_id = str(arguments.get("action_id") or "").strip()
@@ -146,7 +188,6 @@ class ActionLifecycleProvider(BaseProvider):
                 {"reason": "action_not_waiting_for_approval", "status": target.status, "action_id": target.id},
             )
 
-        # Resolve authority again at execution time. The model never supplies role or workspace authority.
         invocation = context.invocation or {}
         metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
         execution = await resolve_execution_context(
@@ -185,6 +226,6 @@ class ActionLifecycleProvider(BaseProvider):
 
     async def verify(self, context, capability_name, arguments, result):
         del context, arguments
-        if capability_name.startswith("actions."):
+        if capability_name.startswith("actions.") or capability_name == "runtime.recent_resources":
             return CapabilityResult(result.success, result.changed, {"observation_available": result.success, **result.evidence}, result.external_reference)
         return result
