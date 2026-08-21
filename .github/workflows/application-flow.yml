@@ -79,6 +79,7 @@ jobs:
           packages/channels/identity.py
           packages/channels/linking.py
           packages/channels/guest_chat.py
+          packages/channels/space_bindings.py
           packages/channels/service.py
           packages/context/service.py
           packages/security/execution_context.py
@@ -86,6 +87,7 @@ jobs:
           packages/security/principals.py
           packages/plugins/manifest.py
           packages/mcp/policy.py
+          packages/mcp/gateway.py
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
           packages/connectors/discord/runtime.py
