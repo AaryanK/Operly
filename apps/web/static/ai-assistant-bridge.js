@@ -65,3 +65,14 @@ if (!document.querySelector('script[data-operly-settings-scopes]')) {
   script.dataset.operlySettingsScopes = "1";
   document.head.append(script);
 }
+
+// Capture the authenticated human's browser IANA timezone once and persist it
+// as a personal Operly preference. Every channel/harness later reuses the same
+// canonical timezone instead of implementing channel-specific clock logic.
+if (!document.querySelector('script[data-operly-time-sync]')) {
+  const script = document.createElement("script");
+  script.src = "/static/time-sync.js?v=20260821-time-v1";
+  script.defer = true;
+  script.dataset.operlyTimeSync = "1";
+  document.head.append(script);
+}
