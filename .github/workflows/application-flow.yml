@@ -24,6 +24,7 @@ on:
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
       - "tests/test_channel_context.py"
+      - "tests/test_dm_workspace_switch.py"
       - "tests/test_connector_runtime.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
@@ -126,6 +127,7 @@ jobs:
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
           tests/test_channel_context.py
+          tests/test_dm_workspace_switch.py
           tests/test_connector_runtime.py
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
