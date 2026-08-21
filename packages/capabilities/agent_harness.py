@@ -5,132 +5,16 @@ from typing import Any
 from packages.actions.service import ActionService
 from packages.capabilities.defaults import default_registry
 from packages.database.db import session_scope
+from packages.security.permissions import (
+    DEFAULT_ROLE_AUTHORITY,
+    default_permissions,
+    resolve_workspace_permissions,
+)
 
 
-ROLE_AUTHORITY = {
-    "owner": {
-        "company:read",
-        "research:read",
-        "analytics:read",
-        "crm:read",
-        "crm:write",
-        "website:read",
-        "website:write",
-        "messaging:draft",
-        "messaging:curate",
-        "messaging:read",
-        "messaging:write",
-        "messaging:send",
-        "gmail:read",
-        "gmail:write",
-        "gmail:draft",
-        "calendar:read",
-        "calendar:write",
-        "solution:read",
-        "solution:generate",
-        "solution:write",
-        "tasks:read",
-        "tasks:write",
-        "memory:read",
-        "memory:write",
-        "messages:read",
-        "catalog:write",
-        "inventory:write",
-        "orders:write",
-        "quotes:write",
-        "operations:read",
-        "operations:write",
-        "reminders:write",
-        "context:human:read",
-        "context:human:write",
-        "context:tenant:read",
-        "context:tenant:write",
-        "context:conversation:read",
-        "context:conversation:write",
-    },
-    "manager": {
-        "company:read",
-        "research:read",
-        "analytics:read",
-        "crm:read",
-        "crm:write",
-        "website:read",
-        "website:write",
-        "messaging:draft",
-        "messaging:curate",
-        "messaging:read",
-        "messaging:write",
-        "messaging:send",
-        "gmail:read",
-        "gmail:write",
-        "gmail:draft",
-        "calendar:read",
-        "calendar:write",
-        "solution:read",
-        "tasks:read",
-        "tasks:write",
-        "memory:read",
-        "memory:write",
-        "messages:read",
-        "catalog:write",
-        "inventory:write",
-        "orders:write",
-        "quotes:write",
-        "operations:read",
-        "operations:write",
-        "reminders:write",
-        "context:human:read",
-        "context:human:write",
-        "context:tenant:read",
-        "context:tenant:write",
-        "context:conversation:read",
-        "context:conversation:write",
-    },
-    "agent": {
-        "company:read",
-        "research:read",
-        "analytics:read",
-        "crm:read",
-        "crm:write",
-        "website:read",
-        "messaging:draft",
-        "messaging:curate",
-        "messaging:read",
-        "gmail:read",
-        "gmail:draft",
-        "calendar:read",
-        "solution:read",
-        "tasks:read",
-        "tasks:write",
-        "memory:read",
-        "memory:write",
-        "messages:read",
-        "operations:read",
-        "reminders:write",
-        "context:human:read",
-        "context:human:write",
-        "context:tenant:read",
-        "context:tenant:write",
-        "context:conversation:read",
-        "context:conversation:write",
-    },
-    "employee": {
-        "company:read",
-        "analytics:read",
-        "crm:read",
-        "website:read",
-        "solution:read",
-        "tasks:read",
-        "messages:read",
-        "memory:read",
-        "messaging:read",
-        "context:human:read",
-        "context:human:write",
-        "context:tenant:read",
-        "context:conversation:read",
-        "context:conversation:write",
-    },
-}
+# Compatibility alias for older imports/tests. Runtime authorization is resolved
+# per workspace through resolve_workspace_permissions().
+ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
 
 
 _PRIVATE_CONNECTOR_AUTHORITY = {
@@ -152,7 +36,12 @@ class PluginInvocationContext:
 
 
 class PluginAgentHarness:
-    """Single execution authority between the reasoning model and plugins."""
+    """Single execution authority between the reasoning model and plugins.
+
+    The model never selects its workspace, membership role, or permission set.
+    Those are resolved by trusted application code before schemas are exposed and
+    are re-resolved again before every invocation.
+    """
 
     def __init__(self, registry=None):
         self.registry = registry
@@ -209,10 +98,16 @@ class PluginAgentHarness:
         return default_registry(enabled_external)
 
     def authority(self, role: str) -> set[str]:
-        # Unknown channel roles are intentionally deny-by-default. A Discord or
-        # future connector participant must resolve to a real TenantMember role
-        # before model-visible capabilities become available.
-        return set(ROLE_AUTHORITY.get(role, set()))
+        """Return built-in defaults for compatibility and non-runtime callers."""
+        return default_permissions(role)
+
+    async def authority_for(self, context: PluginInvocationContext) -> set[str]:
+        async with session_scope() as db:
+            return await resolve_workspace_permissions(
+                db,
+                tenant_id=context.tenant_id,
+                role=context.role,
+            )
 
     @staticmethod
     def capability_authorized(capability_id: str, authority: set[str]) -> bool:
@@ -227,7 +122,7 @@ class PluginAgentHarness:
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         registry = await self.registry_for(context)
-        authority = self.authority(context.role)
+        authority = await self.authority_for(context)
         return [
             item.model_tool_schema()
             for item in registry.metadata(
@@ -250,7 +145,7 @@ class PluginAgentHarness:
         *,
         call_id: str | None = None,
     ) -> dict[str, Any]:
-        authority = self.authority(context.role)
+        authority = await self.authority_for(context)
         if not self.capability_authorized(name, authority):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
         registry = await self.registry_for(context)
