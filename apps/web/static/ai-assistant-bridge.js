@@ -98,3 +98,20 @@ if (!document.querySelector('script[data-operly-operations-semantic-fix]')) {
   script.dataset.operlyOperationsSemanticFix = "1";
   document.head.append(script);
 }
+
+// Progressive chat enhancements: render model Markdown safely and replace raw
+// SpeechRecognition alerts with permission-aware, inline voice status.
+if (!document.querySelector('link[data-operly-chat-enhancements]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/chat-enhancements.css?v=20260821-chat-v1";
+  link.dataset.operlyChatEnhancements = "1";
+  document.head.append(link);
+}
+if (!document.querySelector('script[data-operly-chat-enhancements]')) {
+  const script = document.createElement("script");
+  script.src = "/static/chat-enhancements.js?v=20260821-chat-v1";
+  script.defer = true;
+  script.dataset.operlyChatEnhancements = "1";
+  document.head.append(script);
+}
