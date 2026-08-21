@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.security import hash_token, random_token
 from packages.channels.identity import IdentityService
 from packages.database.channel_models import IdentityLinkChallenge
+from packages.security.principals import PrincipalService
 
 
 LINK_TTL_MINUTES = 10
@@ -33,13 +34,34 @@ class IdentityLinkService:
         return hash_token(code.upper(), purpose="external-identity-code")
 
     @classmethod
-    async def create_from_operly(
+    async def _claim_guest_if_present(
         cls,
         db: AsyncSession,
         *,
         user_id: str,
         provider: str,
-    ) -> PairingChallenge:
+        external_user_id: str,
+    ) -> None:
+        existing = await PrincipalService.external_principal(
+            db,
+            provider=provider,
+            provider_subject=str(external_user_id),
+        )
+        if not existing:
+            await PrincipalService.user_principal(db, user_id)
+            return
+        principal, _ = existing
+        if principal.kind == "guest" and principal.status == "active":
+            await PrincipalService.claim_guest(
+                db,
+                guest_principal_id=principal.id,
+                user_id=user_id,
+                provider=provider,
+                provider_subject=str(external_user_id),
+            )
+
+    @classmethod
+    async def create_from_operly(cls, db: AsyncSession, *, user_id: str, provider: str) -> PairingChallenge:
         token = random_token()
         code = ""
         for _ in range(10):
@@ -67,13 +89,7 @@ class IdentityLinkService:
         )
         db.add(row)
         await db.flush()
-        return PairingChallenge(
-            challenge_id=row.id,
-            provider=provider,
-            mode=row.mode,
-            code=code,
-            expires_at=expires,
-        )
+        return PairingChallenge(challenge_id=row.id, provider=provider, mode=row.mode, code=code, expires_at=expires)
 
     @classmethod
     async def create_from_channel(
@@ -96,13 +112,7 @@ class IdentityLinkService:
         )
         db.add(row)
         await db.flush()
-        return PairingChallenge(
-            challenge_id=row.id,
-            provider=provider,
-            mode=row.mode,
-            token=token,
-            expires_at=expires,
-        )
+        return PairingChallenge(challenge_id=row.id, provider=provider, mode=row.mode, token=token, expires_at=expires)
 
     @classmethod
     async def _challenge_by_token(
@@ -124,19 +134,8 @@ class IdentityLinkService:
         )
 
     @classmethod
-    async def inspect_channel_token(
-        cls,
-        db: AsyncSession,
-        *,
-        provider: str,
-        token: str,
-    ) -> dict | None:
-        row = await cls._challenge_by_token(
-            db,
-            provider=provider,
-            token=token,
-            mode="from_channel",
-        )
+    async def inspect_channel_token(cls, db: AsyncSession, *, provider: str, token: str) -> dict | None:
+        row = await cls._challenge_by_token(db, provider=provider, token=token, mode="from_channel")
         if not row:
             return None
         return {
@@ -147,22 +146,16 @@ class IdentityLinkService:
         }
 
     @classmethod
-    async def claim_from_web(
-        cls,
-        db: AsyncSession,
-        *,
-        user_id: str,
-        provider: str,
-        token: str,
-    ):
-        row = await cls._challenge_by_token(
-            db,
-            provider=provider,
-            token=token,
-            mode="from_channel",
-        )
+    async def claim_from_web(cls, db: AsyncSession, *, user_id: str, provider: str, token: str):
+        row = await cls._challenge_by_token(db, provider=provider, token=token, mode="from_channel")
         if not row or not row.external_user_id:
             raise ValueError("Identity link is invalid or expired")
+        await cls._claim_guest_if_present(
+            db,
+            user_id=user_id,
+            provider=provider,
+            external_user_id=row.external_user_id,
+        )
         identity = await IdentityService.link_external_identity(
             db,
             user_id=user_id,
@@ -197,6 +190,12 @@ class IdentityLinkService:
         )
         if not row or not row.user_id:
             raise ValueError("Pairing code is invalid or expired")
+        await cls._claim_guest_if_present(
+            db,
+            user_id=row.user_id,
+            provider=provider,
+            external_user_id=str(external_user_id),
+        )
         identity = await IdentityService.link_external_identity(
             db,
             user_id=row.user_id,
