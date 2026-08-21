@@ -172,7 +172,7 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
                     text="hello",
                 ),
             )
-            ambiguous_dm = await ChannelService.resolve(
+            personal_dm = await ChannelService.resolve(
                 db,
                 ChannelEnvelope(
                     provider="discord",
@@ -208,8 +208,14 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((first.tenant_id, first.role), (operly_id, "owner"))
         self.assertEqual((second.tenant_id, second.role), (coffee_id, "manager"))
-        self.assertIsNone(ambiguous_dm.tenant_id)
-        self.assertEqual({item["id"] for item in ambiguous_dm.options}, {operly_id, coffee_id})
+        # A private DM always has a safe execution anchor now, but account.* tools
+        # can see every membership listed in options. The anchor is not the user's
+        # visibility/security boundary.
+        self.assertIn(personal_dm.tenant_id, {operly_id, coffee_id})
+        self.assertTrue(personal_dm.allow_tenant_context)
+        self.assertEqual(personal_dm.user_id, aaryan_id)
+        self.assertEqual({item["id"] for item in personal_dm.options}, {operly_id, coffee_id})
+        self.assertEqual({item["role"] for item in personal_dm.options}, {"owner", "manager"})
         self.assertEqual(selected_dm.tenant_id, coffee_id)
         self.assertEqual(continued_dm.tenant_id, coffee_id)
 
