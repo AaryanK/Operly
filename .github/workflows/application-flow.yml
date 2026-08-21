@@ -113,6 +113,7 @@ jobs:
           node --check apps/web/static/ai-assistant.js
           node --check apps/web/static/ai-assistant-bridge.js
           node --check apps/web/static/workspace-shell.js
+          node --check apps/web/static/operly-modern.js
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
