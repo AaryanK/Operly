@@ -13,12 +13,7 @@ from packages.database.models import Tenant
 
 @dataclass(frozen=True, slots=True)
 class TemporalContext:
-    """Application-resolved time context shared by every Operly surface.
-
-    Actor time is the default for phrases such as "today" and "tomorrow".
-    Workspace time is also supplied so the model/tools can honor explicit business-
-    timezone requests without asking each connector to implement its own clock logic.
-    """
+    """Application-resolved time context shared by every Operly surface."""
 
     now_utc: datetime
     actor_timezone: str
@@ -51,17 +46,22 @@ class TemporalContext:
         )
 
 
-def validate_timezone(value: str | None, *, fallback: str = "UTC") -> str:
-    candidate = str(value or "").strip() or fallback
+def _valid_timezone(value: str) -> bool:
     try:
-        ZoneInfo(candidate)
+        ZoneInfo(value)
+        return True
     except (ZoneInfoNotFoundError, ValueError):
-        candidate = fallback
-        try:
-            ZoneInfo(candidate)
-        except (ZoneInfoNotFoundError, ValueError):
-            candidate = "UTC"
-    return candidate
+        return False
+
+
+def validate_timezone(value: str | None, *, fallback: str = "UTC") -> str:
+    candidate = str(value or "").strip()
+    if candidate and _valid_timezone(candidate):
+        return candidate
+    fallback_value = str(fallback or "").strip()
+    if fallback_value and _valid_timezone(fallback_value):
+        return fallback_value
+    return "UTC"
 
 
 async def user_timezone(db: AsyncSession, user_id: str | None) -> str | None:
@@ -79,12 +79,14 @@ async def user_timezone(db: AsyncSession, user_id: str | None) -> str | None:
         .order_by(ContextRecord.updated_at.desc())
         .limit(1)
     )
-    return validate_timezone(row.content) if row else None
+    if not row or not _valid_timezone(str(row.content or "").strip()):
+        return None
+    return str(row.content).strip()
 
 
 async def set_user_timezone(db: AsyncSession, *, user_id: str, timezone_name: str) -> str:
-    value = validate_timezone(timezone_name, fallback="")
-    if not value:
+    value = str(timezone_name or "").strip()
+    if not value or not _valid_timezone(value):
         raise ValueError("Invalid IANA timezone")
     row = await db.scalar(
         select(ContextRecord).where(
