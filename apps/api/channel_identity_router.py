@@ -7,12 +7,18 @@ from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.channels.linking import IdentityLinkService
 from packages.database.channel_models import ExternalIdentity
 
-
 router = APIRouter(prefix="/api/identities", tags=["identities"])
 
 
 class ClaimIdentityInput(BaseModel):
     token: str = Field(min_length=20, max_length=500)
+
+
+def _provider(value: str) -> str:
+    provider = "".join(ch for ch in str(value or "").strip().lower() if ch.isalnum() or ch in {"-", "_"})
+    if not provider or len(provider) > 40:
+        raise HTTPException(422, "Invalid identity provider")
+    return provider
 
 
 @router.get("")
@@ -38,39 +44,40 @@ async def identities(
     ]
 
 
-@router.post("/discord/link-code")
-async def discord_link_code(
+@router.post("/{provider}/link-code")
+async def provider_link_code(
+    provider: str,
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    name = _provider(provider)
     challenge = await IdentityLinkService.create_from_operly(
         db,
         user_id=auth.user.id,
-        provider="discord",
+        provider=name,
     )
     await db.commit()
     return {
+        "provider": name,
         "code": challenge.code,
         "expires_at": challenge.expires_at.isoformat(),
-        "instruction": "In Discord, send `!operly link CODE` to the Operly bot.",
+        "instruction": f"Complete the {name} connector's Operly link flow with this one-time code.",
     }
 
 
-@router.get("/discord/claim-info")
-async def discord_claim_info(
+@router.get("/{provider}/claim-info")
+async def provider_claim_info(
+    provider: str,
     token: str = Query(..., min_length=20, max_length=500),
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    info = await IdentityLinkService.inspect_channel_token(
-        db,
-        provider="discord",
-        token=token,
-    )
+    name = _provider(provider)
+    info = await IdentityLinkService.inspect_channel_token(db, provider=name, token=token)
     if not info:
         raise HTTPException(404, "Identity link is invalid or expired")
     return {
-        "provider": "discord",
+        "provider": name,
         "display_name": info["display_name"],
         "expires_at": info["expires_at"].isoformat(),
         "operly_user": auth.user.display_name,
@@ -78,17 +85,19 @@ async def discord_claim_info(
     }
 
 
-@router.post("/discord/claim")
-async def discord_claim(
+@router.post("/{provider}/claim")
+async def provider_claim(
+    provider: str,
     payload: ClaimIdentityInput,
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    name = _provider(provider)
     try:
         identity = await IdentityLinkService.claim_from_web(
             db,
             user_id=auth.user.id,
-            provider="discord",
+            provider=name,
             token=payload.token,
         )
     except ValueError as error:
