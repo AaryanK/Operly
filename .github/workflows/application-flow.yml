@@ -77,6 +77,7 @@ jobs:
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
           packages/connectors/discord/runtime.py
+          packages/connectors/discord/secure_runtime.py
           packages/connectors/discord/bot_shared.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
