@@ -14,6 +14,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "tasks:write", "memory:read", "memory:write", "messages:read",
         "catalog:write", "inventory:write", "orders:write", "quotes:write",
         "operations:read", "operations:write", "reminders:write",
+        "discord:read", "discord:write",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
         "workspace:read", "workspace:members:manage", "workspace:roles:manage",
@@ -27,6 +28,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "solution:read", "tasks:read", "tasks:write", "memory:read", "memory:write",
         "messages:read", "catalog:write", "inventory:write", "orders:write",
         "quotes:write", "operations:read", "operations:write", "reminders:write",
+        "discord:read", "discord:write",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
         "workspace:read",
@@ -36,13 +38,14 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "website:read", "messaging:draft", "messaging:curate", "messaging:read",
         "gmail:read", "gmail:draft", "calendar:read", "solution:read", "tasks:read",
         "tasks:write", "memory:read", "memory:write", "messages:read", "operations:read",
-        "reminders:write", "context:human:read", "context:human:write",
+        "reminders:write", "discord:read", "discord:write",
+        "context:human:read", "context:human:write",
         "context:tenant:read", "context:tenant:write", "context:conversation:read",
         "context:conversation:write", "workspace:read",
     },
     "employee": {
         "company:read", "analytics:read", "crm:read", "website:read", "solution:read",
-        "tasks:read", "messages:read", "memory:read", "messaging:read",
+        "tasks:read", "messages:read", "memory:read", "messaging:read", "discord:read",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:conversation:read", "context:conversation:write", "workspace:read",
     },
@@ -77,7 +80,14 @@ async def resolve_workspace_permissions(db: AsyncSession, *, tenant_id: str, rol
             )
         )
     ).all()
-    return {str(permission) for permission in rows if permission in KNOWN_PERMISSIONS}
+    explicit = {str(permission) for permission in rows if permission in KNOWN_PERMISSIONS}
+    # System roles are product defaults. When Operly gains a new built-in capability,
+    # existing workspaces should adapt automatically instead of freezing the permission
+    # universe that happened to exist when that workspace was created. Custom roles stay
+    # explicit and therefore never gain new authority silently.
+    if workspace_role.is_system and role_key in DEFAULT_ROLE_AUTHORITY:
+        explicit |= default_permissions(role_key)
+    return explicit
 
 
 def normalize_role_key(value: str) -> str:

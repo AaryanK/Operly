@@ -6,12 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.channels.linking import IdentityLinkService
 from packages.database.channel_models import ExternalIdentity
+from packages.security.temporal_context import set_user_timezone, user_timezone, validate_timezone
 
 router = APIRouter(prefix="/api/identities", tags=["identities"])
 
 
 class ClaimIdentityInput(BaseModel):
     token: str = Field(min_length=20, max_length=500)
+
+
+class TimezoneInput(BaseModel):
+    timezone: str = Field(min_length=1, max_length=100)
 
 
 def _provider(value: str) -> str:
@@ -42,6 +47,32 @@ async def identities(
         }
         for row in rows
     ]
+
+
+@router.get("/preferences/timezone")
+async def get_timezone_preference(
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    value = await user_timezone(db, auth.user.id)
+    return {
+        "timezone": value,
+        "workspace_fallback": validate_timezone(auth.tenant.timezone),
+    }
+
+
+@router.put("/preferences/timezone")
+async def put_timezone_preference(
+    payload: TimezoneInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        value = await set_user_timezone(db, user_id=auth.user.id, timezone_name=payload.timezone)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    await db.commit()
+    return {"ok": True, "timezone": value}
 
 
 @router.post("/{provider}/link-code")

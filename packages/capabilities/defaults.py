@@ -2,6 +2,7 @@ from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.message_curation import MessageCurationProvider
 from packages.capabilities.operations_provider import OperationsProvider
+from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.capabilities.providers import (
     CompanyProvider,
     MessagingProvider,
@@ -15,6 +16,7 @@ from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
+from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
 
 
@@ -28,6 +30,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
     def enabled(tenant_id, definition):
         return (
             definition.integration_provider is None
+            or definition.integration_provider == "discord"
             or enabled_plugins is None
             or definition.id in enabled_plugins
         )
@@ -37,6 +40,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         CompanyProvider(),
         ResearchProvider(),
         OperlyAnalyticsProvider(),
+        PersonalRuntimeProvider(),
         ContextProvider(),
         UnifiedWebsiteProvider(),
         UnifiedBusinessProvider(),
@@ -48,6 +52,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
         PresenceOperationsProvider(),
+        DiscordProvider(),
         GmailProvider(),
         GoogleCalendarProvider(),
     ):
