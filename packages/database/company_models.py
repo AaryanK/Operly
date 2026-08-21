@@ -47,6 +47,11 @@ class BusinessActionRecord(Base):
     causation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     approved_arguments_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    principal_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    client_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    origin: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    connector_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
