@@ -8,13 +8,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.dependencies import AuthContext
-from apps.api.schemas import WorkspaceCreateInput
-from apps.api.workspace_router import create_workspace
+from apps.api.schemas import (
+    WorkspaceCreateInput,
+    WorkspaceMemberAddInput,
+    WorkspaceMemberRoleInput,
+    WorkspaceRoleCreateInput,
+)
+from apps.api.workspace_router import (
+    add_workspace_member,
+    create_workspace,
+    create_workspace_role,
+    set_workspace_member_role,
+)
 from packages.business_brain.context_loader import load_business_context
 from packages.context.service import ContextService
 from packages.database.db import Base
 from packages.database.models import AppUser, Memory, Message, Task, Tenant, TenantMember
 from packages.database.schema import import_all_models
+from packages.security.permissions import resolve_workspace_permissions
 
 
 class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
@@ -50,17 +61,29 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
             membership = TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner")
             db.add(membership)
             await db.commit()
-            return user, tenant, membership
+            return user.id, tenant.id
+
+    async def auth_context(self, db, user_id: str, tenant_id: str) -> AuthContext:
+        user = await db.get(AppUser, user_id)
+        tenant = await db.get(Tenant, tenant_id)
+        membership = await db.scalar(
+            select(TenantMember).where(
+                TenantMember.user_id == user_id,
+                TenantMember.tenant_id == tenant_id,
+            )
+        )
+        return AuthContext(user=user, tenant=tenant, role=membership.role, session=None)
 
     async def test_business_context_does_not_preload_workspace_records(self):
-        user, tenant, _ = await self.seed_owner()
+        user_id, tenant_id = await self.seed_owner()
         async with self.sessions() as db:
+            user = await db.get(AppUser, user_id)
             db.add_all(
                 [
-                    Memory(tenant_id=tenant.id, kind="secret", content="private-memory-marker"),
-                    Task(tenant_id=tenant.id, title="private-task-marker", status="open"),
+                    Memory(tenant_id=tenant_id, kind="secret", content="private-memory-marker"),
+                    Task(tenant_id=tenant_id, title="private-task-marker", status="open"),
                     Message(
-                        tenant_id=tenant.id,
+                        tenant_id=tenant_id,
                         channel_id=1,
                         message_id=1001,
                         author_id=1,
@@ -71,7 +94,7 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 ]
             )
             await db.commit()
-            prompt = await load_business_context(db, tenant.id)
+            prompt = await load_business_context(db, tenant_id)
 
         self.assertIn("Workspace: ANHITRA", prompt)
         self.assertIn("No business records are automatically included", prompt)
@@ -80,12 +103,12 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private-message-marker", prompt)
 
     async def test_scoped_context_injects_trusted_current_principal(self):
-        user, tenant, _ = await self.seed_owner()
+        user_id, tenant_id = await self.seed_owner()
         async with self.sessions() as db:
             loaded = await ContextService.load_for_agent(
                 db,
-                tenant_id=tenant.id,
-                user_id=user.id,
+                tenant_id=tenant_id,
+                user_id=user_id,
                 conversation_id="conversation-1",
                 allow_tenant_context=True,
                 query="who am I",
@@ -99,18 +122,17 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Workspace context authorized: yes", prompt)
 
     async def test_authenticated_user_can_create_an_additional_workspace(self):
-        user, tenant, membership = await self.seed_owner()
+        user_id, tenant_id = await self.seed_owner()
         async with self.sessions() as db:
-            db_user = await db.get(AppUser, user.id)
-            db_tenant = await db.get(Tenant, tenant.id)
+            auth = await self.auth_context(db, user_id, tenant_id)
             result = await create_workspace(
                 WorkspaceCreateInput(name="NAYSCHOOL", timezone="UTC"),
-                AuthContext(user=db_user, tenant=db_tenant, role=membership.role, session=None),
+                auth,
                 db,
             )
             created_membership = await db.scalar(
                 select(TenantMember).where(
-                    TenantMember.user_id == user.id,
+                    TenantMember.user_id == user_id,
                     TenantMember.tenant_id == result["id"],
                 )
             )
@@ -120,6 +142,73 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["current"])
         self.assertIsNotNone(created_membership)
         self.assertEqual(created_membership.role, "owner")
+
+    async def test_custom_workspace_role_is_deny_by_default_except_configured_permissions(self):
+        user_id, tenant_id = await self.seed_owner()
+        async with self.sessions() as db:
+            auth = await self.auth_context(db, user_id, tenant_id)
+            role = await create_workspace_role(
+                WorkspaceRoleCreateInput(
+                    name="Travel Agent",
+                    key="travel-agent",
+                    permissions=["crm:read", "tasks:read"],
+                ),
+                auth,
+                db,
+            )
+            permissions = await resolve_workspace_permissions(
+                db,
+                tenant_id=tenant_id,
+                role=role["key"],
+            )
+
+        self.assertEqual(permissions, {"crm:read", "tasks:read"})
+        self.assertNotIn("gmail:read", permissions)
+        self.assertNotIn("website:write", permissions)
+        self.assertNotIn("workspace:roles:manage", permissions)
+
+    async def test_owner_can_add_member_and_assign_workspace_custom_role(self):
+        owner_id, tenant_id = await self.seed_owner()
+        async with self.sessions() as db:
+            teammate = AppUser(
+                email="teammate@example.com",
+                display_name="Teammate",
+                active=True,
+            )
+            db.add(teammate)
+            await db.commit()
+            auth = await self.auth_context(db, owner_id, tenant_id)
+            await create_workspace_role(
+                WorkspaceRoleCreateInput(
+                    name="Travel Agent",
+                    key="travel-agent",
+                    permissions=["crm:read"],
+                ),
+                auth,
+                db,
+            )
+            added = await add_workspace_member(
+                WorkspaceMemberAddInput(
+                    email="teammate@example.com",
+                    role="employee",
+                ),
+                auth,
+                db,
+            )
+            changed = await set_workspace_member_role(
+                added["user_id"],
+                WorkspaceMemberRoleInput(role="travel-agent"),
+                auth,
+                db,
+            )
+            permissions = await resolve_workspace_permissions(
+                db,
+                tenant_id=tenant_id,
+                role=changed["role"],
+            )
+
+        self.assertEqual(changed["role"], "travel-agent")
+        self.assertEqual(permissions, {"crm:read"})
 
 
 if __name__ == "__main__":
