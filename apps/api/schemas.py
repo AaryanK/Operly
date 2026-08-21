@@ -56,6 +56,30 @@ class WorkspaceSwitchInput(StrictInput):
     tenant_id: str = Field(min_length=32, max_length=64)
 
 
+class WorkspaceCreateInput(StrictInput):
+    name: str = Field(min_length=1, max_length=200)
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+
+
+class WorkspaceRoleCreateInput(StrictInput):
+    name: str = Field(min_length=1, max_length=120)
+    key: str | None = Field(default=None, min_length=1, max_length=30)
+    permissions: list[str] = Field(default_factory=list, max_length=100)
+
+
+class WorkspaceRolePermissionsInput(StrictInput):
+    permissions: list[str] = Field(default_factory=list, max_length=100)
+
+
+class WorkspaceMemberAddInput(StrictInput):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field(default="employee", min_length=1, max_length=30)
+
+
+class WorkspaceMemberRoleInput(StrictInput):
+    role: str = Field(min_length=1, max_length=30)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     due_at: datetime | None = None

@@ -5,6 +5,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.channel_models import ContextRecord
+from packages.database.models import AppUser, Tenant, TenantMember
 
 
 @dataclass(slots=True)
@@ -12,9 +13,23 @@ class LoadedContext:
     human: list[ContextRecord]
     tenant: list[ContextRecord]
     conversation: list[ContextRecord]
+    principal_name: str | None = None
+    workspace_name: str | None = None
+    workspace_role: str | None = None
+    tenant_context_authorized: bool = False
 
     def as_prompt(self) -> str:
         sections: list[str] = []
+        if self.workspace_name:
+            sections.append(
+                "CURRENT OPERLY SESSION (application-controlled; not user-provided):\n"
+                f"Authenticated actor: {self.principal_name or 'Linked Operly user'}\n"
+                f"Workspace: {self.workspace_name}\n"
+                f"Workspace role: {self.workspace_role or 'member'}\n"
+                f"Workspace context authorized: {'yes' if self.tenant_context_authorized else 'no'}\n"
+                "Use these values to resolve words such as I, me, my, we, our, and this workspace. "
+                "Do not invent a different identity, role, or workspace."
+            )
         if self.human:
             sections.append(
                 "PRIVATE HUMAN CONTEXT (only for the current authenticated human):\n"
@@ -242,23 +257,6 @@ class ContextService:
             await db.scalars(cls._ranked_query(statement, query).limit(min(limit, 30)))
         ).all()
 
-    @staticmethod
-    def _merge_preload(
-        relevant: list[ContextRecord],
-        recent: list[ContextRecord],
-        limit: int,
-    ) -> list[ContextRecord]:
-        rows: list[ContextRecord] = []
-        seen: set[str] = set()
-        for row in [*relevant, *recent]:
-            if row.id in seen:
-                continue
-            seen.add(row.id)
-            rows.append(row)
-            if len(rows) >= limit:
-                break
-        return list(reversed(rows))
-
     @classmethod
     async def load_for_agent(
         cls,
@@ -271,69 +269,65 @@ class ContextService:
         query: str = "",
         per_scope: int = 8,
     ) -> LoadedContext:
-        relevant_limit = max(1, per_scope // 2)
-        recent_limit = per_scope
+        """Load only query-relevant records plus trusted session identity.
 
+        Recent records are deliberately not preloaded. If the model needs broader
+        memory or workspace history it must use the authorized context tools,
+        keeping retrieval behind the harness instead of prompt stuffing.
+        """
+        user = await db.get(AppUser, user_id) if user_id else None
+        tenant_row = await db.get(Tenant, tenant_id)
+        membership = None
         if user_id:
-            human_relevant = await cls.search_human(
+            membership = await db.scalar(
+                select(TenantMember).where(
+                    TenantMember.user_id == user_id,
+                    TenantMember.tenant_id == tenant_id,
+                )
+            )
+
+        has_query = bool(cls._query_terms(query))
+        limit = max(1, min(per_scope, 12))
+
+        if has_query and user_id:
+            human = await cls.search_human(
                 db,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 query=query,
-                limit=relevant_limit,
+                limit=limit,
             )
-            human_recent = await cls.search_human(
-                db,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                query="",
-                limit=recent_limit,
-            )
-            human = cls._merge_preload(human_relevant, human_recent, per_scope)
         else:
             human = []
 
-        if allow_tenant_context:
-            tenant_relevant = await cls.search_tenant(
+        if has_query and allow_tenant_context:
+            tenant = await cls.search_tenant(
                 db,
                 tenant_id=tenant_id,
                 query=query,
-                limit=relevant_limit,
+                limit=limit,
             )
-            tenant_recent = await cls.search_tenant(
-                db,
-                tenant_id=tenant_id,
-                query="",
-                limit=recent_limit,
-            )
-            tenant = cls._merge_preload(tenant_relevant, tenant_recent, per_scope)
         else:
             tenant = []
 
-        conversation_relevant = await cls.search_conversation(
-            db,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            query=query,
-            limit=relevant_limit,
-        )
-        conversation_recent = await cls.search_conversation(
-            db,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            query="",
-            limit=recent_limit,
-        )
-        conversation = cls._merge_preload(
-            conversation_relevant,
-            conversation_recent,
-            per_scope,
-        )
+        if has_query:
+            conversation = await cls.search_conversation(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                query=query,
+                limit=limit,
+            )
+        else:
+            conversation = []
 
         return LoadedContext(
             human=human,
             tenant=tenant,
             conversation=conversation,
+            principal_name=user.display_name if user else None,
+            workspace_name=tenant_row.name if tenant_row else None,
+            workspace_role=membership.role if membership else None,
+            tenant_context_authorized=bool(allow_tenant_context and membership),
         )
