@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
+from apps.api.access_router import router as access_router
 from apps.api.agent_router import router as agent_router
 from apps.api.application_builder_router import router as application_builder_router
 from apps.api.approvals_router import router as approvals_router
@@ -62,18 +63,11 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
-    """Create the configured bootstrap owner when credentials are supplied.
-
-    ADMIN_PASSWORD is optional. A fresh deployment can start without it and use
-    the normal signup flow to create its first workspace owner.
-    """
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
-
     if not password:
         return
-
     async with session_scope() as db:
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
         if user is None:
@@ -85,7 +79,6 @@ async def bootstrap_admin() -> None:
             )
             db.add(user)
             await db.flush()
-
         password_identity = await db.scalar(
             select(AuthIdentity).where(
                 AuthIdentity.user_id == user.id,
@@ -103,13 +96,9 @@ async def bootstrap_admin() -> None:
             )
         if user.email_verified_at is None:
             user.email_verified_at = user.created_at
-
-        membership = await db.scalar(
-            select(TenantMember).where(TenantMember.user_id == user.id)
-        )
+        membership = await db.scalar(select(TenantMember).where(TenantMember.user_id == user.id))
         if membership:
             return
-
         tenants = (await db.scalars(select(Tenant).order_by(Tenant.created_at))).all()
         if len(tenants) == 1:
             tenant = tenants[0]
@@ -117,7 +106,6 @@ async def bootstrap_admin() -> None:
             tenant = Tenant(name=tenant_name, slug="default")
             db.add(tenant)
             await db.flush()
-
         db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner"))
 
 
@@ -126,7 +114,6 @@ def validate_runtime_configuration() -> None:
         raise RuntimeError("SESSION_SECRET is missing")
     if not PRODUCTION:
         return
-
     token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
     if len(token_pepper.encode("utf-8")) < 32:
         raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
@@ -151,7 +138,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OPERLY API", version="0.1.0", lifespan=lifespan)
-
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -163,8 +149,6 @@ if public_host:
 if RAILWAY_PUBLIC_DOMAIN:
     allowed_hosts.add(RAILWAY_PUBLIC_DOMAIN)
 if RUNNING_ON_RAILWAY:
-    # Railway-generated public domains use this suffix. Keep TrustedHost enabled,
-    # but allow preview/copy domains even when PUBLIC_BASE_URL points elsewhere.
     allowed_hosts.add("*.up.railway.app")
 if not PRODUCTION:
     allowed_hosts.update({"localhost", "127.0.0.1", "testserver"})
@@ -184,11 +168,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-# Composition root: routers own HTTP concerns; packages own business behavior.
 for router in (
     system_router,
     session_router,
     workspace_router,
+    access_router,
     approvals_router,
     integrations_router,
     business_router,
@@ -208,8 +192,6 @@ for router in (
 ):
     app.include_router(router)
 
-# The static application remains the production UI for this migration branch.
-# apps/web/src is intentionally not served until feature parity is proven.
 WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 app.mount("/static", StaticFiles(directory=WEB_STATIC), name="static")
 
