@@ -40,6 +40,7 @@ def issue_authorization_code(
     redirect_uri: str,
     scopes: list[str],
     code_challenge: str,
+    resource: str,
 ) -> str:
     return _serializer("authorization-code").dumps(
         {
@@ -48,6 +49,7 @@ def issue_authorization_code(
             "tenant_id": tenant_id,
             "client_id": client_id,
             "redirect_uri": redirect_uri,
+            "resource": resource,
             "scopes": sorted(set(scopes)),
             "code_challenge": code_challenge,
         }
@@ -60,6 +62,7 @@ def consume_authorization_code(
     client_id: str,
     redirect_uri: str,
     code_verifier: str,
+    resource: str,
 ) -> dict[str, Any]:
     try:
         payload = _serializer("authorization-code").loads(
@@ -72,6 +75,8 @@ def consume_authorization_code(
         raise McpOAuthError("Invalid authorization code") from exc
     if payload.get("client_id") != client_id or payload.get("redirect_uri") != redirect_uri:
         raise McpOAuthError("Authorization code client mismatch")
+    if payload.get("resource") != resource:
+        raise McpOAuthError("Authorization code resource mismatch")
     if not code_verifier or pkce_s256(code_verifier) != payload.get("code_challenge"):
         raise McpOAuthError("PKCE verification failed")
     return payload
