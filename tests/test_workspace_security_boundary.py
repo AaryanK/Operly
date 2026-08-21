@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.dependencies import AuthContext
@@ -21,7 +21,10 @@ from apps.api.workspace_router import (
     set_workspace_member_role,
 )
 from packages.business_brain.context_loader import load_business_context
+from packages.channels.envelope import ChannelEnvelope
+from packages.channels.service import ChannelService
 from packages.context.service import ContextService
+from packages.database.channel_models import ChannelInstallation
 from packages.database.db import Base
 from packages.database.models import AppUser, Memory, Message, Task, Tenant, TenantMember
 from packages.database.schema import import_all_models
@@ -120,6 +123,27 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Workspace: ANHITRA", prompt)
         self.assertIn("Workspace role: owner", prompt)
         self.assertIn("Workspace context authorized: yes", prompt)
+
+    async def test_unknown_channel_space_does_not_create_workspace_installation(self):
+        async with self.sessions() as db:
+            resolution = await ChannelService.resolve(
+                db,
+                ChannelEnvelope(
+                    provider="discord",
+                    external_user_id="unlinked-user",
+                    external_space_id="unknown-server",
+                    external_conversation_id="general",
+                    actor_name="Unknown",
+                    text="hello",
+                ),
+            )
+            installation_count = await db.scalar(
+                select(func.count(ChannelInstallation.id))
+            )
+
+        self.assertIsNone(resolution.tenant_id)
+        self.assertFalse(resolution.allow_tenant_context)
+        self.assertEqual(int(installation_count or 0), 0)
 
     async def test_authenticated_user_can_create_an_additional_workspace(self):
         user_id, tenant_id = await self.seed_owner()
