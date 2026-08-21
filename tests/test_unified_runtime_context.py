@@ -65,6 +65,7 @@ class UnifiedRuntimeContextTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_personal_workspace_tools_exist_in_dm_but_not_shared_discord_server(self):
         harness = PluginAgentHarness()
+        authority = {"workspace:read", "discord:read", "discord:write"}
         dm = PluginInvocationContext(
             tenant_id=self.tenant.id,
             user_id=self.user.id,
@@ -81,11 +82,17 @@ class UnifiedRuntimeContextTests(unittest.IsolatedAsyncioTestCase):
             channel="discord",
             metadata={"is_direct": False},
         )
-        dm_tools = {item["function"]["name"] for item in await harness.schemas(dm)}
-        server_tools = {item["function"]["name"] for item in await harness.schemas(server)}
-        self.assertIn("account.list_workspaces", dm_tools)
-        self.assertNotIn("account.list_workspaces", server_tools)
-        self.assertIn("discord.send_dm", server_tools)
+        self.assertTrue(harness.capability_authorized("account.list_workspaces", authority, dm))
+        self.assertFalse(harness.capability_authorized("account.list_workspaces", authority, server))
+        self.assertTrue(harness.capability_authorized("discord.send_dm", authority, server))
+        self.assertFalse(harness.capability_authorized("discord.send_message", authority, PluginInvocationContext(
+            tenant_id=self.tenant.id,
+            user_id=self.user.id,
+            role="owner",
+            objective="send this",
+            channel="web",
+            metadata={},
+        )))
 
 
 if __name__ == "__main__":
