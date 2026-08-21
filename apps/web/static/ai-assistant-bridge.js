@@ -29,3 +29,14 @@ if (!document.querySelector('script[data-operly-workspace-shell]')) {
   script.dataset.operlyWorkspaceShell = "1";
   document.head.append(script);
 }
+
+// The modern interaction layer is deliberately separate from business logic.
+// It adds account/session controls, command navigation and visual repair while
+// keeping all authorization and mutations behind the existing API contracts.
+if (!document.querySelector('script[data-operly-modern]')) {
+  const script = document.createElement("script");
+  script.src = "/static/operly-modern.js?v=20260821-modern-v1";
+  script.defer = true;
+  script.dataset.operlyModern = "1";
+  document.head.append(script);
+}
