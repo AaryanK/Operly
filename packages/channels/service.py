@@ -21,7 +21,7 @@ class TenantResolution:
 
 
 class ChannelService:
-    """Resolve every channel into either a guest principal or authenticated workspace execution."""
+    """Resolve channels into private-human or shared-workspace execution."""
 
     @staticmethod
     def _mentions_tenant(text: str, tenant: Tenant) -> bool:
@@ -31,6 +31,13 @@ class ChannelService:
 
     @classmethod
     async def _resolve_direct_tenant(cls, db: AsyncSession, envelope: ChannelEnvelope, *, user_id: str) -> TenantResolution:
+        """Pick an execution anchor for a private DM, never an account visibility boundary.
+
+        Personal account.* capabilities remain able to inspect every workspace the
+        human is actually a member of. An explicit workspace name selects that
+        workspace for ordinary business tools; otherwise the remembered preference
+        is used, falling back deterministically to the first membership.
+        """
         memberships = await IdentityService.memberships(db, user_id=user_id)
         if not memberships:
             return TenantResolution(None, None, user_id, False, [])
@@ -40,21 +47,21 @@ class ChannelService:
             external_user_id=envelope.external_user_id,
             external_conversation_id=envelope.external_conversation_id,
         )
-        explicit = [(membership, tenant) for membership, tenant in memberships if cls._mentions_tenant(envelope.text, tenant)]
+        explicit = [
+            (membership, tenant)
+            for membership, tenant in memberships
+            if cls._mentions_tenant(envelope.text, tenant)
+        ]
         if len(explicit) == 1:
             membership, tenant = explicit[0]
         elif state and state.active_tenant_id:
-            match = next((item for item in memberships if item[0].tenant_id == state.active_tenant_id), None)
-            if match:
-                membership, tenant = match
-            elif len(memberships) == 1:
-                membership, tenant = memberships[0]
-            else:
-                return TenantResolution(None, None, user_id, False, [{"id": t.id, "name": t.name} for _, t in memberships])
-        elif len(memberships) == 1:
-            membership, tenant = memberships[0]
+            match = next(
+                (item for item in memberships if item[0].tenant_id == state.active_tenant_id),
+                None,
+            )
+            membership, tenant = match or memberships[0]
         else:
-            return TenantResolution(None, None, user_id, False, [{"id": t.id, "name": t.name} for _, t in memberships])
+            membership, tenant = memberships[0]
 
         workspace_changed = bool(
             state
@@ -69,9 +76,19 @@ class ChannelService:
             user_id=user_id,
             active_tenant_id=tenant.id,
             clear_agent_conversation=workspace_changed,
-            metadata={"direct": True},
+            metadata={
+                "direct": True,
+                "execution_anchor_only": True,
+                "workspace_count": len(memberships),
+            },
         )
-        return TenantResolution(tenant.id, membership.role, user_id, True, [])
+        return TenantResolution(
+            tenant.id,
+            membership.role,
+            user_id,
+            True,
+            [{"id": t.id, "name": t.name, "role": m.role} for m, t in memberships],
+        )
 
     @classmethod
     async def resolve(cls, db: AsyncSession, envelope: ChannelEnvelope) -> TenantResolution:
@@ -142,16 +159,12 @@ class ChannelService:
                 )
 
             if resolved.tenant_id is None:
-                if resolved.options:
-                    names = ", ".join(item["name"] for item in resolved.options)
-                    return ChannelResponse(
-                        message=f"Which Operly workspace do you mean? I can use: {names}. Mention the workspace name and try again.",
-                        user_id=resolved.user_id,
-                        status="tenant_required",
-                        tenant_options=resolved.options,
-                    )
                 return ChannelResponse(
-                    message="This channel space is not bound to an Operly workspace yet. Connect it through an explicit workspace installation flow first.",
+                    message=(
+                        "Your Operly account does not currently have a workspace membership."
+                        if envelope.is_direct
+                        else "This channel space is not bound to an Operly workspace yet. Connect it through an explicit workspace installation flow first."
+                    ),
                     user_id=resolved.user_id,
                     status="tenant_required",
                 )
@@ -173,9 +186,6 @@ class ChannelService:
             )
             conversation_id = state.agent_conversation_id if state else None
 
-            # Channel state is only a cache. Validate it against the freshly resolved
-            # security scope before reuse so historical bugs, identity upgrades, or
-            # workspace moves cannot poison future requests with a stale conversation.
             if conversation_id:
                 conversation = await db.get(AgentConversation, conversation_id)
                 expected_principal = f"user:{resolved.user_id}"
@@ -215,6 +225,8 @@ class ChannelService:
                     "external_space_id": envelope.external_space_id,
                     "external_conversation_id": envelope.external_conversation_id,
                     "is_direct": envelope.is_direct,
+                    "accessible_workspaces": resolved.options if envelope.is_direct else [],
+                    "dm_execution_anchor": resolved.tenant_id if envelope.is_direct else None,
                 },
             )
         )
@@ -228,7 +240,10 @@ class ChannelService:
                 user_id=resolved.user_id,
                 active_tenant_id=resolved.tenant_id,
                 agent_conversation_id=result.get("conversation_id"),
-                metadata={"direct": envelope.is_direct},
+                metadata={
+                    "direct": envelope.is_direct,
+                    "execution_anchor_only": envelope.is_direct,
+                },
             )
 
         return ChannelResponse(
