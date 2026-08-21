@@ -56,6 +56,11 @@ class WorkspaceSwitchInput(StrictInput):
     tenant_id: str = Field(min_length=32, max_length=64)
 
 
+class WorkspaceCreateInput(StrictInput):
+    name: str = Field(min_length=1, max_length=200)
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     due_at: datetime | None = None
