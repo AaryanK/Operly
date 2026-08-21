@@ -1,0 +1,55 @@
+/* Final viewport/layout repair for the active workspace shell. */
+@media (min-width: 761px) {
+  #dashboard.workspace-shell-ready {
+    min-height: 100dvh !important;
+    align-items: stretch !important;
+  }
+  #dashboard.workspace-shell-ready .operly-workspace-rail {
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    width: 72px !important;
+    height: auto !important;
+    min-height: 100dvh !important;
+  }
+  #dashboard.workspace-shell-ready .operly-section-nav {
+    position: fixed !important;
+    inset: 0 auto 0 72px !important;
+    width: 252px !important;
+    height: auto !important;
+    min-height: 100dvh !important;
+  }
+  #dashboard.workspace-shell-ready > .app-main {
+    grid-column: 3 !important;
+    min-height: 100dvh !important;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  #dashboard.workspace-shell-ready .operly-workspace-rail { width: 68px !important; }
+  #dashboard.workspace-shell-ready .operly-section-nav { left: 68px !important; width: 224px !important; }
+}
+
+.op-pulse-list i.neutral {
+  background: #a8b0aa !important;
+  box-shadow: 0 0 0 4px rgba(130, 142, 134, .10) !important;
+}
+
+#dashboard.workspace-shell-ready .op-metric-grid {
+  grid-template-columns: repeat(6, minmax(150px, 1fr)) !important;
+}
+
+#dashboard.workspace-shell-ready .op-metric {
+  min-width: 0 !important;
+}
+
+@media (max-width: 1450px) and (min-width: 761px) {
+  #dashboard.workspace-shell-ready .op-metric-grid {
+    grid-template-columns: repeat(3, minmax(180px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 980px) and (min-width: 761px) {
+  #dashboard.workspace-shell-ready .op-metric-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr)) !important;
+  }
+}
