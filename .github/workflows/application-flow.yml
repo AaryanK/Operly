@@ -73,6 +73,7 @@ jobs:
           packages/channels/linking.py
           packages/channels/service.py
           packages/context/service.py
+          packages/security/execution_context.py
           packages/security/permissions.py
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
