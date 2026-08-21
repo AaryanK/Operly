@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.channel_models import ContextRecord
 from packages.database.models import AppUser, Tenant, TenantMember
+from packages.security.temporal_context import resolve_temporal_context
 
 
 @dataclass(slots=True)
@@ -17,6 +18,7 @@ class LoadedContext:
     workspace_name: str | None = None
     workspace_role: str | None = None
     tenant_context_authorized: bool = False
+    temporal_prompt: str | None = None
 
     def as_prompt(self) -> str:
         sections: list[str] = []
@@ -30,6 +32,8 @@ class LoadedContext:
                 "Use these values to resolve words such as I, me, my, we, our, and this workspace. "
                 "Do not invent a different identity, role, or workspace."
             )
+        if self.temporal_prompt:
+            sections.append(self.temporal_prompt)
         if self.human:
             sections.append(
                 "PRIVATE HUMAN CONTEXT (only for the current authenticated human):\n"
@@ -269,7 +273,7 @@ class ContextService:
         query: str = "",
         per_scope: int = 8,
     ) -> LoadedContext:
-        """Load only query-relevant records plus trusted session identity.
+        """Load only query-relevant records plus trusted session identity and time.
 
         Recent records are deliberately not preloaded. If the model needs broader
         memory or workspace history it must use the authorized context tools,
@@ -286,6 +290,11 @@ class ContextService:
                 )
             )
 
+        temporal = await resolve_temporal_context(
+            db,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         has_query = bool(cls._query_terms(query))
         limit = max(1, min(per_scope, 12))
 
@@ -330,4 +339,5 @@ class ContextService:
             workspace_name=tenant_row.name if tenant_row else None,
             workspace_role=membership.role if membership else None,
             tenant_context_authorized=bool(allow_tenant_context and membership),
+            temporal_prompt=temporal.as_prompt(),
         )
