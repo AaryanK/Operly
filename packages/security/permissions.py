@@ -80,7 +80,14 @@ async def resolve_workspace_permissions(db: AsyncSession, *, tenant_id: str, rol
             )
         )
     ).all()
-    return {str(permission) for permission in rows if permission in KNOWN_PERMISSIONS}
+    explicit = {str(permission) for permission in rows if permission in KNOWN_PERMISSIONS}
+    # System roles are product defaults. When Operly gains a new built-in capability,
+    # existing workspaces should adapt automatically instead of freezing the permission
+    # universe that happened to exist when that workspace was created. Custom roles stay
+    # explicit and therefore never gain new authority silently.
+    if workspace_role.is_system and role_key in DEFAULT_ROLE_AUTHORITY:
+        explicit |= default_permissions(role_key)
+    return explicit
 
 
 def normalize_role_key(value: str) -> str:
