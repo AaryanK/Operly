@@ -18,3 +18,14 @@ document.addEventListener("click", async (event) => {
       `<div class="error">${String(error.message || error)}</div>`;
   }
 }, true);
+
+// The workspace shell is intentionally loaded from this tiny bridge so the
+// legacy feature scripts can keep operating while the product migrates to the
+// new Discord-style multi-workspace navigation model.
+if (!document.querySelector('script[data-operly-workspace-shell]')) {
+  const script = document.createElement("script");
+  script.src = "/static/workspace-shell.js?v=20260821-shell-v1";
+  script.defer = true;
+  script.dataset.operlyWorkspaceShell = "1";
+  document.head.append(script);
+}
