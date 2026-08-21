@@ -53,6 +53,15 @@ if (!document.querySelector('link[data-operly-frontend-overhaul]')) {
   document.head.append(link);
 }
 
+// Final viewport and responsive corrections must win the entire legacy cascade.
+if (!document.querySelector('link[data-operly-viewport-fix]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/viewport-fix.css?v=20260821-viewport-v1";
+  link.dataset.operlyViewportFix = "1";
+  document.head.append(link);
+}
+
 if (!document.querySelector('script[data-operly-modern]')) {
   const script = document.createElement("script");
   script.src = "/static/operly-modern.js?v=20260821-modern-v1";
@@ -77,5 +86,15 @@ if (!document.querySelector('script[data-operly-time-sync]')) {
   script.src = "/static/time-sync.js?v=20260821-time-v1";
   script.defer = true;
   script.dataset.operlyTimeSync = "1";
+  document.head.append(script);
+}
+
+// Reconcile the Operations dashboard's status language with the actual alert
+// and snapshot data after the shell renderer has populated the page.
+if (!document.querySelector('script[data-operly-operations-semantic-fix]')) {
+  const script = document.createElement("script");
+  script.src = "/static/operations-semantic-fix.js?v=20260821-semantics-v1";
+  script.defer = true;
+  script.dataset.operlyOperationsSemanticFix = "1";
   document.head.append(script);
 }
