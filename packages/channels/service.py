@@ -6,6 +6,7 @@ from packages.business_brain import AgentInput, get_agent_service
 from packages.channels.envelope import ChannelEnvelope, ChannelResponse
 from packages.channels.guest_chat import get_guest_conversation_service
 from packages.channels.identity import IdentityService
+from packages.database.agent_models import AgentConversation
 from packages.database.models import Tenant
 from packages.security.principals import PrincipalService
 
@@ -171,6 +172,30 @@ class ChannelService:
                 external_conversation_id=envelope.external_conversation_id,
             )
             conversation_id = state.agent_conversation_id if state else None
+
+            # Channel state is only a cache. Validate it against the freshly resolved
+            # security scope before reuse so historical bugs, identity upgrades, or
+            # workspace moves cannot poison future requests with a stale conversation.
+            if conversation_id:
+                conversation = await db.get(AgentConversation, conversation_id)
+                expected_principal = f"user:{resolved.user_id}"
+                if (
+                    conversation is None
+                    or conversation.tenant_id != resolved.tenant_id
+                    or conversation.principal_id != expected_principal
+                    or conversation.channel != envelope.provider
+                ):
+                    conversation_id = None
+                    await IdentityService.upsert_conversation_state(
+                        db,
+                        provider=envelope.provider,
+                        external_user_id=envelope.external_user_id,
+                        external_conversation_id=envelope.external_conversation_id,
+                        user_id=resolved.user_id,
+                        active_tenant_id=resolved.tenant_id,
+                        clear_agent_conversation=True,
+                        metadata={"direct": envelope.is_direct, "scope_repaired": True},
+                    )
 
         result = await get_agent_service().run(
             AgentInput(

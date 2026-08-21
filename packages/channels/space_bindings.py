@@ -1,7 +1,11 @@
+import json
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.channels.identity import IdentityService
 from packages.database.channel_models import ChannelInstallation
+from packages.database.models import TenantMember
 from packages.security.permissions import resolve_workspace_permissions
 
 
@@ -31,6 +35,29 @@ class ExternalSpaceBindingService:
         )
         return membership.role == "owner" or "workspace:channels:manage" in permissions
 
+    @staticmethod
+    async def _is_reclaimable_legacy_binding(
+        db: AsyncSession,
+        installation: ChannelInstallation,
+    ) -> bool:
+        if installation.provisional:
+            return True
+        try:
+            metadata = json.loads(installation.metadata_json or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        if not metadata.get("legacy_discord_guild"):
+            return False
+        members = await db.scalar(
+            select(func.count(TenantMember.id)).where(
+                TenantMember.tenant_id == installation.tenant_id
+            )
+        )
+        # Old pre-workspace Discord projections sometimes point at an orphan tenant
+        # with no human membership. A verified external administrator may reclaim
+        # only that orphaned compatibility binding into a workspace they can manage.
+        return int(members or 0) == 0
+
     @classmethod
     async def bind(
         cls,
@@ -58,15 +85,13 @@ class ExternalSpaceBindingService:
             external_space_id=str(external_space_id),
         )
         if existing and existing.tenant_id != tenant_id and not existing.provisional:
-            # `/bind` is an explicit move request. Allow it only when the same
-            # authenticated human can manage both the current source workspace
-            # and the requested target workspace, in addition to having verified
-            # authority over the external space itself (for Discord: Manage Server).
-            if not await cls._can_manage_workspace(
+            source_authorized = await cls._can_manage_workspace(
                 db,
                 user_id=user_id,
                 tenant_id=existing.tenant_id,
-            ):
+            )
+            reclaimable_legacy = await cls._is_reclaimable_legacy_binding(db, existing)
+            if not source_authorized and not reclaimable_legacy:
                 raise SpaceBindingError(
                     "External space is already bound to another workspace that you cannot manage"
                 )
@@ -87,6 +112,12 @@ class ExternalSpaceBindingService:
             existing.display_name = display_name[:200]
             existing.provisional = False
             existing.status = "connected"
+            try:
+                metadata = json.loads(existing.metadata_json or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            metadata["rebound_under_workspace_security"] = True
+            existing.metadata_json = json.dumps(metadata, separators=(",", ":"))
         await db.flush()
         return existing
 
