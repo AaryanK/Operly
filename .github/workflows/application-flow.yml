@@ -34,6 +34,7 @@ on:
       - "tests/test_workspace_security_boundary.py"
       - "tests/test_principal_access_architecture.py"
       - "tests/test_unified_runtime_context.py"
+      - "tests/test_durable_runtime_state.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -68,6 +69,7 @@ jobs:
           alembic/versions/0024_principals_clients_mcp.py
           alembic/versions/0025_principal_conversations.py
           alembic/versions/0026_action_provenance.py
+          alembic/versions/0027_global_human_memory.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
@@ -104,6 +106,9 @@ jobs:
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
           packages/capabilities/context_provider.py
+          packages/capabilities/action_provider.py
+          packages/capabilities/history_provider.py
+          packages/capabilities/gmail_draft_provider.py
           packages/capabilities/runtime_context.py
           packages/capabilities/personal_provider.py
           packages/capabilities/business_provider.py
@@ -144,6 +149,7 @@ jobs:
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py
           tests/test_unified_runtime_context.py
+          tests/test_durable_runtime_state.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production

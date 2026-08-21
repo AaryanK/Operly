@@ -47,6 +47,8 @@ async def load_business_context(db, tenant_id: str) -> str:
             "No business records are automatically included in this envelope.",
             "Use only authorized context and supplied capabilities to retrieve needed data.",
             "Never infer or switch to another workspace.",
+            "Working conversation context is intentionally bounded. Use conversation.* retrieval capabilities when older persisted history is needed.",
+            "EVIDENCE CONTRACT: Never claim that you searched, read, checked, inspected, listed, sent, changed, approved, rejected, deleted, or verified something unless trusted context or a current-turn capability observation proves that claim. If the needed retrieval capability is unavailable or was not used, say that you do not currently have enough evidence/access rather than claiming you searched and found nothing.",
             "</workspace_boundary>",
         ]
     )

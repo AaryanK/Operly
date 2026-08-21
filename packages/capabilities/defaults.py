@@ -1,5 +1,8 @@
+from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
+from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
+from packages.capabilities.history_provider import ConversationHistoryProvider
 from packages.capabilities.message_curation import MessageCurationProvider
 from packages.capabilities.operations_provider import OperationsProvider
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
@@ -42,6 +45,8 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         OperlyAnalyticsProvider(),
         PersonalRuntimeProvider(),
         ContextProvider(),
+        ConversationHistoryProvider(),
+        ActionLifecycleProvider(),
         UnifiedWebsiteProvider(),
         UnifiedBusinessProvider(),
         WorkspaceProvider(),
@@ -54,6 +59,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         PresenceOperationsProvider(),
         DiscordProvider(),
         GmailProvider(),
+        GmailDraftLifecycleProvider(),
         GoogleCalendarProvider(),
     ):
         registry.register(provider)
