@@ -14,6 +14,7 @@ from packages.business_brain.attachments.multimodal_processor import attachment_
 from packages.business_brain.attachments.privacy import redacted_name
 from packages.business_brain.ollama_client import OllamaError
 from packages.business_brain.security import AgentSecurityError
+from packages.capabilities.time_context import user_time_context
 from packages.database.agent_models import AgentConversation, AgentMessage, AttachmentAudit
 from packages.database.db import session_scope
 from packages.model_runtime.semantic_router import SemanticRoutingError
@@ -26,6 +27,17 @@ class ChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     conversation_id: str | None = Field(default=None, max_length=120)
     application_id: str | None = Field(default=None, max_length=120)
+    user_timezone: str | None = Field(default=None, max_length=100)
+
+
+def _time_metadata(requested_timezone: str | None) -> dict:
+    context = user_time_context(requested_timezone)
+    return {
+        **context,
+        "dashboard_context": {
+            "user_time": context,
+        },
+    }
 
 
 async def _run_agent(auth: AuthContext, request: AgentInput):
@@ -58,6 +70,7 @@ async def chat(
                 "user_id": auth.user.id,
                 "role": auth.role,
                 "allow_tenant_context": True,
+                **_time_metadata(payload.user_timezone),
             },
         ),
     )
@@ -68,6 +81,7 @@ async def chat_with_attachments(
     message: str = Form(default="", max_length=8_000),
     conversation_id: str | None = Form(default=None, max_length=120),
     application_id: str | None = Form(default=None, max_length=120),
+    user_timezone: str | None = Form(default=None, max_length=100),
     files: list[UploadFile] = File(default=[]),
     auth: AuthContext = Depends(get_auth_context),
 ):
@@ -158,6 +172,7 @@ async def chat_with_attachments(
                 "role": auth.role,
                 "allow_tenant_context": True,
                 "attachment_audit_id": audit_id,
+                **_time_metadata(user_timezone),
             },
         ),
     )

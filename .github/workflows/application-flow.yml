@@ -23,6 +23,7 @@ on:
       - "tests/test_authentication.py"
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
+      - "tests/test_calendar_time_context.py"
       - "tests/test_channel_context.py"
       - "tests/test_connector_runtime.py"
       - "tests/test_company_intelligence.py"
@@ -100,6 +101,7 @@ jobs:
           packages/capabilities/defaults.py
           packages/capabilities/context_provider.py
           packages/capabilities/runtime_context.py
+          packages/capabilities/time_context.py
           packages/capabilities/business_provider.py
           packages/capabilities/workspace_provider.py
           packages/capabilities/operations_provider.py
@@ -125,6 +127,7 @@ jobs:
           tests/test_authentication.py
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
+          tests/test_calendar_time_context.py
           tests/test_channel_context.py
           tests/test_connector_runtime.py
           tests/test_company_intelligence.py

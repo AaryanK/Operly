@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.business_brain import AgentInput, get_agent_service
+from packages.capabilities.time_context import user_time_context
 from packages.channels.envelope import ChannelEnvelope, ChannelResponse
 from packages.channels.guest_chat import get_guest_conversation_service
 from packages.channels.identity import IdentityService
@@ -97,6 +98,7 @@ class ChannelService:
     async def handle(cls, envelope: ChannelEnvelope) -> ChannelResponse:
         from packages.database.db import session_scope
 
+        time_metadata: dict[str, str] = {}
         async with session_scope() as db:
             resolved = await cls.resolve(db, envelope)
             if envelope.is_direct and resolved.user_id is None:
@@ -164,6 +166,19 @@ class ChannelService:
                 external_conversation_id=envelope.external_conversation_id,
             )
             conversation_id = state.agent_conversation_id if state else None
+            tenant = await db.get(Tenant, resolved.tenant_id)
+            requested_timezone = str(envelope.metadata.get("user_timezone") or "").strip()
+            time_metadata = user_time_context(
+                requested_timezone or (tenant.timezone if tenant else None)
+            )
+
+        existing_dashboard = envelope.metadata.get("dashboard_context")
+        dashboard_context = (
+            dict(existing_dashboard)
+            if isinstance(existing_dashboard, dict)
+            else {}
+        )
+        dashboard_context["user_time"] = time_metadata
 
         result = await get_agent_service().run(
             AgentInput(
@@ -176,6 +191,8 @@ class ChannelService:
                 images=list(envelope.images),
                 metadata={
                     **dict(envelope.metadata),
+                    **time_metadata,
+                    "dashboard_context": dashboard_context,
                     "user_id": resolved.user_id,
                     "role": resolved.role,
                     "allow_tenant_context": resolved.allow_tenant_context,

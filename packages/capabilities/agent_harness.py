@@ -4,6 +4,7 @@ from typing import Any
 
 from packages.actions.service import ActionService
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.time_context import normalize_calendar_arguments
 from packages.database.db import session_scope
 from packages.security.execution_context import (
     ExecutionContextError,
@@ -143,7 +144,11 @@ class PluginAgentHarness:
         if not authority or not self.capability_authorized(name, authority):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
         registry = await self.registry_for(context)
-        arguments = dict(arguments)
+        arguments = normalize_calendar_arguments(
+            name,
+            dict(arguments),
+            requested_timezone=str(context.metadata.get("user_timezone") or "") or None,
+        )
 
         async with session_scope() as db:
             service = ActionService(

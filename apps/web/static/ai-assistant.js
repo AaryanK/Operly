@@ -22,6 +22,14 @@
     }).format(new Date(value));
   }
 
+  function userTimezone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  }
+
   function messageHtml(role, content) {
     return `<div class="ai-message ${role}">${escapeHtml(content)}</div>`;
   }
@@ -230,6 +238,7 @@
   async function multipartChat(text, files) {
     const form = new FormData();
     form.append("message", text);
+    form.append("user_timezone", userTimezone());
     if (conversationId) form.append("conversation_id", conversationId);
     const applicationId = document.querySelector("#ai-application")?.value;
     if (applicationId) form.append("application_id", applicationId);
@@ -280,7 +289,8 @@
         body: JSON.stringify({
           message: text,
           conversation_id: conversationId,
-          application_id: document.querySelector("#ai-application")?.value || null
+          application_id: document.querySelector("#ai-application")?.value || null,
+          user_timezone: userTimezone()
         })
       });
 
