@@ -20,7 +20,8 @@ class WorkspaceRole(Base):
         nullable=False,
         index=True,
     )
-    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    # TenantMember.role is the persisted membership key and is currently 30 chars.
+    key: Mapped[str] = mapped_column(String(30), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
