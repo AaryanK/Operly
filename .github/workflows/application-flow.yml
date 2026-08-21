@@ -33,6 +33,7 @@ on:
       - "tests/test_unified_application_flow.py"
       - "tests/test_workspace_security_boundary.py"
       - "tests/test_principal_access_architecture.py"
+      - "tests/test_unified_runtime_context.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -89,6 +90,7 @@ jobs:
           packages/security/execution_context.py
           packages/security/permissions.py
           packages/security/principals.py
+          packages/security/temporal_context.py
           packages/plugins/manifest.py
           packages/mcp/policy.py
           packages/mcp/gateway.py
@@ -98,10 +100,12 @@ jobs:
           packages/connectors/discord/secure_runtime.py
           packages/connectors/discord/slash_commands.py
           packages/connectors/discord/bot_shared.py
+          packages/connectors/discord/provider.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
           packages/capabilities/context_provider.py
           packages/capabilities/runtime_context.py
+          packages/capabilities/personal_provider.py
           packages/capabilities/business_provider.py
           packages/capabilities/workspace_provider.py
           packages/capabilities/operations_provider.py
@@ -117,6 +121,7 @@ jobs:
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
           node --check apps/web/static/settings-scopes.js
+          node --check apps/web/static/time-sync.js
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -138,6 +143,7 @@ jobs:
           tests/test_unified_application_flow.py
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py
+          tests/test_unified_runtime_context.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production
