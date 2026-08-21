@@ -12,8 +12,6 @@ from packages.security.execution_context import (
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
 
 
-# Compatibility alias for older imports/tests. Runtime authorization is resolved
-# from the current workspace membership instead of trusting this mapping directly.
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
 
 
@@ -36,13 +34,7 @@ class PluginInvocationContext:
 
 
 class PluginAgentHarness:
-    """Single execution authority between the reasoning model and plugins.
-
-    The model never selects its workspace, membership role, or permission set.
-    Those are resolved by trusted application code before schemas are exposed and
-    re-resolved again before every invocation so membership changes take effect
-    immediately.
-    """
+    """Single execution authority between the reasoning model and plugins."""
 
     def __init__(self, registry=None):
         self.registry = registry
@@ -52,7 +44,6 @@ class PluginAgentHarness:
             return self.registry
 
         from sqlalchemy import select
-
         from packages.connectors.google_provider import (
             CALENDAR,
             CALENDAR_FREEBUSY,
@@ -99,7 +90,6 @@ class PluginAgentHarness:
         return default_registry(enabled_external)
 
     def authority(self, role: str) -> set[str]:
-        """Return built-in defaults for compatibility and non-runtime callers."""
         return default_permissions(role)
 
     async def authority_for(self, context: PluginInvocationContext) -> set[str]:
@@ -122,12 +112,6 @@ class PluginAgentHarness:
 
     @staticmethod
     def capability_authorized(capability_id: str, authority: set[str]) -> bool:
-        """Apply extra privacy authority for tenant-connected personal accounts.
-
-        Gmail mailbox capabilities are intentionally stricter than ordinary tenant
-        message search. A member may read shared Discord/Operly messages without
-        automatically inheriting access to an owner's connected Gmail mailbox.
-        """
         required = _PRIVATE_CONNECTOR_AUTHORITY.get(capability_id)
         return required is None or required in authority
 
@@ -138,10 +122,7 @@ class PluginAgentHarness:
         registry = await self.registry_for(context)
         return [
             item.model_tool_schema()
-            for item in registry.metadata(
-                context.tenant_id,
-                authority=authority,
-            )
+            for item in registry.metadata(context.tenant_id, authority=authority)
             if self.capability_authorized(item.id, authority)
         ]
 
@@ -174,10 +155,7 @@ class PluginAgentHarness:
             try:
                 definition = next(
                     item
-                    for item in registry.metadata(
-                        context.tenant_id,
-                        authority=authority,
-                    )
+                    for item in registry.metadata(context.tenant_id, authority=authority)
                     if item.id == name
                 )
             except StopIteration:
@@ -190,6 +168,13 @@ class PluginAgentHarness:
             expected = str(
                 arguments.pop("_expected_outcome", "") or definition.description
             )[:2000]
+            runtime_metadata = dict(context.metadata)
+            if context.user_id:
+                runtime_metadata["principal_id"] = f"user:{context.user_id}"
+            runtime_metadata.setdefault(
+                "client_id",
+                str(context.metadata.get("client_id") or context.channel or "operly"),
+            )
 
             try:
                 action = await service.propose(
@@ -206,7 +191,7 @@ class PluginAgentHarness:
                     ),
                     runtime_context={
                         "channel": context.channel,
-                        "metadata": dict(context.metadata),
+                        "metadata": runtime_metadata,
                     },
                 )
             except (ValueError, PermissionError, LookupError) as error:
@@ -231,7 +216,6 @@ class PluginAgentHarness:
         context: PluginInvocationContext,
         max_steps: int = 8,
     ):
-        """Reusable adaptive model loop; observations remain in one session."""
         trace = []
         for _ in range(max_steps):
             message = await client.chat(messages, await self.schemas(context))
@@ -254,7 +238,6 @@ class PluginAgentHarness:
                         arguments = {}
                 if not isinstance(arguments, dict):
                     arguments = {}
-
                 result = await self.invoke(
                     str(function.get("name") or ""),
                     arguments,
