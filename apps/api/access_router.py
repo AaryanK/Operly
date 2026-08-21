@@ -13,6 +13,15 @@ from packages.security.principals import PrincipalService
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
+SUPPORTED_EXTERNAL_CLIENTS = {
+    "chatgpt": {
+        "id": "chatgpt",
+        "name": "ChatGPT",
+        "surface": "mcp",
+        "owner_managed": True,
+    }
+}
+
 
 class ClientGrantInput(BaseModel):
     client_id: str = Field(min_length=1, max_length=120)
@@ -33,6 +42,16 @@ async def _require_manage(db: AsyncSession, auth: AuthContext, permission: str) 
         raise HTTPException(403, "Workspace permission denied")
 
 
+def _require_owner(auth: AuthContext) -> None:
+    if auth.role != "owner":
+        raise HTTPException(403, "Only the workspace owner can manage external AI access")
+
+
+@router.get("/external-clients")
+async def external_clients(auth: AuthContext = Depends(get_auth_context)):
+    return list(SUPPORTED_EXTERNAL_CLIENTS.values())
+
+
 @router.get("/me")
 async def current_principal(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     principal = await PrincipalService.user_principal(db, auth.user.id)
@@ -49,8 +68,16 @@ async def current_principal(auth: AuthContext = Depends(get_auth_context), db: A
 
 @router.get("/client-grants")
 async def list_client_grants(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    _require_owner(auth)
     principal = await PrincipalService.user_principal(db, auth.user.id)
-    rows = (await db.scalars(select(ClientGrant).where(ClientGrant.principal_id == principal.id))).all()
+    rows = (
+        await db.scalars(
+            select(ClientGrant).where(
+                ClientGrant.principal_id == principal.id,
+                ClientGrant.tenant_id == auth.tenant.id,
+            )
+        )
+    ).all()
     return [
         {
             "id": row.id,
@@ -70,13 +97,20 @@ async def create_client_grant(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_owner(auth)
+    client_id = payload.client_id.strip().lower()
+    if client_id not in SUPPORTED_EXTERNAL_CLIENTS:
+        raise HTTPException(400, "Unsupported external AI client")
+    if not payload.workspace_only:
+        raise HTTPException(400, "External AI grants must be scoped to the active workspace")
+
     principal = await PrincipalService.user_principal(db, auth.user.id)
-    tenant_id = auth.tenant.id if payload.workspace_only else None
+    tenant_id = auth.tenant.id
     existing = await db.scalar(
         select(ClientGrant).where(
             ClientGrant.principal_id == principal.id,
             ClientGrant.tenant_id == tenant_id,
-            ClientGrant.client_id == payload.client_id,
+            ClientGrant.client_id == client_id,
         )
     )
     scopes = sorted({str(item).strip() for item in payload.scopes if str(item).strip()})
@@ -89,7 +123,7 @@ async def create_client_grant(
         row = ClientGrant(
             principal_id=principal.id,
             tenant_id=tenant_id,
-            client_id=payload.client_id,
+            client_id=client_id,
             scopes_json=json.dumps(scopes, separators=(",", ":")),
             status="active",
         )
@@ -104,11 +138,13 @@ async def revoke_client_grant(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_owner(auth)
     principal = await PrincipalService.user_principal(db, auth.user.id)
     row = await db.scalar(
         select(ClientGrant).where(
             ClientGrant.id == grant_id,
             ClientGrant.principal_id == principal.id,
+            ClientGrant.tenant_id == auth.tenant.id,
         )
     )
     if row is None:
