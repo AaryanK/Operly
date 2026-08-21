@@ -26,6 +26,7 @@ from apps.api.csrf import CSRFMiddleware
 from apps.api.custom_software_router import router as custom_software_router
 from apps.api.dashboard_studio_router import router as dashboard_studio_router
 from apps.api.integrations_router import router as integrations_router
+from apps.api.mcp_router import router as mcp_router
 from apps.api.operations_router import router as operations_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
@@ -173,6 +174,7 @@ for router in (
     session_router,
     workspace_router,
     access_router,
+    mcp_router,
     approvals_router,
     integrations_router,
     business_router,
