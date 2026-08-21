@@ -31,6 +31,7 @@ def upgrade():
             sa.Column("metadata_json", sa.Text(), nullable=False),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("updated_at", sa.DateTime(), nullable=False),
+            sa.UniqueConstraint("kind", "user_id", name="uq_principal_kind_user"),
         )
         for col in ("kind", "user_id", "status", "expires_at", "claimed_by_user_id"):
             op.create_index(f"ix_principals_{col}", "principals", [col])
