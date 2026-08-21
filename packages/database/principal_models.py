@@ -24,7 +24,10 @@ class Principal(Base):
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    __table_args__ = (Index("ix_principal_kind_status", "kind", "status"),)
+    __table_args__ = (
+        UniqueConstraint("kind", "user_id", name="uq_principal_kind_user"),
+        Index("ix_principal_kind_status", "kind", "status"),
+    )
 
 
 class ExternalPrincipalBinding(Base):
