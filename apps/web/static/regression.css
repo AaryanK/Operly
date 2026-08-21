@@ -1,3 +1,4 @@
+@import url('/static/operly-modern.css?v=20260821-modern-v1');
 html,body{max-width:100%;overflow-x:hidden}
 .operly-dock.page-suppressed{display:none}
 .studio-editor,.app-builder{width:100%;max-width:100%;align-items:stretch}
