@@ -1,7 +1,7 @@
 import json
 import os
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -38,6 +38,10 @@ def _public_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def _resource(request: Request) -> str:
+    return f"{_public_base_url(request)}/mcp"
+
+
 def _client_secret() -> str:
     return os.getenv("CHATGPT_MCP_CLIENT_SECRET", "").strip()
 
@@ -56,6 +60,20 @@ def _verify_client(client_id: str, client_secret: str | None) -> None:
         raise HTTPException(401, "Invalid MCP OAuth client")
     if not secrets.compare_digest(expected, client_secret):
         raise HTTPException(401, "Invalid MCP OAuth client")
+
+
+def _redirect_with_query(uri: str, values: dict[str, str]) -> str:
+    parsed = urlsplit(uri)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(values)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def _oauth_challenge(request: Request) -> dict[str, str]:
+    base = _public_base_url(request)
+    return {
+        "WWW-Authenticate": f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource"'
+    }
 
 
 async def _active_grant(db: AsyncSession, grant_id: str) -> ClientGrant:
@@ -87,10 +105,11 @@ async def oauth_metadata(request: Request):
 
 
 @router.get("/.well-known/oauth-protected-resource")
+@router.get("/.well-known/oauth-protected-resource/mcp")
 async def protected_resource_metadata(request: Request):
     base = _public_base_url(request)
     return {
-        "resource": f"{base}/mcp",
+        "resource": _resource(request),
         "authorization_servers": [base],
         "bearer_methods_supported": ["header"],
     }
@@ -102,6 +121,7 @@ async def authorize_chatgpt(
     response_type: str = Query(...),
     client_id: str = Query(...),
     redirect_uri: str = Query(...),
+    resource: str = Query(...),
     state: str | None = Query(default=None),
     scope: str = Query(default=""),
     code_challenge: str = Query(...),
@@ -111,6 +131,8 @@ async def authorize_chatgpt(
 ):
     if response_type != "code" or client_id != CHATGPT_CLIENT_ID:
         raise HTTPException(400, "Unsupported OAuth request")
+    if resource != _resource(request):
+        raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
     if code_challenge_method != "S256":
         raise HTTPException(400, "PKCE S256 is required")
     allowed_redirects = _allowed_redirect_uris()
@@ -148,17 +170,20 @@ async def authorize_chatgpt(
         redirect_uri=redirect_uri,
         scopes=effective_scopes,
         code_challenge=code_challenge,
+        resource=resource,
     )
     params = {"code": code}
     if state is not None:
         params["state"] = state
-    return RedirectResponse(f"{redirect_uri}?{urlencode(params)}", status_code=302)
+    return RedirectResponse(_redirect_with_query(redirect_uri, params), status_code=302)
 
 
 @router.post("/oauth/token")
 async def oauth_token(
+    request: Request,
     grant_type: str = Form(...),
     client_id: str = Form(...),
+    resource: str = Form(...),
     client_secret: str | None = Form(default=None),
     code: str | None = Form(default=None),
     redirect_uri: str | None = Form(default=None),
@@ -167,6 +192,8 @@ async def oauth_token(
     db: AsyncSession = Depends(get_db),
 ):
     _verify_client(client_id, client_secret)
+    if resource != _resource(request):
+        raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
     try:
         if grant_type == "authorization_code":
             if not code or not redirect_uri or not code_verifier:
@@ -176,13 +203,14 @@ async def oauth_token(
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 code_verifier=code_verifier,
+                resource=resource,
             )
         elif grant_type == "refresh_token":
             if not refresh_token:
                 raise HTTPException(400, "Missing refresh token")
             payload = decode_refresh_token(refresh_token)
-            if payload.get("client_id") != client_id:
-                raise HTTPException(401, "Refresh token client mismatch")
+            if payload.get("client_id") != client_id or payload.get("resource") != resource:
+                raise HTTPException(401, "Refresh token client or resource mismatch")
         else:
             raise HTTPException(400, "Unsupported grant type")
     except McpOAuthError as exc:
@@ -201,6 +229,7 @@ async def oauth_token(
         "principal_id": grant.principal_id,
         "tenant_id": grant.tenant_id,
         "client_id": CHATGPT_CLIENT_ID,
+        "resource": resource,
         "scopes": token_scopes,
     }
     return {
@@ -213,25 +242,32 @@ async def oauth_token(
 
 
 async def _request_context(
+    request: Request,
     authorization: str | None,
     db: AsyncSession,
 ) -> McpRequestContext:
+    challenge = _oauth_challenge(request)
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "Bearer token required")
+        raise HTTPException(401, "Bearer token required", headers=challenge)
     token = authorization.split(" ", 1)[1].strip()
     try:
         payload = decode_access_token(token)
     except McpOAuthError as exc:
-        raise HTTPException(401, str(exc)) from exc
-    if payload.get("client_id") != CHATGPT_CLIENT_ID:
-        raise HTTPException(401, "Invalid MCP client")
+        raise HTTPException(401, str(exc), headers=challenge) from exc
+    if payload.get("client_id") != CHATGPT_CLIENT_ID or payload.get("resource") != _resource(request):
+        raise HTTPException(401, "Invalid MCP client or token audience", headers=challenge)
 
-    grant = await _active_grant(db, str(payload.get("grant_id", "")))
+    try:
+        grant = await _active_grant(db, str(payload.get("grant_id", "")))
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            exc.headers = challenge
+        raise
     if grant.principal_id != payload.get("principal_id") or grant.tenant_id != payload.get("tenant_id"):
-        raise HTTPException(401, "MCP token identity mismatch")
+        raise HTTPException(401, "MCP token identity mismatch", headers=challenge)
     principal = await db.get(Principal, grant.principal_id)
     if principal is None or not principal.user_id or principal.status != "active":
-        raise HTTPException(401, "MCP principal is unavailable")
+        raise HTTPException(401, "MCP principal is unavailable", headers=challenge)
     membership = await db.scalar(
         select(TenantMember).where(
             TenantMember.user_id == principal.user_id,
@@ -260,11 +296,12 @@ def _rpc_error(request_id, code: int, message: str):
 
 @router.post("/mcp")
 async def mcp_endpoint(
+    request: Request,
     payload: dict,
     authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    context = await _request_context(authorization, db)
+    context = await _request_context(request, authorization, db)
     method = payload.get("method")
     request_id = payload.get("id")
 
