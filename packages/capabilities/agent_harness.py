@@ -5,15 +5,15 @@ from typing import Any
 from packages.actions.service import ActionService
 from packages.capabilities.defaults import default_registry
 from packages.database.db import session_scope
-from packages.security.permissions import (
-    DEFAULT_ROLE_AUTHORITY,
-    default_permissions,
-    resolve_workspace_permissions,
+from packages.security.execution_context import (
+    ExecutionContextError,
+    resolve_execution_context,
 )
+from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
 
 
 # Compatibility alias for older imports/tests. Runtime authorization is resolved
-# per workspace through resolve_workspace_permissions().
+# from the current workspace membership instead of trusting this mapping directly.
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
 
 
@@ -40,7 +40,8 @@ class PluginAgentHarness:
 
     The model never selects its workspace, membership role, or permission set.
     Those are resolved by trusted application code before schemas are exposed and
-    are re-resolved again before every invocation.
+    re-resolved again before every invocation so membership changes take effect
+    immediately.
     """
 
     def __init__(self, registry=None):
@@ -102,12 +103,22 @@ class PluginAgentHarness:
         return default_permissions(role)
 
     async def authority_for(self, context: PluginInvocationContext) -> set[str]:
-        async with session_scope() as db:
-            return await resolve_workspace_permissions(
-                db,
-                tenant_id=context.tenant_id,
-                role=context.role,
-            )
+        if not context.user_id:
+            return set()
+        try:
+            async with session_scope() as db:
+                execution = await resolve_execution_context(
+                    db,
+                    workspace_id=context.tenant_id,
+                    user_id=context.user_id,
+                    channel=context.channel,
+                    conversation_id=str(context.metadata.get("_conversation_id") or "") or None,
+                    metadata=context.metadata,
+                    require_membership=True,
+                )
+        except ExecutionContextError:
+            return set()
+        return set(execution.permissions)
 
     @staticmethod
     def capability_authorized(capability_id: str, authority: set[str]) -> bool:
@@ -121,8 +132,10 @@ class PluginAgentHarness:
         return required is None or required in authority
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
-        registry = await self.registry_for(context)
         authority = await self.authority_for(context)
+        if not authority:
+            return []
+        registry = await self.registry_for(context)
         return [
             item.model_tool_schema()
             for item in registry.metadata(
@@ -146,7 +159,7 @@ class PluginAgentHarness:
         call_id: str | None = None,
     ) -> dict[str, Any]:
         authority = await self.authority_for(context)
-        if not self.capability_authorized(name, authority):
+        if not authority or not self.capability_authorized(name, authority):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
         registry = await self.registry_for(context)
         arguments = dict(arguments)
