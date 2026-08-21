@@ -9,7 +9,7 @@ document.addEventListener("click", async (event) => {
     item.classList.toggle("active", item.dataset.page === "assistant");
   });
 
-  document.querySelector("#page-title").textContent = "OPERLY AI";
+  document.querySelector("#page-title").textContent = "Operly";
 
   try {
     await window.renderOperlyAssistant();
@@ -19,19 +19,17 @@ document.addEventListener("click", async (event) => {
   }
 }, true);
 
-// The workspace shell is intentionally loaded from this tiny bridge so the
-// legacy feature scripts can keep operating while the product migrates to the
-// new Discord-style multi-workspace navigation model.
+// Workspace shell: the current production frontend lives in /static, so this
+// bridge mounts the unified workspace navigation over the legacy feature pages.
 if (!document.querySelector('script[data-operly-workspace-shell]')) {
   const script = document.createElement("script");
-  script.src = "/static/workspace-shell.js?v=20260821-shell-v1";
+  script.src = "/static/workspace-shell.js?v=20260821-shell-v2";
   script.defer = true;
   script.dataset.operlyWorkspaceShell = "1";
   document.head.append(script);
 }
 
-// Load the 2026 visual system after every legacy stylesheet so it owns the
-// final cascade without changing any backend contracts or feature routers.
+// Base modern visual system.
 for (const [href, marker] of [
   ["/static/operly-modern.css?v=20260821-modern-v1", "core"],
   ["/static/operly-modern-extras.css?v=20260821-modern-v1", "extras"],
@@ -45,9 +43,16 @@ for (const [href, marker] of [
   }
 }
 
-// The modern interaction layer is deliberately separate from business logic.
-// It adds account/session controls, command navigation and visual repair while
-// keeping all authorization and mutations behind the existing API contracts.
+// Repair layer for the command center, operations dashboard and all workspace
+// surfaces. It is deliberately loaded after the modern base cascade.
+if (!document.querySelector('link[data-operly-frontend-overhaul]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/frontend-overhaul.css?v=20260821-command-center-v1";
+  link.dataset.operlyFrontendOverhaul = "1";
+  document.head.append(link);
+}
+
 if (!document.querySelector('script[data-operly-modern]')) {
   const script = document.createElement("script");
   script.src = "/static/operly-modern.js?v=20260821-modern-v1";
@@ -57,7 +62,7 @@ if (!document.querySelector('script[data-operly-modern]')) {
 }
 
 // Personal identity settings and workspace-owned channel/integration settings
-// are separate security scopes. This layer renders those scopes explicitly.
+// stay separate security scopes.
 if (!document.querySelector('script[data-operly-settings-scopes]')) {
   const script = document.createElement("script");
   script.src = "/static/settings-scopes.js?v=20260821-scopes-v1";
@@ -66,9 +71,7 @@ if (!document.querySelector('script[data-operly-settings-scopes]')) {
   document.head.append(script);
 }
 
-// Capture the authenticated human's browser IANA timezone once and persist it
-// as a personal Operly preference. Every channel/harness later reuses the same
-// canonical timezone instead of implementing channel-specific clock logic.
+// Persist the authenticated human's browser IANA timezone for every channel.
 if (!document.querySelector('script[data-operly-time-sync]')) {
   const script = document.createElement("script");
   script.src = "/static/time-sync.js?v=20260821-time-v1";
