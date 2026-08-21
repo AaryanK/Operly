@@ -226,6 +226,7 @@ class IdentityService:
         user_id: str | None,
         active_tenant_id: str | None,
         agent_conversation_id: str | None = None,
+        clear_agent_conversation: bool = False,
         metadata: dict | None = None,
     ) -> ChannelConversationState:
         row = await cls.conversation_state(
@@ -244,7 +245,9 @@ class IdentityService:
 
         row.user_id = user_id
         row.active_tenant_id = active_tenant_id
-        if agent_conversation_id:
+        if clear_agent_conversation:
+            row.agent_conversation_id = None
+        elif agent_conversation_id:
             row.agent_conversation_id = agent_conversation_id
         if metadata is not None:
             row.metadata_json = json.dumps(metadata, separators=(",", ":"))
