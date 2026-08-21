@@ -64,12 +64,14 @@ jobs:
           alembic/versions/0023_workspace_rbac.py
           alembic/versions/0024_principals_clients_mcp.py
           alembic/versions/0025_principal_conversations.py
+          alembic/versions/0026_action_provenance.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
           packages/database/channel_models.py
           packages/database/workspace_security_models.py
           packages/database/principal_models.py
+          packages/database/company_models.py
           packages/database/schema.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
