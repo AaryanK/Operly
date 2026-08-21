@@ -235,7 +235,10 @@ async def add_workspace_member(
     db: AsyncSession = Depends(get_db),
 ):
     await _require_workspace_permission(db, auth, "workspace:members:manage")
-    role_key = normalize_role_key(payload.role)
+    try:
+        role_key = normalize_role_key(payload.role)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     if not await _role_exists(db, auth.tenant.id, role_key):
         raise HTTPException(status_code=422, detail="Workspace role not found")
     try:
@@ -275,7 +278,10 @@ async def set_workspace_member_role(
     db: AsyncSession = Depends(get_db),
 ):
     await _require_workspace_permission(db, auth, "workspace:members:manage")
-    role_key = normalize_role_key(payload.role)
+    try:
+        role_key = normalize_role_key(payload.role)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     if not await _role_exists(db, auth.tenant.id, role_key):
         raise HTTPException(status_code=422, detail="Workspace role not found")
     membership = await db.scalar(
@@ -305,6 +311,7 @@ async def dashboard(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "workspace:read")
     return await WorkspaceService.dashboard(db, auth.tenant.id)
 
 
@@ -315,6 +322,7 @@ async def list_messages(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "messages:read")
     rows = await WorkspaceService.list_messages(
         db,
         auth.tenant.id,
@@ -340,6 +348,7 @@ async def list_tasks(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "tasks:read")
     rows = await WorkspaceService.list_tasks(db, auth.tenant.id)
     return [
         {
@@ -359,6 +368,7 @@ async def create_task(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "tasks:write")
     try:
         row = await WorkspaceService.create_task(
             db,
@@ -384,6 +394,7 @@ async def complete_task(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "tasks:write")
     try:
         await WorkspaceService.complete_task(db, auth.tenant.id, task_id)
     except LookupError as error:
@@ -397,6 +408,7 @@ async def list_memories(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "memory:read")
     rows = await WorkspaceService.list_memories(db, auth.tenant.id)
     return [
         {
@@ -415,6 +427,7 @@ async def create_memory(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_workspace_permission(db, auth, "memory:write")
     try:
         row = await WorkspaceService.create_memory(
             db,
