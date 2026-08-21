@@ -184,10 +184,14 @@ async def resolve_workspace_permissions(
 
 def normalize_role_key(value: str) -> str:
     raw = "-".join(str(value or "").strip().lower().split())
-    cleaned = "".join(character for character in raw if character.isalnum() or character in {"-", "_"})
+    cleaned = "".join(
+        character
+        for character in raw
+        if character.isalnum() or character in {"-", "_"}
+    )
     if not cleaned:
         raise ValueError("Role key is required")
-    return cleaned[:80]
+    return cleaned[:30]
 
 
 def validate_permissions(values: list[str] | set[str]) -> set[str]:
