@@ -28,18 +28,13 @@ class ToolExposureInput(BaseModel):
 
 
 async def _require_manage(db: AsyncSession, auth: AuthContext, permission: str) -> None:
-    permissions = await resolve_workspace_permissions(
-        db, tenant_id=auth.tenant.id, role=auth.role
-    )
+    permissions = await resolve_workspace_permissions(db, tenant_id=auth.tenant.id, role=auth.role)
     if auth.role != "owner" and permission not in permissions:
         raise HTTPException(403, "Workspace permission denied")
 
 
 @router.get("/me")
-async def current_principal(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
+async def current_principal(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     principal = await PrincipalService.user_principal(db, auth.user.id)
     await db.commit()
     return {
@@ -53,16 +48,9 @@ async def current_principal(
 
 
 @router.get("/client-grants")
-async def list_client_grants(
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
+async def list_client_grants(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     principal = await PrincipalService.user_principal(db, auth.user.id)
-    rows = (
-        await db.scalars(
-            select(ClientGrant).where(ClientGrant.principal_id == principal.id)
-        )
-    ).all()
+    rows = (await db.scalars(select(ClientGrant).where(ClientGrant.principal_id == principal.id))).all()
     return [
         {
             "id": row.id,
@@ -110,17 +98,33 @@ async def create_client_grant(
     return {"id": row.id, "client_id": row.client_id, "workspace_id": row.tenant_id, "scopes": scopes}
 
 
-@router.get("/tool-exposure")
-async def list_tool_exposure(
+@router.delete("/client-grants/{grant_id}")
+async def revoke_client_grant(
+    grant_id: str,
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    principal = await PrincipalService.user_principal(db, auth.user.id)
+    row = await db.scalar(
+        select(ClientGrant).where(
+            ClientGrant.id == grant_id,
+            ClientGrant.principal_id == principal.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(404, "Client grant not found")
+    row.status = "revoked"
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/tool-exposure")
+async def list_tool_exposure(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
     await _require_manage(db, auth, "workspace:read")
     rows = (
         await db.scalars(
-            select(WorkspaceToolExposure).where(
-                WorkspaceToolExposure.tenant_id == auth.tenant.id
-            )
+            select(WorkspaceToolExposure).where(WorkspaceToolExposure.tenant_id == auth.tenant.id)
         )
     ).all()
     return [
