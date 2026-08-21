@@ -51,13 +51,25 @@ class ContextProvider(BaseProvider):
         _read_definition(
             "context.human.search",
             "context_human_search",
-            "Search private context belonging only to the current linked human.",
+            "Search global private context belonging only to the current linked human. This follows the human across authorized workspaces and surfaces.",
             "context:human:read",
         ),
         _remember_definition(
             "context.human.remember",
             "context_human_remember",
-            "Remember private context for the current linked human only.",
+            "Remember a global private fact or preference for the current linked human. Use for person-level facts that should follow them across workspaces and surfaces.",
+            "context:human:write",
+        ),
+        _read_definition(
+            "context.private_workspace_search",
+            "context_private_workspace_search",
+            "Search private context for the current human that is intentionally associated only with the current workspace.",
+            "context:human:read",
+        ),
+        _remember_definition(
+            "context.private_workspace_remember",
+            "context_private_workspace_remember",
+            "Remember a private fact for the current human that should apply only inside the current workspace.",
             "context:human:write",
         ),
         _read_definition(
@@ -114,16 +126,44 @@ class ContextProvider(BaseProvider):
                 rows = await ContextService.search_human(
                     context.db,
                     user_id=user_id or "",
-                    tenant_id=context.tenant_id,
+                    tenant_id=None,
                     query=query,
                 )
                 return CapabilityResult(
                     True,
                     False,
-                    {"matches": [{"id": row.id, "kind": row.kind, "content": row.content} for row in rows]},
+                    {"matches": [{"id": row.id, "kind": row.kind, "content": row.content} for row in rows], "scope": "human_global"},
                 )
 
             if capability_name == "context.human.remember":
+                row = await ContextService.remember_human(
+                    context.db,
+                    user_id=user_id or "",
+                    tenant_id=None,
+                    content=content,
+                    kind=kind,
+                    channel_provider=channel or None,
+                    channel_space_id=str(space_id) if space_id is not None else None,
+                    source_message_id=str(source_message_id) if source_message_id is not None else None,
+                )
+                return CapabilityResult(True, True, {"context_id": row.id, "scope": "human_global"}, row.id)
+
+            if capability_name == "context.private_workspace_search":
+                statement = select(ContextRecord).where(
+                    ContextRecord.scope_type == "human",
+                    ContextRecord.visibility == "private",
+                    ContextRecord.owner_user_id == (user_id or ""),
+                    ContextRecord.tenant_id == context.tenant_id,
+                )
+                statement = ContextService._ranked_query(statement, query).limit(12)
+                rows = (await context.db.scalars(statement)).all()
+                return CapabilityResult(
+                    True,
+                    False,
+                    {"matches": [{"id": row.id, "kind": row.kind, "content": row.content} for row in rows], "scope": "human_workspace_private"},
+                )
+
+            if capability_name == "context.private_workspace_remember":
                 row = await ContextService.remember_human(
                     context.db,
                     user_id=user_id or "",
@@ -134,7 +174,7 @@ class ContextProvider(BaseProvider):
                     channel_space_id=str(space_id) if space_id is not None else None,
                     source_message_id=str(source_message_id) if source_message_id is not None else None,
                 )
-                return CapabilityResult(True, True, {"context_id": row.id, "scope": "human"}, row.id)
+                return CapabilityResult(True, True, {"context_id": row.id, "scope": "human_workspace_private"}, row.id)
 
             if capability_name == "context.tenant.search":
                 rows = await ContextService.search_tenant(
@@ -209,7 +249,7 @@ class ContextProvider(BaseProvider):
     async def verify(self, context, capability_name, arguments, result):
         if not result.success:
             return CapabilityResult(False, result.changed, result.evidence, result.external_reference)
-        if capability_name.endswith(".search"):
+        if capability_name.endswith(".search") or capability_name.endswith("_search"):
             return CapabilityResult(True, False, {"observation_available": True, **result.evidence})
         row = await context.db.scalar(
             select(ContextRecord).where(ContextRecord.id == result.external_reference)
