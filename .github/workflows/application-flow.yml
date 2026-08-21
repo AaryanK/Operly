@@ -25,6 +25,7 @@ on:
       - "tests/test_capability_harness_journey.py"
       - "tests/test_channel_context.py"
       - "tests/test_dm_workspace_switch.py"
+      - "tests/test_space_binding_transfer.py"
       - "tests/test_connector_runtime.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
@@ -115,6 +116,7 @@ jobs:
           node --check apps/web/static/ai-assistant-bridge.js
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
+          node --check apps/web/static/settings-scopes.js
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -128,6 +130,7 @@ jobs:
           tests/test_capability_harness_journey.py
           tests/test_channel_context.py
           tests/test_dm_workspace_switch.py
+          tests/test_space_binding_transfer.py
           tests/test_connector_runtime.py
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
