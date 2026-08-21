@@ -14,6 +14,7 @@ on:
       - "packages/connectors/**"
       - "packages/context/**"
       - "packages/database/**"
+      - "packages/security/**"
       - "packages/workspace/**"
       - "requirements.txt"
       - "Dockerfile"
@@ -56,10 +57,13 @@ jobs:
           apps/api/integrations_router.py
           apps/api/system_router.py
           alembic/versions/0022_channel_identity_context.py
+          alembic/versions/0023_workspace_rbac.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
           packages/database/channel_models.py
+          packages/database/workspace_security_models.py
+          packages/database/schema.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
           packages/business_brain/context_loader.py
@@ -69,6 +73,7 @@ jobs:
           packages/channels/linking.py
           packages/channels/service.py
           packages/context/service.py
+          packages/security/permissions.py
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
           packages/connectors/discord/runtime.py
