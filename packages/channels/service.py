@@ -135,12 +135,15 @@ class ChannelService:
         if not envelope.external_space_id:
             return TenantResolution(None, None, user_id, False, [])
 
-        installation = await IdentityService.ensure_installation(
+        # Normal channel traffic is not allowed to mutate workspace topology.
+        # External spaces must already be installed/bound by an explicit flow.
+        installation = await IdentityService.installation(
             db,
             provider=envelope.provider,
             external_space_id=envelope.external_space_id,
-            display_name=envelope.space_name,
         )
+        if installation is None:
+            return TenantResolution(None, None, user_id, False, [])
         membership = await IdentityService.membership(
             db,
             user_id=user_id,
@@ -183,7 +186,10 @@ class ChannelService:
                         tenant_options=resolved.options,
                     )
                 return ChannelResponse(
-                    message="I could not resolve an Operly workspace for this conversation.",
+                    message=(
+                        "This channel space is not bound to an Operly workspace yet. "
+                        "Connect it through an explicit workspace installation flow first."
+                    ),
                     user_id=resolved.user_id,
                     status="tenant_required",
                 )
