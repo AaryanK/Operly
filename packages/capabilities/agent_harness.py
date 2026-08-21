@@ -21,6 +21,11 @@ _PRIVATE_CONNECTOR_AUTHORITY = {
     "gmail.read_message": "gmail:read",
     "gmail.modify_labels": "gmail:write",
     "gmail.create_draft": "gmail:draft",
+    "gmail.list_drafts": "gmail:draft",
+    "gmail.get_draft": "gmail:draft",
+    "gmail.update_draft": "gmail:draft",
+    "gmail.send_draft": "messaging:send",
+    "gmail.delete_draft": "gmail:draft",
 }
 
 _PERSONAL_ONLY_PREFIXES = ("account.",)
@@ -82,7 +87,17 @@ class PluginAgentHarness:
                 if scopes & {GMAIL_READONLY, GMAIL_MODIFY}:
                     enabled_external.update({"gmail.search", "gmail.read_message"})
                 if GMAIL_MODIFY in scopes:
-                    enabled_external.update({"gmail.modify_labels", "gmail.create_draft"})
+                    enabled_external.update(
+                        {
+                            "gmail.modify_labels",
+                            "gmail.create_draft",
+                            "gmail.list_drafts",
+                            "gmail.get_draft",
+                            "gmail.update_draft",
+                            "gmail.send_draft",
+                            "gmail.delete_draft",
+                        }
+                    )
                 if CALENDAR in scopes:
                     enabled_external.update(
                         {
