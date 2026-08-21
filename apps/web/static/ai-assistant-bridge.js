@@ -29,3 +29,29 @@ if (!document.querySelector('script[data-operly-workspace-shell]')) {
   script.dataset.operlyWorkspaceShell = "1";
   document.head.append(script);
 }
+
+// Load the 2026 visual system after every legacy stylesheet so it owns the
+// final cascade without changing any backend contracts or feature routers.
+for (const [href, marker] of [
+  ["/static/operly-modern.css?v=20260821-modern-v1", "core"],
+  ["/static/operly-modern-extras.css?v=20260821-modern-v1", "extras"],
+]) {
+  if (!document.querySelector(`link[data-operly-modern-${marker}]`)) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    link.dataset[`operlyModern${marker[0].toUpperCase()}${marker.slice(1)}`] = "1";
+    document.head.append(link);
+  }
+}
+
+// The modern interaction layer is deliberately separate from business logic.
+// It adds account/session controls, command navigation and visual repair while
+// keeping all authorization and mutations behind the existing API contracts.
+if (!document.querySelector('script[data-operly-modern]')) {
+  const script = document.createElement("script");
+  script.src = "/static/operly-modern.js?v=20260821-modern-v1";
+  script.defer = true;
+  script.dataset.operlyModern = "1";
+  document.head.append(script);
+}

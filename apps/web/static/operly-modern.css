@@ -1,0 +1,122 @@
+/* OPERLY 2026 visual system — loaded after legacy CSS through regression.css */
+:root{
+  --op-bg:#f7f8f5;--op-bg-2:#eef2eb;--op-panel:#ffffff;--op-panel-2:#f3f5f1;
+  --op-ink:#0c1712;--op-muted:#68746d;--op-faint:#909a94;--op-line:rgba(18,36,28,.10);
+  --op-forest:#123f2f;--op-forest-2:#0c2c22;--op-lime:#b9f45a;--op-lime-soft:#eafbcf;
+  --op-danger:#bd3f44;--op-warn:#b96d20;--op-blue:#2d65c7;
+  --op-shadow:0 1px 2px rgba(13,25,19,.04),0 12px 38px rgba(13,25,19,.07);
+  --op-shadow-lg:0 28px 90px rgba(6,18,12,.16);
+  --op-r-sm:10px;--op-r:16px;--op-r-lg:24px;--op-r-xl:32px;
+}
+html{background:var(--op-bg);scroll-behavior:smooth}
+body{background:var(--op-bg);color:var(--op-ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input,textarea,select{font:inherit}
+button{transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease,color .16s ease}
+button:active{transform:translateY(1px)}
+::selection{background:rgba(185,244,90,.55);color:#0a1c14}
+
+/* ---------- Public / marketing ---------- */
+#landing{min-height:100vh;background:
+  radial-gradient(circle at 12% 8%,rgba(185,244,90,.22),transparent 26%),
+  radial-gradient(circle at 92% 16%,rgba(77,152,114,.16),transparent 24%),
+  linear-gradient(180deg,#fbfcf9 0%,#f3f6f1 64%,#eef3ed 100%);position:relative;overflow:hidden}
+#landing:before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.33;background-image:linear-gradient(rgba(17,63,47,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(17,63,47,.035) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 74%)}
+.landing-header{height:86px;max-width:1380px;padding:0 38px;position:relative;z-index:5}
+.landing-header .brand{color:var(--op-ink);letter-spacing:.12em}
+.brand-mark{background:var(--op-lime);color:#0b2017;box-shadow:inset 0 0 0 1px rgba(15,47,34,.08)}
+.landing-actions .button{border-radius:999px;padding:11px 18px}
+.landing-actions .button.secondary{background:rgba(255,255,255,.66);border-color:rgba(19,55,41,.12);backdrop-filter:blur(16px)}
+.landing-actions .button.primary{background:var(--op-forest);box-shadow:0 8px 24px rgba(18,63,47,.18)}
+.landing-actions .button.primary:hover{box-shadow:0 12px 34px rgba(18,63,47,.25);transform:translateY(-1px)}
+.hero{position:relative;z-index:2;max-width:1380px;min-height:690px;margin:10px auto 0;padding:86px 72px;gap:70px;border-radius:40px;background:
+ radial-gradient(circle at 86% 14%,rgba(185,244,90,.18),transparent 23%),
+ radial-gradient(circle at 14% 90%,rgba(255,255,255,.06),transparent 25%),
+ linear-gradient(138deg,#0a251b 0%,#103d2d 52%,#18583f 100%);
+ box-shadow:0 36px 110px rgba(11,45,32,.19);overflow:hidden}
+.hero:after{content:"";position:absolute;width:540px;height:540px;border:1px solid rgba(185,244,90,.16);border-radius:50%;right:-240px;top:-300px;box-shadow:0 0 0 80px rgba(185,244,90,.035),0 0 0 160px rgba(185,244,90,.02)}
+.hero .kicker{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(185,244,90,.22);background:rgba(185,244,90,.08);border-radius:999px;padding:8px 12px;color:#dbff9f}
+.hero h1{max-width:720px;font-size:clamp(54px,5.6vw,88px);line-height:.95;letter-spacing:-.067em;margin:24px 0 22px;text-wrap:balance}
+.hero h1 em{color:var(--op-lime)}
+.hero p{font-size:18px;line-height:1.7;color:#c4d6cd;max-width:620px}
+.hero .button.lime{border-radius:999px;padding:16px 24px;box-shadow:0 14px 36px rgba(185,244,90,.14)}
+.product-preview{min-height:470px;border:1px solid rgba(255,255,255,.14);border-radius:26px;background:#f7faf6;box-shadow:0 42px 100px rgba(0,0,0,.36);transform:perspective(1100px) rotateY(-7deg) rotateX(1deg);overflow:hidden}
+.preview-sidebar{width:76px;background:linear-gradient(180deg,#0d2b21,#102f25);border-right:1px solid rgba(255,255,255,.07)}
+.preview-main{padding:32px}
+.preview-main h3{font-size:22px;letter-spacing:-.025em}
+.preview-stats article,.preview-card{border-color:rgba(18,63,47,.09);box-shadow:0 8px 30px rgba(14,40,29,.05)}
+.features{position:relative;z-index:2;max-width:1240px;margin:84px auto;padding:0 28px;gap:18px}
+.features article{border:1px solid rgba(18,63,47,.09);border-radius:22px;background:rgba(255,255,255,.7);backdrop-filter:blur(14px);padding:28px;box-shadow:0 10px 36px rgba(20,50,38,.045)}
+.features article:hover{transform:translateY(-3px);box-shadow:var(--op-shadow)}
+.features span{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--op-lime-soft);color:var(--op-forest);font-size:10px}
+.features h2{font-size:22px;letter-spacing:-.03em;margin:18px 0 8px}.features p{line-height:1.65}
+.public-footer{position:relative;z-index:2;border-color:rgba(18,63,47,.10);padding-bottom:38px}
+
+/* ---------- Auth ---------- */
+.auth-screen,#login.auth-screen{background:
+ radial-gradient(circle at 10% 5%,rgba(185,244,90,.25),transparent 28%),
+ radial-gradient(circle at 90% 8%,rgba(32,105,75,.12),transparent 24%),
+ linear-gradient(145deg,#eff5ee,#fbfcfa 60%,#f1f4f0)}
+.auth-shell{width:min(100%,590px);padding:34px 24px 68px}.auth-brand{margin-bottom:10px}
+.auth-card{padding:42px;border:1px solid rgba(18,63,47,.10);border-radius:28px;box-shadow:0 28px 80px rgba(20,51,39,.12);background:rgba(255,255,255,.88);backdrop-filter:blur(24px)}
+.auth-card h1{font-size:clamp(34px,7vw,48px);letter-spacing:-.055em}.auth-card>p{font-size:14px}
+.auth-card label{color:#284238}.auth-card input{border-color:rgba(18,63,47,.12);background:#fbfcfa;border-radius:12px;min-height:52px;padding:14px 15px}
+.auth-card input:focus{border-color:#6e9f87;box-shadow:0 0 0 4px rgba(42,108,80,.09)}
+.auth-card .button.primary{border-radius:13px;min-height:52px;background:linear-gradient(180deg,#1a6448,#14523c);box-shadow:0 10px 28px rgba(18,82,59,.16)}
+.google-button{border-radius:13px;overflow:hidden}
+.auth-divider:before,.auth-divider:after{background:rgba(18,63,47,.09)}
+
+/* ---------- Application shell ---------- */
+#dashboard.workspace-shell-ready{grid-template-columns:72px 252px minmax(0,1fr)!important;background:#f2f4f1!important}
+#dashboard.workspace-shell-ready>.app-main{grid-column:3!important;margin-left:0!important;width:auto!important;background:#f6f7f5!important;min-height:100vh}
+.operly-workspace-rail{width:72px!important;padding:12px 10px!important;gap:9px!important;background:linear-gradient(180deg,#0a0e0c,#101612)!important;border-right:1px solid rgba(255,255,255,.055)!important}
+.operly-rail-logo,.operly-rail-item,.operly-rail-add,.operly-rail-account{width:50px!important;height:50px!important;border-radius:17px!important;box-shadow:none!important}
+.operly-rail-logo{background:linear-gradient(145deg,#c7ff69,#aeea49)!important;color:#0b1911!important;box-shadow:0 8px 26px rgba(185,244,90,.14)!important}
+.operly-rail-item{background:#1b211d!important;color:#d7ddd9!important;border:1px solid rgba(255,255,255,.045)!important}
+.operly-rail-item:hover{background:#28322c!important;border-radius:14px!important}.operly-rail-item.active{background:#d0ff78!important;color:#102017!important;border-radius:14px!important}
+.operly-rail-item.active:before{left:-11px!important;width:3px!important;height:26px!important;border-radius:0 4px 4px 0!important;background:#d0ff78!important}
+.operly-rail-add{background:#171d19!important;color:#aeee57!important;border:1px dashed rgba(174,238,87,.25)!important}.operly-rail-add:hover{background:#243026!important}
+.operly-rail-account{background:#242b27!important;color:#f2f5f3!important;border:1px solid rgba(255,255,255,.07)!important}
+.operly-section-nav{width:252px!important;background:linear-gradient(180deg,#121714 0%,#151b17 100%)!important;border-right:1px solid rgba(255,255,255,.055)!important;box-shadow:10px 0 40px rgba(3,9,6,.06)}
+.operly-workspace-head{min-height:76px!important;padding:15px 16px!important;border-bottom:1px solid rgba(255,255,255,.065)!important}
+.operly-workspace-head strong{font-size:14px!important;letter-spacing:-.01em}.operly-workspace-head small{margin-top:4px;color:#8f9b94!important}
+.operly-nav-scroll{padding:12px 8px 24px!important}.operly-nav-group{margin:17px 0 6px!important;padding:0 11px!important;color:#68756e!important;font-size:9px!important;letter-spacing:.14em!important}
+.operly-nav-item{min-height:40px!important;border-radius:10px!important;padding:0 11px!important;color:#aeb8b2!important;gap:10px!important;font-size:13px!important}
+.operly-nav-item:hover{background:rgba(255,255,255,.045)!important;color:#fff!important}.operly-nav-item.active{background:linear-gradient(90deg,rgba(185,244,90,.11),rgba(255,255,255,.035))!important;color:#f4f8f5!important;box-shadow:inset 2px 0 #b9f45a!important}
+.operly-nav-icon{display:grid!important;place-items:center;width:22px!important;height:22px!important;border-radius:7px!important;background:rgba(255,255,255,.035);color:#7f8b84!important;font-size:12px!important}.operly-nav-item.active .operly-nav-icon{background:rgba(185,244,90,.12)!important;color:#c8ff75!important}
+.operly-nav-pill{font-size:8px!important;padding:3px 6px;border-radius:999px;background:rgba(185,244,90,.09);color:#a9c879!important}
+.operly-nav-footer{padding:11px!important;grid-template-columns:38px minmax(0,1fr) 32px!important;background:#0f1411!important;border-top-color:rgba(255,255,255,.065)!important}.operly-user-avatar{width:36px!important;height:36px!important;border-radius:12px!important;background:linear-gradient(145deg,#29332d,#212a25)!important;color:#f7faf8!important}.operly-user-menu{width:32px;height:32px;border-radius:9px!important}.operly-user-menu:hover{background:rgba(255,255,255,.06)!important;color:white!important}
+
+#dashboard.workspace-shell-ready .topbar{height:72px!important;min-height:72px!important;padding:0 28px!important;border-bottom:1px solid rgba(18,36,28,.08)!important;background:rgba(249,250,248,.88)!important;backdrop-filter:blur(22px) saturate(150%)!important;box-shadow:0 1px 0 rgba(255,255,255,.6);z-index:20!important}
+#dashboard.workspace-shell-ready .topbar h1{font-size:18px!important;letter-spacing:-.025em!important;margin:0!important}.simple-topbar-actions{display:flex!important;align-items:center!important;gap:9px!important}.simple-topbar-ask{border-radius:11px!important;padding:10px 14px!important;background:linear-gradient(180deg,#1a6549,#14543d)!important;box-shadow:0 7px 20px rgba(20,84,61,.13)!important;font-size:12px!important}
+#dashboard.workspace-shell-ready .builder-controls{display:none!important}
+#dashboard.workspace-shell-ready .content{max-width:1280px!important;padding:34px 38px 64px!important;margin:0 auto!important}
+
+/* App page language */
+.operly-shell-page{gap:18px!important}.operly-shell-hero{align-items:center!important;min-height:94px;padding:2px 2px 12px!important;border-bottom:1px solid var(--op-line);margin-bottom:2px}.operly-shell-hero h2{font-size:32px!important;line-height:1!important;letter-spacing:-.05em!important;margin:6px 0 8px!important}.operly-shell-hero p{font-size:13px!important;line-height:1.55!important;color:var(--op-muted)!important;max-width:680px!important}.operly-shell-eyebrow{font-size:9px!important;letter-spacing:.15em!important;color:#718078!important}
+.operly-shell-grid{gap:12px!important;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))!important}
+.operly-shell-card{border:1px solid rgba(18,36,28,.085)!important;border-radius:18px!important;padding:19px!important;background:rgba(255,255,255,.88)!important;box-shadow:0 1px 2px rgba(12,24,18,.02),0 10px 32px rgba(12,24,18,.035)!important;backdrop-filter:blur(10px)}
+.operly-shell-card:hover{border-color:rgba(18,63,47,.14)!important;box-shadow:0 2px 3px rgba(12,24,18,.025),0 14px 38px rgba(12,24,18,.05)!important}.operly-shell-card h3{font-size:16px!important;letter-spacing:-.025em!important}.operly-shell-card p,.operly-shell-card small{color:var(--op-muted)!important;line-height:1.5}
+.operly-shell-row{border:0!important;border-top:1px solid rgba(18,36,28,.075)!important;border-radius:0!important;padding:14px 2px!important;background:transparent!important}.operly-shell-list>.operly-shell-row:first-child{border-top:0!important}.operly-shell-row strong{font-size:13px}.operly-shell-row small{font-size:11px!important}
+.operly-shell-button{border:1px solid rgba(18,36,28,.11)!important;background:#fff!important;color:#243129!important;border-radius:10px!important;padding:9px 12px!important;font-size:11px!important;box-shadow:0 1px 2px rgba(12,24,18,.03)}.operly-shell-button:hover{background:#f6f8f5!important;border-color:rgba(18,63,47,.17)!important}.operly-shell-button.primary{background:#17231d!important;border-color:#17231d!important;color:#fff!important}.operly-shell-button.accent{background:#b9f45a!important;border-color:#b9f45a!important;color:#102017!important}.operly-shell-button.danger{color:#a93d42!important;background:#fff7f7!important;border-color:#f0d6d8!important}
+.operly-shell-input,.operly-shell-select{border:1px solid rgba(18,36,28,.11)!important;border-radius:11px!important;background:#fbfcfa!important;min-height:42px!important}.operly-shell-input:focus,.operly-shell-select:focus{outline:none;border-color:#6f9e87!important;box-shadow:0 0 0 4px rgba(53,119,89,.08)}
+.operly-status{background:#eef2ed!important;color:#5c6a62!important;border:1px solid rgba(18,36,28,.06)!important;padding:4px 7px!important;font-size:9px!important}.operly-permission{background:#f6f8f5!important;border-color:rgba(18,36,28,.08)!important;color:#5f6c64!important}
+.operly-shell-modal{border-radius:24px!important;box-shadow:var(--op-shadow-lg)!important;background:#fbfcfa!important}.operly-shell-modal::backdrop{background:rgba(5,12,8,.54)!important;backdrop-filter:blur(9px)!important}.operly-shell-modal-body{padding:26px!important}.operly-shell-modal-body h2{font-size:25px!important;letter-spacing:-.045em!important}
+
+/* Existing pages brought into the new shell */
+#dashboard.workspace-shell-ready .simple-home-hero,#dashboard.workspace-shell-ready .company-learning,#dashboard.workspace-shell-ready .simple-block,#dashboard.workspace-shell-ready .panel,#dashboard.workspace-shell-ready .card,#dashboard.workspace-shell-ready .settings{border-radius:20px!important;border:1px solid rgba(18,36,28,.085)!important;box-shadow:0 1px 2px rgba(12,24,18,.02),0 10px 34px rgba(12,24,18,.035)!important;background:rgba(255,255,255,.9)!important}
+#dashboard.workspace-shell-ready .simple-home-hero{background:linear-gradient(145deg,#102e23,#194b37)!important;color:#fff!important;border:0!important;position:relative;overflow:hidden}
+#dashboard.workspace-shell-ready .simple-home-hero:after{content:"";position:absolute;width:320px;height:320px;border-radius:50%;right:-120px;top:-190px;border:1px solid rgba(185,244,90,.18);box-shadow:0 0 0 50px rgba(185,244,90,.025),0 0 0 100px rgba(185,244,90,.02)}
+#dashboard.workspace-shell-ready .simple-command-form{position:relative;z-index:1}.simple-command-form textarea{background:rgba(255,255,255,.96)!important;border:1px solid rgba(255,255,255,.16)!important;border-radius:15px!important;box-shadow:0 12px 34px rgba(3,12,7,.10)}
+
+/* Modern account / command popovers */
+.operly-modern-popover{position:fixed;z-index:1000;width:min(330px,calc(100vw - 24px));padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:rgba(19,24,21,.97);color:#f5f8f6;box-shadow:0 24px 70px rgba(0,0,0,.32);backdrop-filter:blur(18px)}
+.operly-modern-popover .op-user{padding:11px 11px 13px;border-bottom:1px solid rgba(255,255,255,.07);margin-bottom:6px}.operly-modern-popover .op-user strong,.operly-modern-popover .op-user small{display:block}.operly-modern-popover .op-user strong{font-size:13px}.operly-modern-popover .op-user small{font-size:10px;color:#93a099;margin-top:3px}
+.operly-modern-popover button{width:100%;height:38px;padding:0 10px;border:0;border-radius:9px;background:transparent;color:#c7d0ca;text-align:left;font-size:12px;cursor:pointer}.operly-modern-popover button:hover{background:rgba(255,255,255,.06);color:#fff}.operly-modern-popover button.danger{color:#ffb9bc}.operly-modern-popover .sep{height:1px;background:rgba(255,255,255,.07);margin:6px}
+.operly-command-trigger{display:flex;align-items:center;gap:8px;margin-right:auto;margin-left:24px;min-width:260px;max-width:420px;height:38px;padding:0 12px;border:1px solid rgba(18,36,28,.10);border-radius:11px;background:rgba(255,255,255,.72);color:#7a867f;font-size:11px;cursor:pointer}.operly-command-trigger:hover{background:#fff;border-color:rgba(18,63,47,.16)}.operly-command-trigger kbd{margin-left:auto;padding:2px 6px;border:1px solid rgba(18,36,28,.09);border-radius:6px;background:#f3f5f2;color:#849089;font-size:9px}
+.operly-command-palette{position:fixed;inset:0;z-index:1100;display:grid;place-items:start center;padding-top:min(16vh,150px);background:rgba(6,13,9,.34);backdrop-filter:blur(8px)}.operly-command-box{width:min(680px,calc(100vw - 28px));overflow:hidden;border:1px solid rgba(255,255,255,.16);border-radius:20px;background:#fbfcfa;box-shadow:0 34px 100px rgba(4,14,8,.30)}.operly-command-box input{height:62px;border:0!important;border-radius:0!important;padding:0 20px!important;background:#fff!important;font-size:15px!important;box-shadow:none!important}.operly-command-results{padding:8px;max-height:430px;overflow:auto}.operly-command-results button{width:100%;display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:10px;min-height:48px;border:0;border-radius:11px;padding:7px 10px;background:transparent;text-align:left;color:#26332b;cursor:pointer}.operly-command-results button:hover{background:#eef3ec}.operly-command-results .icon{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#e8eee8;color:#315e49;font-weight:800}.operly-command-results small{color:#88938d}.operly-command-results .hint{font-size:9px;color:#9aa39e}
+
+/* Better empty / loading language */
+.simple-loading,.empty{border:1px dashed rgba(18,63,47,.14)!important;border-radius:18px!important;background:rgba(255,255,255,.55)!important;color:#7a877f!important}
+
+@media(max-width:1100px){#dashboard.workspace-shell-ready{grid-template-columns:68px 224px minmax(0,1fr)!important}.operly-section-nav{width:224px!important}#dashboard.workspace-shell-ready .content{padding:28px 26px 56px!important}.operly-command-trigger{min-width:180px;max-width:260px}}
+@media(max-width:760px){.hero{margin:8px 12px 0!important;padding:54px 26px!important;border-radius:28px!important;min-height:auto!important}.hero h1{font-size:49px!important}.features{grid-template-columns:1fr!important;margin:54px auto!important}.auth-card{padding:30px!important;border-radius:22px!important}#dashboard.workspace-shell-ready{display:block!important;padding-bottom:70px!important}.operly-workspace-rail{width:100%!important}.operly-section-nav{display:none!important}#dashboard.workspace-shell-ready>.app-main{margin-left:0!important}.operly-command-trigger{display:none!important}#dashboard.workspace-shell-ready .content{padding:20px 15px 40px!important}.operly-shell-hero{align-items:flex-start!important;min-height:auto!important}.operly-shell-grid{grid-template-columns:1fr!important}}
