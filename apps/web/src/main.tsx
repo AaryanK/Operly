@@ -72,9 +72,7 @@ const navItems: Array<{ id: Section; label: string; icon: string }> = [
 function Brand({ dark = false }: { dark?: boolean }) {
   return (
     <div className={`brand ${dark ? "brand-dark" : ""}`}>
-      <div className="brand-mark">
-        <span />
-      </div>
+      <img className="brand-mark" src="/operly-logo.png" alt="Operly logo" />
       <span className="brand-word">OPERLY</span>
     </div>
   );

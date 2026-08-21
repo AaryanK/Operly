@@ -142,7 +142,7 @@
     return `
       <div class="ai-welcome ai-command-center">
         <div class="ai-welcome-heading">
-          <div class="ai-orb">O</div>
+          <img class="ai-orb" src="/static/operly-logo.png" alt="Operly logo">
           <div>
             <span class="ai-eyebrow">OPERLY · ${escapeHtml(businessName)}</span>
             <h2>What should we work on?</h2>

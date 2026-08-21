@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="OPERLY business operating platform">
+  <link rel="icon" type="image/png" href="/static/operly-logo.png">
+  <link rel="apple-touch-icon" href="/static/operly-logo.png">
+  <meta property="og:image" content="/static/operly-logo.png">
+  <meta name="twitter:image" content="/static/operly-logo.png">
   <title>OPERLY</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260804-responsive2">
   <link rel="stylesheet" href="/static/operations-phase.css?v=20260804-responsive">
@@ -20,7 +24,7 @@
 <body>
   <div id="landing" class="screen">
     <header class="landing-header">
-      <div class="brand dark"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <div class="landing-actions"><button class="button secondary" data-route="/login">Sign in</button><button class="button primary" data-route="/signup">Get started</button></div>
     </header>
 
@@ -32,7 +36,7 @@
         <button class="button lime large" data-route="/signup">Get started →</button>
       </section>
       <section class="product-preview">
-        <div class="preview-sidebar"><div class="brand"><span class="brand-mark">O</span></div><i></i><i></i><i></i><i></i></div>
+        <div class="preview-sidebar"><div class="brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"></div><i></i><i></i><i></i><i></i></div>
         <div class="preview-main">
           <h3>Good morning, Owner</h3>
           <div class="preview-stats"><article><b>128</b><span>Messages</span></article><article><b>12</b><span>Tasks</span></article><article><b>4</b><span>Approvals</span></article></div>
@@ -46,13 +50,13 @@
       <article><span>02</span><h2>Turn language into action</h2><p>Tasks, memory and approvals from natural language.</p></article>
       <article><span>03</span><h2>Keep the owner in control</h2><p>Visible and auditable business operations.</p></article>
     </section>
-    <footer class="public-footer"><span class="brand-mark" aria-hidden="true">O</span><p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a></p></footer>
+    <footer class="public-footer"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a></p></footer>
   </div>
 
   <div id="login" class="screen auth-screen hidden">
     <div class="auth-shell">
       <button class="back" data-route="/">← Home</button>
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <form id="login-form" class="auth-card" novalidate>
         <span class="kicker green">Sign in</span><h1>Welcome back</h1><p>Open your secure business workspace.</p>
         <div id="google-login-button" class="google-button" aria-label="Continue with Google"></div>
@@ -70,7 +74,7 @@
   <div id="signup" class="screen auth-screen hidden">
     <div class="auth-shell">
       <button class="back" data-route="/">← Home</button>
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <form id="signup-form" class="auth-card" novalidate>
         <span class="kicker green">Get started</span><h1>Create your OPERLY account</h1><p>Your first workspace is created with your account.</p>
         <div id="google-signup-button" class="google-button" aria-label="Continue with Google"></div>
@@ -90,7 +94,7 @@
   <div id="verify-email" class="screen auth-screen hidden">
     <div class="auth-shell compact">
       <button class="back" data-route="/signup">← Back</button>
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <form id="verify-form" class="auth-card" novalidate>
         <span class="kicker green">One more step</span><h1>Verify your email</h1><p>Enter the six-digit code from your OPERLY email, or use the verification button in that message.</p>
         <label for="verify-code">Verification code<input id="verify-code" class="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></label>
@@ -104,7 +108,7 @@
   <div id="forgot-password" class="screen auth-screen hidden">
     <div class="auth-shell compact">
       <button class="back" data-route="/login">← Sign in</button>
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <form id="forgot-form" class="auth-card" novalidate>
         <span class="kicker green">Account recovery</span><h1>Forgot your password?</h1><p>Enter your email and we’ll send secure reset instructions if it matches an account.</p>
         <label for="forgot-email">Email<input id="forgot-email" type="email" autocomplete="username" inputmode="email" maxlength="320" required></label>
@@ -118,7 +122,7 @@
   <div id="reset-password" class="screen auth-screen hidden">
     <div class="auth-shell compact">
       <button class="back" data-route="/login">← Sign in</button>
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <form id="reset-form" class="auth-card" novalidate>
         <span class="kicker green">Choose a new password</span><h1>Reset your password</h1><p>Use the secure link from your email, or enter your email and six-digit code.</p>
         <div id="reset-code-fields"><label for="reset-email">Email<input id="reset-email" type="email" autocomplete="username" inputmode="email" maxlength="320"></label><label for="reset-code">Reset code<input id="reset-code" class="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></label></div>
@@ -132,7 +136,7 @@
 
   <div id="onboarding" class="screen auth-screen hidden">
     <div class="auth-shell compact">
-      <div class="brand dark auth-brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand dark auth-brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <section class="auth-card onboarding-card">
         <span class="onboarding-check" aria-hidden="true">✓</span><span class="kicker green">You’re ready</span><h1>Welcome to OPERLY</h1><p>Your secure workspace is ready. Start by opening your business command center.</p>
         <button id="open-workspace" class="button primary large">Open my workspace</button>
@@ -143,7 +147,7 @@
   <div id="dashboard" class="screen hidden app-shell">
     <button id="mobile-nav-backdrop" class="mobile-nav-backdrop" aria-label="Close navigation" tabindex="-1"></button>
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><span class="brand-mark">O</span><b>OPERLY</b></div>
+      <div class="brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
       <nav id="nav"><button data-simple-page="home" class="active">Home</button><button data-simple-page="presence">Presence</button><button data-simple-page="activity">Activity <span id="simple-activity-badge" class="simple-activity-badge hidden"></span></button><button data-page="settings">Connections</button></nav>
       <div class="sidebar-bottom">
         <label class="workspace-switch-label">Workspace<select id="workspace-switch" aria-label="Switch workspace"></select></label>
