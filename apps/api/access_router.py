@@ -140,7 +140,7 @@ async def set_tool_exposure(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    await _require_manage(db, auth, "workspace:roles:manage")
+    await _require_manage(db, auth, "workspace:tools:expose")
     row = await db.scalar(
         select(WorkspaceToolExposure).where(
             WorkspaceToolExposure.tenant_id == auth.tenant.id,
