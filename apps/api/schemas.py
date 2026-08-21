@@ -61,6 +61,25 @@ class WorkspaceCreateInput(StrictInput):
     timezone: str = Field(default="UTC", min_length=1, max_length=100)
 
 
+class WorkspaceRoleCreateInput(StrictInput):
+    name: str = Field(min_length=1, max_length=120)
+    key: str | None = Field(default=None, min_length=1, max_length=80)
+    permissions: list[str] = Field(default_factory=list, max_length=100)
+
+
+class WorkspaceRolePermissionsInput(StrictInput):
+    permissions: list[str] = Field(default_factory=list, max_length=100)
+
+
+class WorkspaceMemberAddInput(StrictInput):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field(default="employee", min_length=1, max_length=80)
+
+
+class WorkspaceMemberRoleInput(StrictInput):
+    role: str = Field(min_length=1, max_length=80)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     due_at: datetime | None = None
