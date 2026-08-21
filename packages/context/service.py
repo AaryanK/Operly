@@ -5,6 +5,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.channel_models import ContextRecord
+from packages.database.models import AppUser, Tenant, TenantMember
 
 
 @dataclass(slots=True)
@@ -12,9 +13,23 @@ class LoadedContext:
     human: list[ContextRecord]
     tenant: list[ContextRecord]
     conversation: list[ContextRecord]
+    principal_name: str | None = None
+    workspace_name: str | None = None
+    workspace_role: str | None = None
+    tenant_context_authorized: bool = False
 
     def as_prompt(self) -> str:
         sections: list[str] = []
+        if self.workspace_name:
+            sections.append(
+                "CURRENT OPERLY SESSION (application-controlled; not user-provided):\n"
+                f"Authenticated actor: {self.principal_name or 'Linked Operly user'}\n"
+                f"Workspace: {self.workspace_name}\n"
+                f"Workspace role: {self.workspace_role or 'member'}\n"
+                f"Workspace context authorized: {'yes' if self.tenant_context_authorized else 'no'}\n"
+                "Use these values to resolve words such as I, me, my, we, our, and this workspace. "
+                "Do not invent a different identity, role, or workspace."
+            )
         if self.human:
             sections.append(
                 "PRIVATE HUMAN CONTEXT (only for the current authenticated human):\n"
@@ -274,6 +289,17 @@ class ContextService:
         relevant_limit = max(1, per_scope // 2)
         recent_limit = per_scope
 
+        user = await db.get(AppUser, user_id) if user_id else None
+        tenant_row = await db.get(Tenant, tenant_id)
+        membership = None
+        if user_id:
+            membership = await db.scalar(
+                select(TenantMember).where(
+                    TenantMember.user_id == user_id,
+                    TenantMember.tenant_id == tenant_id,
+                )
+            )
+
         if user_id:
             human_relevant = await cls.search_human(
                 db,
@@ -336,4 +362,8 @@ class ContextService:
             human=human,
             tenant=tenant,
             conversation=conversation,
+            principal_name=user.display_name if user else None,
+            workspace_name=tenant_row.name if tenant_row else None,
+            workspace_role=membership.role if membership else None,
+            tenant_context_authorized=bool(allow_tenant_context and membership),
         )
