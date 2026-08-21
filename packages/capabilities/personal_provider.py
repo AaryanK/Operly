@@ -102,7 +102,7 @@ class PersonalRuntimeProvider(BaseProvider):
             or requested in " ".join(tenant.name.lower().split())
             or requested == str(tenant.slug or "").lower()
         ]
-        from packages.database.business_models import Contact, Lead, Order
+        from packages.database.business_models import BusinessOrder, Contact, Lead
         from packages.database.models import Task
         from sqlalchemy import func
 
@@ -121,7 +121,7 @@ class PersonalRuntimeProvider(BaseProvider):
                 )
             if member.role == "owner" or "orders:write" in permissions:
                 item["orders"] = int(
-                    await context.db.scalar(select(func.count(Order.id)).where(Order.tenant_id == tenant.id)) or 0
+                    await context.db.scalar(select(func.count(BusinessOrder.id)).where(BusinessOrder.tenant_id == tenant.id)) or 0
                 )
             if member.role == "owner" or "tasks:read" in permissions:
                 item["open_tasks"] = int(
