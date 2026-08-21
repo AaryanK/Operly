@@ -26,6 +26,7 @@ on:
       - "tests/test_company_operating_system.py"
       - "tests/test_google_workspace_capabilities.py"
       - "tests/test_unified_application_flow.py"
+      - "tests/test_workspace_security_boundary.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -61,6 +62,7 @@ jobs:
           packages/database/channel_models.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
+          packages/business_brain/context_loader.py
           packages/actions/service.py
           packages/channels/envelope.py
           packages/channels/identity.py
@@ -103,6 +105,7 @@ jobs:
           tests/test_company_operating_system.py
           tests/test_google_workspace_capabilities.py
           tests/test_unified_application_flow.py
+          tests/test_workspace_security_boundary.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production
