@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0022_channel_identity_context"
+ALEMBIC_HEAD = "0023_workspace_rbac"
 
 
 def import_all_models() -> None:
@@ -17,6 +17,7 @@ def import_all_models() -> None:
     from packages.database import connector_models  # noqa: F401
     from packages.database import channel_models  # noqa: F401
     from packages.database import product_models  # noqa: F401
+    from packages.database import workspace_security_models  # noqa: F401
 
 
 def synchronous_database_url(url: str) -> str:
