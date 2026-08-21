@@ -10,6 +10,7 @@ from packages.security.execution_context import (
     resolve_execution_context,
 )
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
+from packages.security.temporal_context import resolve_temporal_context
 
 
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
@@ -20,6 +21,15 @@ _PRIVATE_CONNECTOR_AUTHORITY = {
     "gmail.read_message": "gmail:read",
     "gmail.modify_labels": "gmail:write",
     "gmail.create_draft": "gmail:draft",
+}
+
+_PERSONAL_ONLY_PREFIXES = ("account.",)
+_DISCORD_CURRENT_CONTEXT = {
+    "discord.context",
+    "discord.read_recent_messages",
+    "discord.send_message",
+    "discord.add_reaction",
+    "discord.create_thread",
 }
 
 
@@ -111,9 +121,30 @@ class PluginAgentHarness:
         return set(execution.permissions)
 
     @staticmethod
-    def capability_authorized(capability_id: str, authority: set[str]) -> bool:
+    def _is_private_surface(context: PluginInvocationContext) -> bool:
+        # Web/MCP calls are personal unless their client explicitly declares a shared
+        # origin. Discord is private only for a DM; a guild/server is workspace-bound.
+        if context.channel == "discord":
+            return bool(context.metadata.get("is_direct"))
+        return not bool(context.metadata.get("shared_surface"))
+
+    @classmethod
+    def capability_authorized(
+        cls,
+        capability_id: str,
+        authority: set[str],
+        context: PluginInvocationContext | None = None,
+    ) -> bool:
         required = _PRIVATE_CONNECTOR_AUTHORITY.get(capability_id)
-        return required is None or required in authority
+        if required is not None and required not in authority:
+            return False
+        if context is None:
+            return True
+        if capability_id.startswith(_PERSONAL_ONLY_PREFIXES) and not cls._is_private_surface(context):
+            return False
+        if capability_id in _DISCORD_CURRENT_CONTEXT and context.channel != "discord":
+            return False
+        return True
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         authority = await self.authority_for(context)
@@ -123,7 +154,7 @@ class PluginAgentHarness:
         return [
             item.model_tool_schema()
             for item in registry.metadata(context.tenant_id, authority=authority)
-            if self.capability_authorized(item.id, authority)
+            if self.capability_authorized(item.id, authority, context)
         ]
 
     def handles(self, name: str) -> bool:
@@ -140,7 +171,7 @@ class PluginAgentHarness:
         call_id: str | None = None,
     ) -> dict[str, Any]:
         authority = await self.authority_for(context)
-        if not authority or not self.capability_authorized(name, authority):
+        if not authority or not self.capability_authorized(name, authority, context):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
         registry = await self.registry_for(context)
         arguments = dict(arguments)
@@ -156,7 +187,7 @@ class PluginAgentHarness:
                 definition = next(
                     item
                     for item in registry.metadata(context.tenant_id, authority=authority)
-                    if item.id == name
+                    if item.id == name and self.capability_authorized(item.id, authority, context)
                 )
             except StopIteration:
                 return {"ok": False, "error": "Unknown or unauthorized plugin"}
@@ -175,6 +206,12 @@ class PluginAgentHarness:
                 "client_id",
                 str(context.metadata.get("client_id") or context.channel or "operly"),
             )
+            temporal = await resolve_temporal_context(
+                db,
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+            )
+            runtime_metadata["temporal_context"] = temporal.as_dict()
 
             try:
                 action = await service.propose(
@@ -192,6 +229,7 @@ class PluginAgentHarness:
                     runtime_context={
                         "channel": context.channel,
                         "metadata": runtime_metadata,
+                        "temporal_context": temporal.as_dict(),
                     },
                 )
             except (ValueError, PermissionError, LookupError) as error:
