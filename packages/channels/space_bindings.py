@@ -11,7 +11,29 @@ class SpaceBindingError(ValueError):
 
 class ExternalSpaceBindingService:
     @staticmethod
+    async def _can_manage_workspace(
+        db: AsyncSession,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> bool:
+        membership = await IdentityService.membership(
+            db,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        if membership is None:
+            return False
+        permissions = await resolve_workspace_permissions(
+            db,
+            tenant_id=tenant_id,
+            role=membership.role,
+        )
+        return membership.role == "owner" or "workspace:channels:manage" in permissions
+
+    @classmethod
     async def bind(
+        cls,
         db: AsyncSession,
         *,
         provider: str,
@@ -23,20 +45,12 @@ class ExternalSpaceBindingService:
     ) -> ChannelInstallation:
         if not external_authority_verified:
             raise SpaceBindingError("External platform authority is required")
-        membership = await IdentityService.membership(
+        if not await cls._can_manage_workspace(
             db,
             user_id=user_id,
             tenant_id=tenant_id,
-        )
-        if membership is None:
-            raise SpaceBindingError("Operly workspace membership is required")
-        permissions = await resolve_workspace_permissions(
-            db,
-            tenant_id=tenant_id,
-            role=membership.role,
-        )
-        if membership.role != "owner" and "workspace:channels:manage" not in permissions:
-            raise SpaceBindingError("Operly role cannot manage workspace channels")
+        ):
+            raise SpaceBindingError("Operly role cannot manage target workspace channels")
 
         existing = await IdentityService.installation(
             db,
@@ -44,7 +58,19 @@ class ExternalSpaceBindingService:
             external_space_id=str(external_space_id),
         )
         if existing and existing.tenant_id != tenant_id and not existing.provisional:
-            raise SpaceBindingError("External space is already bound to another workspace")
+            # `/bind` is an explicit move request. Allow it only when the same
+            # authenticated human can manage both the current source workspace
+            # and the requested target workspace, in addition to having verified
+            # authority over the external space itself (for Discord: Manage Server).
+            if not await cls._can_manage_workspace(
+                db,
+                user_id=user_id,
+                tenant_id=existing.tenant_id,
+            ):
+                raise SpaceBindingError(
+                    "External space is already bound to another workspace that you cannot manage"
+                )
+
         if existing is None:
             existing = ChannelInstallation(
                 tenant_id=tenant_id,
@@ -64,8 +90,9 @@ class ExternalSpaceBindingService:
         await db.flush()
         return existing
 
-    @staticmethod
+    @classmethod
     async def unbind(
+        cls,
         db: AsyncSession,
         *,
         provider: str,
@@ -82,19 +109,11 @@ class ExternalSpaceBindingService:
         )
         if installation is None:
             return
-        membership = await IdentityService.membership(
+        if not await cls._can_manage_workspace(
             db,
             user_id=user_id,
             tenant_id=installation.tenant_id,
-        )
-        if membership is None:
-            raise SpaceBindingError("Operly workspace membership is required")
-        permissions = await resolve_workspace_permissions(
-            db,
-            tenant_id=installation.tenant_id,
-            role=membership.role,
-        )
-        if membership.role != "owner" and "workspace:channels:manage" not in permissions:
+        ):
             raise SpaceBindingError("Operly role cannot manage workspace channels")
         installation.status = "disconnected"
         await db.flush()
