@@ -109,13 +109,16 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
                 query="planning",
             )
 
-        self.assertIn("replace our current accountant", owner.as_prompt())
-        self.assertIn("Private salary planning note", owner.as_prompt())
-        self.assertIn("Acme wants the proposal by Friday", owner.as_prompt())
-        self.assertNotIn("replace our current accountant", peer.as_prompt())
-        self.assertNotIn("Private salary planning note", peer.as_prompt())
-        self.assertIn("Acme wants the proposal by Friday", peer.as_prompt())
-        self.assertIn("Shared project decision", peer.as_prompt())
+        owner_prompt = owner.as_prompt()
+        peer_prompt = peer.as_prompt()
+        self.assertIn("Acme wants the proposal by Friday", owner_prompt)
+        self.assertNotIn("replace our current accountant", owner_prompt)
+        self.assertNotIn("Private salary planning note", owner_prompt)
+        self.assertNotIn("Shared project decision", owner_prompt)
+        self.assertNotIn("replace our current accountant", peer_prompt)
+        self.assertNotIn("Private salary planning note", peer_prompt)
+        self.assertNotIn("Acme wants the proposal by Friday", peer_prompt)
+        self.assertNotIn("Shared project decision", peer_prompt)
 
     async def test_same_discord_human_resolves_different_server_memberships_and_dm_state(self):
         aaryan_id, _, operly_id, coffee_id = await self.seed_team()
