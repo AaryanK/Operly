@@ -44,6 +44,17 @@ class ActionService:
         self.actor_id = actor_id
 
     async def _event(self, action, event_type, payload=None):
+        provenance = {
+            key: value
+            for key, value in {
+                "principal_id": action.principal_id,
+                "client_id": action.client_id,
+                "origin": action.origin,
+                "connector_id": action.connector_id,
+                "resource_type": action.resource_type,
+            }.items()
+            if value
+        }
         event = await append_event(
             self.db,
             tenant_id=action.tenant_id,
@@ -52,6 +63,7 @@ class ActionService:
                 "action_id": action.id,
                 "capability": action.capability,
                 "status": action.status,
+                **provenance,
                 **(payload or {}),
             },
             correlation_id=action.correlation_id,
@@ -70,7 +82,7 @@ class ActionService:
                 self.db,
                 tenant_id=action.tenant_id,
                 event_type=normalized,
-                payload={"action_id": action.id, **(payload or {})},
+                payload={"action_id": action.id, **provenance, **(payload or {})},
                 correlation_id=action.correlation_id,
                 causation_id=action.id,
                 source="actions",
@@ -114,6 +126,23 @@ class ActionService:
         validate_arguments(definition.input_schema, arguments)
         risk_level = definition.risk_level
 
+        runtime = dict(runtime_context or {})
+        metadata = runtime.get("metadata") if isinstance(runtime.get("metadata"), dict) else {}
+        principal_id = str(metadata.get("principal_id") or "").strip() or (
+            f"user:{self.actor_id}" if self.actor_id else None
+        )
+        client_id = str(metadata.get("client_id") or "").strip() or None
+        origin = str(runtime.get("channel") or metadata.get("origin") or "").strip() or None
+        connector_id = str(
+            metadata.get("connector_id")
+            or definition.integration_provider
+            or definition.provider
+            or ""
+        ).strip() or None
+        resource_type = str(
+            metadata.get("resource_type") or definition.category or ""
+        ).strip() or None
+
         action = BusinessActionRecord(
             tenant_id=tenant_id,
             objective=objective,
@@ -124,6 +153,11 @@ class ActionService:
             risk_level=risk_level,
             causation_id=causation_id,
             idempotency_key=idempotency_key,
+            principal_id=principal_id,
+            client_id=client_id,
+            origin=origin,
+            connector_id=connector_id,
+            resource_type=resource_type,
         )
         self.db.add(action)
         await self.db.flush()
@@ -144,11 +178,7 @@ class ActionService:
         action.policy_decision = decision.decision.value
         if decision.decision == PolicyDecisionType.DENY:
             action.status = ActionStatus.REJECTED
-            await self._event(
-                action,
-                "action.rejected",
-                {"reason": decision.reason},
-            )
+            await self._event(action, "action.rejected", {"reason": decision.reason})
         elif decision.decision == PolicyDecisionType.REQUIRE_APPROVAL:
             approval = Approval(
                 tenant_id=tenant_id,
@@ -171,7 +201,7 @@ class ActionService:
                 {"approval_id": approval.id},
             )
         else:
-            await self.execute(action, runtime_context=runtime_context)
+            await self.execute(action, runtime_context=runtime)
         return action
 
     async def execute(
@@ -196,11 +226,7 @@ class ActionService:
             != hashlib.sha256(action.arguments_json.encode()).hexdigest()
         ):
             action.status = ActionStatus.FAILED
-            await self._event(
-                action,
-                "action.failed",
-                {"reason": "approved_payload_changed"},
-            )
+            await self._event(action, "action.failed", {"reason": "approved_payload_changed"})
             return action
 
         provider_context = ProviderContext(
@@ -213,11 +239,7 @@ class ActionService:
         )
         try:
             result = await asyncio.wait_for(
-                provider.execute(
-                    provider_context,
-                    action.capability,
-                    arguments,
-                ),
+                provider.execute(provider_context, action.capability, arguments),
                 timeout=30,
             )
         except Exception as error:
@@ -246,16 +268,9 @@ class ActionService:
             except ValueError as error:
                 action.status = ActionStatus.FAILED
                 action.result_json = json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Invalid plugin output: {error}",
-                    }
+                    {"success": False, "error": f"Invalid plugin output: {error}"}
                 )
-                await self._event(
-                    action,
-                    "action.failed",
-                    {"reason": "invalid_plugin_output"},
-                )
+                await self._event(action, "action.failed", {"reason": "invalid_plugin_output"})
                 return action
 
         if not result.success:
@@ -268,12 +283,7 @@ class ActionService:
         action.status = ActionStatus.VERIFYING
         await self._event(action, "action.verifying")
 
-        verified = await provider.verify(
-            provider_context,
-            action.capability,
-            arguments,
-            result,
-        )
+        verified = await provider.verify(provider_context, action.capability, arguments, result)
         action.verification_json = json.dumps(
             {
                 "success": verified.success,
@@ -283,15 +293,11 @@ class ActionService:
             sort_keys=True,
         )
         action.status = (
-            ActionStatus.VERIFIED
-            if verified.success
-            else ActionStatus.VERIFICATION_FAILED
+            ActionStatus.VERIFIED if verified.success else ActionStatus.VERIFICATION_FAILED
         )
         await self._event(
             action,
-            "action.verified"
-            if verified.success
-            else "action.verification_failed",
+            "action.verified" if verified.success else "action.verification_failed",
             verified.evidence,
         )
         return action
@@ -302,9 +308,7 @@ class ActionService:
             raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id)
         approval.status = "approved"
-        action.approved_arguments_digest = hashlib.sha256(
-            action.arguments_json.encode()
-        ).hexdigest()
+        action.approved_arguments_digest = hashlib.sha256(action.arguments_json.encode()).hexdigest()
         action.status = ActionStatus.APPROVED
         await self._event(
             action,

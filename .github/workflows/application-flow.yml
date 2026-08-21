@@ -14,6 +14,8 @@ on:
       - "packages/connectors/**"
       - "packages/context/**"
       - "packages/database/**"
+      - "packages/mcp/**"
+      - "packages/plugins/**"
       - "packages/security/**"
       - "packages/workspace/**"
       - "requirements.txt"
@@ -28,6 +30,7 @@ on:
       - "tests/test_google_workspace_capabilities.py"
       - "tests/test_unified_application_flow.py"
       - "tests/test_workspace_security_boundary.py"
+      - "tests/test_principal_access_architecture.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -45,6 +48,7 @@ jobs:
         run: >-
           python -m py_compile
           apps/api/main.py
+          apps/api/access_router.py
           apps/api/agent_router.py
           apps/api/csrf.py
           apps/api/business.py
@@ -58,11 +62,16 @@ jobs:
           apps/api/system_router.py
           alembic/versions/0022_channel_identity_context.py
           alembic/versions/0023_workspace_rbac.py
+          alembic/versions/0024_principals_clients_mcp.py
+          alembic/versions/0025_principal_conversations.py
+          alembic/versions/0026_action_provenance.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
           packages/database/channel_models.py
           packages/database/workspace_security_models.py
+          packages/database/principal_models.py
+          packages/database/company_models.py
           packages/database/schema.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
@@ -71,14 +80,21 @@ jobs:
           packages/channels/envelope.py
           packages/channels/identity.py
           packages/channels/linking.py
+          packages/channels/guest_chat.py
+          packages/channels/space_bindings.py
           packages/channels/service.py
           packages/context/service.py
           packages/security/execution_context.py
           packages/security/permissions.py
+          packages/security/principals.py
+          packages/plugins/manifest.py
+          packages/mcp/policy.py
+          packages/mcp/gateway.py
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
           packages/connectors/discord/runtime.py
           packages/connectors/discord/secure_runtime.py
+          packages/connectors/discord/slash_commands.py
           packages/connectors/discord/bot_shared.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
@@ -113,6 +129,7 @@ jobs:
           tests/test_google_workspace_capabilities.py
           tests/test_unified_application_flow.py
           tests/test_workspace_security_boundary.py
+          tests/test_principal_access_architecture.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production
