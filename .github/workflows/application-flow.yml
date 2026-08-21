@@ -111,6 +111,8 @@ jobs:
         run: |
           node --check apps/web/static/app.js
           node --check apps/web/static/ai-assistant.js
+          node --check apps/web/static/ai-assistant-bridge.js
+          node --check apps/web/static/workspace-shell.js
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234
