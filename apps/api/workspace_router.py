@@ -2,10 +2,35 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
-from apps.api.schemas import MemoryCreate, TaskCreate
+from apps.api.schemas import MemoryCreate, TaskCreate, WorkspaceCreateInput
+from packages.database.models import Tenant, TenantMember
 from packages.workspace.service import WorkspaceService
 
 router = APIRouter(prefix="/api", tags=["workspace"])
+
+
+@router.post("/workspaces", status_code=201)
+async def create_workspace(
+    payload: WorkspaceCreateInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    name = " ".join(payload.name.replace("\x00", "").split()).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Workspace name is required")
+    timezone = " ".join(payload.timezone.replace("\x00", "").split()).strip() or "UTC"
+    tenant = Tenant(name=name[:200], timezone=timezone[:100], slug=None)
+    db.add(tenant)
+    await db.flush()
+    db.add(TenantMember(tenant_id=tenant.id, user_id=auth.user.id, role="owner"))
+    await db.commit()
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "timezone": tenant.timezone,
+        "role": "owner",
+        "current": False,
+    }
 
 
 @router.get("/dashboard")
