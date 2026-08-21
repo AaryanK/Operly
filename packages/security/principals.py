@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.database.agent_models import AgentConversation
 from packages.database.channel_models import ChannelConversationState
 from packages.database.models import AppUser
-from packages.database.principal_models import ExternalPrincipalBinding, Principal
+from packages.database.principal_models import (
+    ExternalPrincipalBinding,
+    Principal,
+    PrincipalConversation,
+)
 
 GUEST_TTL_DAYS = 30
 
@@ -74,7 +78,6 @@ class PrincipalService:
         if existing:
             principal, _ = existing
             return principal
-
         principal = Principal(
             kind="guest",
             display_name=display_name,
@@ -111,7 +114,6 @@ class PrincipalService:
         if guest is None or guest.kind != "guest" or guest.status != "active":
             raise PrincipalError("Guest session is unavailable")
         user_principal = await cls.user_principal(db, user_id)
-
         binding = await db.scalar(
             select(ExternalPrincipalBinding).where(
                 ExternalPrincipalBinding.provider == provider,
@@ -127,8 +129,7 @@ class PrincipalService:
         guest.claimed_by_user_id = user_id
         guest.claimed_at = datetime.utcnow()
 
-        # Preserve channel continuity. Workspace authority is not inherited here;
-        # the channel resolver will re-resolve real memberships after authentication.
+        # Preserve continuity but never inherit workspace membership/roles.
         await db.execute(
             update(ChannelConversationState)
             .where(
@@ -137,9 +138,11 @@ class PrincipalService:
             )
             .values(user_id=user_id)
         )
-
-        # Personal/guest conversation IDs use a stable principal string. When a
-        # guest is claimed, move those conversations to the authenticated principal.
+        await db.execute(
+            update(PrincipalConversation)
+            .where(PrincipalConversation.principal_id == guest.id)
+            .values(principal_id=user_principal.id)
+        )
         await db.execute(
             update(AgentConversation)
             .where(AgentConversation.principal_id == f"guest:{guest.id}")
