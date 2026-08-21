@@ -17,11 +17,17 @@ def upgrade():
     # Before workspace-private human memory existed, every `human` record was
     # conceptually person-level but was incidentally stamped with the active
     # tenant. Promote those legacy records to the intended global-private scope.
+    context_records = sa.table(
+        "context_records",
+        sa.column("scope_type", sa.String()),
+        sa.column("visibility", sa.String()),
+        sa.column("tenant_id", sa.String()),
+    )
     op.execute(
-        sa.text(
-            "UPDATE context_records SET tenant_id = NULL "
-            "WHERE scope_type = 'human' AND visibility = 'private'"
-        )
+        context_records.update()
+        .where(context_records.c.scope_type == "human")
+        .where(context_records.c.visibility == "private")
+        .values(tenant_id=None)
     )
 
 
