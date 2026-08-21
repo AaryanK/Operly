@@ -47,6 +47,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "workspace:read",
         "workspace:members:manage",
         "workspace:roles:manage",
+        "workspace:channels:manage",
     },
     "manager": {
         "company:read",
