@@ -24,7 +24,7 @@ def upgrade():
             "workspace_roles",
             sa.Column("id", sa.String(36), primary_key=True),
             sa.Column("tenant_id", sa.String(36), sa.ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("key", sa.String(80), nullable=False),
+            sa.Column("key", sa.String(30), nullable=False),
             sa.Column("name", sa.String(120), nullable=False),
             sa.Column("is_system", sa.Boolean(), nullable=False),
             sa.Column("created_at", sa.DateTime(), nullable=False),
