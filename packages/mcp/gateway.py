@@ -14,6 +14,7 @@ class McpRequestContext:
     role: str
     client_id: str
     objective: str = "MCP request"
+    token_scopes: set[str] | None = None
 
 
 class McpGateway:
@@ -51,6 +52,8 @@ class McpGateway:
                 client_id=context.client_id,
                 tenant_id=context.tenant_id,
             )
+        if context.token_scopes is not None:
+            client_scopes = client_scopes.intersection(context.token_scopes)
         allowed = []
         for definition in registry.metadata(context.tenant_id, authority=authority):
             mode = exposures.get(definition.id)
