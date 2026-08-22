@@ -1,6 +1,8 @@
 """Canonical read facade over legacy/current software project records."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 
 from packages.database.application_builder_models import ManagedApplication
@@ -48,7 +50,7 @@ class SoftwareProjectService:
         projects.extend(from_managed_application(row) for row in apps)
         projects.extend(from_generated_project(row) for row in generated)
         projects.sort(
-            key=lambda item: item.updated_at or item.created_at,
+            key=lambda item: item.updated_at or item.created_at or datetime.min,
             reverse=True,
         )
         return projects
