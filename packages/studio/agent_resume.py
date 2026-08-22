@@ -7,6 +7,7 @@ from packages.database.db import SessionFactory
 from packages.database.studio_source_models import StudioAgentRun
 from packages.studio.agent_runs import ACTIVE_STATES, launch_run, record_event
 from packages.studio.runtime_policy import apply_studio_runtime_policy
+from packages.studio.terminal_recovery import apply_studio_terminal_recovery
 
 
 async def resume_interrupted_studio_runs() -> int:
@@ -15,6 +16,7 @@ async def resume_interrupted_studio_runs() -> int:
     # website-specific runtime/grounding/edit policy once all shared modules are fully
     # imported, before any new or resumed Studio run can launch.
     apply_studio_runtime_policy()
+    apply_studio_terminal_recovery()
 
     async with SessionFactory() as db:
         rows = list(
