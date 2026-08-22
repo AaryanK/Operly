@@ -5,10 +5,10 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from packages.model_runtime.catalog import select_model_resource
+from packages.model_runtime.contracts import InferenceRequest, ModelSelector
 from packages.model_runtime.discovery import refresh_model_discovery
-from packages.model_runtime.portfolio import ModelRoute, model_route
-from packages.model_runtime.providers import model_client_for_route
+from packages.model_runtime.portfolio import model_route
+from packages.model_runtime.registry import default_model_registry
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,8 +24,7 @@ class ModelInvocationService:
 
     Delegated calls intentionally receive no tools. This makes model-as-tool
     delegation one level deep by default and prevents unbounded model recursion.
-    Provider catalog discovery happens behind the model-runtime boundary; the
-    harness does not know or care where the selected resource came from.
+    Selection and provider transport stay inside model_runtime.
     """
 
     async def invoke(
@@ -48,26 +47,21 @@ class ModelInvocationService:
             ttl = 600.0
         await refresh_model_discovery(ttl_seconds=max(0.0, ttl))
 
-        orchestrator = model_route("business_agent")
-        exclude = (
-            (orchestrator.provider, orchestrator.primary)
-            if exclude_orchestrator
-            else None
-        )
-        resource = select_model_resource(
-            clean_capability,
-            exclude=exclude,
-            prefer_free=prefer_free,
-        )
-        if resource is None:
-            raise LookupError(
-                f"No delegated model is available for capability: {clean_capability}"
-            )
+        excluded: set[str] = set()
+        if exclude_orchestrator:
+            orchestrator = model_route("business_agent")
+            excluded.add(f"{orchestrator.provider}:{orchestrator.primary}")
 
-        client = model_client_for_route(
-            ModelRoute(provider=resource.provider, primary=resource.id)
+        registry = default_model_registry()
+        model = registry.resolve(
+            ModelSelector(
+                requires=frozenset({clean_capability}),
+                prefer_tags=frozenset({"free"}) if prefer_free else frozenset(),
+                prefer_free=prefer_free,
+                exclude_resource_ids=frozenset(excluded),
+            )
         )
-        messages: list[dict[str, Any]] = [
+        messages: tuple[dict[str, Any], ...] = (
             {
                 "role": "system",
                 "content": (
@@ -84,14 +78,14 @@ class ModelInvocationService:
                     + (f"Context:\n{str(context)[:12000]}" if context else "")
                 ),
             },
-        ]
-        response = await client.chat(messages, [])
-        content = str(response.get("content") or "").strip()
+        )
+        result = await model.infer(InferenceRequest(messages=messages))
+        content = str(result.message.get("content") or "").strip()
         if not content:
             raise RuntimeError("Delegated model returned no usable content")
         return ModelInvocationResult(
-            provider=resource.provider,
-            model=resource.id,
+            provider=result.provider,
+            model=result.provider_model_id,
             capability=clean_capability,
             content=content,
         )
