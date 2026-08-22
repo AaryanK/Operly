@@ -14,12 +14,20 @@ from typing import Any
 from sqlalchemy import select
 
 from packages.business_brain.ollama_client import OllamaError
-from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
+from packages.coding_harness.model_client import coding_model_client
+from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError, OpenCodeStyleCodingAgent
 from packages.database.db import SessionFactory
 from packages.database.studio_models import StudioProject
 from packages.database.studio_source_models import StudioAgentEvent, StudioAgentRun
 from packages.model_runtime.portfolio import model_route
-from packages.studio.source_agent import edit_source, generate_source, latest_source, source_json
+from packages.studio.source_agent import (
+    _legacy_project_files,
+    _persist,
+    latest_source,
+    project_context,
+    source_files,
+    source_json,
+)
 
 ACTIVE_STATES = {"queued", "running"}
 TERMINAL_STATES = {"succeeded", "failed", "needs_input"}
@@ -152,20 +160,72 @@ def launch_run(run_id: str) -> None:
 
 
 async def _mark_failed(run_id: str, state: str, message: str) -> None:
+    tenant_id = None
     async with SessionFactory() as db:
         run = await db.get(StudioAgentRun, run_id)
         if run is None:
             return
+        tenant_id = run.tenant_id
         run.state = state
         run.error_message = _clip(message, 4000)
         run.completed_at = datetime.utcnow()
         await db.commit()
-    await record_event(
-        run_id,
+    if tenant_id:
+        await record_event(
+            run_id,
+            tenant_id,
+            "needs_input" if state == "needs_input" else "error",
+            _clip(message, 1000) or "The source change stopped safely.",
+            detail={"state": state},
+        )
+
+
+async def _run_source_agent(db, run: StudioAgentRun, project: StudioProject, context: dict[str, Any], progress):
+    """Execute the existing coding agent while exposing its sanitized progress callback."""
+    parent = await latest_source(db, run.tenant_id, project.id)
+    specification = await project_context(db, run.tenant_id, project, editor_context=context)
+    client = coding_model_client("coding")
+    agent = OpenCodeStyleCodingAgent(client=client, progress_callback=progress)
+
+    if run.operation == "generate":
+        if parent is not None:
+            return parent
+        result = await agent.build(specification, context=context)
+        return await _persist(
+            db,
+            run.tenant_id,
+            run.created_by,
+            project,
+            result,
+            instruction="Create the initial website from the supplied business and Studio context.",
+            parent=None,
+            editor_context=context,
+            operation="generate",
+        )
+
+    if run.operation != "edit":
+        raise CodingHarnessError(f"Unsupported Studio run operation: {run.operation}")
+
+    task = _clip(run.instruction, 20_000)
+    if not task:
+        raise CodingHarnessError("Source edit instruction is empty")
+    files = source_files(parent) if parent else await _legacy_project_files(db, run.tenant_id, project)
+    if files:
+        result = await agent.edit(specification, files, task, context=context)
+        operation = "edit" if parent else "legacy_migration_edit"
+    else:
+        result = await agent.build(specification + "\n\nOWNER INSTRUCTION\n- " + task, context=context)
+        operation = "generate_from_instruction"
+    return await _persist(
+        db,
         run.tenant_id,
-        "needs_input" if state == "needs_input" else "error",
-        _clip(message, 1000) or "The source change stopped safely.",
-        detail={"state": state},
+        run.created_by,
+        project,
+        result,
+        instruction=task,
+        parent=parent,
+        editor_context=context,
+        operation=operation,
     )
 
 
@@ -181,7 +241,6 @@ async def _execute_run(run_id: str) -> None:
             )
         )
         if project is None:
-            await db.close()
             await _mark_failed(run_id, "failed", "Studio project no longer exists.")
             return
 
@@ -222,28 +281,7 @@ async def _execute_run(run_id: str) -> None:
             await record_event(run.id, run.tenant_id, phase, summary_text, detail=detail)
 
         try:
-            if run.operation == "generate":
-                row = await generate_source(
-                    db,
-                    run.tenant_id,
-                    run.created_by,
-                    project,
-                    editor_context=context,
-                    progress_callback=progress,
-                )
-            elif run.operation == "edit":
-                row = await edit_source(
-                    db,
-                    run.tenant_id,
-                    run.created_by,
-                    project,
-                    run.instruction,
-                    editor_context=context,
-                    progress_callback=progress,
-                )
-            else:
-                raise CodingHarnessError(f"Unsupported Studio run operation: {run.operation}")
-
+            row = await _run_source_agent(db, run, project, context, progress)
             payload = source_json(row)
             run.source_id = row.id
             run.model_id = payload.get("modelId") or run.model_id
