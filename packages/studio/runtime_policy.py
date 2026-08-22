@@ -7,6 +7,7 @@ grounded, and focused edits get resilient source tools rather than app-only cere
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -195,9 +196,10 @@ async def _noop_event(_event: dict[str, Any]) -> None:
 
 
 class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
-    def __init__(self, event_callback=None) -> None:
+    def __init__(self, event_callback=None, *, preloaded_paths: list[str] | None = None) -> None:
         super().__init__()
         self.event_callback = event_callback or _noop_event
+        self.preloaded_paths = set(preloaded_paths or [])
 
     async def _finish(self, args: dict[str, Any], session: coding.CodingSession) -> dict[str, Any]:
         files = session.workspace.source_files()
@@ -251,6 +253,22 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
         for name, tool in selected.items():
             async def execute(args, session, *, _tool=tool):
                 path = str(args.get("path") or args.get("prefix") or args.get("pattern") or "") or None
+                if _tool.name == "read" and path in self.preloaded_paths:
+                    try:
+                        current = session.workspace.raw(path)
+                    except Exception:
+                        current = None
+                    if current is not None and current == session.before.get(path):
+                        return {
+                            "ok": True,
+                            "path": path,
+                            "preloaded": True,
+                            "unchanged": True,
+                            "note": (
+                                "The complete current contents of this unchanged file are already attached in the "
+                                "Studio source working set. Use that source and proceed to the edit instead of rereading it."
+                            ),
+                        }
                 try:
                     if _tool.name == "edit":
                         _safe_fuzzy_edit(
@@ -274,6 +292,8 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
                         "detail": str(error)[:2000],
                     })
                     raise
+                if bool(result.get("ok", False)) and _tool.name in {"write", "edit", "remove", "replace_range"} and path:
+                    self.preloaded_paths.discard(path)
                 if not bool(result.get("ok", False)):
                     await self.event_callback({
                         "phase": "validation",
@@ -329,10 +349,12 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
         spec = spec[:80_000]
         session = coding.CodingSession(mode=mode, workspace=workspace, before=workspace.snapshot(), editor_context=editor_context)
         system = coding.PLAN_SYSTEM if mode == "plan" else STUDIO_WEBSITE_SYSTEM
+        files = workspace.list()
+        task_text = str(task or "")[:24_000]
         packet = {
             "approvedSpecification": spec,
-            "task": str(task or "")[:24_000],
-            "workspaceFiles": workspace.list(),
+            "task": task_text,
+            "workspaceFiles": files,
             "mode": mode,
             "executionBoundary": "Generated website code is previewed by Operly; work only through project tools.",
         }
@@ -346,7 +368,32 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
         web_enabled = bool(os.getenv("OLLAMA_API_KEY", "").strip()) and os.getenv("OPERLY_CODING_WEB_TOOLS", "1").strip() not in {"0", "false", "False"}
         tools = self.registry.for_mode(mode, visual=bool(editor_context), web=web_enabled)
         schemas = [tool.schema() for tool in tools.values()]
+        initial_message_chars = len(json.dumps(session.messages, ensure_ascii=False, default=str))
+        await self._progress(
+            {
+                "step": 0,
+                "phase": "model_input",
+                "summary": (
+                    f"Model input prepared: {len(spec)} specification chars · {len(files)} workspace file"
+                    f"{'s' if len(files) != 1 else ''} · {len(schemas)} tool{'s' if len(schemas) != 1 else ''}."
+                ),
+                "detail": {
+                    "mode": mode,
+                    "systemPrompt": "PLAN_SYSTEM" if mode == "plan" else "STUDIO_WEBSITE_SYSTEM",
+                    "systemChars": len(system),
+                    "specificationChars": len(spec),
+                    "specificationDigest": hashlib.sha256(spec.encode("utf-8")).hexdigest(),
+                    "taskChars": len(task_text),
+                    "workspaceFileCount": len(files),
+                    "workspaceFiles": files[:50],
+                    "editorContextAvailable": bool(editor_context),
+                    "toolNames": list(tools),
+                    "initialMessageChars": initial_message_chars,
+                },
+            }
+        )
         nudges = 0
+        inspection_only_turns = 0
         started = time.monotonic()
         failed_signatures: dict[str, int] = {}
 
@@ -355,7 +402,17 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
             if remaining <= 0:
                 detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
                 raise coding.CodingHarnessError(f"Studio website agent did not converge within {self.max_seconds} seconds.{detail}"[:4000])
-            await self._progress({"step": step, "phase": "model", "summary": "Choosing the next focused website action from current source and owner context."})
+            await self._progress(
+                {
+                    "step": step,
+                    "phase": "model",
+                    "summary": "Choosing the next focused website action from current source and owner context.",
+                    "detail": {
+                        "messageCount": len(session.messages),
+                        "messageChars": len(json.dumps(session.messages, ensure_ascii=False, default=str)),
+                    },
+                }
+            )
             try:
                 assistant = await asyncio.wait_for(
                     self.client.chat(session.messages, schemas),
@@ -384,8 +441,10 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
                 session.messages.append({"role": "user", "content": f"Continue with the smallest relevant project-tool action, then call {finish_name}."})
                 continue
 
+            tool_names_this_turn: list[str] = []
             for call in calls:
                 name, args = coding._arguments(call)
+                tool_names_this_turn.append(name)
                 signature = coding._tool_signature(name, args)
                 tool = tools.get(name)
                 path = str(args.get("path") or args.get("prefix") or args.get("pattern") or "") or None
@@ -448,6 +507,35 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
             if session.finished:
                 break
 
+            inspection_only = bool(tool_names_this_turn) and all(
+                name in coding.SOURCE_INSPECTION_TOOLS for name in tool_names_this_turn
+            )
+            if require_change and mode in {"edit", "repair"} and not session.changed_paths() and inspection_only:
+                inspection_only_turns += 1
+            else:
+                inspection_only_turns = 0
+            if inspection_only_turns >= 2:
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have spent two model turns inspecting without changing the website source. "
+                            "Use the current specification, preloaded source, and tool results already available and "
+                            "make the requested source change now. Do not reread unchanged source. If a material blocker "
+                            "truly prevents implementation, use the question tool."
+                        ),
+                    }
+                )
+                await self._progress(
+                    {
+                        "step": step,
+                        "phase": "guardrail",
+                        "summary": "No website source progress across two inspection turns; asking the coding model to act on existing context.",
+                        "detail": {"inspectionTurns": 2, "tools": tool_names_this_turn},
+                    }
+                )
+                inspection_only_turns = 0
+
         if not session.finished:
             detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
             raise coding.CodingHarnessError(f"Studio website agent exhausted its bounded model-turn budget.{detail}"[:4000])
@@ -466,9 +554,10 @@ def _studio_ensure_static(result) -> str:
 
 
 def _studio_budget(operation: str) -> tuple[int, int, int]:
+    """Keep Studio website policy aligned with the context-rich shared harness budget."""
     if operation == "generate":
-        return 24, 120, 60
-    return 12, 75, 45
+        return 20, 180, 90
+    return 10, 120, 75
 
 
 _APPLIED = False
