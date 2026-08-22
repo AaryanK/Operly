@@ -36,3 +36,48 @@ class StudioSourceVersion(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "source_version", name="uq_studio_source_version"),
     )
+
+
+class StudioAgentRun(Base):
+    """Durable owner-visible lifecycle for one Studio model/tool-loop request."""
+
+    __tablename__ = "studio_agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("studio_projects.id"), index=True)
+    operation: Mapped[str] = mapped_column(String(30))
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    context_json: Mapped[str] = mapped_column(Text, default="{}")
+    state: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    model_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class StudioAgentEvent(Base):
+    """Sanitized operational trace shown to the owner while the agent works.
+
+    These records intentionally contain tool/action summaries and validation
+    evidence, never private chain-of-thought or hidden model reasoning.
+    """
+
+    __tablename__ = "studio_agent_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("studio_agent_runs.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(String(40))
+    summary: Mapped[str] = mapped_column(String(1000))
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_studio_agent_event_sequence"),
+    )

@@ -30,6 +30,17 @@ class _ControlInventory(HTMLParser):
         values = {str(key).lower(): value for key, value in attrs}
         tag = tag.lower()
         role_control = values.get("role") in {"button", "tab", "menuitem", "option", "switch"}
+
+        # Normal anchors already have deterministic browser behavior through href.
+        # Requiring a JavaScript interaction manifest for ordinary website navigation
+        # made Studio source edits burn model turns inventing handlers/tests for links
+        # such as the brand/home anchor. Only anchors promoted to app-style controls
+        # through an interactive ARIA role belong in the custom interaction contract.
+        if tag == "a" and not role_control:
+            href = str(values.get("href") or "").strip()
+            if href and not href.lower().startswith("javascript:"):
+                return
+
         if tag not in _CONTROL_TAGS and tag != "a" and not role_control:
             return
         if tag == "input" and str(values.get("type") or "").lower() == "hidden":
@@ -94,10 +105,13 @@ def validate_interaction_contract(bundle: SourceBundle) -> dict:
     if payload.get("schemaVersion") != 1 or not isinstance(contracts, list):
         raise InteractionContractError("Interaction contract must use schemaVersion 1 and an interactions array")
     by_id = {str(item.get("id") or ""): item for item in contracts if isinstance(item, dict)}
-    if set(ids) != set(by_id):
-        missing = sorted(set(ids) - set(by_id))
-        extra = sorted(set(by_id) - set(ids))
-        raise InteractionContractError(f"Interaction manifest must exactly cover rendered controls; missing={missing}, extra={extra}")
+
+    # Rendered scripted controls must be covered. Extra dormant contracts are
+    # harmless and can occur after a source edit converts a scripted control into
+    # native browser behavior; they should not force another expensive model turn.
+    missing = sorted(set(ids) - set(by_id))
+    if missing:
+        raise InteractionContractError(f"Interaction manifest is missing rendered controls: {missing}")
 
     js_source = "\n".join(
         item.content.decode("utf-8", errors="replace")

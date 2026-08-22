@@ -1,5 +1,6 @@
 import json
 import mimetypes
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -10,6 +11,8 @@ from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.business_brain.ollama_client import OllamaError
 from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
 from packages.custom_software.source_bundles import normalized_path
+from packages.database.studio_source_models import StudioAgentRun
+from packages.studio.agent_runs import create_run, latest_run as latest_agent_run, run_json
 from packages.studio.service import StudioService
 from packages.studio.source_agent import (
     edit_source,
@@ -33,6 +36,13 @@ class SourceEditInput(BaseModel):
 
 class SourceGenerateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    context: dict = Field(default_factory=dict)
+
+
+class SourceRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["generate", "edit"]
+    instruction: str = Field(default="", max_length=20_000)
     context: dict = Field(default_factory=dict)
 
 
@@ -79,6 +89,71 @@ async def current_source(
     return source_json(row)
 
 
+@router.post("/api/studio/projects/{project_id}/source/runs", status_code=202)
+async def start_source_run(
+    project_id: str,
+    payload: SourceRunInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """Start a durable source-agent run and return immediately.
+
+    Studio polls the run to display the authorized model, attached context, model
+    turns, tool actions, validation failures, retries and completion. The trace is
+    intentionally operational and never exposes private chain-of-thought.
+    """
+    _assert_owner(auth)
+    if payload.operation == "edit" and not payload.instruction.strip():
+        raise HTTPException(status_code=422, detail={"code": "invalid_instruction", "message": "Instruction is required"})
+    try:
+        project = await service.project(db, auth.tenant.id, project_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Project not found") from error
+    run, created = await create_run(
+        db,
+        auth.tenant.id,
+        auth.user.id,
+        project,
+        operation=payload.operation,
+        instruction=payload.instruction,
+        context=payload.context,
+    )
+    result = await run_json(db, run)
+    result["created"] = created
+    return result
+
+
+@router.get("/api/studio/projects/{project_id}/source/runs/latest")
+async def latest_source_run(
+    project_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await service.project(db, auth.tenant.id, project_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Project not found") from error
+    run = await latest_agent_run(db, auth.tenant.id, project_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No Studio agent run exists for this website")
+    return await run_json(db, run)
+
+
+@router.get("/api/studio/projects/{project_id}/source/runs/{run_id}")
+async def get_source_run(
+    project_id: str,
+    run_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    run = await db.get(StudioAgentRun, run_id)
+    if run is None or run.tenant_id != auth.tenant.id or run.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Studio agent run not found")
+    return await run_json(db, run)
+
+
+# Compatibility endpoints retained for older clients. The current Studio browser
+# uses /source/runs so long model work is durable and observable.
 @router.post("/api/studio/projects/{project_id}/source/generate")
 async def generate_project_source(
     project_id: str,

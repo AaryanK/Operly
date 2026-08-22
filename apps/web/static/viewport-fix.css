@@ -53,3 +53,175 @@
     grid-template-columns: repeat(2, minmax(180px, 1fr)) !important;
   }
 }
+
+/* Keep the Discord-like workspace controls visible after the shell applies its
+   generic button reset. */
+#dashboard.workspace-shell-ready .operly-workspace-head .operly-side-toggle {
+  display: grid !important;
+  place-items: center !important;
+  flex: 0 0 34px !important;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+  padding: 0 !important;
+  border: 1px solid rgba(151,169,255,.18) !important;
+  border-radius: 10px !important;
+  background: rgba(255,255,255,.055) !important;
+  color: #e9edff !important;
+  font-size: 22px !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+}
+#dashboard.workspace-shell-ready .operly-workspace-head .operly-side-toggle:hover {
+  background: rgba(91,128,255,.16) !important;
+  border-color: rgba(116,151,255,.4) !important;
+}
+
+.operly-rail-item,
+.operly-rail-account,
+.operly-rail-settings {
+  color: #f7f8ff !important;
+  opacity: 1 !important;
+  font-weight: 850 !important;
+}
+.operly-rail-settings {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  min-height: 48px !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(151,169,255,.14) !important;
+  border-radius: 16px !important;
+  background: rgba(255,255,255,.045) !important;
+  color: #9ed1ff !important;
+  font-size: 17px !important;
+  cursor: pointer !important;
+}
+.operly-rail-settings:hover {
+  border-radius: 13px !important;
+  background: rgba(88,111,218,.16) !important;
+  border-color: rgba(116,151,255,.3) !important;
+}
+
+/* Studio is conversation-first: the transcript and command area need enough room
+   to understand the edit instead of being a one-line strip under the canvas. */
+body.operly-studio-open .ss-chat {
+  min-height: 250px !important;
+  max-height: 46vh !important;
+}
+body.operly-studio-open #ss-thread {
+  min-height: 72px !important;
+  max-height: 180px !important;
+  padding-block: 12px !important;
+}
+body.operly-studio-open .ss-msg p {
+  line-height: 1.5 !important;
+}
+body.operly-studio-open #ss-input {
+  min-height: 72px !important;
+  max-height: 220px !important;
+  line-height: 1.45 !important;
+  font-size: 15px !important;
+}
+body.operly-studio-open .ss-preview-state {
+  max-width: min(56vw, 720px) !important;
+}
+body.operly-studio-open .ss-preview-state span {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* Durable owner-visible source-agent trace. This is operational activity only:
+   context attachment, model turns, tools, validation evidence and completion. */
+body.operly-studio-open .ss-run-trace {
+  margin: 10px 12px 0 !important;
+  border: 1px solid rgba(116,151,255,.22) !important;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg,rgba(17,25,45,.96),rgba(10,15,29,.96)) !important;
+  color: #f7f8ff !important;
+  overflow: hidden !important;
+  flex: 0 0 auto !important;
+}
+body.operly-studio-open .ss-run-trace[hidden] { display: none !important; }
+body.operly-studio-open .ss-run-head {
+  min-height: 42px !important;
+  padding: 8px 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  border-bottom: 1px solid rgba(151,169,255,.12) !important;
+}
+body.operly-studio-open .ss-run-head > div {
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+body.operly-studio-open .ss-run-head strong { color: #fff !important; font-size: 12px !important; }
+body.operly-studio-open .ss-run-head small,
+body.operly-studio-open .ss-run-head > span { color: #9eabc4 !important; font-size: 10px !important; }
+body.operly-studio-open .ss-run-dot {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  background: #6f7b94 !important;
+  flex: 0 0 8px !important;
+}
+body.operly-studio-open .ss-run-dot.running,
+body.operly-studio-open .ss-run-dot.queued { background: #61b7ff !important; box-shadow: 0 0 14px rgba(97,183,255,.55) !important; }
+body.operly-studio-open .ss-run-dot.succeeded { background: #57d9a8 !important; }
+body.operly-studio-open .ss-run-dot.failed,
+body.operly-studio-open .ss-run-dot.needs_input { background: #ff8c9d !important; }
+body.operly-studio-open .ss-run-now {
+  padding: 10px 12px !important;
+  color: #dfe7f7 !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  background: rgba(73,116,255,.055) !important;
+}
+body.operly-studio-open .ss-run-trace details { border-top: 1px solid rgba(151,169,255,.10) !important; }
+body.operly-studio-open .ss-run-trace summary {
+  padding: 8px 12px !important;
+  cursor: pointer !important;
+  color: #b9c7df !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+body.operly-studio-open .ss-run-trace summary span { color: #7786a3 !important; font-weight: 500 !important; }
+body.operly-studio-open .ss-run-events {
+  max-height: 150px !important;
+  overflow: auto !important;
+  padding: 0 12px 10px !important;
+  display: grid !important;
+  gap: 6px !important;
+}
+body.operly-studio-open .ss-run-event {
+  display: grid !important;
+  grid-template-columns: 10px minmax(0,1fr) !important;
+  gap: 8px !important;
+  padding: 6px 0 !important;
+}
+body.operly-studio-open .ss-run-event > i {
+  width: 6px !important;
+  height: 6px !important;
+  margin-top: 5px !important;
+  border-radius: 50% !important;
+  background: #698dff !important;
+}
+body.operly-studio-open .ss-run-event.bad > i { background: #ff8c9d !important; }
+body.operly-studio-open .ss-run-event strong,
+body.operly-studio-open .ss-run-event small,
+body.operly-studio-open .ss-run-event em { display: block !important; }
+body.operly-studio-open .ss-run-event strong { color: #dfe6f5 !important; font-size: 10px !important; line-height: 1.35 !important; }
+body.operly-studio-open .ss-run-event small { color: #75829c !important; font-size: 9px !important; margin-top: 2px !important; }
+body.operly-studio-open .ss-run-event em { color: #ffbdc7 !important; font-style: normal !important; font-size: 9px !important; margin-top: 3px !important; line-height: 1.35 !important; }
+
+@media (max-height: 760px) {
+  body.operly-studio-open .ss-chat { min-height: 210px !important; max-height: 42vh !important; }
+  body.operly-studio-open #ss-thread { max-height: 110px !important; }
+  body.operly-studio-open .ss-run-events { max-height: 96px !important; }
+}

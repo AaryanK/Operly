@@ -61,6 +61,16 @@ def test_existing_python_profile_remains_source_driven():
     assert validate_runtime_contract(bundle) == "python-stdlib-web"
 
 
+def test_native_website_anchor_does_not_require_a_custom_interaction_contract():
+    bundle = _bundle([
+        ("index.html", "<!doctype html><a href='/' data-operly-interaction='nav-brand'>Home</a><script src='app.js'></script>"),
+        ("app.js", "module.exports={siteName:()=> 'Operly'};"),
+        ("app.test.js", "const test=require('node:test');const assert=require('node:assert/strict');const {siteName}=require('./app.js');test('loads',()=>assert.equal(siteName(),'Operly'));"),
+        ("operly.interactions.json", '{"schemaVersion":1,"interactions":[{"id":"nav-brand","control":"anchor","event":"click","handler":"unused","operation":"unused","success":"navigates","rejection":"not applicable","stateChange":"not applicable","stateProbe":"not applicable","uiEvidence":"browser navigation","uiProjection":"unused","persistence":"not_applicable","reloadOperation":"not applicable","testId":"legacy-nav","requirementIds":[]}]}'),
+    ])
+    assert validate_runtime_contract(bundle) == "static-web-js"
+
+
 def test_visible_dead_button_is_rejected_even_when_preview_and_unit_test_shape_exist():
     bundle = _bundle([
         ("index.html", "<!doctype html><button>New Customer</button><script src='app.js'></script>"),
