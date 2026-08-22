@@ -31,7 +31,7 @@ class OllamaClient:
     def __new__(cls, *, model=None, fallback_models=None):
         provider = _configured_provider()
         default_model = (
-            "openai/gpt-oss-120b:free" if provider == "openrouter" else "gemma4:31b"
+            "stealth/ox-alpha" if provider == "openrouter" else "gemma4:31b"
         )
         route = ModelRoute(
             provider=provider,
