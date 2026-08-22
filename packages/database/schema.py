@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0027_global_human_memory"
+ALEMBIC_HEAD = "0028_studio_source_agent"
 
 
 def import_all_models() -> None:
@@ -9,6 +9,7 @@ def import_all_models() -> None:
     from packages.database import agent_models  # noqa: F401
     from packages.database import business_models  # noqa: F401
     from packages.database import studio_models  # noqa: F401
+    from packages.database import studio_source_models  # noqa: F401
     from packages.database import dashboard_studio_models  # noqa: F401
     from packages.database import application_builder_models  # noqa: F401
     from packages.database import custom_software_models  # noqa: F401
