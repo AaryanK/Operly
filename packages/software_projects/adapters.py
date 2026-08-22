@@ -8,6 +8,8 @@ def _state(value: str | None, *, ready: bool = False, live: bool = False) -> Pro
     clean = str(value or "").strip().lower()
     if clean == "archived":
         return ProjectState.ARCHIVED
+    if clean in {"published", "live"}:
+        return ProjectState.LIVE
     if clean in {item.value for item in ProjectState}:
         return ProjectState(clean)
     if live:
