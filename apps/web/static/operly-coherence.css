@@ -1,0 +1,231 @@
+/* Canonical authenticated-workspace coherence layer.
+   Loaded after legacy shell/overhaul CSS so old light/green theme rules cannot
+   produce unreadable mixed-theme screens. This file owns visual tokens only;
+   feature-specific stylesheets continue to own layout/behavior. */
+
+#dashboard {
+  --shell-bg: #070914;
+  --shell-surface: #101529;
+  --shell-surface-2: #151c34;
+  --shell-surface-3: #1b2441;
+  --shell-ink: #f7f8ff;
+  --shell-muted: #aeb8d6;
+  --shell-border: rgba(151, 170, 229, .24);
+  --shell-accent: #7ea2ff;
+  --shell-accent-strong: #9b87ff;
+  --shell-success: #63d6aa;
+  --shell-danger: #ff8b9a;
+  color: var(--shell-ink) !important;
+  background: var(--shell-bg) !important;
+  color-scheme: dark;
+}
+
+#dashboard,
+#dashboard .app-main,
+#dashboard .content,
+#dashboard .operly-workspace-shell,
+#dashboard .operly-shell-main {
+  background-color: var(--shell-bg) !important;
+  color: var(--shell-ink) !important;
+}
+
+/* Never inherit the legacy green/light typography into the authenticated shell. */
+#dashboard h1,
+#dashboard h2,
+#dashboard h3,
+#dashboard h4,
+#dashboard h5,
+#dashboard h6,
+#dashboard strong,
+#dashboard b,
+#dashboard legend,
+#dashboard label {
+  color: var(--shell-ink) !important;
+}
+
+#dashboard p,
+#dashboard small,
+#dashboard .muted,
+#dashboard .operly-muted,
+#dashboard .operly-shell-muted,
+#dashboard .operly-card-subtitle,
+#dashboard .operly-shell-description {
+  color: var(--shell-muted) !important;
+}
+
+/* Normalize every common shell surface. The older frontend-overhaul stylesheet
+   paints many of these pure white and sets dark-green text with !important. */
+#dashboard .operly-shell-card,
+#dashboard .operly-shell-panel,
+#dashboard .operly-shell-hero,
+#dashboard .operly-section,
+#dashboard .operly-card,
+#dashboard .simple-block,
+#dashboard .simple-card,
+#dashboard .simple-attention-card,
+#dashboard .simple-solution-card,
+#dashboard .settings-card,
+#dashboard .settings-panel,
+#dashboard .integration-card,
+#dashboard .plugin-card,
+#dashboard .mcp-card,
+#dashboard article:not(.auth-card),
+#dashboard fieldset {
+  background: var(--shell-surface) !important;
+  color: var(--shell-ink) !important;
+  border-color: var(--shell-border) !important;
+  box-shadow: none !important;
+}
+
+#dashboard .operly-shell-row,
+#dashboard .operly-list-row,
+#dashboard .operly-data-row,
+#dashboard .simple-list-item,
+#dashboard .settings-row,
+#dashboard .integration-row {
+  background: var(--shell-surface-2) !important;
+  color: var(--shell-ink) !important;
+  border-color: var(--shell-border) !important;
+}
+
+#dashboard a:not(.button),
+#dashboard .text-link {
+  color: #a8bdff !important;
+}
+
+#dashboard input,
+#dashboard textarea,
+#dashboard select {
+  background: #0c1123 !important;
+  color: var(--shell-ink) !important;
+  border-color: var(--shell-border) !important;
+  caret-color: var(--shell-ink);
+}
+
+#dashboard input::placeholder,
+#dashboard textarea::placeholder {
+  color: #8390b3 !important;
+  opacity: 1;
+}
+
+#dashboard input:focus,
+#dashboard textarea:focus,
+#dashboard select:focus,
+#dashboard button:focus-visible,
+#dashboard a:focus-visible {
+  outline: 2px solid #91adff !important;
+  outline-offset: 2px;
+}
+
+#dashboard button,
+#dashboard .button,
+#dashboard .operly-shell-button {
+  border-color: var(--shell-border);
+}
+
+#dashboard .button.primary,
+#dashboard .operly-shell-button.primary,
+#dashboard button.primary {
+  background: linear-gradient(135deg, #7297ff, #8e76ff) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+
+#dashboard .button.secondary,
+#dashboard .operly-shell-button:not(.primary),
+#dashboard button.secondary {
+  background: var(--shell-surface-3) !important;
+  color: var(--shell-ink) !important;
+  border-color: var(--shell-border) !important;
+}
+
+#dashboard .badge,
+#dashboard .pill,
+#dashboard .status,
+#dashboard .operly-pill {
+  color: #dce5ff !important;
+  border-color: var(--shell-border) !important;
+}
+
+/* Explicitly cover the screens that exposed low-contrast headings. */
+#dashboard .operly-shell-hero h1,
+#dashboard .operly-shell-hero h2,
+#dashboard .operly-shell-hero h3,
+#dashboard .operly-shell-card h1,
+#dashboard .operly-shell-card h2,
+#dashboard .operly-shell-card h3,
+#dashboard .settings-card h1,
+#dashboard .settings-card h2,
+#dashboard .settings-card h3,
+#dashboard [class*="mcp"] h1,
+#dashboard [class*="mcp"] h2,
+#dashboard [class*="mcp"] h3 {
+  color: #f8f9ff !important;
+  -webkit-text-fill-color: #f8f9ff !important;
+}
+
+/* Mobile: the desktop section navigation becomes a real off-canvas drawer;
+   it must never disappear just because the bottom workspace rail exists. */
+@media (max-width: 760px) {
+  #dashboard .operly-section-nav {
+    display: flex !important;
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1200;
+    width: min(86vw, 320px);
+    max-width: 320px;
+    padding: max(18px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom));
+    flex-direction: column;
+    overflow-y: auto;
+    background: #0b1020 !important;
+    border-right: 1px solid var(--shell-border) !important;
+    transform: translateX(-105%);
+    transition: transform .2s ease;
+    box-shadow: 22px 0 50px rgba(0,0,0,.42);
+  }
+
+  #dashboard.mobile-nav-open .operly-section-nav,
+  #dashboard .operly-section-nav.mobile-open,
+  #dashboard .operly-section-nav.open {
+    transform: translateX(0);
+  }
+
+  #dashboard .mobile-nav-toggle {
+    display: inline-grid !important;
+    place-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    color: var(--shell-ink) !important;
+    background: var(--shell-surface-2) !important;
+    border: 1px solid var(--shell-border) !important;
+  }
+
+  #dashboard .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1150;
+    border: 0;
+    background: rgba(2, 5, 14, .68) !important;
+    backdrop-filter: blur(3px);
+    display: none;
+  }
+
+  #dashboard.mobile-nav-open .mobile-nav-backdrop {
+    display: block !important;
+  }
+
+  #dashboard .content,
+  #dashboard .operly-shell-main {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  #dashboard .operly-shell-card,
+  #dashboard .operly-shell-panel,
+  #dashboard .simple-block,
+  #dashboard .simple-card {
+    max-width: 100%;
+  }
+}
