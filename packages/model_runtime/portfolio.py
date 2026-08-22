@@ -17,7 +17,7 @@ class ModelRoute:
 
 
 _DEFAULT_PROVIDER = "openrouter"
-_DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+_DEFAULT_MODEL = "stealth/ox-alpha"
 
 _DEFAULTS = {
     role: ModelRoute(_DEFAULT_PROVIDER, _DEFAULT_MODEL)
