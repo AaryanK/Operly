@@ -2,7 +2,9 @@ name: coding-harness-smoke
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "architecture/**"
     paths:
       - "apps/api/custom_software_router.py"
       - "packages/coding_harness/**"
