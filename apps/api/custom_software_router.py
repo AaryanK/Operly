@@ -20,6 +20,7 @@ from packages.custom_software.live_planning import PlannerUnavailable, PlanningB
 from packages.custom_software.pack_renderer import render_customer_quotation, render_inventory, render_quotation_public, render_quotation_staff
 from packages.custom_software.packs import PACKS, pack_manifest
 from packages.custom_software.plan_service import PlanConflict, approve, create_plan, owned_plan, plan_json, plan_version, revise
+from packages.custom_software.preview_proxy import PreviewRedirectError, preview_redirect_location, preview_request_target
 from packages.custom_software.renderer import render_dispatch, render_public, render_status
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter
 from packages.custom_software.runner_service import RunnerStateError, active_preview, build_events, build_json, owned_build, refresh_build, stop_preview
@@ -258,21 +259,26 @@ def _validated_preview_target(value:str)->str:
     return value.rstrip("/")
 
 
-@router.api_route("/api/custom-software/previews/{preview_id}/{path:path}",methods=["GET","POST"])
+@router.api_route("/api/custom-software/previews/{preview_id}/{path:path}",methods=["GET","POST","PUT","PATCH","DELETE"])
 async def preview_proxy(preview_id:str,path:str,request:Request,auth:AuthContext=Depends(get_auth_context),db:AsyncSession=Depends(get_db)):
     if path.startswith(("_runner","admin","internal")):raise HTTPException(404,"Preview route not found")
     try:preview,_=await active_preview(db,auth.tenant.id,preview_id)
     except LookupError as error:raise HTTPException(404,str(error)) from error
     body=await request.body()
     if len(body)>1_000_000:raise HTTPException(413,"Preview request is too large")
-    target=_validated_preview_target(preview.target_url)+"/"+path
+    base=_validated_preview_target(preview.target_url)
+    target=preview_request_target(base,path,request.url.query)
     headers={k:v for k,v in request.headers.items() if k.lower() in {"content-type","accept"}}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.request(request.method,target,data=body,headers=headers) as upstream:
+            async with session.request(request.method,target,data=body,headers=headers,allow_redirects=False) as upstream:
                 data=await upstream.content.read(2_000_001)
                 if len(data)>2_000_000:raise HTTPException(502,"Preview response exceeded the size limit")
                 safe={k:v for k,v in upstream.headers.items() if k.lower() in {"content-type","cache-control"}}
+                location=upstream.headers.get("location")
+                if location:
+                    try:safe["location"]=preview_redirect_location(preview_id,base,location)
+                    except PreviewRedirectError as error:raise HTTPException(502,str(error)) from error
                 return Response(data,status_code=upstream.status,headers=safe)
     except aiohttp.ClientError as error:raise HTTPException(502,"Preview runner is unavailable") from error
 
