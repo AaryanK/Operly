@@ -33,6 +33,7 @@ from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
+from apps.api.software_projects_router import router as software_projects_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_router import router as studio_router
@@ -194,6 +195,7 @@ for router in (
     custom_software_router,
     architecture_pack_router,
     coding_harness_router,
+    software_projects_router,
     solutions_router,
     solutions_public_router,
 ):
@@ -218,15 +220,25 @@ def frontend_shell() -> HTMLResponse:
     return HTMLResponse(
         html,
         headers={
-            "Cache-Control": "no-store, max-age=0",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
+            "Expires": "0",
         },
     )
 
 
-@app.get("/{path:path}", include_in_schema=False)
-async def frontend(path: str):
-    requested = WEB_STATIC / path
-    if path and requested.is_file():
-        return FileResponse(requested)
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return frontend_shell()
+
+
+@app.get("/{path:path}")
+async def spa(path: str):
+    if path.startswith("api/"):
+        return FileResponse(WEB_STATIC / "404.html", status_code=404)
+    if "." in Path(path).name:
+        candidate = WEB_STATIC / path
+        if candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(WEB_STATIC / "404.html", status_code=404)
     return frontend_shell()
