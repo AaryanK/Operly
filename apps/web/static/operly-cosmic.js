@@ -1,7 +1,36 @@
 (() => {
   const KEY="operly.workspace.navigation.collapsed";
+  const AUTH_BOOT="20260822-auth-v3";
   const $=(q,r=document)=>r.querySelector(q);
   let editTicker=null;
+  let authRedirectPending=false;
+  const nativeFetch=window.fetch.bind(window);
+
+  // Authentication is a hard application boundary. A successful session should
+  // not depend on the signed-out DOM, legacy renderers, or an old cached auth.js
+  // finishing its own in-page transition. Keep this small interception limited to
+  // successful authentication endpoints only.
+  window.fetch=async(...args)=>{
+    const response=await nativeFetch(...args);
+    try{
+      const request=args[0];
+      const raw=typeof request==="string"?request:request?.url;
+      const path=raw?new URL(raw,location.href).pathname:"";
+      if(response.ok&&path==="/api/auth/login"){
+        if(!authRedirectPending){
+          authRedirectPending=true;
+          setTimeout(()=>location.replace(`/app?auth_boot=${AUTH_BOOT}`),0);
+        }
+      }else if(response.ok&&path==="/api/auth/google"){
+        response.clone().json().then(body=>{
+          if(body?.new_account||authRedirectPending)return;
+          authRedirectPending=true;
+          location.replace(`/app?auth_boot=${AUTH_BOOT}`);
+        }).catch(()=>{});
+      }
+    }catch{}
+    return response;
+  };
 
   function apply(collapsed){
     const dashboard=$("#dashboard.workspace-shell-ready");
@@ -51,6 +80,27 @@
       }
     });
     return true;
+  }
+
+  async function reconcileAuthenticatedRoute(){
+    if(location.pathname!=="/app")return false;
+    try{
+      const response=await nativeFetch("/api/me",{
+        method:"GET",
+        credentials:"same-origin",
+        cache:"no-store",
+        headers:{Accept:"application/json"}
+      });
+      if(!response.ok)return false;
+      const dashboard=$("#dashboard");
+      if(!dashboard)return false;
+      dashboard.classList.remove("hidden");
+      ensureAuthenticatedScreenBoundary();
+      document.documentElement.dataset.operlyAuth="authenticated";
+      return true;
+    }catch{
+      return false;
+    }
   }
 
   function ensureSideToggle(){
@@ -144,6 +194,9 @@
   document.addEventListener("keydown",captureStudioSend,true);
 
   mount();
+  reconcileAuthenticatedRoute();
+  window.addEventListener("pageshow",()=>reconcileAuthenticatedRoute());
+
   // The workspace shell and rail are intentionally re-renderable. Keep this
   // observer alive so collapse/settings controls are restored after workspace or
   // navigation refreshes instead of disappearing after the first successful mount.
