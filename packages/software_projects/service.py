@@ -1,72 +1,203 @@
-"""Canonical read facade over legacy/current software project records."""
+"""Canonical SoftwareProject persistence over current runtime implementations."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from sqlalchemy import select
 
 from packages.database.application_builder_models import ManagedApplication
 from packages.database.custom_software_models import GeneratedProject
+from packages.database.software_project_models import ServiceBindingRecord, SoftwareProjectRecord
 from packages.database.studio_models import StudioProject
 from packages.software_projects.adapters import (
     from_generated_project,
     from_managed_application,
     from_studio_project,
 )
+from packages.software_projects.contracts import ProjectState, SoftwareProject
+
+
+_LEGACY_SOURCES = (
+    ("studio", StudioProject, from_studio_project),
+    ("managed_app", ManagedApplication, from_managed_application),
+    ("generated_project", GeneratedProject, from_generated_project),
+)
+
+
+def _json(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 class SoftwareProjectService:
-    """Compatibility service while canonical SoftwareProject persistence lands.
+    """Canonical project identity with non-destructive legacy synchronization.
 
-    New Studio orchestration can consume one project shape now instead of branching
-    on three product generations. Writes remain owned by existing services until
-    the persistence migration is complete.
+    Existing runtime tables keep owning their implementation-specific behavior.
+    This service creates/updates a stable ``software_projects`` identity for them,
+    so new Studio orchestration no longer needs runtime-type IDs as its public key.
     """
 
-    async def list(self, db, workspace_id: str):
-        studios = (
+    async def _binding_ids(self, db, project_id: str) -> tuple[str, ...]:
+        rows = (
             await db.scalars(
-                select(StudioProject).where(
-                    StudioProject.tenant_id == workspace_id,
-                    StudioProject.status != "archived",
+                select(ServiceBindingRecord.id)
+                .where(
+                    ServiceBindingRecord.project_id == project_id,
+                    ServiceBindingRecord.status == "active",
                 )
+                .order_by(ServiceBindingRecord.created_at)
             )
         ).all()
-        apps = (
-            await db.scalars(
-                select(ManagedApplication).where(
-                    ManagedApplication.tenant_id == workspace_id
-                )
-            )
-        ).all()
-        generated = (
-            await db.scalars(
-                select(GeneratedProject).where(
-                    GeneratedProject.tenant_id == workspace_id
-                )
-            )
-        ).all()
-        projects = [*(from_studio_project(row) for row in studios)]
-        projects.extend(from_managed_application(row) for row in apps)
-        projects.extend(from_generated_project(row) for row in generated)
-        projects.sort(
-            key=lambda item: item.updated_at or item.created_at or datetime.min,
-            reverse=True,
-        )
-        return projects
+        return tuple(str(item) for item in rows)
 
-    async def get(self, db, workspace_id: str, project_id: str):
-        for model, adapter in (
-            (StudioProject, from_studio_project),
-            (ManagedApplication, from_managed_application),
-            (GeneratedProject, from_generated_project),
-        ):
-            row = await db.scalar(
-                select(model).where(
-                    model.id == project_id,
-                    model.tenant_id == workspace_id,
-                )
+    async def _as_project(self, db, row: SoftwareProjectRecord) -> SoftwareProject:
+        metadata = _json(row.metadata_json)
+        if row.legacy_runtime_type:
+            metadata.setdefault("compatibility_runtime", row.legacy_runtime_type)
+        if row.legacy_runtime_reference:
+            metadata.setdefault("runtime_reference", row.legacy_runtime_reference)
+        try:
+            state = ProjectState(row.state)
+        except ValueError:
+            state = ProjectState.DRAFT
+        return SoftwareProject(
+            id=row.id,
+            workspace_id=row.tenant_id,
+            name=row.name,
+            description=row.description or "",
+            state=state,
+            active_source_version_id=row.active_source_version_id,
+            active_runtime_id=row.active_runtime_id,
+            service_binding_ids=await self._binding_ids(db, row.id),
+            created_by=row.created_by or "",
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            metadata=metadata,
+        )
+
+    async def _ensure_legacy_record(
+        self,
+        db,
+        *,
+        runtime_type: str,
+        legacy_row,
+        adapter,
+    ) -> SoftwareProjectRecord:
+        projected = adapter(legacy_row)
+        row = await db.scalar(
+            select(SoftwareProjectRecord).where(
+                SoftwareProjectRecord.tenant_id == projected.workspace_id,
+                SoftwareProjectRecord.legacy_runtime_type == runtime_type,
+                SoftwareProjectRecord.legacy_runtime_reference == str(legacy_row.id),
             )
-            if row is not None:
-                return adapter(row)
-        raise LookupError("Software project not found")
+        )
+        metadata = dict(projected.metadata)
+        metadata["compatibility_runtime"] = runtime_type
+        metadata["runtime_reference"] = str(legacy_row.id)
+        values = {
+            "name": projected.name,
+            "description": projected.description,
+            "state": projected.state.value,
+            "active_source_version_id": projected.active_source_version_id,
+            "active_runtime_id": projected.active_runtime_id,
+            "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
+            "created_by": projected.created_by,
+        }
+        if row is None:
+            row = SoftwareProjectRecord(
+                tenant_id=projected.workspace_id,
+                legacy_runtime_type=runtime_type,
+                legacy_runtime_reference=str(legacy_row.id),
+                created_at=projected.created_at or datetime.utcnow(),
+                **values,
+            )
+            db.add(row)
+            await db.flush()
+        else:
+            for key, value in values.items():
+                setattr(row, key, value)
+            row.updated_at = projected.updated_at or datetime.utcnow()
+        return row
+
+    async def sync_legacy(self, db, workspace_id: str) -> None:
+        for runtime_type, model, adapter in _LEGACY_SOURCES:
+            statement = select(model).where(model.tenant_id == workspace_id)
+            if model is StudioProject:
+                statement = statement.where(StudioProject.status != "archived")
+            rows = (await db.scalars(statement)).all()
+            for legacy_row in rows:
+                await self._ensure_legacy_record(
+                    db,
+                    runtime_type=runtime_type,
+                    legacy_row=legacy_row,
+                    adapter=adapter,
+                )
+        await db.flush()
+
+    async def list(self, db, workspace_id: str) -> list[SoftwareProject]:
+        await self.sync_legacy(db, workspace_id)
+        rows = (
+            await db.scalars(
+                select(SoftwareProjectRecord)
+                .where(
+                    SoftwareProjectRecord.tenant_id == workspace_id,
+                    SoftwareProjectRecord.state != ProjectState.ARCHIVED.value,
+                )
+                .order_by(SoftwareProjectRecord.updated_at.desc())
+            )
+        ).all()
+        return [await self._as_project(db, row) for row in rows]
+
+    async def get(self, db, workspace_id: str, project_id: str) -> SoftwareProject:
+        await self.sync_legacy(db, workspace_id)
+        row = await db.scalar(
+            select(SoftwareProjectRecord).where(
+                SoftwareProjectRecord.id == project_id,
+                SoftwareProjectRecord.tenant_id == workspace_id,
+            )
+        )
+        if row is None:
+            raise LookupError("Software project not found")
+        return await self._as_project(db, row)
+
+    async def create(
+        self,
+        db,
+        *,
+        workspace_id: str,
+        user_id: str,
+        name: str,
+        description: str = "",
+        metadata: dict | None = None,
+    ) -> SoftwareProject:
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise ValueError("Project name is required")
+        row = SoftwareProjectRecord(
+            tenant_id=workspace_id,
+            name=clean_name[:200],
+            description=str(description or "")[:8000],
+            state=ProjectState.DRAFT.value,
+            metadata_json=json.dumps(metadata or {}, sort_keys=True, default=str),
+            created_by=user_id,
+        )
+        db.add(row)
+        await db.flush()
+        return await self._as_project(db, row)
+
+    async def legacy_target(self, db, workspace_id: str, project_id: str) -> tuple[str, str] | None:
+        row = await db.scalar(
+            select(SoftwareProjectRecord).where(
+                SoftwareProjectRecord.id == project_id,
+                SoftwareProjectRecord.tenant_id == workspace_id,
+            )
+        )
+        if row is None:
+            raise LookupError("Software project not found")
+        if not row.legacy_runtime_type or not row.legacy_runtime_reference:
+            return None
+        return row.legacy_runtime_type, row.legacy_runtime_reference
