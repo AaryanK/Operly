@@ -8,6 +8,7 @@ from packages.custom_software.source_bundles import SourceFile
 from packages.database.db import Base
 from packages.database.schema import import_all_models
 from packages.studio.agent_runs import _context_summary
+from packages.studio.preview_assets import inline_local_preview_assets
 from packages.studio.runtime_policy import (
     StudioWebsiteContractError,
     _safe_fuzzy_edit,
@@ -64,16 +65,8 @@ def test_studio_context_summary_surfaces_authorized_capability_groups():
             "viewport": "desktop",
             "conversation": [{"role": "user", "content": "Build the booking page"}],
             "_operly_capabilities": [
-                {
-                    "id": "business.search_leads",
-                    "category": "business",
-                    "provider": "operly",
-                },
-                {
-                    "id": "gmail.search",
-                    "category": "messaging",
-                    "provider": "google",
-                },
+                {"id": "business.search_leads", "category": "business", "provider": "operly"},
+                {"id": "gmail.search", "category": "messaging", "provider": "google"},
             ],
         },
         SimpleNamespace(source_version=4),
@@ -112,6 +105,25 @@ def test_source_production_flattens_css_blocks_generated_js_and_wires_contact_fo
     assert "<script" not in html.lower()
     assert "/api/public/presence/solution-123/forms/contact" in html
     assert "__OPERLY_FORM_ACTION__" not in html
+
+
+def test_sandboxed_preview_inlines_local_css_and_js_without_same_origin_credentials():
+    html = """<!doctype html><html><head><link rel='stylesheet' href='./styles.css'></head>
+    <body><h1>Antu Hill</h1><script src='app.js'></script></body></html>"""
+    bundled = inline_local_preview_assets(
+        html,
+        {
+            "index.html": html,
+            "styles.css": "body{background:#050610;color:#fff}",
+            "app.js": "document.documentElement.dataset.ready='1';",
+        },
+    )
+    assert "href='./styles.css'" not in bundled
+    assert "src='app.js'" not in bundled
+    assert "body{background:#050610;color:#fff}" in bundled
+    assert "document.documentElement.dataset.ready='1'" in bundled
+    assert 'data-operly-inline-source="styles.css"' in bundled
+    assert 'data-operly-inline-source="app.js"' in bundled
 
 
 def test_studio_website_contract_accepts_native_navigation_forms_and_css_toggle():
