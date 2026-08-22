@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from sqlalchemy import desc, select
 
+from packages.coding_harness.opencode_agent import CodingHarnessError
 from packages.company.events import append_event
 from packages.database.product_models import SolutionDeployment, SolutionJob
 from packages.database.studio_models import StudioVersion
