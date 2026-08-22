@@ -63,12 +63,12 @@ def test_live_projection_discards_legacy_semantic_defaults():
     assert projected["testRequirements"] == ["test_calculator"]
 
 
-def test_coding_harness_spec_excludes_legacy_presentation_fields():
+def test_coding_harness_spec_excludes_legacy_presentation_and_duplicate_requirement_fields():
     plan = {
         "projectName": "Calculator",
         "summary": "Build a calculator",
         "effectiveRequirements": ["No authentication or database"],
-        "requirementLedger": [{"id": "R-001"}],
+        "requirementLedger": [{"id": "R-001", "normalizedMeaning": "No authentication or database"}],
         "planTree": [{"id": "ROOT"}],
         "globalValidation": {"passed": True},
         "unsupportedRequirements": [],
@@ -82,4 +82,6 @@ def test_coding_harness_spec_excludes_legacy_presentation_fields():
     assert "roles" not in spec
     assert "entities" not in spec
     assert "stack" not in spec
-    assert spec["effectiveRequirements"] == ["No authentication or database"]
+    assert "effectiveRequirements" not in spec
+    assert spec["requirements"][0]["id"] == "R-001"
+    assert spec["requirements"][0]["requirement"] == "No authentication or database"
