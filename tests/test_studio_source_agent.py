@@ -261,7 +261,9 @@ def test_studio_browser_uses_durable_source_runs_and_visible_trace():
     assert "/source/runs/latest" in source
     assert "ss-run-trace" in source
     assert "Agent activity" in source
-    assert "/source/edits" not in source
+    assert "/studio/projects/${rt.id}/source/edits" not in source
+    assert "/coding-harness/plans/${rt.planId}/source/edits" in source
+    assert 'api("/coding-harness/builds"' in source
     assert "/source/generate" not in source
     assert "/ai/revise" not in source
     assert "SELECTED ELEMENT CONTEXT" not in source
