@@ -72,6 +72,13 @@ def studio_coding_model_client(role: str = "coding"):
         inner.max_attempts = 1
         inner.fallback_models = _studio_fallbacks(inner.model, inner.fallback_models)
         inner.fallback_model = inner.fallback_models[0] if inner.fallback_models else ""
+        client.operly_studio_route = {
+            "provider": "openrouter",
+            "primary": inner.model,
+            "fallbacks": list(inner.fallback_models),
+            "attemptTimeoutSeconds": inner.timeout_seconds,
+            "attemptsPerModel": inner.max_attempts,
+        }
     return client
 
 
