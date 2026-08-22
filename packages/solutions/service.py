@@ -117,8 +117,8 @@ class SolutionService:
         if row.runtime_type==RuntimeType.MANAGED_APP:
             items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all()
             return [{"id":x.id,"version":x.version_number,"status":"active" if x.active else "superseded","summary":x.summary,"created_at":x.created_at.isoformat()} for x in items]
-        if runtime.plan_id:
-            sources=(await db.scalars(select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id==tenant_id,GeneratedSourceBundle.plan_id==runtime.plan_id).order_by(desc(GeneratedSourceBundle.source_version)))).all()
+        if runtime.plan_id and runtime.approved_plan_version:
+            sources=(await db.scalars(select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id==tenant_id,GeneratedSourceBundle.plan_id==runtime.plan_id,GeneratedSourceBundle.plan_version==runtime.approved_plan_version).order_by(desc(GeneratedSourceBundle.source_version)))).all()
             if sources:
                 output=[]
                 for index,item in enumerate(sources):
