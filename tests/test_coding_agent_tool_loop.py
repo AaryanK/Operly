@@ -180,7 +180,8 @@ def test_progress_callback_reports_model_and_real_tool_activity():
 
     asyncio.run(OpenCodeStyleCodingAgent(client=DirectBuildModel(), max_steps=6, progress_callback=progress).build("Approved tiny Python specification"))
 
-    assert events[0]["phase"] == "model"
+    assert events[0]["phase"] == "model_input"
+    assert events[1]["phase"] == "model"
     assert any(item.get("tool") == "write" and "Creating or replacing" in item["summary"] for item in events)
     assert any(item.get("tool") == "finish" and "finalizing" in item["summary"] for item in events)
 
