@@ -1,8 +1,9 @@
 """Studio interaction budgets expressed through provider-neutral model policy.
 
 Studio chooses latency/turn budgets because it owns the interactive UX. It never
-inspects or mutates OpenRouter/Ollama/future provider clients. Attempt limits and
-cross-provider failover are enforced below this module by ``model_runtime``.
+inspects or mutates OpenRouter/Ollama/future provider clients. Attempt limits,
+output budgets, and cross-provider failover are enforced below this module by
+``model_runtime``.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ _STUDIO_MODEL_SLICE_SECONDS = 195
 _STUDIO_EDIT_MAX_SECONDS = 420
 _STUDIO_GENERATE_MAX_SECONDS = 600
 _STUDIO_MAX_MODELS = 3
+_STUDIO_MAX_OUTPUT_TOKENS = 16_384
 
 _APPLIED = False
 
@@ -34,6 +36,7 @@ def studio_coding_model_client(role: str = "coding"):
             timeout_seconds=_STUDIO_PROVIDER_ATTEMPT_SECONDS,
             attempts_per_model=1,
             max_models=_STUDIO_MAX_MODELS,
+            max_output_tokens=_STUDIO_MAX_OUTPUT_TOKENS,
         ),
     )
 
