@@ -69,6 +69,9 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
             {"OPERLY_MODEL_CATALOG_JSON": catalog},
             clear=True,
         ), patch(
+            "packages.model_runtime.service.refresh_model_discovery",
+            new=AsyncMock(return_value={}),
+        ), patch(
             "packages.model_runtime.service.model_client_for_route",
             return_value=fake_client,
         ) as factory:
