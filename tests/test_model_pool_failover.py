@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from packages.model_runtime import (
     ModelInferenceError,
     model_for_role,
 )
+from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.model_runtime.portfolio import model_route
 from packages.model_runtime.registry import ModelPool
 
@@ -54,6 +56,30 @@ class _SuccessModel:
         )
 
 
+class _FakeResponse:
+    status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def text(self):
+        return json.dumps(
+            {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        )
+
+
+class _FakeSession:
+    def __init__(self):
+        self.payload = None
+
+    def post(self, url, *, headers, json):
+        self.payload = json
+        return _FakeResponse()
+
+
 class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_falls_through_to_next_model(self):
         first = _FailingModel("primary")
@@ -70,6 +96,46 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider_model_id, "fallback")
         self.assertEqual(first.calls, 1)
         self.assertEqual(second.calls, 1)
+
+    async def test_openrouter_agent_turn_has_bounded_output_reservation(self):
+        with patch.dict(
+            os.environ,
+            {"OPEN_ROUTER_API": "test-key"},
+            clear=False,
+        ):
+            client = OpenRouterClient(model="stealth/ox-alpha")
+            session = _FakeSession()
+            result = await client._request_once(
+                session,
+                {},
+                "stealth/ox-alpha",
+                [{"role": "user", "content": "edit the source"}],
+                [],
+            )
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(session.payload["max_tokens"], 16_384)
+
+    async def test_openrouter_output_reservation_is_operator_configurable(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPEN_ROUTER_API": "test-key",
+                "OPEN_ROUTER_MAX_TOKENS": "4096",
+            },
+            clear=False,
+        ):
+            client = OpenRouterClient(model="stealth/ox-alpha")
+            session = _FakeSession()
+            await client._request_once(
+                session,
+                {},
+                "stealth/ox-alpha",
+                [{"role": "user", "content": "edit the source"}],
+                [],
+            )
+
+        self.assertEqual(session.payload["max_tokens"], 4096)
 
     def test_default_openrouter_coding_route_has_provider_local_fallbacks(self):
         with patch.dict(os.environ, {}, clear=True):
