@@ -122,6 +122,40 @@ def test_exact_edit_invalidates_pre_edit_source_observation():
     assert observations == []
 
 
+def test_failed_edit_keeps_last_confirmed_source_observation():
+    messages = _head()
+    messages += _read_turn("index.html", "1: <h1>Still current</h1>")
+    messages += [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "edit",
+                        "arguments": {
+                            "path": "index.html",
+                            "old": "missing text",
+                            "new": "replacement",
+                        },
+                    }
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_name": "edit",
+            "content": json.dumps({"ok": False, "error": "Exact edit requires one match; found 0"}),
+        },
+    ]
+
+    observations = _latest_source_observations(messages)
+
+    assert len(observations) == 1
+    assert observations[0]["path"] == "index.html"
+    assert "Still current" in observations[0]["content"]
+
+
 def test_full_write_becomes_the_new_durable_source_without_an_extra_read():
     messages = _head()
     messages += _read_turn("app.js", "1: old source")
@@ -147,3 +181,34 @@ def test_full_write_becomes_the_new_durable_source_without_an_extra_read():
     assert observations[0]["path"] == "app.js"
     assert observations[0]["source"] == "write"
     assert observations[0]["content"] == "export const current = true;\n"
+
+
+def test_failed_write_never_poison_durable_source_state():
+    messages = _head()
+    messages += _read_turn("app.js", "1: export const current = 'old';")
+    messages += [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "write",
+                        "arguments": {"path": "app.js", "content": "export const current = 'uncommitted';\n"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_name": "write",
+            "content": json.dumps({"ok": False, "error": "Workspace size limit exceeded"}),
+        },
+    ]
+
+    observations = _latest_source_observations(messages)
+
+    assert len(observations) == 1
+    assert observations[0]["source"] == "read"
+    assert "old" in observations[0]["content"]
+    assert "uncommitted" not in observations[0]["content"]
