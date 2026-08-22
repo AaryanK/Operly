@@ -1,6 +1,7 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
+from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
 from packages.capabilities.message_curation import MessageCurationProvider
@@ -25,12 +26,11 @@ from packages.connectors.google_provider import GmailProvider, GoogleCalendarPro
 
 
 def default_registry(enabled_plugins=None) -> CapabilityRegistry:
-    """Build the single canonical runtime registry.
+    """Build the current built-in registry during manifest-runtime migration.
 
-    Legacy provider definitions remain importable during migration, but the live
-    execution path only registers the unified providers listed here. Model
-    delegation is a normal built-in capability; provider discovery decides at
-    invocation time whether a suitable specialist resource exists.
+    This remains bootstrap code, not the long-term extension mechanism. Discovery
+    capabilities are registered against the finished registry so agents can search
+    capability metadata without receiving every schema up front.
     """
 
     def enabled(tenant_id, definition):
@@ -67,4 +67,5 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         GoogleCalendarProvider(),
     ):
         registry.register(provider)
+    registry.register(CapabilityDiscoveryProvider(registry))
     return registry
