@@ -36,25 +36,31 @@ There is deliberately no Gemma-only, Ox-only, OpenRouter-only, or Ollama-only
 model guardrail in the harness. Defaults choose Ox Alpha today; they do not limit
 what registered providers/models may be selected tomorrow.
 
-## Model resources
+## Model resources and discovery
 
-Models are catalog resources separate from providers. Each resource declares a
-provider, model id, capabilities, free/paid status and routing priority. The
-orchestrator is always included automatically. Additional resources can be added
-without harness changes through `OPERLY_MODEL_CATALOG_JSON` or
-`register_model_resource(...)`.
+Models are catalog resources separate from providers. Each resource can declare a
+provider, model id, human name, capabilities, free/paid status, routing priority,
+context length, input/output modalities and supported provider parameters.
 
-Example:
+The orchestrator is always included automatically. Additional resources can come
+from three interchangeable sources:
+
+1. static environment configuration through `OPERLY_MODEL_CATALOG_JSON`;
+2. runtime registration through `register_model_resource(...)`;
+3. provider discovery plugins through `register_model_discoverer(...)`.
+
+OpenRouter discovery is installed now. It reads OpenRouter's live `/api/v1/models`
+catalog behind the provider boundary and translates provider metadata into Operly
+capabilities such as `text`, `vision`, `video`, `audio_input`, `image_generation`,
+`tools`, `reasoning`, `structured_output`, `coding`, `translation`, `reranking`,
+`transcription`, and `speech` when the provider metadata supports or identifies
+them. Discovery is cached and a provider outage does not replace configured
+resources or break the orchestrator.
+
+Example static resource:
 
 ```json
 [
-  {
-    "provider": "openrouter",
-    "id": "some/free-vision-model",
-    "capabilities": ["vision", "reasoning"],
-    "free": true,
-    "priority": 10
-  },
   {
     "provider": "ollama",
     "id": "local-specialist",
@@ -69,25 +75,26 @@ Routing asks for a capability, not a model name. Today the selector prefers free
 eligible resources and then priority. This policy can later include quality,
 latency, privacy and budget without changing the harness.
 
-The catalog currently contains the configured/registered resources; it is not a
-hard-coded copy of a provider's entire marketplace. Provider catalog discovery can
-be layered on top of this same resource contract so OpenRouter, Ollama, or future
-providers can publish their available models/capabilities without changing the
-harness.
+Adding another marketplace/provider catalog is therefore another discovery plugin,
+not a harness rewrite.
 
 ## Models as tools
 
-When at least one specialist exists beyond the current orchestrator, OPERLY adds a
-`model.invoke` plugin to the normal capability registry. The orchestrator supplies
-only a capability, objective and bounded context. OPERLY chooses the concrete model
-and provider. Delegated models receive no tools, so model-to-model delegation is
-one level deep by default and cannot recurse indefinitely.
+`model.invoke` is a normal built-in capability. The orchestrator supplies only a
+capability, objective and bounded context. At invocation time Operly refreshes
+provider discovery as needed, chooses the concrete model/provider, and invokes it
+through the provider registry.
+
+Delegated models currently receive no tools, so model-to-model delegation is one
+level deep by default and cannot recurse indefinitely. This is a delegation-loop
+safety boundary, not a restriction on which model or provider may be used.
 
 This keeps the intended boundary:
 
 - harness, context, security, permissions, memory and business tools stay constant;
 - model identity is replaceable;
 - provider transport is replaceable;
+- provider model catalogs are discoverable data;
 - additional models become capabilities/tools available to the orchestrator;
 - future image/audio/video model adapters can join the same resource catalog while
   keeping modality-specific transport inside their provider/model plugin boundary.
