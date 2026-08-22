@@ -38,6 +38,7 @@ on:
       - "tests/test_studio_design_quality.py"
       - "tests/test_studio_source_agent.py"
       - "tests/test_studio_context_rich_harness.py"
+      - "tests/test_studio_model_latency_policy.py"
       - "tests/test_unified_application_flow.py"
       - "tests/test_unified_studio_regressions.py"
       - "tests/test_workspace_security_boundary.py"
@@ -140,6 +141,7 @@ jobs:
           packages/studio/ai.py
           packages/studio/source_agent.py
           packages/studio/agent_runs.py
+          packages/studio/model_latency_policy.py
       - name: Check browser JavaScript syntax
         run: |
           node --check apps/web/static/app.js
@@ -175,6 +177,7 @@ jobs:
           tests/test_studio_design_quality.py
           tests/test_studio_source_agent.py
           tests/test_studio_context_rich_harness.py
+          tests/test_studio_model_latency_policy.py
           tests/test_unified_application_flow.py
           tests/test_unified_studio_regressions.py
           tests/test_workspace_security_boundary.py
