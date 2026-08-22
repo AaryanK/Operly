@@ -204,7 +204,7 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.primary, "stealth/ox-alpha")
         self.assertEqual(
             route.fallbacks,
-            ("qwen/qwen3-coder-flash", "openai/gpt-oss-120b:free"),
+            ("openai/gpt-oss-120b:free", "qwen/qwen3-coder-flash"),
         )
 
     def test_default_openrouter_fallback_ids_do_not_leak_to_other_provider(self):
@@ -225,8 +225,8 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
     def test_role_candidate_configuration_builds_multi_model_pool(self):
         candidates = (
             '[{"provider":"openrouter","model":"stealth/ox-alpha"},'
-            '{"provider":"openrouter","model":"qwen/qwen3-coder-flash"},'
-            '{"provider":"openrouter","model":"openai/gpt-oss-120b:free"}]'
+            '{"provider":"openrouter","model":"openai/gpt-oss-120b:free"},'
+            '{"provider":"openrouter","model":"qwen/qwen3-coder-flash"}]'
         )
         with patch.dict(
             os.environ,
@@ -238,7 +238,7 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(model, ModelPool)
         self.assertEqual(len(model.models), 3)
         self.assertEqual(model.models[0].provider_model_id, "stealth/ox-alpha")
-        self.assertEqual(model.models[1].provider_model_id, "qwen/qwen3-coder-flash")
+        self.assertEqual(model.models[1].provider_model_id, "openai/gpt-oss-120b:free")
 
 
 if __name__ == "__main__":
