@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from packages.agents import AgentRuntime
 from packages.application_builder.routing import route_application_request
 from packages.application_builder.schema import BuilderContext, ProposalRequest
 from packages.application_builder.service import ApplicationBuilderService
@@ -23,7 +24,7 @@ from packages.context.service import ContextService
 from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.application_builder_models import ManagedApplication
 from packages.database.db import session_scope
-from packages.model_runtime import model_chat_client_for_role
+from packages.model_runtime import ModelChatAdapter, model_for_role
 from packages.security.execution_context import (
     ExecutionContextError,
     resolve_execution_context,
@@ -80,13 +81,17 @@ BUSINESS REASONING:
 
 
 class AgentService:
-    """Persistent model loop with one canonical plugin execution path."""
+    """Persistent business policy/context over the generic Operly AgentRuntime."""
 
     def __init__(self) -> None:
-        self.client = model_chat_client_for_role("business_agent")
+        self.model = model_for_role("business_agent")
+        # Managed Application routing is compatibility code that still expects the
+        # old chat-shaped interface. It receives an adapter over the same Model.
+        self.client = ModelChatAdapter(self.model)
         self.plugin_harness = PluginAgentHarness()
         self.rate_limiter = SlidingWindowRateLimiter(limit=20, window_seconds=60)
         self.max_steps = 6
+        self.agent_runtime = AgentRuntime(max_steps=self.max_steps)
 
     async def run(self, request: AgentInput) -> dict:
         if not request.tenant_id or not request.principal_id:
@@ -126,14 +131,10 @@ class AgentService:
                 request.metadata.get("allow_tenant_context", True)
             ) and execution.is_member
 
-        # Replace caller-carried role/context flags with application-resolved values
-        # before any model routing, context loading, or capability construction.
         request.metadata["role"] = trusted_role
         request.metadata["allow_tenant_context"] = allow_tenant_context
 
-        # Managed-application routing is now an explicit Studio compatibility mode.
-        # Ordinary business language must reach the normal tool-selection loop so
-        # adding a new capability does not require another hard-coded intent router.
+        # Managed-application routing is now an explicit compatibility mode.
         builder_selected = bool(
             request.metadata.get("application_id")
             or request.metadata.get("builder_mode")
@@ -249,10 +250,7 @@ class AgentService:
                 }
             )
 
-        user_message: dict = {
-            "role": "user",
-            "content": objective,
-        }
+        user_message: dict = {"role": "user", "content": objective}
         if request.images:
             user_message["images"] = request.images[:4]
         messages.append(user_message)
@@ -269,64 +267,42 @@ class AgentService:
             metadata=plugin_metadata,
         )
 
-        for _ in range(self.max_steps):
-            assistant_message = await self.client.chat(
-                messages,
-                await self.plugin_harness.schemas(plugin_context),
+        async def schemas():
+            return await self.plugin_harness.schemas(plugin_context)
+
+        async def invoke(name: str, arguments: dict, call_id: str | None):
+            return await self.plugin_harness.invoke(
+                name,
+                arguments,
+                plugin_context,
+                call_id=call_id,
             )
-            messages.append(assistant_message)
-            tool_calls = assistant_message.get("tool_calls") or []
 
-            if not tool_calls:
-                answer = bounded_text(
-                    assistant_message.get("content") or "Done.",
-                    MAX_ASSISTANT_TEXT,
-                ).strip()
-                async with session_scope() as db:
-                    db.add(
-                        AgentMessage(
-                            tenant_id=request.tenant_id,
-                            conversation_id=conversation.id,
-                            role="assistant",
-                            content=answer,
-                        )
+        async def persist_observation(name: str, arguments: dict, result: dict):
+            del arguments
+            tool_content = json.dumps(result, ensure_ascii=False, default=str)
+            async with session_scope() as db:
+                db.add(
+                    AgentMessage(
+                        tenant_id=request.tenant_id,
+                        conversation_id=conversation.id,
+                        role="tool",
+                        content=tool_content,
+                        tool_name=name,
                     )
-                return {"conversation_id": conversation.id, "message": answer}
-
-            for call in tool_calls:
-                function = call.get("function") or {}
-                name = str(function.get("name") or "")
-                arguments = function.get("arguments") or {}
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        arguments = {}
-                if not isinstance(arguments, dict):
-                    arguments = {}
-
-                result = await self.plugin_harness.invoke(
-                    name,
-                    arguments,
-                    plugin_context,
-                    call_id=str(call.get("id") or "") or None,
                 )
-                tool_content = json.dumps(result, ensure_ascii=False, default=str)
-                messages.append(
-                    {"role": "tool", "tool_name": name, "content": tool_content}
-                )
-                async with session_scope() as db:
-                    db.add(
-                        AgentMessage(
-                            tenant_id=request.tenant_id,
-                            conversation_id=conversation.id,
-                            role="tool",
-                            content=tool_content,
-                            tool_name=name,
-                        )
-                    )
 
-        answer = "I stopped because the request exceeded the safe plugin-execution limit."
+        run = await self.agent_runtime.run(
+            model=self.model,
+            messages=messages,
+            schemas=schemas,
+            invoke=invoke,
+            on_observation=persist_observation,
+        )
+        answer = bounded_text(
+            run.get("message") or "Done.",
+            MAX_ASSISTANT_TEXT,
+        ).strip()
         async with session_scope() as db:
             db.add(
                 AgentMessage(
@@ -362,9 +338,7 @@ class AgentService:
             application = await db.scalar(query)
 
             if application is None:
-                answer = (
-                    "Create or select a managed application in Studio before changing the application."
-                )
+                answer = "Create or select a managed application in Studio before changing the application."
                 db.add(
                     AgentMessage(
                         tenant_id=request.tenant_id,
