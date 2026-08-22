@@ -10,14 +10,13 @@ from packages.studio.model_latency_policy import (
 )
 
 
-def test_studio_openrouter_deadline_finishes_before_outer_model_slice():
+def test_studio_openrouter_uses_bounded_default_failover_chain():
     with patch.dict(
         os.environ,
         {
             "OPEN_ROUTER_API": "test-openrouter-key",
             "OPEN_ROUTER_TIMEOUT_SECONDS": "600",
             "OPEN_ROUTER_MAX_ATTEMPTS": "5",
-            "OPERLY_MODEL_CODING_FALLBACKS": "openrouter/test-fallback",
         },
         clear=True,
     ):
@@ -25,14 +24,56 @@ def test_studio_openrouter_deadline_finishes_before_outer_model_slice():
 
     inner = client.inner
     assert isinstance(inner, OpenRouterClient)
-    assert inner.timeout_seconds == 180
+    assert inner.model == "stealth/ox-alpha"
+    assert inner.timeout_seconds == 60
     assert inner.max_attempts == 1
-    assert inner.fallback_models == ["openrouter/test-fallback"]
+    assert inner.fallback_models == [
+        "openai/gpt-oss-120b:free",
+        "qwen/qwen3-coder-flash",
+    ]
 
     _, edit_total, edit_slice = studio_budget("edit")
     _, generate_total, generate_slice = studio_budget("generate")
-    assert inner.timeout_seconds < edit_slice < edit_total
-    assert inner.timeout_seconds < generate_slice < generate_total
+    worst_case_model_chain = inner.timeout_seconds * (1 + len(inner.fallback_models))
+    assert worst_case_model_chain < edit_slice < edit_total
+    assert worst_case_model_chain < generate_slice < generate_total
+
+
+def test_studio_preserves_explicit_route_fallbacks_instead_of_defaults():
+    with patch.dict(
+        os.environ,
+        {
+            "OPEN_ROUTER_API": "test-openrouter-key",
+            "OPERLY_MODEL_CODING_FALLBACKS": "openrouter/test-fallback,openrouter/test-second",
+        },
+        clear=True,
+    ):
+        client = studio_coding_model_client("coding")
+
+    assert client.inner.fallback_models == [
+        "openrouter/test-fallback",
+        "openrouter/test-second",
+    ]
+
+
+def test_studio_specific_fallback_env_overrides_route_and_stays_bounded():
+    with patch.dict(
+        os.environ,
+        {
+            "OPEN_ROUTER_API": "test-openrouter-key",
+            "OPERLY_MODEL_CODING_FALLBACKS": "openrouter/route-fallback",
+            "OPERLY_STUDIO_OPENROUTER_FALLBACKS": (
+                "openrouter/studio-first,openrouter/studio-second,openrouter/studio-third"
+            ),
+        },
+        clear=True,
+    ):
+        client = studio_coding_model_client("coding")
+
+    assert client.inner.fallback_models == [
+        "openrouter/studio-first",
+        "openrouter/studio-second",
+    ]
 
 
 def test_studio_respects_an_explicitly_tighter_provider_timeout():
@@ -40,14 +81,14 @@ def test_studio_respects_an_explicitly_tighter_provider_timeout():
         os.environ,
         {
             "OPEN_ROUTER_API": "test-openrouter-key",
-            "OPEN_ROUTER_TIMEOUT_SECONDS": "60",
+            "OPEN_ROUTER_TIMEOUT_SECONDS": "30",
             "OPEN_ROUTER_MAX_ATTEMPTS": "3",
         },
         clear=True,
     ):
         client = studio_coding_model_client("coding")
 
-    assert client.inner.timeout_seconds == 60
+    assert client.inner.timeout_seconds == 30
     assert client.inner.max_attempts == 1
 
 
