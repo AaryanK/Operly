@@ -36,14 +36,16 @@ def model_route(role: str) -> ModelRoute:
     env_key = "OPERLY_MODEL_" + "".join(
         character if character.isalnum() else "_" for character in key.upper()
     )
-    primary = os.getenv(env_key, default.primary).strip()
+    global_provider = os.getenv("OPERLY_MODEL_PROVIDER", default.provider).strip().lower()
+    global_model = os.getenv("OPERLY_MODEL_DEFAULT", default.primary).strip()
+    primary = os.getenv(env_key, global_model).strip()
     fallback_text = os.getenv(env_key + "_FALLBACKS", ",".join(default.fallbacks))
     fallbacks = tuple(
         item.strip()
         for item in fallback_text.split(",")
         if item.strip() and item.strip() != primary
     )
-    provider = os.getenv(env_key + "_PROVIDER", default.provider).strip().lower()
+    provider = os.getenv(env_key + "_PROVIDER", global_provider).strip().lower()
     return ModelRoute(provider=provider, primary=primary, fallbacks=fallbacks)
 
 
