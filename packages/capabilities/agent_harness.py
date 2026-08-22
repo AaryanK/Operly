@@ -2,15 +2,18 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.actions.service import ActionService
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.firewall import (
+    ActionBackedCapabilityFirewall,
+    CapabilityInvocation,
+)
 from packages.database.db import session_scope
 from packages.security.execution_context import (
+    ExecutionContext,
     ExecutionContextError,
     resolve_execution_context,
 )
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
-from packages.security.temporal_context import resolve_temporal_context
 
 
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
@@ -49,7 +52,12 @@ class PluginInvocationContext:
 
 
 class PluginAgentHarness:
-    """Single execution authority between the reasoning model and plugins."""
+    """Agent-facing capability view over one canonical invocation boundary.
+
+    Authorization details intentionally remain compatible with the current system.
+    Consequential execution is delegated to CapabilityFirewall so future auth work
+    does not require rewriting every agent/transport surface again.
+    """
 
     def __init__(self, registry=None):
         self.registry = registry
@@ -117,12 +125,15 @@ class PluginAgentHarness:
     def authority(self, role: str) -> set[str]:
         return default_permissions(role)
 
-    async def authority_for(self, context: PluginInvocationContext) -> set[str]:
+    async def execution_context_for(
+        self,
+        context: PluginInvocationContext,
+    ) -> ExecutionContext | None:
         if not context.user_id:
-            return set()
+            return None
         try:
             async with session_scope() as db:
-                execution = await resolve_execution_context(
+                return await resolve_execution_context(
                     db,
                     workspace_id=context.tenant_id,
                     user_id=context.user_id,
@@ -132,13 +143,14 @@ class PluginAgentHarness:
                     require_membership=True,
                 )
         except ExecutionContextError:
-            return set()
-        return set(execution.permissions)
+            return None
+
+    async def authority_for(self, context: PluginInvocationContext) -> set[str]:
+        execution = await self.execution_context_for(context)
+        return set(execution.permissions) if execution else set()
 
     @staticmethod
     def _is_private_surface(context: PluginInvocationContext) -> bool:
-        # Web/MCP calls are personal unless their client explicitly declares a shared
-        # origin. Discord is private only for a DM; a guild/server is workspace-bound.
         if context.channel == "discord":
             return bool(context.metadata.get("is_direct"))
         return not bool(context.metadata.get("shared_surface"))
@@ -185,82 +197,47 @@ class PluginAgentHarness:
         *,
         call_id: str | None = None,
     ) -> dict[str, Any]:
-        authority = await self.authority_for(context)
+        execution = await self.execution_context_for(context)
+        if execution is None:
+            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+        authority = set(execution.permissions)
         if not authority or not self.capability_authorized(name, authority, context):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
+
         registry = await self.registry_for(context)
-        arguments = dict(arguments)
-
-        async with session_scope() as db:
-            service = ActionService(
-                db,
-                registry,
-                authority=authority,
-                actor_id=context.user_id,
+        try:
+            definition = next(
+                item
+                for item in registry.metadata(context.tenant_id, authority=authority)
+                if item.id == name and self.capability_authorized(item.id, authority, context)
             )
-            try:
-                definition = next(
-                    item
-                    for item in registry.metadata(context.tenant_id, authority=authority)
-                    if item.id == name and self.capability_authorized(item.id, authority, context)
-                )
-            except StopIteration:
-                return {"ok": False, "error": "Unknown or unauthorized plugin"}
+        except StopIteration:
+            return {"ok": False, "error": "Unknown or unauthorized plugin"}
 
-            rationale = str(
-                arguments.pop("_rationale", "")
-                or f"Model selected {name} for the current objective"
-            )[:2000]
-            expected = str(
-                arguments.pop("_expected_outcome", "") or definition.description
-            )[:2000]
-            runtime_metadata = dict(context.metadata)
-            if context.user_id:
-                runtime_metadata["principal_id"] = f"user:{context.user_id}"
-            runtime_metadata.setdefault(
-                "client_id",
-                str(context.metadata.get("client_id") or context.channel or "operly"),
-            )
-            temporal = await resolve_temporal_context(
-                db,
-                user_id=context.user_id,
-                tenant_id=context.tenant_id,
-            )
-            runtime_metadata["temporal_context"] = temporal.as_dict()
+        clean_arguments = dict(arguments)
+        rationale = str(
+            clean_arguments.pop("_rationale", "")
+            or f"Model selected {name} for the current objective"
+        )[:2000]
+        expected = str(
+            clean_arguments.pop("_expected_outcome", "") or definition.description
+        )[:2000]
 
-            try:
-                action = await service.propose(
-                    tenant_id=context.tenant_id,
-                    objective=context.objective,
-                    capability=name,
-                    arguments=arguments,
-                    rationale=rationale,
-                    expected_outcome=expected,
-                    risk_level=definition.risk_level,
-                    causation_id=call_id,
-                    idempotency_key=(
-                        f"{context.tenant_id}:{call_id}" if call_id else None
-                    ),
-                    runtime_context={
-                        "channel": context.channel,
-                        "metadata": runtime_metadata,
-                        "temporal_context": temporal.as_dict(),
-                    },
-                )
-            except (ValueError, PermissionError, LookupError) as error:
-                return {"ok": False, "error": str(error)}
-
-            await db.commit()
-            result = json.loads(action.result_json or "{}")
-            return {
-                "ok": action.status in {"VERIFIED", "WAITING_APPROVAL"},
-                "action_id": action.id,
-                "plugin": name,
-                "status": action.status,
-                "approval_id": action.approval_id,
-                "observation": result.get("evidence", {}),
-                "verification": json.loads(action.verification_json or "{}"),
-            }
+        firewall = ActionBackedCapabilityFirewall(registry)
+        result = await firewall.invoke(
+            CapabilityInvocation(
+                capability_id=name,
+                arguments=clean_arguments,
+                objective=context.objective,
+                rationale=rationale,
+                expected_outcome=expected,
+                call_id=call_id,
+                channel=context.channel,
+                metadata=dict(context.metadata),
+            ),
+            execution,
+        )
+        return result.as_dict()
 
     async def run_session(
         self,
