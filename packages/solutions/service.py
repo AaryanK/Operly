@@ -26,7 +26,8 @@ class SolutionType(StrEnum):
 
 def solution_json(row):
     preview=row.preview_url.replace("{solution_id}",row.id) if row.preview_url else None
-    return {"id":row.id,"name":row.name,"description":row.description,"solution_type":row.solution_type,"status":row.lifecycle_status,"current_version":row.current_version_reference,"preview":{"state":row.preview_state,"url":preview},"production":{"state":row.production_state,"url":row.production_url},"visibility":row.visibility,"created_at":row.created_at.isoformat(),"updated_at":row.updated_at.isoformat()}
+    runtime_kind={RuntimeType.STUDIO:"studio",RuntimeType.MANAGED_APP:"app",RuntimeType.GENERATED_PROJECT:"generated"}.get(row.runtime_type,"unknown")
+    return {"id":row.id,"name":row.name,"description":row.description,"solution_type":row.solution_type,"status":row.lifecycle_status,"current_version":row.current_version_reference,"preview":{"state":row.preview_state,"url":preview},"production":{"state":row.production_state,"url":row.production_url},"visibility":row.visibility,"runtime":{"kind":runtime_kind,"id":row.runtime_reference},"created_at":row.created_at.isoformat(),"updated_at":row.updated_at.isoformat()}
 
 
 class SolutionService:
@@ -104,22 +105,6 @@ class SolutionService:
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id)
         if preview:return f"/api/custom-software/previews/{preview.id}/"
         return f"/api/custom-software/projects/{runtime.id}/preview"
-
-    async def runtime_descriptor(self,db:AsyncSession,tenant_id:str,row,runtime)->dict:
-        runtime_type=RuntimeType(row.runtime_type)
-        target=await self.preview_target(db,tenant_id,row,runtime)
-        if runtime_type==RuntimeType.STUDIO:
-            return {"kind":"studio","id":runtime.id,"previewUrl":target,"editable":True}
-        if runtime_type==RuntimeType.MANAGED_APP:
-            return {"kind":"app","id":runtime.id,"previewUrl":target,"editable":True}
-        return {
-            "kind":"generated",
-            "id":runtime.id,
-            "planId":runtime.plan_id,
-            "approvedVersion":runtime.approved_plan_version,
-            "previewUrl":target,
-            "editable":bool(runtime.plan_id and runtime.approved_plan_version),
-        }
 
     async def versions(self,db,tenant_id,solution_id):
         row,runtime=await self.resolve(db,tenant_id,solution_id)
