@@ -8,10 +8,13 @@ from packages.studio.model_latency_policy import (
     studio_budget,
     studio_coding_model_client,
 )
+from packages.studio.model_trace import TracingModelChatClient, redact_trace_value
 
 
 def _adapter(client) -> ModelChatAdapter:
-    adapter = client.inner
+    tracing = client.inner
+    assert isinstance(tracing, TracingModelChatClient)
+    adapter = tracing.inner
     assert isinstance(adapter, ModelChatAdapter)
     return adapter
 
@@ -25,8 +28,13 @@ def _provider_model_ids(adapter: ModelChatAdapter) -> list[str]:
 
 def test_studio_uses_bounded_provider_neutral_model_pool():
     with patch.dict(os.environ, {}, clear=True):
-        adapter = _adapter(studio_coding_model_client("coding"))
+        client = studio_coding_model_client("coding")
+        adapter = _adapter(client)
 
+    # Context bounding is outermost and tracing sits immediately in front of the
+    # generic ModelChatAdapter. Therefore the trace sees the compacted packet that
+    # is actually converted into an InferenceRequest.
+    assert isinstance(client.inner, TracingModelChatClient)
     assert isinstance(adapter.model, ModelPool)
     assert _provider_model_ids(adapter) == [
         "stealth/ox-alpha",
@@ -101,6 +109,25 @@ def test_studio_timeout_and_output_budget_are_provider_neutral():
     assert adapter.budget.attempts_per_model == 1
     assert adapter.budget.max_models == 3
     assert adapter.budget.max_output_tokens == 16_384
+
+
+def test_model_trace_redacts_secret_shaped_values_without_hiding_normal_prompt_data():
+    source = {
+        "messages": [
+            {"role": "user", "content": "keep this exact source text"},
+            {"role": "tool", "content": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
+        ],
+        "metadata": {
+            "api_key": "sk-super-secret-value-123456",
+            "ordinary": "visible",
+        },
+    }
+    redacted = redact_trace_value(source)
+
+    assert redacted["messages"][0]["content"] == "keep this exact source text"
+    assert "abcdefghijklmnopqrstuvwxyz" not in redacted["messages"][1]["content"]
+    assert redacted["metadata"]["api_key"] == "[REDACTED]"
+    assert redacted["metadata"]["ordinary"] == "visible"
 
 
 def test_latency_aware_agent_can_reach_declared_studio_budget():
