@@ -32,8 +32,6 @@ class DiscordPluginLifecycle:
             start_embedded(),
             name="operly-plugin-discord-adapter",
         )
-        # Yield once so immediate startup failures become observable to health/logs
-        # without blocking PluginRuntime on the gateway's long-lived event loop.
         await asyncio.sleep(0)
         return None
 
@@ -77,3 +75,6 @@ class DiscordPluginLifecycle:
 
     async def uninstall(self, context=None):
         await self.stop(context)
+
+
+discord_plugin_lifecycle = DiscordPluginLifecycle()
