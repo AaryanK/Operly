@@ -7,11 +7,23 @@ into software project records.
 from __future__ import annotations
 
 import json
+from typing import Any, Mapping
 
 from sqlalchemy import select
 
 from packages.database.software_project_models import ServiceBindingRecord, SoftwareProjectRecord
 from packages.service_bindings.contracts import ServiceBinding
+
+
+_FORBIDDEN_SECRET_KEYS = (
+    "password",
+    "secret",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "authorization",
+)
 
 
 def _configuration(value: str | None) -> dict:
@@ -20,6 +32,29 @@ def _configuration(value: str | None) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _safe_configuration(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = dict(value or {})
+
+    def walk(item: Any, path: str = "configuration") -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                clean = str(key).strip().lower()
+                # References/aliases name a secret owned elsewhere; they do not
+                # contain the provider credential and are valid binding metadata.
+                is_reference = clean.endswith(("_alias", "_reference", "_ref"))
+                if not is_reference and any(token in clean for token in _FORBIDDEN_SECRET_KEYS):
+                    raise ValueError(
+                        f"Service binding cannot persist raw credential field: {path}.{key}"
+                    )
+                walk(child, f"{path}.{key}")
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                walk(child, f"{path}[{index}]")
+
+    walk(data)
+    return data
 
 
 def _binding(row: ServiceBindingRecord) -> ServiceBinding:
@@ -38,6 +73,13 @@ def _binding(row: ServiceBindingRecord) -> ServiceBinding:
 
 
 class ServiceBindingStore:
+    """Durable semantic-to-capability mappings for one SoftwareProject.
+
+    Creating a binding never grants runtime authority. When ``authority`` is
+    supplied we validate the caller can currently select the capability, but every
+    eventual invocation is independently re-evaluated by CapabilityFirewall.
+    """
+
     def __init__(self, capability_registry) -> None:
         self.capability_registry = capability_registry
 
@@ -63,7 +105,8 @@ class ServiceBindingStore:
         capability_id: str,
         binding_mode: str = "capability_gateway",
         principal_scope: str = "project_runtime",
-        configuration: dict | None = None,
+        configuration: Mapping[str, Any] | None = None,
+        authority: set[str] | None = None,
     ) -> ServiceBinding:
         await self._project(db, workspace_id, project_id)
         clean_name = " ".join(str(semantic_name or "").split()).strip()
@@ -71,10 +114,13 @@ class ServiceBindingStore:
             raise ValueError("Binding semantic name is required")
 
         definition = self.capability_registry.definition(str(capability_id or "").strip())
-        # This verifies plugin installation/configuration at binding time. It does
-        # not grant execution authority; the CapabilityFirewall re-evaluates every
-        # invocation under the runtime principal in the authorization pass.
-        self.capability_registry.resolve(workspace_id, definition.id)
+        # Verify installation/configuration. Authority may be omitted while a plan
+        # is merely drafting possible bindings; execution never inherits this call.
+        self.capability_registry.resolve(
+            workspace_id,
+            definition.id,
+            authority=set(authority) if authority is not None else None,
+        )
 
         existing = await db.scalar(
             select(ServiceBindingRecord).where(
@@ -82,7 +128,8 @@ class ServiceBindingStore:
                 ServiceBindingRecord.semantic_name == clean_name,
             )
         )
-        payload = json.dumps(configuration or {}, sort_keys=True, default=str)
+        safe = _safe_configuration(configuration)
+        payload = json.dumps(safe, sort_keys=True, default=str)
         if existing is None:
             existing = ServiceBindingRecord(
                 tenant_id=workspace_id,
@@ -109,30 +156,42 @@ class ServiceBindingStore:
         await db.flush()
         return _binding(existing)
 
-    async def get(self, db, *, workspace_id: str, binding_id: str) -> ServiceBinding:
-        row = await db.scalar(
-            select(ServiceBindingRecord).where(
-                ServiceBindingRecord.id == binding_id,
-                ServiceBindingRecord.tenant_id == workspace_id,
-                ServiceBindingRecord.status == "active",
-            )
+    async def get(
+        self,
+        db,
+        *,
+        workspace_id: str,
+        binding_id: str,
+        include_inactive: bool = False,
+    ) -> ServiceBinding:
+        statement = select(ServiceBindingRecord).where(
+            ServiceBindingRecord.id == binding_id,
+            ServiceBindingRecord.tenant_id == workspace_id,
         )
+        if not include_inactive:
+            statement = statement.where(ServiceBindingRecord.status == "active")
+        row = await db.scalar(statement)
         if row is None:
             raise LookupError("Service binding not found")
         return _binding(row)
 
-    async def list(self, db, *, workspace_id: str, project_id: str) -> tuple[ServiceBinding, ...]:
+    async def list(
+        self,
+        db,
+        *,
+        workspace_id: str,
+        project_id: str,
+        include_inactive: bool = False,
+    ) -> tuple[ServiceBinding, ...]:
         await self._project(db, workspace_id, project_id)
+        statement = select(ServiceBindingRecord).where(
+            ServiceBindingRecord.tenant_id == workspace_id,
+            ServiceBindingRecord.project_id == project_id,
+        )
+        if not include_inactive:
+            statement = statement.where(ServiceBindingRecord.status == "active")
         rows = (
-            await db.scalars(
-                select(ServiceBindingRecord)
-                .where(
-                    ServiceBindingRecord.tenant_id == workspace_id,
-                    ServiceBindingRecord.project_id == project_id,
-                    ServiceBindingRecord.status == "active",
-                )
-                .order_by(ServiceBindingRecord.created_at)
-            )
+            await db.scalars(statement.order_by(ServiceBindingRecord.created_at))
         ).all()
         return tuple(_binding(row) for row in rows)
 
