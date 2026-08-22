@@ -16,6 +16,10 @@ from packages.studio.runtime_policy import (
 )
 from packages.studio.schema import blank_site
 from packages.studio.source_agent import production_html, project_context
+from packages.studio.terminal_recovery import (
+    _EXTRA_RUNTIME_RULE,
+    recover_verified_terminal_session,
+)
 
 
 class _Rows:
@@ -184,6 +188,64 @@ def test_studio_fuzzy_edit_recovers_from_whitespace_only_source_drift():
         "<section><h2>Explore Nepal</h2><p>Start in Kathmandu and travel across Nepal.</p></section>",
     )
     assert "Start in Kathmandu" in workspace.raw("index.html")
+
+
+def test_terminal_guard_preserves_a_changed_workspace_only_after_studio_validation_passes():
+    workspace = VirtualWorkspace(
+        [SourceFile("index.html", b"<!doctype html><html><body><h1>Old</h1></body></html>", "test")]
+    )
+    before = workspace.snapshot()
+    workspace.write("index.html", "<!doctype html><html><body><h1>Explore Nepal</h1></body></html>")
+
+    recovered = recover_verified_terminal_session(
+        mode="edit",
+        specification='- Known facts: {"location":"Kathmandu, Nepal"}',
+        workspace=workspace,
+        before=before,
+        require_change=True,
+        editor_context={"viewport": "desktop"},
+        error=RuntimeError("Coding model did not respond within the bounded website-edit window."),
+    )
+
+    assert recovered is not None
+    assert recovered.finished is True
+    assert "verified" in recovered.summary.lower()
+    assert recovered.changed_paths() == ["index.html"]
+
+
+def test_terminal_guard_does_not_preserve_an_invalid_or_unchanged_workspace():
+    invalid = VirtualWorkspace(
+        [SourceFile("index.html", b"<!doctype html><html><body><script src='https://evil.example/x.js'></script></body></html>", "test")]
+    )
+    invalid_before = {"index.html": "<!doctype html><html><body><h1>Old</h1></body></html>"}
+    assert recover_verified_terminal_session(
+        mode="edit",
+        specification="- Known facts: {}",
+        workspace=invalid,
+        before=invalid_before,
+        require_change=True,
+        editor_context={},
+        error=RuntimeError("Studio website agent exhausted its bounded model-turn budget."),
+    ) is None
+
+    unchanged = VirtualWorkspace(
+        [SourceFile("index.html", b"<!doctype html><html><body><h1>Old</h1></body></html>", "test")]
+    )
+    unchanged_before = unchanged.snapshot()
+    assert recover_verified_terminal_session(
+        mode="edit",
+        specification="- Known facts: {}",
+        workspace=unchanged,
+        before=unchanged_before,
+        require_change=True,
+        editor_context={},
+        error=RuntimeError("Studio website agent exhausted its bounded model-turn budget."),
+    ) is None
+
+
+def test_terminal_recovery_runtime_rule_warns_model_about_remote_scripts_upfront():
+    assert "third-party remote script URLs" in _EXTRA_RUNTIME_RULE
+    assert "Studio rejects them" in _EXTRA_RUNTIME_RULE
 
 
 def test_studio_agent_run_models_are_registered_for_durable_progress():
