@@ -3,6 +3,7 @@ from pathlib import Path
 
 from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
+from packages.capabilities.defaults import default_registry
 from packages.capabilities.firewall import ActionBackedCapabilityFirewall, CapabilityDecision, CapabilityInvocation
 from packages.capabilities.providers import BaseProvider
 from packages.capabilities.registry import CapabilityRegistry
@@ -20,6 +21,7 @@ from packages.model_runtime.ollama_client import OllamaError
 from packages.plugins import PluginManifest, PluginManifestRegistry
 from packages.runtime_plugins import register_builtin_runtimes
 from packages.security.execution_context import ExecutionContext
+from packages.service_bindings.store import _safe_configuration
 
 
 class _DemoProvider(BaseProvider):
@@ -258,12 +260,38 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.get("static-web-js").spec.id, "static-web-js")
         self.assertEqual(registry.get("python-stdlib-web").spec.id, "python-stdlib-web")
 
+    def test_default_registry_includes_canonical_software_capabilities(self):
+        ids = {item.id for item in default_registry().definitions()}
+        self.assertIn("software.project.list", ids)
+        self.assertIn("software.project.inspect", ids)
+        self.assertIn("software.binding.list", ids)
+        self.assertIn("software.binding.create", ids)
+        self.assertIn("software.binding.revoke", ids)
+
+    def test_service_binding_configuration_rejects_raw_credentials(self):
+        with self.assertRaises(ValueError):
+            _safe_configuration({"api_key": "should-never-be-here"})
+        with self.assertRaises(ValueError):
+            _safe_configuration({"nested": {"access_token": "secret"}})
+        self.assertEqual(
+            _safe_configuration({"credential_alias": "google-primary", "allowed_argument_fields": ["to"]})["credential_alias"],
+            "google-primary",
+        )
+
+    def test_studio_capability_surface_is_source_first(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "packages/capabilities/studio_provider.py").read_text()
+        self.assertNotIn("StudioAI", source)
+        self.assertNotIn("SiteSchema", source)
+        self.assertIn("source_agent.edit_source", source)
+
     def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]
         protected = (
             "packages/studio/model_latency_policy.py",
             "packages/coding_harness/model_client.py",
             "packages/custom_software/provider_planning.py",
+            "packages/custom_software/model_planning_client.py",
             "packages/capability_sandbox/target_resolution.py",
             "packages/business_brain/agent.py",
         )
