@@ -13,7 +13,7 @@ from packages.model_runtime import (
 from packages.model_runtime.ollama_client import OllamaError
 from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.model_runtime.portfolio import model_route
-from packages.model_runtime.registry import ModelPool, _failure
+from packages.model_runtime.registry import ConfiguredModel, ModelPool, _failure
 
 
 class _FailingModel:
@@ -81,6 +81,18 @@ class _FakeSession:
         return _FakeResponse()
 
 
+class _BudgetAwareClient:
+    def __init__(self):
+        self.max_attempts = 3
+        self.fallback_models = ["legacy"]
+        self.fallback_model = "legacy"
+        self.max_tokens = 65_536
+        self.last_model = "example/model"
+
+    async def chat(self, messages, tools=None):
+        return {"role": "assistant", "content": "ok"}
+
+
 class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_falls_through_to_next_model(self):
         first = _FailingModel("primary")
@@ -120,6 +132,29 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(error.classification, "quota_or_credits")
         self.assertFalse(error.retryable)
+
+    async def test_provider_neutral_budget_reaches_adapter_output_limit(self):
+        client = _BudgetAwareClient()
+        model = ConfiguredModel(
+            resource_id="test-model",
+            provider="future-provider",
+            provider_model_id="example/model",
+            capabilities={"text", "tools"},
+        )
+        with patch(
+            "packages.model_runtime.registry.model_client_for_route",
+            return_value=client,
+        ):
+            await model.infer(
+                InferenceRequest(
+                    messages=({"role": "user", "content": "edit source"},),
+                    budget=InferenceBudget(max_output_tokens=8192),
+                )
+            )
+
+        self.assertEqual(client.max_tokens, 8192)
+        self.assertEqual(client.max_attempts, 1)
+        self.assertEqual(client.fallback_models, [])
 
     async def test_openrouter_agent_turn_has_bounded_output_reservation(self):
         with patch.dict(
