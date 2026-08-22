@@ -39,6 +39,7 @@ on:
       - "tests/test_studio_source_agent.py"
       - "tests/test_studio_context_rich_harness.py"
       - "tests/test_unified_application_flow.py"
+      - "tests/test_unified_studio_regressions.py"
       - "tests/test_workspace_security_boundary.py"
       - "tests/test_principal_access_architecture.py"
       - "tests/test_unified_runtime_context.py"
@@ -144,6 +145,7 @@ jobs:
           node --check apps/web/static/app.js
           node --check apps/web/static/ai-assistant.js
           node --check apps/web/static/ai-assistant-bridge.js
+          node --check apps/web/static/studio-ui-bridge.js
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
           node --check apps/web/static/operly-cosmic.js
@@ -174,6 +176,7 @@ jobs:
           tests/test_studio_source_agent.py
           tests/test_studio_context_rich_harness.py
           tests/test_unified_application_flow.py
+          tests/test_unified_studio_regressions.py
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py
           tests/test_unified_runtime_context.py
