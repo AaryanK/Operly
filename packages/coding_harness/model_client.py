@@ -24,7 +24,7 @@ class CodingModelClient(Protocol):
 
 def _coding_allowlist() -> frozenset[str]:
     """Return the owner-authorized model ids for coding/repair execution."""
-    raw = os.getenv("OPERLY_CODING_ALLOWED_MODELS", "openai/gpt-oss-120b:free")
+    raw = os.getenv("OPERLY_CODING_ALLOWED_MODELS", "stealth/ox-alpha")
     return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
