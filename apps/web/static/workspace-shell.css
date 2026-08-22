@@ -201,14 +201,90 @@
   #dashboard.workspace-shell-ready .content { padding:20px; }
 }
 @media (max-width: 760px) {
-  #dashboard.workspace-shell-ready { display:block !important; padding-bottom:68px; }
-  .operly-workspace-rail { position:fixed; bottom:0; top:auto; left:0; right:0; height:66px; min-height:0; width:100%; flex-direction:row; justify-content:flex-start; padding:8px 12px; border-right:0; border-top:1px solid var(--operly-border); overflow-x:auto; }
-  .operly-rail-logo,.operly-rail-item,.operly-rail-add { min-width:46px; width:46px; height:46px; }
-  .operly-rail-separator { width:1px; height:32px; }
+  #dashboard.workspace-shell-ready { display:block !important; padding-bottom:74px; }
+  .operly-workspace-rail { position:fixed; bottom:0; top:auto; left:0; right:0; height:66px; min-height:0; width:100%; flex-direction:row; justify-content:flex-start; padding:8px 12px max(8px,env(safe-area-inset-bottom)); border-right:0; border-top:1px solid var(--operly-border); overflow-x:auto; overflow-y:hidden; scroll-padding-inline:12px; }
+  .operly-rail-logo,.operly-rail-item,.operly-rail-add,.operly-rail-account { min-width:46px; width:46px; height:46px; flex:0 0 46px; }
+  .operly-rail-separator { width:1px; min-width:1px; height:32px; }
   .operly-rail-spacer { display:none; }
   .operly-section-nav { display:none; }
   #dashboard.workspace-shell-ready > .app-main { display:block; }
   #dashboard.workspace-shell-ready .content { padding:16px; }
   #dashboard.workspace-shell-ready .topbar { padding:0 16px; }
   .operly-shell-hero { align-items:flex-start; flex-direction:column; }
+
+  /* Mobile Home polish: stronger hierarchy, less empty-state bulk, and reliable contrast. */
+  #dashboard.workspace-shell-ready .simple-block {
+    padding:16px !important;
+    border-radius:20px !important;
+    background:rgba(244,246,250,.96) !important;
+    border:1px solid rgba(255,255,255,.18) !important;
+    box-shadow:0 14px 38px rgba(0,0,0,.16) !important;
+  }
+  #dashboard.workspace-shell-ready .simple-section-head {
+    align-items:flex-start !important;
+    gap:12px !important;
+    margin-bottom:10px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-section-head > div { min-width:0 !important; }
+  #dashboard.workspace-shell-ready .simple-section-head h3 {
+    margin:2px 0 0 !important;
+    color:#172033 !important;
+    font-size:20px !important;
+    line-height:1.12 !important;
+  }
+  #dashboard.workspace-shell-ready .simple-eyebrow {
+    color:#537fc5 !important;
+    font-size:9px !important;
+    letter-spacing:.14em !important;
+  }
+  #dashboard.workspace-shell-ready .simple-link {
+    flex:0 0 auto !important;
+    padding:4px 0 4px 8px !important;
+    color:#315f9f !important;
+    font-size:12px !important;
+    line-height:1.25 !important;
+    text-align:right !important;
+  }
+  #dashboard.workspace-shell-ready .simple-attention-grid {
+    gap:8px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-attention-card {
+    min-height:0 !important;
+    padding:14px 15px !important;
+    border-radius:14px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-attention-card > span {
+    font-size:10px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-attention-card strong {
+    margin:5px 0 1px !important;
+    font-size:27px !important;
+    line-height:1 !important;
+  }
+  #dashboard.workspace-shell-ready .simple-attention-card p {
+    font-size:11px !important;
+    line-height:1.35 !important;
+  }
+  #dashboard.workspace-shell-ready .simple-project-grid { gap:8px !important; }
+  #dashboard.workspace-shell-ready .simple-project-card,
+  #dashboard.workspace-shell-ready .simple-empty-projects {
+    min-height:0 !important;
+    padding:15px !important;
+    border-radius:14px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-project-card h4,
+  #dashboard.workspace-shell-ready .simple-empty-projects h4 {
+    margin:8px 0 4px !important;
+    font-size:15px !important;
+  }
+  #dashboard.workspace-shell-ready .simple-project-card p,
+  #dashboard.workspace-shell-ready .simple-empty-projects p {
+    font-size:11px !important;
+    line-height:1.4 !important;
+  }
+}
+
+@media (max-width: 420px) {
+  #dashboard.workspace-shell-ready .simple-section-head { display:grid !important; grid-template-columns:minmax(0,1fr) auto !important; }
+  #dashboard.workspace-shell-ready .simple-link { max-width:118px !important; white-space:normal !important; }
 }
