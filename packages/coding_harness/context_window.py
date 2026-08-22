@@ -80,8 +80,8 @@ def _tool_call_name_and_args(call: dict[str, Any]) -> tuple[str, dict[str, Any]]
     return name, raw if isinstance(raw, dict) else {}
 
 
-def _read_observation(message: dict[str, Any]) -> dict[str, Any] | None:
-    if str(message.get("role") or "") != "tool" or str(message.get("tool_name") or "") != "read":
+def _tool_result_data(message: dict[str, Any]) -> dict[str, Any] | None:
+    if str(message.get("role") or "") != "tool":
         return None
     raw = message.get("content")
     if not isinstance(raw, str):
@@ -90,7 +90,14 @@ def _read_observation(message: dict[str, Any]) -> dict[str, Any] | None:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    if not isinstance(data, dict) or data.get("ok") is False:
+    return data if isinstance(data, dict) else None
+
+
+def _read_observation(message: dict[str, Any]) -> dict[str, Any] | None:
+    if str(message.get("tool_name") or "") != "read":
+        return None
+    data = _tool_result_data(message)
+    if data is None or data.get("ok") is False:
         return None
     path = str(data.get("path") or "").strip()
     content = data.get("content")
@@ -108,14 +115,16 @@ def _read_observation(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _latest_source_observations(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reconstruct only source observations that are not known to be stale.
+    """Reconstruct only source observations confirmed by successful tool results.
 
-    Reads are keyed by path/range. A write supersedes every previous observation for
-    that path and contributes its complete new content. Exact edits/removes invalidate
-    previous observations because the context wrapper cannot safely reconstruct the
-    whole post-edit file from a bounded snippet.
+    Reads are keyed by path/range. A successful write supersedes previous observations
+    for that path and contributes its complete new content. Successful exact edits and
+    removes invalidate prior observations because this wrapper cannot safely rebuild a
+    whole post-edit file from a bounded snippet. Failed mutations never advance the
+    durable source view.
     """
     observations: dict[tuple[str, int], dict[str, Any]] = {}
+    pending: list[tuple[str, dict[str, Any]]] = []
 
     def invalidate(path: str) -> None:
         if not path:
@@ -124,15 +133,30 @@ def _latest_source_observations(messages: list[dict[str, Any]]) -> list[dict[str
             observations.pop(key, None)
 
     for message in messages[2:]:
-        if str(message.get("role") or "") == "assistant":
+        role = str(message.get("role") or "")
+        if role == "assistant":
+            pending = []
             for call in message.get("tool_calls") or []:
-                if not isinstance(call, dict):
-                    continue
-                name, args = _tool_call_name_and_args(call)
-                path = str(args.get("path") or "").strip()
-                if name == "write" and path:
-                    invalidate(path)
-                    content = args.get("content")
+                if isinstance(call, dict):
+                    pending.append(_tool_call_name_and_args(call))
+            continue
+        if role != "tool":
+            continue
+
+        tool_name = str(message.get("tool_name") or "")
+        match_index = next((index for index, item in enumerate(pending) if item[0] == tool_name), None)
+        call_args: dict[str, Any] = {}
+        if match_index is not None:
+            _, call_args = pending.pop(match_index)
+
+        data = _tool_result_data(message)
+        succeeded = bool(data is not None and data.get("ok") is not False)
+        if succeeded and tool_name in {"write", "edit", "remove"}:
+            path = str(call_args.get("path") or (data or {}).get("path") or "").strip()
+            if path:
+                invalidate(path)
+                if tool_name == "write":
+                    content = call_args.get("content")
                     if isinstance(content, str):
                         observations[(path, 1)] = {
                             "path": path,
@@ -143,16 +167,12 @@ def _latest_source_observations(messages: list[dict[str, Any]]) -> list[dict[str
                             "content": content,
                             "source": "write",
                         }
-                elif name in {"edit", "remove"} and path:
-                    invalidate(path)
-            continue
 
         observation = _read_observation(message)
-        if observation is None:
-            continue
-        key = (observation["path"], observation["offset"])
-        observations.pop(key, None)
-        observations[key] = observation
+        if observation is not None:
+            key = (observation["path"], observation["offset"])
+            observations.pop(key, None)
+            observations[key] = observation
 
     return list(observations.values())
 
@@ -178,7 +198,7 @@ def _source_working_set_message(messages: list[dict[str, Any]], *, budget_chars:
     payload = {
         "sourceObservations": selected,
         "observationCount": len(selected),
-        "note": "Tool workspace state supersedes an observation after any later mutation of that path.",
+        "note": "Tool workspace state supersedes an observation after any later successful mutation of that path.",
     }
     return {
         "role": "user",
