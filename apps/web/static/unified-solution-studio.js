@@ -437,16 +437,24 @@
     }catch(error){previewState("error","Preview unavailable");msg("ai",friendly(error),"No changes applied")}
   }
 
-  function createModal() {
-    const d=document.createElement("dialog");d.className="ss-modal";
-    d.innerHTML=`<form id="ss-create-form"><header><div><small>NEW WEBSITE</small><h2>What are we building?</h2><p>Give the project a name. Operly will use the business context it already knows and let the source agent design the first version.</p></div><button type="button" data-close>×</button></header><label>Website name<input id="ss-create-name" maxlength="200" required autocomplete="off" placeholder="e.g. Antu Hill Travels"></label><div id="ss-modal-error" class="ss-modal-error" hidden></div><footer><button type="button" data-close>Cancel</button><button type="submit" class="primary" id="ss-create-submit">Create website</button></footer></form>`;
-    document.body.append(d);$$('[data-close]',d).forEach(b=>b.onclick=()=>d.close());d.addEventListener("close",()=>d.remove());d.showModal();setTimeout(()=>$("#ss-create-name",d)?.focus(),20);
-    $("#ss-create-form",d).onsubmit=async event=>{
-      event.preventDefault();const name=$("#ss-create-name",d).value.trim(),submit=$("#ss-create-submit",d),error=$("#ss-modal-error",d);if(!name)return;
-      submit.disabled=true;submit.textContent="Creating…";error.hidden=true;
-      try{const solution=await api("/solutions",{method:"POST",body:JSON.stringify({solution_type:"digital_presence",name})});d.close();editor(solution,{generate:true})}
-      catch(ex){error.textContent=friendly(ex);error.hidden=false;submit.disabled=false;submit.textContent="Create website"}
-    };
+  async function createWebsite(button=null) {
+    const existing=S.solutions.find(solution=>solution.solution_type==="digital_presence");
+    if(existing){editor(existing);return;}
+    const priorLabel=button?.textContent||"Create website";
+    if(button){button.disabled=true;button.textContent="Creating…";}
+    const error=$("#ss-create-error");if(error){error.hidden=true;error.textContent="";}
+    try{
+      // Digital Presence is workspace-scoped today. The server derives its identity
+      // from the active tenant's CompanyProfile, falling back to the workspace name.
+      const solution=await api("/solutions",{method:"POST",body:JSON.stringify({solution_type:"digital_presence"})});
+      const index=S.solutions.findIndex(item=>item.id===solution.id);
+      if(index>=0)S.solutions[index]=solution;else S.solutions.unshift(solution);
+      editor(solution,{generate:true});
+    }catch(ex){
+      if(error){error.textContent=friendly(ex);error.hidden=false;}
+      else alert(friendly(ex));
+      if(button){button.disabled=false;button.textContent=priorLabel;}
+    }
   }
 
   function card(solution) {
@@ -459,8 +467,14 @@
     const host=root();if(!host)return;host.innerHTML='<div class="ss-list-loading"><span></span><p>Loading Solutions…</p></div>';
     try{
       S.solutions=await api("/solutions");
-      host.innerHTML=`<section class="ss-list"><header><div><small>BUILD & RUN</small><h2>Solutions</h2><p>Websites, business apps and custom software in one workspace.</p></div><button class="primary" id="ss-new">+ New website</button></header>${S.solutions.length?`<div class="ss-cards">${S.solutions.map(card).join("")}</div>`:`<div class="ss-list-empty"><span>✦</span><h3>Build your first Solution</h3><p>Start with a website. Operly will create real source you can keep shaping through conversation.</p><button class="primary" id="ss-empty-new">Create website</button></div>`}</section>`;
-      $("#ss-new")?.addEventListener("click",createModal);$("#ss-empty-new")?.addEventListener("click",createModal);
+      const website=S.solutions.find(solution=>solution.solution_type==="digital_presence");
+      const websiteAction=website
+        ? '<button class="primary" id="ss-open-website">Open website</button>'
+        : '<button class="primary" id="ss-new">Create website</button>';
+      host.innerHTML=`<section class="ss-list"><header><div><small>BUILD & RUN</small><h2>Solutions</h2><p>Websites, business apps and custom software in one workspace.</p></div>${websiteAction}</header><div id="ss-create-error" class="ss-modal-error" hidden></div>${S.solutions.length?`<div class="ss-cards">${S.solutions.map(card).join("")}</div>`:`<div class="ss-list-empty"><span>✦</span><h3>Build your first Solution</h3><p>Create the workspace website directly from the business context Operly already knows.</p><button class="primary" id="ss-empty-new">Create website</button></div>`}</section>`;
+      $("#ss-open-website")?.addEventListener("click",()=>editor(website));
+      $("#ss-new")?.addEventListener("click",event=>createWebsite(event.currentTarget));
+      $("#ss-empty-new")?.addEventListener("click",event=>createWebsite(event.currentTarget));
       $$('[data-open-solution]').forEach(button=>button.addEventListener("click",()=>{const solution=S.solutions.find(x=>x.id===button.dataset.openSolution);if(solution)editor(solution)}));
     }catch(error){host.innerHTML=`<div class="ss-list-error"><strong>Solutions could not load</strong><p>${esc(friendly(error))}</p><button id="ss-list-retry">Retry</button></div>`;$("#ss-list-retry")?.addEventListener("click",list)}
   }
