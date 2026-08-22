@@ -44,6 +44,20 @@ class OpenRouterRuntimeTests(unittest.TestCase):
                 self.assertEqual(route.provider, "openrouter")
                 self.assertEqual(route.primary, "openai/gpt-oss-120b:free")
 
+    def test_global_model_switch_is_env_only(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPERLY_MODEL_PROVIDER": "ollama",
+                "OPERLY_MODEL_DEFAULT": "replacement-model",
+            },
+            clear=True,
+        ):
+            route = model_route("planner")
+
+        self.assertEqual(route.provider, "ollama")
+        self.assertEqual(route.primary, "replacement-model")
+
     def test_explicit_ollama_route_does_not_switch_because_openrouter_key_exists(self):
         with patch.dict(
             os.environ,
