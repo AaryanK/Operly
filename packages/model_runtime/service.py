@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from packages.model_runtime.contracts import InferenceRequest, ModelSelector
 from packages.model_runtime.discovery import refresh_model_discovery
@@ -15,16 +15,27 @@ from packages.model_runtime.registry import default_model_registry
 class ModelInvocationResult:
     provider: str
     model: str
+    resource_id: str
     capability: str
+    selected_tags: tuple[str, ...]
     content: str
 
 
-class ModelInvocationService:
-    """Route a bounded specialist request by capability, not model identity.
+def _norm_tags(values: Iterable[str]) -> frozenset[str]:
+    return frozenset(
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    )
 
-    Delegated calls intentionally receive no tools. This makes model-as-tool
-    delegation one level deep by default and prevents unbounded model recursion.
-    Selection and provider transport stay inside model_runtime.
+
+class ModelInvocationService:
+    """Route a bounded specialist request by capabilities and model traits.
+
+    The caller never chooses a provider/model id. It states the specialist
+    capability it needs plus optional preference tags such as ``heavy``, ``fast``,
+    ``coding``, ``long-context``, ``local`` or ``free``. Delegated calls receive no
+    tools, keeping model-to-model delegation one level deep by default.
     """
 
     async def invoke(
@@ -34,12 +45,21 @@ class ModelInvocationService:
         objective: str,
         context: str = "",
         prefer_free: bool = True,
+        prefer_tags: Iterable[str] = (),
+        avoid_tags: Iterable[str] = (),
         exclude_orchestrator: bool = True,
     ) -> ModelInvocationResult:
         clean_capability = str(capability or "").strip().lower()
         clean_objective = " ".join(str(objective or "").split()).strip()
         if not clean_capability or not clean_objective:
             raise ValueError("Model capability and objective are required")
+
+        preferred = set(_norm_tags(prefer_tags))
+        avoided = _norm_tags(avoid_tags)
+        if prefer_free:
+            preferred.add("free")
+        if preferred & set(avoided):
+            raise ValueError("Model preference and avoidance tags must not overlap")
 
         try:
             ttl = float(os.getenv("OPERLY_MODEL_DISCOVERY_TTL_SECONDS", "600"))
@@ -53,14 +73,14 @@ class ModelInvocationService:
             excluded.add(f"{orchestrator.provider}:{orchestrator.primary}")
 
         registry = default_model_registry()
-        model = registry.resolve(
-            ModelSelector(
-                requires=frozenset({clean_capability}),
-                prefer_tags=frozenset({"free"}) if prefer_free else frozenset(),
-                prefer_free=prefer_free,
-                exclude_resource_ids=frozenset(excluded),
-            )
+        selector = ModelSelector(
+            requires=frozenset({clean_capability}),
+            prefer_tags=frozenset(preferred),
+            avoid_tags=avoided,
+            prefer_free=prefer_free,
+            exclude_resource_ids=frozenset(excluded),
         )
+        model = registry.resolve(selector)
         messages: tuple[dict[str, Any], ...] = (
             {
                 "role": "system",
@@ -74,7 +94,12 @@ class ModelInvocationService:
                 "role": "user",
                 "content": (
                     f"Capability: {clean_capability}\n"
-                    f"Objective: {clean_objective}\n"
+                    + (
+                        "Preferred traits: " + ", ".join(sorted(preferred)) + "\n"
+                        if preferred
+                        else ""
+                    )
+                    + f"Objective: {clean_objective}\n"
                     + (f"Context:\n{str(context)[:12000]}" if context else "")
                 ),
             },
@@ -86,6 +111,8 @@ class ModelInvocationService:
         return ModelInvocationResult(
             provider=result.provider,
             model=result.provider_model_id,
+            resource_id=result.model_resource_id,
             capability=clean_capability,
+            selected_tags=tuple(sorted(model.tags)),
             content=content,
         )
