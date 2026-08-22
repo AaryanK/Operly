@@ -39,11 +39,12 @@ class SolutionService:
             for key,value in values.items():setattr(row,key,value)
         return row
 
-    async def active_generated_preview(self,db:AsyncSession,tenant_id:str,plan_id:str|None):
-        if not plan_id:return None
+    async def active_generated_preview(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
+        if not plan_id or not plan_version:return None
         return await db.scalar(
             select(RunnerPreviewRecord)
             .join(RunnerBuildRecord,RunnerPreviewRecord.build_id==RunnerBuildRecord.id)
+            .join(GeneratedSourceBundle,RunnerBuildRecord.source_bundle_id==GeneratedSourceBundle.id)
             .where(
                 RunnerPreviewRecord.tenant_id==tenant_id,
                 RunnerPreviewRecord.state=="active",
@@ -51,6 +52,9 @@ class SolutionService:
                 RunnerBuildRecord.tenant_id==tenant_id,
                 RunnerBuildRecord.plan_id==plan_id,
                 RunnerBuildRecord.state=="preview_ready",
+                GeneratedSourceBundle.tenant_id==tenant_id,
+                GeneratedSourceBundle.plan_id==plan_id,
+                GeneratedSourceBundle.plan_version==plan_version,
             )
             .order_by(desc(RunnerPreviewRecord.created_at))
             .limit(1)
@@ -76,7 +80,7 @@ class SolutionService:
 
         projects=(await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==tenant_id))).all()
         for p in projects:
-            preview=await self.active_generated_preview(db,tenant_id,p.plan_id)
+            preview=await self.active_generated_preview(db,tenant_id,p.plan_id,p.approved_plan_version)
             await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=p.name,description=p.prompt[:4000],solution_type=SolutionType.CUSTOM_SOLUTION,lifecycle_status=LifecycleStatus.PREVIEW_READY if preview else LifecycleStatus.APPROVED,current_version_reference=str(p.version),preview_state="ready" if preview else "available",preview_url=f"/api/solutions/{{solution_id}}/preview",production_state="offline",production_url=None,visibility="private",context_json="{}")
         await db.flush()
 
@@ -102,7 +106,7 @@ class SolutionService:
         runtime_type=RuntimeType(row.runtime_type)
         if runtime_type==RuntimeType.STUDIO:return f"/api/studio/projects/{runtime.id}/preview"
         if runtime_type==RuntimeType.MANAGED_APP:return f"/apps/{runtime.id}/preview"
-        preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id)
+        preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
         if preview:return f"/api/custom-software/previews/{preview.id}/"
         return f"/api/custom-software/projects/{runtime.id}/preview"
 
