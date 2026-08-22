@@ -9,6 +9,12 @@ from packages.studio.agent_runs import (
     _source_working_set,
     _studio_budget,
 )
+from packages.studio.runtime_policy import (
+    StudioWebsiteCodingAgent,
+    StudioWebsiteToolRegistry,
+    _studio_budget as _website_studio_budget,
+    apply_studio_runtime_policy,
+)
 
 
 def _capability(identifier: str, name: str, description: str, category: str = "general"):
@@ -130,3 +136,146 @@ def test_preloaded_read_is_short_circuited_until_that_file_changes():
 def test_studio_budget_prefers_fewer_richer_model_turns():
     assert _studio_budget("edit") == (10, 120, 75)
     assert _studio_budget("generate") == (20, 180, 90)
+
+
+def test_website_runtime_registry_accepts_production_preloaded_paths_and_invalidates_after_edit():
+    async def no_op_event(_event):
+        return None
+
+    files = [
+        SourceFile("index.html", b"<!doctype html><html><body><h1>Old</h1></body></html>\n", "seed"),
+        SourceFile("styles.css", b"body{font-family:system-ui}\n", "seed"),
+    ]
+    workspace = VirtualWorkspace(files)
+    session = CodingSession(
+        mode="edit",
+        workspace=workspace,
+        before=workspace.snapshot(),
+        editor_context={},
+    )
+    registry = StudioWebsiteToolRegistry(no_op_event, preloaded_paths=["index.html"])
+    tools = registry.for_mode("edit", visual=False, web=False)
+
+    first = asyncio.run(tools["read"].execute({"path": "index.html"}, session))
+    assert first["preloaded"] is True
+    assert first["unchanged"] is True
+    assert "content" not in first
+
+    changed = asyncio.run(
+        tools["edit"].execute(
+            {
+                "path": "index.html",
+                "old": "<h1>Old</h1>",
+                "new": "<h1>New</h1>",
+            },
+            session,
+        )
+    )
+    assert changed["ok"] is True
+    assert "index.html" not in registry.preloaded_paths
+
+    second = asyncio.run(tools["read"].execute({"path": "index.html"}, session))
+    assert second["ok"] is True
+    assert second.get("preloaded") is not True
+    assert "<h1>New</h1>" in second["content"]
+
+
+def test_applied_runtime_policy_registry_matches_agent_runs_preload_factory_contract():
+    from packages.studio import agent_runs
+
+    async def no_op_event(_event):
+        return None
+
+    apply_studio_runtime_policy()
+    registry = agent_runs.VisibleToolRegistry(no_op_event, preloaded_paths=["index.html"])
+
+    assert isinstance(registry, StudioWebsiteToolRegistry)
+    assert registry.preloaded_paths == {"index.html"}
+    assert agent_runs._studio_budget("edit") == (10, 120, 75)
+    assert agent_runs._studio_budget("generate") == (20, 180, 90)
+
+
+def test_website_runtime_budget_stays_aligned_with_context_rich_harness():
+    assert _website_studio_budget("edit") == (10, 120, 75)
+    assert _website_studio_budget("generate") == (20, 180, 90)
+
+
+class _InspectTwiceThenEditWebsiteModel:
+    def __init__(self):
+        self.calls = 0
+        self.saw_guardrail = False
+
+    async def chat(self, messages, tools=None):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "read", "arguments": {"path": "index.html"}}}],
+            }
+        if self.calls == 2:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "grep", "arguments": {"query": "Old"}}}],
+            }
+        if self.calls == 3:
+            self.saw_guardrail = any(
+                item.get("role") == "user"
+                and "two model turns inspecting without changing the website source" in str(item.get("content") or "")
+                for item in messages
+            )
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "edit",
+                            "arguments": {
+                                "path": "index.html",
+                                "old": "<h1>Old</h1>",
+                                "new": "<h1>New</h1>",
+                            },
+                        }
+                    },
+                    {"function": {"name": "finish", "arguments": {"summary": "Updated heading."}}},
+                ],
+            }
+        raise AssertionError("unexpected website coding turn")
+
+
+def test_actual_website_agent_emits_model_input_and_breaks_inspection_only_stall():
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    model = _InspectTwiceThenEditWebsiteModel()
+    files = [
+        SourceFile("index.html", b"<!doctype html><html><body><h1>Old</h1></body></html>\n", "seed"),
+        SourceFile("styles.css", b"body{font-family:system-ui}\n", "seed"),
+    ]
+    registry = StudioWebsiteToolRegistry(progress, preloaded_paths=["index.html", "styles.css"])
+    agent = StudioWebsiteCodingAgent(
+        client=model,
+        max_steps=6,
+        registry=registry,
+        progress_callback=progress,
+    )
+
+    result = asyncio.run(
+        agent.edit(
+            "Approved Studio website specification",
+            files,
+            "Change the heading from Old to New",
+        )
+    )
+
+    assert model.calls == 3
+    assert model.saw_guardrail is True
+    assert result.changed_paths == ["index.html"]
+    model_input = next(item for item in events if item.get("phase") == "model_input")
+    assert model_input["detail"]["systemPrompt"] == "STUDIO_WEBSITE_SYSTEM"
+    assert model_input["detail"]["workspaceFiles"] == ["index.html", "styles.css"]
+    assert any(item.get("phase") == "guardrail" for item in events)
