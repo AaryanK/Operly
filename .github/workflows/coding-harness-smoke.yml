@@ -6,6 +6,15 @@ on:
     paths:
       - "apps/api/custom_software_router.py"
       - "packages/coding_harness/**"
+      - "packages/model_runtime/**"
+      - "packages/capabilities/**"
+      - "packages/plugins/**"
+      - "packages/runtime_plugins/**"
+      - "packages/software_projects/**"
+      - "packages/service_bindings/**"
+      - "packages/studio/model_latency_policy.py"
+      - "packages/capability_sandbox/target_resolution.py"
+      - "packages/custom_software/provider_planning.py"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
       - "packages/custom_software/planning_orchestrator.py"
@@ -27,11 +36,21 @@ on:
       - "tests/test_custom_software_build_routes.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
+      - "tests/test_target_architecture_contracts.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
       - "apps/api/custom_software_router.py"
       - "packages/coding_harness/**"
+      - "packages/model_runtime/**"
+      - "packages/capabilities/**"
+      - "packages/plugins/**"
+      - "packages/runtime_plugins/**"
+      - "packages/software_projects/**"
+      - "packages/service_bindings/**"
+      - "packages/studio/model_latency_policy.py"
+      - "packages/capability_sandbox/target_resolution.py"
+      - "packages/custom_software/provider_planning.py"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
       - "packages/custom_software/planning_orchestrator.py"
@@ -53,6 +72,7 @@ on:
       - "tests/test_custom_software_build_routes.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
+      - "tests/test_target_architecture_contracts.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -85,3 +105,4 @@ jobs:
           tests/test_custom_software_build_routes.py
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
+          tests/test_target_architecture_contracts.py
