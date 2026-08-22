@@ -80,6 +80,7 @@ jobs:
           alembic/versions/0026_action_provenance.py
           alembic/versions/0027_global_human_memory.py
           alembic/versions/0028_studio_source_agent.py
+          alembic/versions/0029_studio_agent_runs.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
@@ -136,6 +137,7 @@ jobs:
           packages/studio/renderer.py
           packages/studio/ai.py
           packages/studio/source_agent.py
+          packages/studio/agent_runs.py
       - name: Check browser JavaScript syntax
         run: |
           node --check apps/web/static/app.js
