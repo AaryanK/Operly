@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from packages.database.db import Base
+from packages.database.schema import import_all_models
 from packages.studio.schema import blank_site
 from packages.studio.source_agent import production_html, project_context
 
@@ -74,11 +76,21 @@ def test_source_production_flattens_css_blocks_generated_js_and_wires_contact_fo
     assert "__OPERLY_FORM_ACTION__" not in html
 
 
-def test_studio_browser_uses_source_agent_not_schema_ai_or_prompt_injection():
+def test_studio_agent_run_models_are_registered_for_durable_progress():
+    import_all_models()
+    assert "studio_agent_runs" in Base.metadata.tables
+    assert "studio_agent_events" in Base.metadata.tables
+
+
+def test_studio_browser_uses_durable_source_runs_and_visible_trace():
     source = (Path(__file__).resolve().parents[1] / "apps" / "web" / "static" / "unified-solution-studio.js").read_text()
     bridge = (Path(__file__).resolve().parents[1] / "apps" / "web" / "static" / "ai-assistant-bridge.js").read_text()
-    assert "/source/edits" in source
-    assert "/source/generate" in source
+    assert "/source/runs" in source
+    assert "/source/runs/latest" in source
+    assert "ss-run-trace" in source
+    assert "Agent activity" in source
+    assert "/source/edits" not in source
+    assert "/source/generate" not in source
     assert "/ai/revise" not in source
     assert "SELECTED ELEMENT CONTEXT" not in source
     assert "Redesign page" not in source
