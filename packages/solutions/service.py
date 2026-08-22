@@ -47,7 +47,8 @@ class SolutionService:
             ready=bool(source or p.active_draft_version_id)
             status=LifecycleStatus.ARCHIVED if p.status=="archived" else LifecycleStatus.LIVE if live else LifecycleStatus.PREVIEW_READY if ready else LifecycleStatus.DRAFT
             current=production.version_reference if production else source.id if source else p.published_version_id or p.active_draft_version_id
-            await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=p.name,description=p.description,solution_type=existing.solution_type if existing else SolutionType.DIGITAL_PRESENCE,lifecycle_status=status,current_version_reference=current,preview_state="ready" if ready else "unavailable",preview_url=f"/api/solutions/{{solution_id}}/preview" if ready else None,production_state="live" if live else "offline",production_url=production.public_url if production else f"/sites/{legacy_deployment.public_slug}" if legacy_deployment else None,visibility="public" if live else "private",context_json=existing.context_json if existing else "{}")
+            preview_url=f"/api/studio/projects/{p.id}/source/preview/" if source else f"/api/solutions/{{solution_id}}/preview" if ready else None
+            await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=p.name,description=p.description,solution_type=existing.solution_type if existing else SolutionType.DIGITAL_PRESENCE,lifecycle_status=status,current_version_reference=current,preview_state="ready" if ready else "unavailable",preview_url=preview_url,production_state="live" if live else "offline",production_url=production.public_url if production else f"/sites/{legacy_deployment.public_slug}" if legacy_deployment else None,visibility="public" if live else "private",context_json=existing.context_json if existing else "{}")
 
         apps=(await db.scalars(select(ManagedApplication).where(ManagedApplication.tenant_id==tenant_id))).all()
         for app in apps:
@@ -85,8 +86,8 @@ class SolutionService:
         if row.runtime_type==RuntimeType.STUDIO:
             sources=(await db.scalars(select(StudioSourceVersion).where(StudioSourceVersion.tenant_id==tenant_id,StudioSourceVersion.project_id==runtime.id).order_by(desc(StudioSourceVersion.source_version)))).all()
             legacy=(await db.scalars(select(StudioVersion).where(StudioVersion.tenant_id==tenant_id,StudioVersion.project_id==runtime.id).order_by(desc(StudioVersion.version_number)))).all()
-            output=[{"id":x.id,"version":f"S{x.source_version}","kind":"source","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in sources]
-            output.extend({"id":x.id,"version":f"L{x.version_number}","kind":"legacy_schema","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in legacy)
+            output=[{"id":x.id,"version":x.source_version,"kind":"source","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in sources]
+            output.extend({"id":x.id,"version":x.version_number,"kind":"legacy_schema","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in legacy)
             return output
         if row.runtime_type==RuntimeType.MANAGED_APP:
             items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all()
@@ -99,9 +100,8 @@ class SolutionService:
         if existing:return await self.get(db,tenant_id,existing.id)
         business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or "Untitled Website").strip()[:200]
         description=str(profile.get("description") or "")[:500]
-        # StudioService still creates one tiny legacy SiteSchema snapshot so old
-        # routes and rollback remain safe. The browser immediately asks the source
-        # agent for the real website; this schema is no longer the model's language.
+        # Preserve one tiny legacy compatibility snapshot so old routes and
+        # rollback remain safe. The source agent becomes primary immediately.
         p=await StudioService.create_project(db,tenant_id,user_id,business,description)
         context={"company_profile":profile,"source_engine":"studio_source_agent_v1","planning_request":{"objective":"Create the business website","business_identity":business,"description":description,"products_services":profile.get("products_services"),"contact":profile.get("contact"),"brand":profile.get("brand",{}),"target_customers":profile.get("target_customers"),"service_areas":profile.get("service_areas")}}
         row=await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=business,description=description,solution_type=SolutionType.DIGITAL_PRESENCE,lifecycle_status=LifecycleStatus.PREVIEW_READY,current_version_reference=p.active_draft_version_id,preview_state="ready",preview_url="/api/solutions/{solution_id}/preview",production_state="offline",production_url=None,visibility="private",context_json=json.dumps(context,sort_keys=True,default=str))
