@@ -25,11 +25,43 @@ class _ControlInventory(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.controls: list[tuple[str, str | None]] = []
+        self._form_stack: list[bool] = []
+
+    @staticmethod
+    def _native_form(values: dict[str, str | None]) -> bool:
+        """Return true when the browser can submit the form without application JS."""
+        action = str(values.get("action") or "").strip()
+        method = str(values.get("method") or "get").strip().lower()
+        return bool(action) and not action.lower().startswith("javascript:") and method in {"get", "post"}
 
     def handle_starttag(self, tag: str, attrs) -> None:
         values = {str(key).lower(): value for key, value in attrs}
         tag = tag.lower()
         role_control = values.get("role") in {"button", "tab", "menuitem", "option", "switch"}
+
+        # A normal GET/POST form with an action is already wired by the browser to a
+        # server/domain boundary. Requiring an invented JavaScript handler, state
+        # probe, requirement ledger and interaction manifest for such forms caused
+        # Studio website generation to loop until its model budget was exhausted.
+        if tag == "form":
+            native = self._native_form(values)
+            self._form_stack.append(native)
+            if native:
+                return
+
+        in_native_form = any(self._form_stack)
+        if in_native_form:
+            # Standard fields are part of the browser's native form submission.
+            if tag in {"select", "textarea"}:
+                return
+            if tag == "input":
+                input_type = str(values.get("type") or "text").strip().lower()
+                if input_type != "button":
+                    return
+            if tag == "button":
+                button_type = str(values.get("type") or "submit").strip().lower()
+                if button_type in {"submit", "reset"}:
+                    return
 
         # Normal anchors already have deterministic browser behavior through href.
         # Requiring a JavaScript interaction manifest for ordinary website navigation
@@ -48,6 +80,10 @@ class _ControlInventory(HTMLParser):
         if str(values.get("aria-hidden") or "").lower() == "true":
             return
         self.controls.append((tag, values.get("data-operly-interaction")))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "form" and self._form_stack:
+            self._form_stack.pop()
 
 
 def _texts(bundle: SourceBundle, suffixes: tuple[str, ...]) -> list[str]:
@@ -72,7 +108,7 @@ def _handler_calls_operation(source: str, handler: str, operation: str) -> bool:
 
 
 def validate_interaction_contract(bundle: SourceBundle) -> dict:
-    """Reject visible controls that lack executable, traceable behavior."""
+    """Reject visible scripted controls that lack executable, traceable behavior."""
     # Python standard-library apps commonly embed their HTML template directly
     # in app.py, so inventory both standalone markup and server source.
     html_sources = _texts(bundle, (".html", ".py"))
