@@ -9,6 +9,7 @@ from packages.model_runtime import (
     ModelInferenceError,
     model_for_role,
 )
+from packages.model_runtime.portfolio import model_route
 from packages.model_runtime.registry import ModelPool
 
 
@@ -70,18 +71,31 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.calls, 1)
         self.assertEqual(second.calls, 1)
 
-    async def test_provider_auth_failure_can_fall_through_to_other_provider(self):
-        first = _FailingModel("provider-a-model", classification="auth")
-        second = _SuccessModel("provider-b-model")
-        pool = ModelPool([first, second], id="cross-provider")
+    def test_default_openrouter_coding_route_has_provider_local_fallbacks(self):
+        with patch.dict(os.environ, {}, clear=True):
+            route = model_route("coding")
 
-        result = await pool.infer(
-            InferenceRequest(messages=({"role": "user", "content": "work"},))
+        self.assertEqual(route.provider, "openrouter")
+        self.assertEqual(route.primary, "stealth/ox-alpha")
+        self.assertEqual(
+            route.fallbacks,
+            ("openai/gpt-oss-120b:free", "qwen/qwen3-coder-flash"),
         )
 
-        self.assertEqual(result.provider_model_id, "provider-b-model")
-        self.assertEqual(first.calls, 1)
-        self.assertEqual(second.calls, 1)
+    def test_default_openrouter_fallback_ids_do_not_leak_to_other_provider(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPERLY_MODEL_PROVIDER": "ollama",
+                "OPERLY_MODEL_DEFAULT": "gemma4:31b",
+            },
+            clear=True,
+        ):
+            route = model_route("coding")
+
+        self.assertEqual(route.provider, "ollama")
+        self.assertEqual(route.primary, "gemma4:31b")
+        self.assertEqual(route.fallbacks, ())
 
     def test_role_candidate_configuration_builds_multi_model_pool(self):
         candidates = (
