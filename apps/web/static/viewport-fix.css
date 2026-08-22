@@ -53,3 +53,87 @@
     grid-template-columns: repeat(2, minmax(180px, 1fr)) !important;
   }
 }
+
+/* Keep the Discord-like workspace controls visible after the shell applies its
+   generic button reset. */
+#dashboard.workspace-shell-ready .operly-workspace-head .operly-side-toggle {
+  display: grid !important;
+  place-items: center !important;
+  flex: 0 0 34px !important;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+  padding: 0 !important;
+  border: 1px solid rgba(151,169,255,.18) !important;
+  border-radius: 10px !important;
+  background: rgba(255,255,255,.055) !important;
+  color: #e9edff !important;
+  font-size: 22px !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+}
+#dashboard.workspace-shell-ready .operly-workspace-head .operly-side-toggle:hover {
+  background: rgba(91,128,255,.16) !important;
+  border-color: rgba(116,151,255,.4) !important;
+}
+
+.operly-rail-item,
+.operly-rail-account,
+.operly-rail-settings {
+  color: #f7f8ff !important;
+  opacity: 1 !important;
+  font-weight: 850 !important;
+}
+.operly-rail-settings {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  min-height: 48px !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(151,169,255,.14) !important;
+  border-radius: 16px !important;
+  background: rgba(255,255,255,.045) !important;
+  color: #9ed1ff !important;
+  font-size: 17px !important;
+  cursor: pointer !important;
+}
+.operly-rail-settings:hover {
+  border-radius: 13px !important;
+  background: rgba(88,111,218,.16) !important;
+  border-color: rgba(116,151,255,.3) !important;
+}
+
+/* Studio is conversation-first: the transcript and command area need enough room
+   to understand the edit instead of being a one-line strip under the canvas. */
+body.operly-studio-open .ss-chat {
+  min-height: 210px !important;
+  max-height: 38vh !important;
+}
+body.operly-studio-open #ss-thread {
+  min-height: 92px !important;
+  max-height: 190px !important;
+  padding-block: 14px !important;
+}
+body.operly-studio-open .ss-msg p {
+  line-height: 1.5 !important;
+}
+body.operly-studio-open #ss-input {
+  min-height: 66px !important;
+  max-height: 150px !important;
+  line-height: 1.45 !important;
+}
+body.operly-studio-open .ss-preview-state {
+  max-width: min(56vw, 720px) !important;
+}
+body.operly-studio-open .ss-preview-state span {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+@media (max-height: 760px) {
+  body.operly-studio-open .ss-chat { min-height: 170px !important; max-height: 34vh !important; }
+  body.operly-studio-open #ss-thread { max-height: 130px !important; }
+}
