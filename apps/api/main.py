@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
@@ -63,6 +63,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
+WEB_ASSET_REVISION = "20260822-auth-v5"
 
 
 async def bootstrap_admin() -> None:
@@ -202,9 +203,30 @@ WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 app.mount("/static", StaticFiles(directory=WEB_STATIC), name="static")
 
 
+def frontend_shell() -> HTMLResponse:
+    html = (WEB_STATIC / "index.html").read_text(encoding="utf-8")
+    html = html.replace(
+        "/static/app.js?v=20260819-auth-v4",
+        f"/static/app.js?v={WEB_ASSET_REVISION}",
+    ).replace(
+        "/static/auth.js?v=20260819-auth-v4",
+        f"/static/auth.js?v={WEB_ASSET_REVISION}",
+    ).replace(
+        "/static/ai-assistant-bridge.js",
+        f"/static/ai-assistant-bridge.js?v={WEB_ASSET_REVISION}",
+    )
+    return HTMLResponse(
+        html,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
     requested = WEB_STATIC / path
     if path and requested.is_file():
         return FileResponse(requested)
-    return FileResponse(WEB_STATIC / "index.html")
+    return frontend_shell()
