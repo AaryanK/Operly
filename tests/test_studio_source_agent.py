@@ -207,3 +207,7 @@ def test_studio_browser_uses_durable_source_runs_and_visible_trace():
     assert "setInterval(" not in source
     assert "studio-product-overhaul.js" not in bridge
     assert "studio-product-overhaul.css" not in bridge
+    assert "createModal" not in source
+    assert "Website name" not in source
+    assert 'id="ss-open-website"' in source
+    assert 'solution_type:"digital_presence"' in source

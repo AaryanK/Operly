@@ -38,6 +38,9 @@ class SolutionTests(unittest.IsolatedAsyncioTestCase):
   context=json.loads(one.context_json);self.assertEqual(context["planning_request"]["products_services"],["Drain cleaning","Water heaters"]);self.assertEqual(context["planning_request"]["contact"]["phones"],["312-555-1212"])
   _,runtime=await self.service.resolve(self.db,self.a.id,one.id);self.assertIsInstance(runtime,StudioProject);self.assertEqual(solution_json(one)["preview"]["url"],f"/api/solutions/{one.id}/preview")
   job,published=await ProductionService(self.service,ManagedStaticDeploymentProvider(self.deployments.name)).publish(self.db,self.a.id,one.id,self.user.id);self.assertEqual(job.status,"succeeded");self.assertEqual(published.lifecycle_status,LifecycleStatus.LIVE);self.assertEqual(published.production_state,"live");self.assertTrue(published.production_url)
+ async def test_digital_presence_falls_back_to_active_workspace_name(self):
+  website=await self.service.create_presence(self.db,self.b.id,self.user.id);self.assertEqual(website.name,"B")
+  _,runtime=await self.service.resolve(self.db,self.b.id,website.id);self.assertEqual(runtime.name,"B")
  async def test_tenant_and_runtime_reference_isolation(self):
   studio=await StudioService.create_project(self.db,self.a.id,self.user.id,"A Website","");rows=await self.service.list(self.db,self.a.id);solution=next(x for x in rows if x.runtime_reference==studio.id)
   with self.assertRaises(LookupError):await self.service.get(self.db,self.b.id,solution.id)

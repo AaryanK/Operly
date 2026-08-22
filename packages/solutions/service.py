@@ -8,6 +8,7 @@ from packages.company.events import append_event
 from packages.company.intelligence import profile_payload
 from packages.database.application_builder_models import ApplicationVersion, ManagedApplication
 from packages.database.custom_software_models import GeneratedProject, RunnerBuildRecord, RunnerPreviewRecord
+from packages.database.models import Tenant
 from packages.database.product_models import CompanyProfile, SolutionDeployment, SolutionRecord
 from packages.database.studio_models import StudioDeployment, StudioProject, StudioVersion
 from packages.database.studio_source_models import StudioSourceVersion
@@ -98,7 +99,9 @@ class SolutionService:
         profile=profile_payload(await db.get(CompanyProfile,tenant_id))["profile"] or {}
         existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.solution_type==SolutionType.DIGITAL_PRESENCE,SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED))
         if existing:return await self.get(db,tenant_id,existing.id)
-        business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or "Untitled Website").strip()[:200]
+        tenant=await db.get(Tenant,tenant_id)
+        workspace_name=(tenant.name if tenant else "").strip()
+        business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or workspace_name or "Untitled Website").strip()[:200]
         description=str(profile.get("description") or "")[:500]
         # Preserve one tiny legacy compatibility snapshot so old routes and
         # rollback remain safe. The source agent becomes primary immediately.

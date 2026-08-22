@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from starlette.requests import Request
@@ -66,6 +67,21 @@ class RailwayAuthOriginTests(unittest.TestCase):
                 "internal-proxy.example",
             )
             self.assertFalse(_cross_site(request))
+
+    def test_signed_in_entry_routes_probe_session_before_rendering_public_auth(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "apps"
+            / "web"
+            / "static"
+            / "auth.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);', source)
+        initialize = source.index("async function initializeAuth()")
+        signed_in_check = source.index("if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname))", initialize)
+        public_route = source.index("if (AUTH_ROUTES[location.pathname])", signed_in_check)
+        self.assertLess(signed_in_check, public_route)
+        self.assertIn("await enterAuthenticatedWorkspace();", source[signed_in_check:public_route])
 
 
 if __name__ == "__main__":

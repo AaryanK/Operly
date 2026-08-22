@@ -8,6 +8,8 @@ const AUTH_ROUTES = {
   "/onboarding": "#onboarding"
 };
 
+const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);
+
 function setFormMessage(id, message, kind = "error") {
   const element = $(id);
   if (!element) return;
@@ -209,9 +211,17 @@ $$("[data-toggle-password]").forEach((button) => button.addEventListener("click"
   button.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
 }));
 
-window.addEventListener("popstate", () => {
+window.addEventListener("popstate", async () => {
   state.linkToken = null;
   extractLinkToken();
+  if (state.me && SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
+    try {
+      await enterAuthenticatedWorkspace();
+      return;
+    } catch {
+      state.me = null;
+    }
+  }
   showRoute();
 });
 
@@ -394,19 +404,34 @@ $("#open-workspace").addEventListener("click", async () => {
 
 async function initializeAuth() {
   extractLinkToken();
-  await refreshAuthBootstrap().catch(() => {});
+
+  // Public entry pages are not a separate authentication state. If a valid session
+  // already exists, /, /login and /signup should enter the workspace immediately.
+  // This check intentionally runs before loading public auth UI or Google buttons.
+  if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
+    try {
+      await enterAuthenticatedWorkspace();
+      return;
+    } catch {
+      state.me = null;
+    }
+  }
+
   if (AUTH_ROUTES[location.pathname]) {
+    await refreshAuthBootstrap().catch(() => {});
     showRoute();
     if (location.pathname === "/verify-email" && state.linkToken) {
       $("#verify-form").requestSubmit();
     }
     return;
   }
+
   try {
     await enterAuthenticatedWorkspace();
   } catch {
     state.me = null;
     history.replaceState({}, "", "/");
+    await refreshAuthBootstrap().catch(() => {});
     showRoute("/");
   }
 }
