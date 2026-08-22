@@ -1,8 +1,10 @@
 """Pluggable model-provider registry for OPERLY's shared harnesses.
 
-Harnesses depend on the small ``chat(messages, tools)`` contract. Providers are
-registered by name and instantiated from a ``ModelRoute``; adding or replacing a
-model backend must not require changes to the business, planning, or coding loops.
+Models are infrastructure plugins. Harnesses depend only on the small
+``chat(messages, tools)`` contract; provider-specific authentication, payload
+translation and transport live behind registered adapters. Adding or replacing a
+model backend therefore does not require changes to business, planning, routing,
+or coding harness logic.
 """
 from __future__ import annotations
 
@@ -28,8 +30,13 @@ ProviderFactory = Callable[[ModelRoute], ModelClient]
 _PROVIDER_FACTORIES: dict[str, ProviderFactory] = {}
 
 
-def register_model_provider(name: str, factory: ProviderFactory, *, replace: bool = False) -> None:
-    """Register a provider adapter behind the common OPERLY model contract."""
+def register_model_provider(
+    name: str,
+    factory: ProviderFactory,
+    *,
+    replace: bool = False,
+) -> None:
+    """Register a model provider exactly like another OPERLY runtime plugin."""
     key = str(name or "").strip().lower()
     if not key:
         raise ValueError("Model provider name is required")
@@ -45,7 +52,8 @@ def model_client_for_route(route: ModelRoute) -> ModelClient:
     if factory is None:
         installed = ", ".join(sorted(_PROVIDER_FACTORIES)) or "none"
         raise RuntimeError(
-            f"Model provider {key or '<empty>'} is not installed. Installed providers: {installed}"
+            f"Model provider {key or '<empty>'} is not installed. "
+            f"Installed providers: {installed}"
         )
     return factory(route)
 
