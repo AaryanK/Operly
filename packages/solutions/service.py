@@ -60,6 +60,19 @@ class SolutionService:
             .limit(1)
         )
 
+    async def latest_generated_source(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
+        if not plan_id or not plan_version:return None
+        return await db.scalar(
+            select(GeneratedSourceBundle)
+            .where(
+                GeneratedSourceBundle.tenant_id==tenant_id,
+                GeneratedSourceBundle.plan_id==plan_id,
+                GeneratedSourceBundle.plan_version==plan_version,
+            )
+            .order_by(desc(GeneratedSourceBundle.source_version))
+            .limit(1)
+        )
+
     async def sync(self,db:AsyncSession,tenant_id:str):
         studios=(await db.scalars(select(StudioProject).where(StudioProject.tenant_id==tenant_id))).all()
         for p in studios:
@@ -81,7 +94,9 @@ class SolutionService:
         projects=(await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==tenant_id))).all()
         for p in projects:
             preview=await self.active_generated_preview(db,tenant_id,p.plan_id,p.approved_plan_version)
-            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=p.name,description=p.prompt[:4000],solution_type=SolutionType.CUSTOM_SOLUTION,lifecycle_status=LifecycleStatus.PREVIEW_READY if preview else LifecycleStatus.APPROVED,current_version_reference=str(p.version),preview_state="ready" if preview else "available",preview_url=f"/api/solutions/{{solution_id}}/preview",production_state="offline",production_url=None,visibility="private",context_json="{}")
+            source=await self.latest_generated_source(db,tenant_id,p.plan_id,p.approved_plan_version)
+            current=str(source.source_version) if source else str(p.version)
+            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=p.name,description=p.prompt[:4000],solution_type=SolutionType.CUSTOM_SOLUTION,lifecycle_status=LifecycleStatus.PREVIEW_READY if preview else LifecycleStatus.APPROVED,current_version_reference=current,preview_state="ready" if preview else "available",preview_url=f"/api/solutions/{{solution_id}}/preview",production_state="offline",production_url=None,visibility="private",context_json="{}")
         await db.flush()
 
     async def list(self,db,tenant_id):
