@@ -1,4 +1,3 @@
-import json
 import mimetypes
 from typing import Literal
 
@@ -13,6 +12,7 @@ from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, Co
 from packages.custom_software.source_bundles import normalized_path
 from packages.database.studio_source_models import StudioAgentRun
 from packages.studio.agent_runs import create_run, latest_run as latest_agent_run, run_json
+from packages.studio.preview_assets import inline_local_preview_assets
 from packages.studio.service import StudioService
 from packages.studio.source_agent import (
     edit_source,
@@ -96,12 +96,7 @@ async def start_source_run(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Start a durable source-agent run and return immediately.
-
-    Studio polls the run to display the authorized model, attached context, model
-    turns, tool actions, validation failures, retries and completion. The trace is
-    intentionally operational and never exposes private chain-of-thought.
-    """
+    """Start durable owner-visible model work and return immediately."""
     _assert_owner(auth)
     if payload.operation == "edit" and not payload.instruction.strip():
         raise HTTPException(status_code=422, detail={"code": "invalid_instruction", "message": "Instruction is required"})
@@ -152,8 +147,7 @@ async def get_source_run(
     return await run_json(db, run)
 
 
-# Compatibility endpoints retained for older clients. The current Studio browser
-# uses /source/runs so long model work is durable and observable.
+# Compatibility endpoints retained for older clients. Current Studio uses durable runs.
 @router.post("/api/studio/projects/{project_id}/source/generate")
 async def generate_project_source(
     project_id: str,
@@ -327,6 +321,10 @@ async def preview_project_source(
     content = records[requested]
     media_type = mimetypes.guess_type(requested)[0] or "application/octet-stream"
     if media_type == "text/html" and "studio" in request.query_params:
+        # Keep the iframe opaque-origin sandboxed. Its session cookies intentionally
+        # cannot authorize relative protected CSS/JS requests, so inline only local
+        # files from this already-authorized immutable source bundle.
+        content = inline_local_preview_assets(content, records)
         content = _inject_bridge(content)
 
     headers = {
