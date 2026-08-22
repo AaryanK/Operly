@@ -1,12 +1,8 @@
-"""Studio-specific website runtime policy.
+"""Studio-specific website runtime and agent policy.
 
-The general coding harness is intentionally strict enough for arbitrary business
-applications. Studio websites need a narrower contract: native HTML behavior stays
-native, business claims stay grounded in supplied context, and focused edits should
-not spend model turns manufacturing application interaction manifests.
-
-This module installs that policy at application startup without weakening the
-shared custom-software harness.
+The generic coding harness remains strict for arbitrary applications. Studio websites
+get a lighter contract: browser-native HTML stays native, business claims must remain
+grounded, and focused edits get resilient source tools rather than app-only ceremony.
 """
 from __future__ import annotations
 
@@ -21,27 +17,27 @@ from packages.coding_harness import opencode_agent as coding
 
 
 STUDIO_WEBSITE_SYSTEM = """
-You are OPERLY's website source agent working inside one persistent Studio project.
+You are OPERLY's website source agent inside one persistent Studio project.
 The owner is editing a public business website, not a generic JavaScript application.
-Use project tools to inspect and modify real source files; do not return a giant code
+Use project tools to inspect and modify real source files. Do not return a giant code
 dump when tools can change the workspace.
 
 WEBSITE RULES
-- The owner instruction, current source, business facts, selected element, recent Studio conversation, and authorized capability summaries are your working context.
+- The owner instruction, current source, business facts, selected element, recent Studio conversation, and authorized capability summaries are your context.
 - Business facts are authoritative data. Never invent testimonials, customer counts, years in business, destinations served, awards, ratings, prices, credentials, guarantees, partnerships, locations, or other concrete claims.
-- If a factual marketing claim is not supported by supplied business context, omit it or use non-quantitative copy. Do not turn missing facts into plausible-sounding facts.
-- Ordinary anchors with href, semantic navigation, native GET/POST forms, inputs inside those forms, and intrinsic browser controls do NOT need data-operly-interaction ids, JavaScript handlers, requirement IDs, state probes, domain operations, or operly.interactions.json entries.
-- Only add JavaScript when the requested experience actually needs scripted behavior. Keep core navigation, reading, responsive layout, contact details, and server-bound contact forms useful without JavaScript.
-- A contact form may use POST action __OPERLY_FORM_ACTION__ with name, email, message, and a hidden website honeypot. Do not call private Operly APIs from generated JavaScript.
-- Do not create or repair operly.interactions.json for a normal content, localization, layout, color, typography, navigation, or native-form edit.
-- For visual/copy/localization edits, inspect index.html and styles.css first. Do not read app.js, tests, or interaction artifacts unless the requested change actually touches scripted behavior.
-- Preserve unrelated working source. A focused request should normally need only a few reads/edits, not a site-wide rewrite.
-- Before using edit, read the current file. If an exact edit is rejected, reread once and use corrected arguments or rewrite the bounded file; never repeat the identical failed edit call.
-- Use write when the intended bounded file is small enough and an exact replacement is needlessly brittle.
-- Keep the site responsive and accessible, with readable contrast, visible focus states, semantic headings, and no horizontal overflow.
+- If a factual marketing claim is unsupported, omit it or use non-quantitative copy. Missing facts are not permission to make plausible facts up.
+- Ordinary anchors, semantic navigation, native GET/POST forms, fields inside those forms, and intrinsic browser controls do NOT need data-operly-interaction ids, JavaScript handlers, requirement IDs, state probes, domain operations, or operly.interactions.json.
+- Only add JavaScript when the requested experience genuinely needs scripted behavior. Core navigation, reading, responsive layout, contact details, and server-bound contact forms must remain useful without JavaScript.
+- A contact form may POST to __OPERLY_FORM_ACTION__ with name, email, message, and a hidden website honeypot. Do not call private Operly APIs from generated JavaScript.
+- Do not create or repair operly.interactions.json for content, localization, layout, color, typography, navigation, or native-form edits.
+- For visual/copy/localization work, inspect index.html and styles.css first. Do not read app.js, tests, or interaction artifacts unless the request actually touches scripted behavior.
+- Preserve unrelated working source. A focused request should normally take a few reads/edits, not a site-wide rewrite.
+- Before edit, read the current file. If exact edit fails, reread once and use corrected arguments, replace_range, or write the bounded file. Never repeat identical failed edit arguments.
+- replace_range is the preferred fallback after a read when line numbers are stable but exact source text is not.
+- Keep the site responsive and accessible: readable contrast, visible focus, semantic headings, and no horizontal overflow.
 - Never write secrets, credentials, .env files, analytics beacons, trackers, or authentication code.
 - Web search is optional evidence only when current public documentation is genuinely required; never use it to invent business facts.
-- Finish as soon as the requested website change is coherent and the Studio website contract passes. Do not add application-only scaffolding merely to satisfy yourself.
+- Finish as soon as the requested website change is coherent and the Studio website contract passes. Do not add application scaffolding merely to satisfy a generic app pattern.
 """.strip()
 
 
@@ -74,7 +70,7 @@ def _visible_text(html: str) -> str:
 
 
 def validate_studio_website(files, specification: str = "") -> dict[str, Any]:
-    """Validate a static Studio website without generic app-only interaction rules."""
+    """Validate Studio website structure/safety/grounding without app-only rules."""
     records = _source_map(files)
     html = records.get("index.html", "")
     if not html.strip():
@@ -93,22 +89,26 @@ def validate_studio_website(files, specification: str = "") -> dict[str, Any]:
     if facts:
         visible = _visible_text(html)
         visible_lower = visible.lower()
+        compact_facts = re.sub(r"\s+", "", facts)
 
-        # Quantitative social-proof claims are particularly easy for design models to
-        # hallucinate. Require their numeric value to be present in business context.
+        # Catch claims such as "15k+ Happy Travelers" and "120+ Global
+        # Destinations", while allowing a few descriptive words between value/noun.
         metric_pattern = re.compile(
             r"(?i)\b(\d[\d,.]*\s*[kKmM]?\+?%?)\s+"
+            r"(?:[A-Za-z][A-Za-z&'-]*\s+){0,3}"
             r"(years?|travelers?|customers?|clients?|destinations?|countries?|projects?|"
             r"trips?|bookings?|reviews?|ratings?|awards?|locations?)\b"
         )
         for match in metric_pattern.finditer(visible):
             value = re.sub(r"\s+", "", match.group(1)).lower()
-            if value and value not in facts.replace(" ", ""):
+            if value and value not in compact_facts:
                 raise StudioWebsiteContractError(
                     f"Unsupported business metric '{match.group(0)}'. Remove it or use a fact supplied in business context."
                 )
 
-        testimonial_markup = bool(re.search(r"(?i)<blockquote\b|class=[\"'][^\"']*testimonial", html))
+        testimonial_markup = bool(
+            re.search(r"(?i)<blockquote\b|class=[\"'][^\"']*(testimonial|review-quote)[^\"']*[\"']", html)
+        )
         if testimonial_markup and not any(token in facts for token in ("testimonial", "review", "customer quote")):
             raise StudioWebsiteContractError(
                 "Unsupported testimonial/social-proof quote. Remove fictional testimonials unless supplied in business context."
@@ -140,7 +140,7 @@ def validate_studio_website(files, specification: str = "") -> dict[str, Any]:
 
 
 def _safe_fuzzy_edit(workspace: coding.VirtualWorkspace, path: str, old: str, new: str) -> None:
-    """Prefer exact replacement, then tolerate whitespace-only source drift once."""
+    """Exact first; then tolerate only whitespace drift, including between tags."""
     clean = workspace._path(path)
     current = workspace.raw(clean)
     if not old:
@@ -155,13 +155,39 @@ def _safe_fuzzy_edit(workspace: coding.VirtualWorkspace, path: str, old: str, ne
     stripped = old.strip()
     if len(stripped) < 24 or len(re.findall(r"\S+", stripped)) < 3:
         raise coding.WorkspacePolicyError("Exact edit requires one match; found 0")
+
+    # re.escape leaves angle brackets literal on modern Python. Permit whitespace
+    # where old already had it and between adjacent tags where formatters commonly
+    # insert indentation/newlines.
     parts = re.split(r"(\s+)", stripped)
     pattern = "".join(r"\s+" if part.isspace() else re.escape(part) for part in parts if part)
+    pattern = pattern.replace("><", r">\s*<")
     matches = list(re.finditer(pattern, current, flags=re.S))
     if len(matches) != 1:
-        raise coding.WorkspacePolicyError(f"Exact edit requires one match; found 0; whitespace-tolerant match found {len(matches)}")
+        raise coding.WorkspacePolicyError(
+            f"Exact edit requires one match; found 0; whitespace-tolerant match found {len(matches)}"
+        )
     match = matches[0]
     workspace.write(clean, current[: match.start()] + new + current[match.end() :])
+
+
+def _replace_range(workspace: coding.VirtualWorkspace, path: str, start_line: int, end_line: int, content: str) -> None:
+    clean = workspace._path(path)
+    current = workspace.raw(clean)
+    lines = current.splitlines(keepends=True)
+    start = int(start_line)
+    end = int(end_line)
+    if start < 1 or end < start or end > len(lines):
+        raise coding.WorkspacePolicyError(
+            f"replace_range lines must satisfy 1 <= start <= end <= {len(lines)}"
+        )
+    if end - start + 1 > 500:
+        raise coding.WorkspacePolicyError("replace_range is limited to 500 source lines")
+    replacement = str(content)
+    if replacement and not replacement.endswith("\n") and end < len(lines):
+        replacement += "\n"
+    updated = "".join(lines[: start - 1]) + replacement + "".join(lines[end:])
+    workspace.write(clean, updated)
 
 
 async def _noop_event(_event: dict[str, Any]) -> None:
@@ -179,34 +205,46 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
             report = validate_studio_website(files, _approved_specification(session))
         except StudioWebsiteContractError as error:
             session.last_validation_error = str(error)[:4000]
-            return {
-                "ok": False,
-                "error": "Cannot finish yet: " + str(error),
-                "files": session.workspace.list(),
-            }
+            return {"ok": False, "error": "Cannot finish yet: " + str(error), "files": session.workspace.list()}
         session.summary = str(args.get("summary") or "Website source updated.").strip()[:4000] or "Website source updated."
-        session.verification = [
-            str(item).strip()[:500]
-            for item in (args.get("verification") or [])
-            if str(item).strip()
-        ][:30]
+        session.verification = [str(item).strip()[:500] for item in (args.get("verification") or []) if str(item).strip()][:30]
         session.finished = True
-        return {
-            "ok": True,
-            **report,
-            "changedPaths": session.changed_paths(),
-        }
+        return {"ok": True, **report, "changedPaths": session.changed_paths()}
+
+    async def _range(self, args: dict[str, Any], session: coding.CodingSession) -> dict[str, Any]:
+        path = str(args.get("path") or "")
+        _replace_range(
+            session.workspace,
+            path,
+            int(args.get("start_line") or 0),
+            int(args.get("end_line") or 0),
+            str(args.get("content") or ""),
+        )
+        return {"ok": True, "path": path}
 
     def for_mode(self, mode, *, visual: bool, web: bool):
         selected = super().for_mode(mode, visual=visual, web=web)
         if mode != "plan":
             selected["finish"] = coding.CodingTool(
                 "finish",
-                "Finish when the requested website change is coherent, safe, grounded in supplied business context, and ready to preview. Native HTML behavior does not need application interaction manifests.",
+                "Finish when the website change is coherent, safe, grounded in supplied business context, and ready to preview. Native HTML behavior does not need application interaction manifests.",
                 {"summary": coding.TEXT, "verification": {"type": "array", "items": coding.TEXT}},
                 ("summary",),
                 frozenset({"build", "edit", "repair"}),
                 self._finish,
+            )
+            selected["replace_range"] = coding.CodingTool(
+                "replace_range",
+                "Replace an inclusive line range in one file after reading it. Use this when exact edit text has drifted; keep replacements bounded and preserve unrelated source.",
+                {
+                    "path": coding.TEXT,
+                    "start_line": coding.INTEGER,
+                    "end_line": coding.INTEGER,
+                    "content": coding.TEXT,
+                },
+                ("path", "start_line", "end_line", "content"),
+                frozenset({"build", "edit", "repair"}),
+                self._range,
             )
 
         wrapped = {}
@@ -214,7 +252,16 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
             async def execute(args, session, *, _tool=tool):
                 path = str(args.get("path") or args.get("prefix") or args.get("pattern") or "") or None
                 try:
-                    result = await _tool.execute(args, session)
+                    if _tool.name == "edit":
+                        _safe_fuzzy_edit(
+                            session.workspace,
+                            str(args.get("path") or ""),
+                            str(args.get("old") or ""),
+                            str(args.get("new") or ""),
+                        )
+                        result = {"ok": True, "path": str(args.get("path") or "")}
+                    else:
+                        result = await _tool.execute(args, session)
                 except coding.CodingAgentNeedsUserInput:
                     raise
                 except Exception as error:
@@ -238,13 +285,15 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
                     })
                 return result
 
+            description = tool.description
+            if name == "edit":
+                description = (
+                    "Replace one current source fragment after reading it. Whitespace-only drift is tolerated. "
+                    "If it still fails, reread and use corrected arguments or replace_range; never repeat identical failed arguments."
+                )
             wrapped[name] = coding.CodingTool(
                 name=tool.name,
-                description=(
-                    "Replace one current source fragment. Read the file first. Whitespace-only drift is tolerated, but after a failed replacement reread or use write; never repeat identical failed arguments."
-                    if name == "edit"
-                    else tool.description
-                ),
+                description=description,
                 properties=tool.properties,
                 required=tool.required,
                 modes=tool.modes,
@@ -254,7 +303,7 @@ class StudioWebsiteToolRegistry(coding.CodingToolRegistry):
 
 
 class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
-    """A lean tool loop for websites; arbitrary software keeps the general agent."""
+    """Lean website loop; arbitrary/custom software keeps the general agent."""
 
     def __init__(self, client=None, max_steps=None, registry=None, progress_callback=None) -> None:
         super().__init__(
@@ -263,12 +312,9 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
             registry=registry or StudioWebsiteToolRegistry(progress_callback),
             progress_callback=progress_callback,
         )
-        self.doom_loop_threshold = 3
 
     def _website_can_finish(self, session: coding.CodingSession, require_change: bool) -> bool:
-        if not session.workspace.source_files():
-            return False
-        if require_change and not session.changed_paths():
+        if not session.workspace.source_files() or (require_change and not session.changed_paths()):
             return False
         try:
             validate_studio_website(session.workspace.source_files(), _approved_specification(session))
@@ -276,28 +322,14 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
             return False
         return True
 
-    async def _session(
-        self,
-        mode,
-        specification,
-        workspace,
-        task,
-        *,
-        require_change,
-        editor_context,
-    ):
+    async def _session(self, mode, specification, workspace, task, *, require_change, editor_context):
         spec = str(specification or "").strip()
         if not spec:
             raise coding.CodingHarnessError("Approved specification is empty")
         spec = spec[:80_000]
-        session = coding.CodingSession(
-            mode=mode,
-            workspace=workspace,
-            before=workspace.snapshot(),
-            editor_context=editor_context,
-        )
+        session = coding.CodingSession(mode=mode, workspace=workspace, before=workspace.snapshot(), editor_context=editor_context)
         system = coding.PLAN_SYSTEM if mode == "plan" else STUDIO_WEBSITE_SYSTEM
-        user_packet = {
+        packet = {
             "approvedSpecification": spec,
             "task": str(task or "")[:24_000],
             "workspaceFiles": workspace.list(),
@@ -305,10 +337,10 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
             "executionBoundary": "Generated website code is previewed by Operly; work only through project tools.",
         }
         if editor_context:
-            user_packet["editorContextAvailable"] = True
+            packet["editorContextAvailable"] = True
         session.messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user_packet, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(packet, ensure_ascii=False)},
         ]
 
         web_enabled = bool(os.getenv("OLLAMA_API_KEY", "").strip()) and os.getenv("OPERLY_CODING_WEB_TOOLS", "1").strip() not in {"0", "false", "False"}
@@ -316,8 +348,7 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
         schemas = [tool.schema() for tool in tools.values()]
         nudges = 0
         started = time.monotonic()
-        last_failed_signature = ""
-        repeated_failed = 0
+        failed_signatures: dict[str, int] = {}
 
         for step in range(1, self.max_steps + 1):
             remaining = self.max_seconds - (time.monotonic() - started)
@@ -359,8 +390,7 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
                 tool = tools.get(name)
                 path = str(args.get("path") or args.get("prefix") or args.get("pattern") or "") or None
 
-                # Do not spend a third model action on exactly the same failed edit.
-                if name == "edit" and signature == last_failed_signature and repeated_failed >= 2:
+                if failed_signatures.get(signature, 0) >= 2:
                     excerpt = ""
                     try:
                         excerpt = session.workspace.raw(path or "")[:6000]
@@ -368,7 +398,7 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
                         pass
                     result = {
                         "ok": False,
-                        "error": "This exact edit already failed twice. Reread current source and use corrected edit arguments or write the bounded file instead.",
+                        "error": "These exact tool arguments already failed twice. Do not repeat them. Reread current source and use corrected arguments, replace_range, or write the bounded file.",
                         "currentSourceExcerpt": excerpt,
                     }
                 elif tool is None:
@@ -380,22 +410,17 @@ class StudioWebsiteCodingAgent(coding.CapabilityCodingAgent):
                         raise
                     except (coding.WorkspacePolicyError, coding.CodingWebToolError, ValueError, TypeError) as error:
                         result = {"ok": False, "error": str(error)[:2000]}
-                        if name == "edit" and path:
+                        if path:
                             try:
                                 result["currentSourceExcerpt"] = session.workspace.raw(path)[:6000]
                             except Exception:
                                 pass
 
                 ok = bool(result.get("ok", False))
-                if name == "edit" and not ok:
-                    if signature == last_failed_signature:
-                        repeated_failed += 1
-                    else:
-                        last_failed_signature = signature
-                        repeated_failed = 1
-                elif ok:
-                    last_failed_signature = ""
-                    repeated_failed = 0
+                if ok:
+                    failed_signatures.pop(signature, None)
+                else:
+                    failed_signatures[signature] = failed_signatures.get(signature, 0) + 1
 
                 session.call_signatures.append(signature)
                 session.trace.append(
@@ -447,33 +472,33 @@ def _studio_budget(operation: str) -> tuple[int, int, int]:
 
 
 _APPLIED = False
-_ORIGINAL_EDIT = None
 
 
 def apply_studio_runtime_policy() -> None:
-    """Install the Studio-only policy after shared modules have finished importing."""
-    global _APPLIED, _ORIGINAL_EDIT
+    """Install Studio-only policy after shared modules finish importing."""
+    global _APPLIED
     if _APPLIED:
         return
 
     from packages.studio import agent_runs, source_agent
 
-    if _ORIGINAL_EDIT is None:
-        _ORIGINAL_EDIT = coding.VirtualWorkspace.edit
+    original_project_context = source_agent.project_context
 
-    def resilient_edit(self, path: str, old: str, new: str) -> None:
-        return _safe_fuzzy_edit(self, path, old, new)
-
-    # Whitespace-tolerant exact edits are a general reliability improvement; Studio
-    # receives the domain-specific agent/finish contract below.
-    coding.VirtualWorkspace.edit = resilient_edit
+    async def website_project_context(*args, **kwargs):
+        text = await original_project_context(*args, **kwargs)
+        text = text.replace(
+            "- Use the canonical source shape required by the Operly coding harness: index.html, separate application JavaScript, executable node:test coverage, and operly.interactions.json.",
+            "- Use index.html and styles.css as the normal website source. Add separate JavaScript only when the requested experience genuinely needs scripted behavior.",
+        )
+        return text
 
     agent_runs.OpenCodeStyleCodingAgent = StudioWebsiteCodingAgent
     agent_runs.VisibleToolRegistry = StudioWebsiteToolRegistry
     agent_runs._studio_budget = _studio_budget
+    agent_runs.project_context = website_project_context
 
-    # Direct source-agent endpoints use the same Studio policy as durable runs.
     source_agent.OpenCodeStyleCodingAgent = StudioWebsiteCodingAgent
     source_agent._ensure_static = _studio_ensure_static
+    source_agent.project_context = website_project_context
 
     _APPLIED = True
