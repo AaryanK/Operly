@@ -2,6 +2,7 @@
   const S = {
     solutions: [], active: null, runtime: null, source: null, selected: null,
     viewport: "desktop", pending: null, messages: [], leftOpen: true, rightOpen: true,
+    run: null, runPollToken: 0,
   };
   const $ = (q, r=document) => r.querySelector(q);
   const $$ = (q, r=document) => [...r.querySelectorAll(q)];
@@ -12,6 +13,8 @@
   const root = () => $("#content");
   const title = v => { const n=$("#page-title"); if(n) n.textContent=v; };
   const isWebsite = () => S.runtime?.kind === "studio";
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const activeRun = run => ["queued","running"].includes(run?.state);
 
   function friendly(error) {
     if (!error) return "Something went wrong.";
@@ -33,6 +36,11 @@
     const n=$("#ss-preview-state"); if(!n) return;
     n.className=`ss-preview-state ${state}`;
     n.innerHTML=`<i></i><span>${esc(label)}</span>`;
+  }
+
+  function setBusy(on) {
+    const button=$("#ss-send");
+    if(button){button.disabled=!!on;button.textContent=on?"Running…":"Send";}
   }
 
   function selector(el) {
@@ -147,8 +155,38 @@
     const role=who==="me"?"user":"assistant";
     recordMessage(role,body);
     thread.insertAdjacentHTML("beforeend",`<article class="ss-msg ${who}"><span>${who==="me"?"You":"✦"}</span><div><p>${esc(body)}</p>${meta?`<small>${esc(meta)}</small>`:""}</div></article>`);
-    while(thread.children.length>8) thread.firstElementChild.remove();
+    while(thread.children.length>12) thread.firstElementChild.remove();
     thread.scrollTop=thread.scrollHeight;
+  }
+
+  function eventMeta(event) {
+    const d=event?.detail||{};
+    const bits=[];
+    if(d.step) bits.push(`turn ${d.step}`);
+    if(d.tool) bits.push(d.tool);
+    if(d.path) bits.push(d.path);
+    if(d.elapsedSeconds!=null) bits.push(`${Math.round(Number(d.elapsedSeconds)||0)}s`);
+    return bits.join(" · ");
+  }
+
+  function renderRun(run) {
+    S.run=run||null;
+    const host=$("#ss-run-trace"); if(!host) return;
+    if(!run){host.hidden=true;host.innerHTML="";return;}
+    host.hidden=false;
+    const events=Array.isArray(run.events)?run.events:[];
+    const latest=events.at(-1);
+    const elapsed=run.elapsedSeconds==null?"":`${Math.round(Number(run.elapsedSeconds)||0)}s`;
+    const stateLabel={queued:"Queued",running:"Working",succeeded:"Complete",failed:"Stopped",needs_input:"Needs input"}[run.state]||run.state;
+    const rows=events.slice(-12).map(event=>{
+      const detail=eventMeta(event);
+      const failed=event.phase==="error"||event.detail?.ok===false;
+      return `<div class="ss-run-event ${failed?"bad":""}"><i></i><div><strong>${esc(event.summary)}</strong>${detail?`<small>${esc(detail)}</small>`:""}${event.detail?.detail?`<em>${esc(compact(event.detail.detail,700))}</em>`:""}</div></div>`;
+    }).join("");
+    host.innerHTML=`
+      <div class="ss-run-head"><div><span class="ss-run-dot ${esc(run.state)}"></span><strong>${esc(stateLabel)}</strong><small>${esc(run.modelId||"authorizing model")}${elapsed?` · ${esc(elapsed)}`:""}</small></div><span>${esc(run.operation||"edit")}</span></div>
+      <div class="ss-run-now">${esc(latest?.summary||"Preparing Studio agent…")}</div>
+      <details ${activeRun(run)?"open":""}><summary>Agent activity <span>${events.length} event${events.length===1?"":"s"}</span></summary><div class="ss-run-events">${rows||'<p>Waiting for the first harness event…</p>'}</div></details>`;
   }
 
   async function runtime() {
@@ -206,31 +244,61 @@
     };
   }
 
+  async function pollWebsiteRun(rt, initialRun, {prior=null, announce=true}={}) {
+    const token=++S.runPollToken;
+    let run=initialRun;
+    renderRun(run);setBusy(activeRun(run));
+    if(activeRun(run)) previewState("loading",run.operation==="generate"?"Operly is designing…":"Operly is editing…");
+    while(activeRun(run) && token===S.runPollToken && S.runtime?.id===rt.id){
+      await sleep(850);
+      try{run=await api(`/studio/projects/${rt.id}/source/runs/${run.id}`);renderRun(run)}
+      catch(error){if(token===S.runPollToken) renderRun({...run,state:"failed",error:friendly(error)});break}
+    }
+    if(token!==S.runPollToken || S.runtime?.id!==rt.id) return run;
+    setBusy(false);
+    if(run.state==="succeeded"){
+      const before=S.source?.id||prior||null;
+      await refreshSourceState(rt);
+      await loadPreview(S.source?`/api/studio/projects/${rt.id}/source/preview/?sourceId=${encodeURIComponent(S.source.id)}`:null);
+      previewState("ready","Source preview");
+      if(run.operation==="edit" && S.source) S.pending={kind:"source",prior:before,current:S.source.id};
+      if(announce) msg("ai",run.events?.at(-1)?.summary||S.source?.summary||"The source update is ready.",S.source?`Source S${S.source.sourceVersion} · ${run.modelId||"model"}`:"Complete");
+      changebar();await history();
+    }else if(run.state==="needs_input"){
+      previewState("ready","Waiting for your input");
+      if(announce) msg("ai",run.error||"I need one decision before I can continue.","No source was changed");
+    }else if(run.state==="failed"){
+      previewState("ready","Preview unchanged");
+      if(announce) msg("ai",run.error||"The source change stopped safely.","Your previous version is unchanged");
+    }
+    return run;
+  }
+
+  async function startWebsiteRun(rt, operation, instruction="", {prior=null,announce=true}={}) {
+    const run=await api(`/studio/projects/${rt.id}/source/runs`,{method:"POST",body:JSON.stringify({operation,instruction,context:sourceContext()})});
+    return pollWebsiteRun(rt,run,{prior,announce});
+  }
+
+  async function resumeLatestRun(rt) {
+    if(rt.kind!=="studio") return null;
+    try{
+      const run=await api(`/studio/projects/${rt.id}/source/runs/latest`);
+      renderRun(run);
+      if(activeRun(run)) return pollWebsiteRun(rt,run,{prior:S.source?.id||null,announce:true});
+      return run;
+    }catch{renderRun(null);return null}
+  }
+
   async function generateInitialSource(rt) {
     if(rt.kind!=="studio" || S.source) return;
-    previewState("loading","Operly is designing the website…");
-    msg("ai","I’m creating the first source version from the business context. The canvas will update when it is ready.","Source agent");
-    try {
-      const source=await api(`/studio/projects/${rt.id}/source/generate`,{method:"POST",body:JSON.stringify({context:sourceContext()})});
-      S.source=source;
-      await loadPreview();
-      msg("ai",source.summary||"The first source version is ready.",`Source S${source.sourceVersion}`);
-      await history();
-    } catch(error) {
-      msg("ai",friendly(error),"The legacy preview is still untouched");
-      S.source=null;
-      await loadPreview(`/api/studio/projects/${rt.id}/preview`);
-    }
+    msg("ai","I’m creating the first real source version from the business context. The live trace below shows what the harness is doing.","Source agent");
+    try { await startWebsiteRun(rt,"generate","",{announce:true}); }
+    catch(error){msg("ai",friendly(error),"The legacy preview is still untouched");S.source=null;await loadPreview(`/api/studio/projects/${rt.id}/preview`)}
   }
 
   async function websiteEdit(rt,instruction) {
     const prior=S.source?.id||null;
-    const source=await api(`/studio/projects/${rt.id}/source/edits`,{method:"POST",body:JSON.stringify({instruction,context:sourceContext()})});
-    S.source=source;
-    S.pending={kind:"source",prior,current:source.id};
-    await loadPreview(`/api/studio/projects/${rt.id}/source/preview/?sourceId=${encodeURIComponent(source.id)}`);
-    msg("ai",source.summary||"I updated the website source and refreshed the preview.",`Source S${source.sourceVersion} · reversible`);
-    changebar(); await history();
+    await startWebsiteRun(rt,"edit",instruction,{prior,announce:true});
   }
 
   async function appEdit(rt,instruction) {
@@ -248,8 +316,7 @@
     const input=$("#ss-input"),button=$("#ss-send"),instruction=input?.value.trim();
     if(!instruction||!S.active||button?.disabled) return;
     msg("me",instruction,S.selected?`Context: ${S.selected.componentType||S.selected.selector||S.selected.tag}`:"Context: whole Solution");
-    input.value=""; input.style.height="auto"; button.disabled=true; button.textContent="Working…";
-    previewState("loading","Operly is editing…");
+    input.value=""; input.style.height="auto"; setBusy(true);
     try {
       const rt=await runtime();
       if(rt.kind==="studio") await websiteEdit(rt,instruction);
@@ -259,7 +326,7 @@
       msg("ai",friendly(error),"Your previous version is unchanged");
       previewState("ready","Preview unchanged");
     } finally {
-      button.disabled=false; button.textContent="Send"; input.focus();
+      setBusy(false);input.focus();
     }
   }
 
@@ -317,7 +384,7 @@
   }
 
   function wireEditor() {
-    $("#ss-back")?.addEventListener("click",()=>{setImmersive(false);list()});
+    $("#ss-back")?.addEventListener("click",()=>{S.runPollToken++;setImmersive(false);list()});
     $("#ss-project-toggle")?.addEventListener("click",()=>setPane("left",!S.leftOpen));
     $("#ss-inspector-toggle")?.addEventListener("click",()=>setPane("right",!S.rightOpen));
     $("#ss-refresh")?.addEventListener("click",()=>loadPreview());
@@ -325,7 +392,7 @@
     $("#ss-retry")?.addEventListener("click",()=>loadPreview());
     $("#ss-send")?.addEventListener("click",send);
     const input=$("#ss-input");
-    input?.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(140,Math.max(48,input.scrollHeight))+"px"});
+    input?.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(220,Math.max(64,input.scrollHeight))+"px"});
     input?.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();send()}});
     $$('[data-view]').forEach(button=>button.addEventListener("click",()=>{
       S.viewport=button.dataset.view;$$('[data-view]').forEach(x=>x.classList.toggle("active",x===button));
@@ -338,7 +405,7 @@
   }
 
   async function editor(solution,{generate=false}={}) {
-    S.active=solution;S.runtime=null;S.source=null;S.selected=null;S.pending=null;S.messages=[];S.viewport="desktop";S.leftOpen=true;S.rightOpen=true;
+    S.runPollToken++;S.active=solution;S.runtime=null;S.source=null;S.selected=null;S.pending=null;S.messages=[];S.run=null;S.viewport="desktop";S.leftOpen=true;S.rightOpen=true;
     setImmersive(true);title(`${solution.name} · Studio`);
     root().innerHTML=`
       <section class="ss-shell">
@@ -357,7 +424,7 @@
             <div class="ss-toolbar"><div><button class="active">⌖ Select</button><span id="ss-selected">Whole page</span></div><div id="ss-preview-state" class="ss-preview-state loading"><i></i><span>Loading preview…</span></div></div>
             <div class="ss-canvas" id="ss-canvas" data-view="desktop"><div class="ss-device"><iframe id="ss-frame" title="Solution preview"></iframe><div class="ss-preview-error" id="ss-preview-error" hidden><strong>Preview unavailable</strong><p></p><button id="ss-retry">Retry</button></div></div></div>
             <div id="ss-change" class="ss-change hidden"></div>
-            <section class="ss-chat"><div id="ss-thread"></div><div class="ss-command"><div class="ss-command-head"><span>✦ Ask Operly</span><small id="ss-command-context">Loading context…</small></div><div class="ss-compose"><textarea id="ss-input" rows="1" placeholder="Tell Operly what you want to change…"></textarea><button id="ss-send" class="primary">Send</button></div><footer>Enter to send · Shift+Enter for a new line · current project, selection and recent Studio conversation are attached automatically</footer></div></section>
+            <section class="ss-chat"><section id="ss-run-trace" class="ss-run-trace" hidden></section><div id="ss-thread"></div><div class="ss-command"><div class="ss-command-head"><span>✦ Ask Operly</span><small id="ss-command-context">Loading context…</small></div><div class="ss-compose"><textarea id="ss-input" rows="2" placeholder="Tell Operly what you want to change…"></textarea><button id="ss-send" class="primary">Send</button></div><footer>Live agent activity appears above · project, business context, selection and recent Studio conversation are attached automatically</footer></div></section>
           </main>
           <aside class="ss-right"><header><span>INSPECTOR</span><button title="Collapse inspector" onclick="document.querySelector('#ss-inspector-toggle')?.click()">›</button></header><div id="ss-inspector"></div></aside>
         </div>
@@ -365,7 +432,8 @@
     wireEditor();renderInspector();history();
     try{
       const rt=await runtime();await refreshSourceState(rt);await loadPreview();
-      if(generate && rt.kind==="studio" && !S.source) generateInitialSource(rt);
+      const latest=await resumeLatestRun(rt);
+      if(generate && rt.kind==="studio" && !S.source && !activeRun(latest)) generateInitialSource(rt);
     }catch(error){previewState("error","Preview unavailable");msg("ai",friendly(error),"No changes applied")}
   }
 
@@ -387,7 +455,7 @@
   }
 
   async function list() {
-    setImmersive(false);title("Solutions");S.active=null;S.runtime=null;S.source=null;S.pending=null;S.selected=null;S.messages=[];
+    S.runPollToken++;setImmersive(false);title("Solutions");S.active=null;S.runtime=null;S.source=null;S.pending=null;S.selected=null;S.messages=[];S.run=null;
     const host=root();if(!host)return;host.innerHTML='<div class="ss-list-loading"><span></span><p>Loading Solutions…</p></div>';
     try{
       S.solutions=await api("/solutions");
