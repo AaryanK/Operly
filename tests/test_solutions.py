@@ -51,6 +51,7 @@ class SolutionTests(unittest.IsolatedAsyncioTestCase):
   old_source=GeneratedSourceBundle(tenant_id=self.a.id,plan_id=plan.id,plan_version=1,source_version=1,application_id=f"plan-{plan.id}",bundle_digest="sha256:old",manifest_json="{}",files_json="[]",provenance_json=json.dumps({"summary":"Old approved plan source"}),created_by=self.user.id)
   current_source=GeneratedSourceBundle(tenant_id=self.a.id,plan_id=plan.id,plan_version=2,source_version=2,application_id=f"plan-{plan.id}",bundle_digest="sha256:current",manifest_json="{}",files_json="[]",provenance_json=json.dumps({"summary":"Current approved plan source"}),created_by=self.user.id);self.db.add_all([project,old_source,current_source]);await self.db.commit()
   rows=await self.service.list(self.db,self.a.id);solution=next(x for x in rows if x.runtime_type==RuntimeType.GENERATED_PROJECT and x.runtime_reference==project.id)
+  self.assertEqual(solution.current_version_reference,"2")
   versions=await self.service.versions(self.db,self.a.id,solution.id)
   self.assertEqual(len(versions),1);self.assertEqual(versions[0]["version"],2);self.assertEqual(versions[0]["status"],"current");self.assertEqual(versions[0]["summary"],"Current approved plan source")
  async def test_digital_presence_uses_profile_and_continues_same_identity(self):
