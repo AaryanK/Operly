@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -15,7 +16,13 @@ from sqlalchemy import select
 
 from packages.business_brain.ollama_client import OllamaError
 from packages.coding_harness.model_client import coding_model_client
-from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError, OpenCodeStyleCodingAgent
+from packages.coding_harness.opencode_agent import (
+    CodingAgentNeedsUserInput,
+    CodingHarnessError,
+    CodingTool,
+    CodingToolRegistry,
+    OpenCodeStyleCodingAgent,
+)
 from packages.database.db import SessionFactory
 from packages.database.studio_models import StudioProject
 from packages.database.studio_source_models import StudioAgentEvent, StudioAgentRun
@@ -180,12 +187,87 @@ async def _mark_failed(run_id: str, state: str, message: str) -> None:
         )
 
 
+def _studio_budget(operation: str) -> tuple[int, int, int]:
+    """Keep normal Studio edits inexpensive while allowing first-generation room."""
+    if operation == "generate":
+        return 32, 150, 60
+    return 18, 90, 45
+
+
+class VisibleToolRegistry(CodingToolRegistry):
+    """Mirror rejected tool evidence into the owner-visible run without changing tools."""
+
+    def __init__(self, event_callback) -> None:
+        super().__init__()
+        self.event_callback = event_callback
+
+    def for_mode(self, mode, *, visual: bool, web: bool):
+        selected = super().for_mode(mode, visual=visual, web=web)
+        wrapped = {}
+        for name, tool in selected.items():
+            async def execute(args, session, *, _tool=tool):
+                path = str(args.get("path") or args.get("prefix") or args.get("pattern") or "") or None
+                try:
+                    result = await _tool.execute(args, session)
+                except CodingAgentNeedsUserInput:
+                    raise
+                except Exception as error:
+                    await self.event_callback({
+                        "phase": "tool_evidence",
+                        "tool": _tool.name,
+                        "path": path,
+                        "ok": False,
+                        "summary": f"{_tool.name} could not be applied; the agent must inspect the current source and correct its next action.",
+                        "detail": str(error)[:2000],
+                    })
+                    raise
+                if not bool(result.get("ok", False)):
+                    await self.event_callback({
+                        "phase": "validation",
+                        "tool": _tool.name,
+                        "path": path,
+                        "ok": False,
+                        "summary": f"{_tool.name} was rejected; validation evidence was fed back to the same model session.",
+                        "detail": str(result.get("error") or result.get("message") or "Tool rejected")[:2000],
+                    })
+                return result
+
+            wrapped[name] = CodingTool(
+                name=tool.name,
+                description=tool.description,
+                properties=tool.properties,
+                required=tool.required,
+                modes=tool.modes,
+                execute=execute,
+            )
+        return wrapped
+
+
 async def _run_source_agent(db, run: StudioAgentRun, project: StudioProject, context: dict[str, Any], progress):
     """Execute the existing coding agent while exposing its sanitized progress callback."""
     parent = await latest_source(db, run.tenant_id, project.id)
     specification = await project_context(db, run.tenant_id, project, editor_context=context)
+    specification += """
+
+STUDIO WEBSITE OVERRIDES
+- Ordinary anchors with a normal non-javascript href are native browser navigation. Do not invent JavaScript handlers, state probes, requirement IDs or interaction-manifest entries for them.
+- The interaction manifest is for scripted/app-style controls whose behavior depends on JavaScript. Keep ordinary website navigation semantic and native.
+- If an exact edit is rejected because its old text no longer matches, read the current file and choose corrected arguments or rewrite that bounded file. Never repeat the identical failed edit call.
+- For a focused visual request, inspect the selected evidence and relevant source first, then make the smallest coherent source change. Do not redesign unrelated sections unless the owner asked for that.
+"""
     client = coding_model_client("coding")
-    agent = OpenCodeStyleCodingAgent(client=client, progress_callback=progress)
+    max_steps, max_seconds, model_slice_seconds = _studio_budget(run.operation)
+    agent = OpenCodeStyleCodingAgent(
+        client=client,
+        max_steps=max_steps,
+        registry=VisibleToolRegistry(progress),
+        progress_callback=progress,
+    )
+    # The general coding harness may have wider budgets for custom software. Studio
+    # website edits are intentionally tighter so a CSS/layout request cannot burn a
+    # four-minute session or dozens of cloud model turns.
+    agent.max_seconds = min(agent.max_seconds, max_seconds)
+    agent.model_slice_seconds = min(agent.model_slice_seconds, model_slice_seconds, agent.max_seconds)
 
     if run.operation == "generate":
         if parent is not None:
@@ -249,12 +331,13 @@ async def _execute_run(run_id: str) -> None:
         run.model_id = route.primary
         run.started_at = datetime.utcnow()
         await db.commit()
+        max_steps, max_seconds, _ = _studio_budget(run.operation)
         await record_event(
             run.id,
             run.tenant_id,
             "start",
             f"Starting source agent with authorized model {route.primary}.",
-            detail={"model": route.primary, "operation": run.operation},
+            detail={"model": route.primary, "operation": run.operation, "maxTurns": max_steps, "maxSeconds": max_seconds},
         )
         source = await latest_source(db, run.tenant_id, project.id)
         try:
@@ -265,8 +348,10 @@ async def _execute_run(run_id: str) -> None:
             context = {}
         summary, context_detail = _context_summary(context, source)
         await record_event(run.id, run.tenant_id, "context", summary, detail=context_detail)
+        started = time.monotonic()
 
         async def progress(event: dict[str, Any]) -> None:
+            elapsed = max(0.0, time.monotonic() - started)
             phase = _clip(event.get("phase") or "progress", 40)
             summary_text = _clip(event.get("summary") or "Studio agent progress", 1000)
             detail = {
@@ -275,8 +360,8 @@ async def _execute_run(run_id: str) -> None:
                 "path": event.get("path"),
                 "ok": event.get("ok"),
                 "detail": event.get("detail"),
-                "elapsedSeconds": event.get("elapsedSeconds"),
-                "remainingSeconds": event.get("remainingSeconds"),
+                "elapsedSeconds": round(elapsed, 1),
+                "remainingSeconds": max(0, round(max_seconds - elapsed, 1)),
             }
             await record_event(run.id, run.tenant_id, phase, summary_text, detail=detail)
 
@@ -299,6 +384,7 @@ async def _execute_run(run_id: str) -> None:
                     "sourceVersion": payload.get("sourceVersion"),
                     "model": run.model_id,
                     "changedPaths": payload.get("changedPaths") or [],
+                    "elapsedSeconds": round(max(0.0, time.monotonic() - started), 1),
                 },
             )
         except CodingAgentNeedsUserInput as error:
