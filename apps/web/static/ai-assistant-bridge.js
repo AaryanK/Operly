@@ -115,3 +115,20 @@ if (!document.querySelector('script[data-operly-chat-enhancements]')) {
   script.dataset.operlyChatEnhancements = "1";
   document.head.append(script);
 }
+
+// Unified Solution Studio: one editor shell for websites, managed apps and
+// generated software. The runtime-specific mutation systems stay underneath it.
+if (!document.querySelector('link[data-operly-unified-solution-studio]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/unified-solution-studio.css?v=20260821-studio-v1";
+  link.dataset.operlyUnifiedSolutionStudio = "1";
+  document.head.append(link);
+}
+if (!document.querySelector('script[data-operly-unified-solution-studio]')) {
+  const script = document.createElement("script");
+  script.src = "/static/unified-solution-studio.js?v=20260821-studio-v1";
+  script.defer = true;
+  script.dataset.operlyUnifiedSolutionStudio = "1";
+  document.head.append(script);
+}
