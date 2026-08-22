@@ -133,7 +133,7 @@ if (!document.querySelector('link[data-operly-cosmic-product]')) {
 }
 if (!document.querySelector('script[data-operly-cosmic-product]')) {
   const script = document.createElement("script");
-  script.src = "/static/operly-cosmic.js?v=20260822-system-v3";
+  script.src = "/static/operly-cosmic.js?v=20260822-system-v4";
   script.defer = true;
   script.dataset.operlyCosmicProduct = "1";
   document.head.append(script);
