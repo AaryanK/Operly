@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "apps/api/custom_software_router.py"
       - "packages/coding_harness/**"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
@@ -21,9 +22,11 @@ on:
       - "tests/test_coding_harness_runtime_resolution.py"
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_coding_model_authorization.py"
+      - "tests/test_custom_software_build_routes.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
+      - "apps/api/custom_software_router.py"
       - "packages/coding_harness/**"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
@@ -41,6 +44,7 @@ on:
       - "tests/test_coding_harness_runtime_resolution.py"
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_coding_model_authorization.py"
+      - "tests/test_custom_software_build_routes.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -68,3 +72,4 @@ jobs:
           tests/test_coding_harness_runtime_resolution.py
           tests/test_coding_harness_execution_loop.py
           tests/test_coding_model_authorization.py
+          tests/test_custom_software_build_routes.py
