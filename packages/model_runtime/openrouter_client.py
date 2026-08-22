@@ -30,33 +30,76 @@ def _api_key() -> str:
     return ""
 
 
-def _tool_result_message(message: dict[str, Any]) -> dict[str, Any]:
-    converted = dict(message)
-    if converted.get("role") == "tool":
-        tool_call_id = converted.pop("tool_call_id", None) or converted.pop("tool_name", None)
-        if tool_call_id:
-            converted["tool_call_id"] = str(tool_call_id)
-    return converted
+def _image_url(value: object) -> str | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    if clean.startswith(("http://", "https://", "data:")):
+        return clean
+    return f"data:image/png;base64,{clean}"
 
 
-def _convert_content(message: dict[str, Any]) -> dict[str, Any]:
-    converted = _tool_result_message(message)
-    images = converted.pop("images", None)
-    if not images:
-        return converted
+def _openrouter_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Translate OPERLY's provider-neutral messages to OpenAI chat messages.
 
-    content: list[dict[str, Any]] = []
-    text = converted.get("content")
-    if text:
-        content.append({"type": "text", "text": str(text)})
-    for image in list(images)[:4]:
-        value = str(image or "").strip()
-        if not value:
-            continue
-        url = value if value.startswith(("http://", "https://", "data:")) else f"data:image/png;base64,{value}"
-        content.append({"type": "image_url", "image_url": {"url": url}})
-    converted["content"] = content
-    return converted
+    The harness intentionally stores tool observations using a tool name rather
+    than a provider-specific call id. Recover the id only from a preceding model
+    tool call in the supplied conversation; never invent one.
+    """
+    output: list[dict[str, Any]] = []
+    pending_tool_ids: dict[str, list[str]] = {}
+
+    for original in messages:
+        message = dict(original)
+        role = str(message.get("role") or "user")
+
+        if role == "assistant":
+            calls = message.get("tool_calls")
+            if isinstance(calls, list):
+                for call in calls:
+                    if not isinstance(call, dict):
+                        continue
+                    function = call.get("function") or {}
+                    name = str(function.get("name") or "")
+                    call_id = str(call.get("id") or "")
+                    if name and call_id:
+                        pending_tool_ids.setdefault(name, []).append(call_id)
+
+        if role == "tool":
+            name = str(message.pop("tool_name", "") or message.get("name") or "")
+            if not message.get("tool_call_id") and name:
+                ids = pending_tool_ids.get(name) or []
+                if ids:
+                    message["tool_call_id"] = ids.pop(0)
+            message.pop("name", None)
+            if not message.get("tool_call_id"):
+                raise RuntimeError(
+                    "OpenRouter tool observation is missing the originating tool_call_id"
+                )
+
+        images = message.pop("images", None)
+        if images and role == "user":
+            parts: list[dict[str, Any]] = []
+            text = message.get("content")
+            if text:
+                parts.append({"type": "text", "text": str(text)})
+            for image in images if isinstance(images, list) else []:
+                url = _image_url(image)
+                if url:
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+            message["content"] = parts
+
+        allowed = {
+            "role",
+            "content",
+            "name",
+            "tool_calls",
+            "tool_call_id",
+            "reasoning_details",
+        }
+        output.append({key: value for key, value in message.items() if key in allowed})
+
+    return output
 
 
 class OpenRouterClient:
@@ -72,8 +115,14 @@ class OpenRouterClient:
             "OPEN_ROUTER_URL", "https://openrouter.ai/api/v1/chat/completions"
         ).strip()
         self.api_key = _api_key()
-        self.model = (model or os.getenv("OPEN_ROUTER_MODEL", "openai/gpt-oss-120b:free")).strip()
-        configured = fallback_models if fallback_models is not None else os.getenv("OPEN_ROUTER_FALLBACK_MODELS", "").split(",")
+        self.model = (
+            model or os.getenv("OPEN_ROUTER_MODEL", "openai/gpt-oss-120b:free")
+        ).strip()
+        configured = (
+            fallback_models
+            if fallback_models is not None
+            else os.getenv("OPEN_ROUTER_FALLBACK_MODELS", "").split(",")
+        )
         self.fallback_models = [
             str(item).strip()
             for item in configured
@@ -96,12 +145,17 @@ class OpenRouterClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds, connect=min(30, self.timeout_seconds))
+        timeout = aiohttp.ClientTimeout(
+            total=self.timeout_seconds,
+            connect=min(30, self.timeout_seconds),
+        )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "HTTP-Referer": os.getenv("PUBLIC_BASE_URL", "https://operly.dragonzpyder.xyz"),
+            "HTTP-Referer": os.getenv(
+                "PUBLIC_BASE_URL", "https://operly.dragonzpyder.xyz"
+            ),
             "X-Title": "OPERLY",
         }
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -110,7 +164,14 @@ class OpenRouterClient:
             for index, model in enumerate(models):
                 attempts = self.max_attempts if index == 0 else 1
                 try:
-                    result = await self._chat_model(session, headers, model, messages, tools or [], attempts=attempts)
+                    result = await self._chat_model(
+                        session,
+                        headers,
+                        model,
+                        messages,
+                        tools or [],
+                        attempts=attempts,
+                    )
                     self.last_model = model
                     return result
                 except OllamaError as error:
@@ -137,12 +198,16 @@ class OpenRouterClient:
                 last_error = error
                 if not error.retryable or attempt >= attempts:
                     raise
-                await asyncio.sleep(min(2 ** (attempt - 1), 8) + random.uniform(0.0, 0.35))
+                await asyncio.sleep(
+                    min(2 ** (attempt - 1), 8) + random.uniform(0.0, 0.35)
+                )
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 last_error = OllamaError("OpenRouter connection failed", retryable=True)
                 if attempt >= attempts:
                     raise last_error from error
-                await asyncio.sleep(min(2 ** (attempt - 1), 8) + random.uniform(0.0, 0.35))
+                await asyncio.sleep(
+                    min(2 ** (attempt - 1), 8) + random.uniform(0.0, 0.35)
+                )
         raise last_error or OllamaError("OpenRouter request failed")
 
     async def _request_once(
@@ -155,7 +220,7 @@ class OpenRouterClient:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [_convert_content(message) for message in messages],
+            "messages": _openrouter_messages(messages),
             "temperature": 0.2,
         }
         if tools:
@@ -172,9 +237,14 @@ class OpenRouterClient:
                 upstream = None
                 if isinstance(body, dict):
                     error_body = body.get("error")
-                    upstream = error_body.get("message") if isinstance(error_body, dict) else error_body
+                    upstream = (
+                        error_body.get("message")
+                        if isinstance(error_body, dict)
+                        else error_body
+                    )
                 raise OllamaError(
-                    f"OpenRouter request failed ({response.status}): {str(upstream or response_text or 'unknown upstream error')[:500]}",
+                    f"OpenRouter request failed ({response.status}): "
+                    f"{str(upstream or response_text or 'unknown upstream error')[:500]}",
                     status=response.status,
                     retryable=response.status in _RETRYABLE_STATUSES,
                 )
@@ -183,8 +253,14 @@ class OpenRouterClient:
                 raise OllamaError("OpenRouter returned invalid JSON", retryable=True)
             choices = body.get("choices")
             if not isinstance(choices, list) or not choices:
-                raise OllamaError("OpenRouter response did not contain choices", retryable=True)
-            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+                raise OllamaError(
+                    "OpenRouter response did not contain choices", retryable=True
+                )
+            message = (
+                choices[0].get("message") if isinstance(choices[0], dict) else None
+            )
             if not isinstance(message, dict):
-                raise OllamaError("OpenRouter response did not contain a message", retryable=True)
+                raise OllamaError(
+                    "OpenRouter response did not contain a message", retryable=True
+                )
             return message
