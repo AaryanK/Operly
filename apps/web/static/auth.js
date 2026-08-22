@@ -23,6 +23,56 @@ function setFormBusy(form, busy, label) {
   button.textContent = busy ? label : button.dataset.label;
 }
 
+function commitAuthenticatedScreen() {
+  $$(".screen").forEach((element) => element.classList.add("hidden"));
+  $("#dashboard")?.classList.remove("hidden");
+  document.title = "OPERLY";
+}
+
+function dashboardBootError(error) {
+  console.error("OPERLY dashboard boot failed after authentication", error);
+  const content = $("#content");
+  if (!content) return;
+  content.innerHTML = `<div class="error" role="alert">Signed in successfully, but the workspace UI could not finish loading. Refresh this page to retry. ${String(error?.message || "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char])}</div>`;
+}
+
+async function enterAuthenticatedWorkspace() {
+  const params = new URLSearchParams(location.search);
+  state.pendingIdentityLink = params.get("identity_link") || state.pendingIdentityLink;
+
+  // Authentication and workspace rendering are separate boundaries. Once /me
+  // confirms the session, commit the signed-in screen immediately. Slow or broken
+  // legacy renderers must never leave a valid session trapped behind "Signing in…".
+  state.me = await api("/me");
+  $("#workspace-name").textContent = state.me.tenant.name;
+  $("#workspace-avatar").textContent = state.me.tenant.name.slice(0, 1).toUpperCase();
+  $("#workspace-role").textContent = state.me.role;
+  $("#tenant-kicker").textContent = state.me.tenant.name;
+  commitAuthenticatedScreen();
+  if (location.pathname !== "/app" && !state.pendingIdentityLink) history.replaceState({}, "", "/app");
+
+  // Let the newer dashboard observers mount independently. Keep the legacy
+  // workspace selector hydrated in the background, but never block auth success on it.
+  setTimeout(() => {
+    Promise.resolve()
+      .then(() => typeof loadWorkspaces === "function" ? loadWorkspaces() : null)
+      .catch(dashboardBootError);
+
+    // The current simple/workspace shell mounts itself when #dashboard becomes
+    // visible. This fallback only runs if nothing has populated the page yet.
+    setTimeout(() => {
+      const content = $("#content");
+      if (!content || content.childElementCount) return;
+      const render = state.pendingIdentityLink
+        ? (typeof renderPage === "function" ? () => renderPage("settings") : null)
+        : (typeof window.operlySimpleHome === "function"
+          ? () => window.operlySimpleHome()
+          : (typeof renderPage === "function" ? () => renderPage("overview") : null));
+      if (render) Promise.resolve(render()).catch(dashboardBootError);
+    }, 0);
+  }, 0);
+}
+
 function extractLinkToken() {
   const token = new URLSearchParams(location.hash.slice(1)).get("token");
   if (!token) return;
@@ -129,7 +179,7 @@ async function handleGoogleCredential(result) {
       history.replaceState({}, "", "/onboarding");
       showRoute("/onboarding");
     } else {
-      await enterDashboard();
+      await enterAuthenticatedWorkspace();
     }
   } catch (error) {
     const code = error.details?.code;
@@ -189,7 +239,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         password: $("#login-password").value
       })
     });
-    await enterDashboard();
+    await enterAuthenticatedWorkspace();
   } catch (error) {
     if (error.details?.code === "EMAIL_NOT_VERIFIED") {
       openVerificationRecovery(
@@ -329,7 +379,7 @@ $("#reset-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({ ...proof, password: $("#reset-password-input").value })
     });
     state.linkToken = null;
-    await enterDashboard();
+    await enterAuthenticatedWorkspace();
   } catch (error) {
     setFormMessage("#reset-error", error.message);
   } finally {
@@ -337,7 +387,10 @@ $("#reset-form").addEventListener("submit", async (event) => {
   }
 });
 
-$("#open-workspace").addEventListener("click", () => enterDashboard());
+$("#open-workspace").addEventListener("click", async () => {
+  try { await enterAuthenticatedWorkspace(); }
+  catch (error) { setFormMessage("#login-error", error.message); navigate("/login"); }
+});
 
 async function initializeAuth() {
   extractLinkToken();
@@ -350,7 +403,7 @@ async function initializeAuth() {
     return;
   }
   try {
-    await enterDashboard();
+    await enterAuthenticatedWorkspace();
   } catch {
     state.me = null;
     history.replaceState({}, "", "/");
