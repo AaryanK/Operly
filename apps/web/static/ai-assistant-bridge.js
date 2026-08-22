@@ -19,17 +19,16 @@ document.addEventListener("click", async (event) => {
   }
 }, true);
 
-// Workspace shell: the current production frontend lives in /static, so this
-// bridge mounts the unified workspace navigation over the legacy feature pages.
+// The current production frontend still contains older structural styles, but
+// workspace-shell + operly-cosmic own the product chrome and brand language.
 if (!document.querySelector('script[data-operly-workspace-shell]')) {
   const script = document.createElement("script");
-  script.src = "/static/workspace-shell.js?v=20260821-shell-v2";
+  script.src = "/static/workspace-shell.js?v=20260822-shell-v3";
   script.defer = true;
   script.dataset.operlyWorkspaceShell = "1";
   document.head.append(script);
 }
 
-// Base modern visual system.
 for (const [href, marker] of [
   ["/static/operly-modern.css?v=20260821-modern-v1", "core"],
   ["/static/operly-modern-extras.css?v=20260821-modern-v1", "extras"],
@@ -43,8 +42,6 @@ for (const [href, marker] of [
   }
 }
 
-// Repair layer for the command center, operations dashboard and all workspace
-// surfaces. It is deliberately loaded after the modern base cascade.
 if (!document.querySelector('link[data-operly-frontend-overhaul]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
@@ -53,7 +50,6 @@ if (!document.querySelector('link[data-operly-frontend-overhaul]')) {
   document.head.append(link);
 }
 
-// Final viewport and responsive corrections must win the entire legacy cascade.
 if (!document.querySelector('link[data-operly-viewport-fix]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
@@ -70,8 +66,6 @@ if (!document.querySelector('script[data-operly-modern]')) {
   document.head.append(script);
 }
 
-// Personal identity settings and workspace-owned channel/integration settings
-// stay separate security scopes.
 if (!document.querySelector('script[data-operly-settings-scopes]')) {
   const script = document.createElement("script");
   script.src = "/static/settings-scopes.js?v=20260821-scopes-v1";
@@ -80,7 +74,6 @@ if (!document.querySelector('script[data-operly-settings-scopes]')) {
   document.head.append(script);
 }
 
-// Persist the authenticated human's browser IANA timezone for every channel.
 if (!document.querySelector('script[data-operly-time-sync]')) {
   const script = document.createElement("script");
   script.src = "/static/time-sync.js?v=20260821-time-v1";
@@ -89,8 +82,6 @@ if (!document.querySelector('script[data-operly-time-sync]')) {
   document.head.append(script);
 }
 
-// Reconcile the Operations dashboard's status language with the actual alert
-// and snapshot data after the shell renderer has populated the page.
 if (!document.querySelector('script[data-operly-operations-semantic-fix]')) {
   const script = document.createElement("script");
   script.src = "/static/operations-semantic-fix.js?v=20260821-semantics-v1";
@@ -99,8 +90,6 @@ if (!document.querySelector('script[data-operly-operations-semantic-fix]')) {
   document.head.append(script);
 }
 
-// Progressive chat enhancements: render model Markdown safely and replace raw
-// SpeechRecognition alerts with permission-aware, inline voice status.
 if (!document.querySelector('link[data-operly-chat-enhancements]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
@@ -116,53 +105,36 @@ if (!document.querySelector('script[data-operly-chat-enhancements]')) {
   document.head.append(script);
 }
 
-// Unified Solution Studio: one editor shell for websites, managed apps and
-// generated software. The runtime-specific mutation systems stay underneath it.
+// One Studio implementation. No MutationObserver enhancement layer and no
+// hard-coded prompt chips sit on top of this editor anymore.
 if (!document.querySelector('link[data-operly-unified-solution-studio]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = "/static/unified-solution-studio.css?v=20260821-studio-v2";
+  link.href = "/static/unified-solution-studio.css?v=20260822-source-agent-v1";
   link.dataset.operlyUnifiedSolutionStudio = "1";
   document.head.append(link);
 }
 if (!document.querySelector('script[data-operly-unified-solution-studio]')) {
   const script = document.createElement("script");
-  script.src = "/static/unified-solution-studio.js?v=20260821-studio-v2";
+  script.src = "/static/unified-solution-studio.js?v=20260822-source-agent-v1";
   script.defer = true;
   script.dataset.operlyUnifiedSolutionStudio = "1";
   document.head.append(script);
 }
 
-// Cosmic product system: one brand language across every Operly workspace page,
-// plus a persistent user-controlled collapse state for the section navigation.
+// Single brand system for authenticated product surfaces plus user-controlled
+// workspace navigation collapse.
 if (!document.querySelector('link[data-operly-cosmic-product]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = "/static/operly-cosmic.css?v=20260822-cosmic-v1";
+  link.href = "/static/operly-cosmic.css?v=20260822-system-v2";
   link.dataset.operlyCosmicProduct = "1";
   document.head.append(link);
 }
 if (!document.querySelector('script[data-operly-cosmic-product]')) {
   const script = document.createElement("script");
-  script.src = "/static/operly-cosmic.js?v=20260822-cosmic-v1";
+  script.src = "/static/operly-cosmic.js?v=20260822-system-v2";
   script.defer = true;
   script.dataset.operlyCosmicProduct = "1";
-  document.head.append(script);
-}
-
-// Studio product-quality layer: readable controls, fit-to-window canvas,
-// persistent command bar, contextual quick actions, and collapsible editor panes.
-if (!document.querySelector('link[data-operly-studio-product]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/studio-product-overhaul.css?v=20260822-studio-product-v1";
-  link.dataset.operlyStudioProduct = "1";
-  document.head.append(link);
-}
-if (!document.querySelector('script[data-operly-studio-product]')) {
-  const script = document.createElement("script");
-  script.src = "/static/studio-product-overhaul.js?v=20260822-studio-product-v1";
-  script.defer = true;
-  script.dataset.operlyStudioProduct = "1";
   document.head.append(script);
 }
