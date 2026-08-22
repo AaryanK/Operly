@@ -21,6 +21,7 @@ from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
+from packages.connectors.discord.lifecycle import discord_plugin_lifecycle
 from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
 from packages.plugins import PermissionSpec, PluginContribution, PluginManifest, default_plugin_runtime
@@ -71,6 +72,7 @@ def _bootstrap_builtin_plugins() -> None:
                 if definition.integration_provider
             }
         )
+        is_discord = isinstance(provider, DiscordProvider)
         manifest = PluginManifest(
             id=f"builtin:{provider.name}",
             version="1.0.0",
@@ -79,12 +81,21 @@ def _bootstrap_builtin_plugins() -> None:
             capabilities=tuple(provider.capabilities),
             permissions=tuple(PermissionSpec(permission) for permission in permissions),
             connectors=tuple(integrations),
+            lifecycle=(
+                None
+                if not is_discord
+                else __import__(
+                    "packages.plugins.manifest",
+                    fromlist=["PluginLifecycleSpec"],
+                ).PluginLifecycleSpec(start_on_boot=True, supports_health=True)
+            ),
             metadata={"builtin": True, "provider_name": provider.name},
         )
         runtime.register(
             PluginContribution(
                 manifest=manifest,
                 capability_provider=provider,
+                lifecycle=discord_plugin_lifecycle if is_discord else None,
             ),
             replace=True,
         )
@@ -111,7 +122,5 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
     for provider in default_plugin_runtime().capability_providers():
         registry.register(provider)
 
-    # Discovery is registered last and points at the completed registry so every
-    # installed plugin contribution is searchable without changing model prompts.
     registry.register(CapabilityDiscoveryProvider(registry))
     return registry
