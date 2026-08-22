@@ -24,7 +24,13 @@ from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.lifecycle import discord_plugin_lifecycle
 from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
-from packages.plugins import PermissionSpec, PluginContribution, PluginManifest, default_plugin_runtime
+from packages.plugins import (
+    PermissionSpec,
+    PluginContribution,
+    PluginLifecycleSpec,
+    PluginManifest,
+    default_plugin_runtime,
+)
 
 
 def _builtin_providers():
@@ -54,7 +60,7 @@ def _builtin_providers():
     )
 
 
-def _bootstrap_builtin_plugins() -> None:
+def bootstrap_builtin_plugins() -> None:
     """Register current first-party providers through the universal plugin runtime."""
     runtime = default_plugin_runtime()
     for provider in _builtin_providers():
@@ -82,12 +88,9 @@ def _bootstrap_builtin_plugins() -> None:
             permissions=tuple(PermissionSpec(permission) for permission in permissions),
             connectors=tuple(integrations),
             lifecycle=(
-                None
-                if not is_discord
-                else __import__(
-                    "packages.plugins.manifest",
-                    fromlist=["PluginLifecycleSpec"],
-                ).PluginLifecycleSpec(start_on_boot=True, supports_health=True)
+                PluginLifecycleSpec(start_on_boot=True, supports_health=True)
+                if is_discord
+                else None
             ),
             metadata={"builtin": True, "provider_name": provider.name},
         )
@@ -117,7 +120,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
             or definition.id in enabled_plugins
         )
 
-    _bootstrap_builtin_plugins()
+    bootstrap_builtin_plugins()
     registry = CapabilityRegistry(enabled_resolver=enabled)
     for provider in default_plugin_runtime().capability_providers():
         registry.register(provider)
