@@ -1,5 +1,6 @@
 from .contracts import BindingCandidate, BindingInvocation, ServiceBinding
 from .service import CapabilityGateway, ServiceBindingResolver
+from .store import ServiceBindingStore
 
 __all__ = [
     "BindingCandidate",
@@ -7,4 +8,5 @@ __all__ = [
     "ServiceBinding",
     "CapabilityGateway",
     "ServiceBindingResolver",
+    "ServiceBindingStore",
 ]
