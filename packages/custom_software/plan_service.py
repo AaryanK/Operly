@@ -14,13 +14,11 @@ from packages.database.custom_software_models import (
     PlanningWorkItem,
 )
 from packages.custom_software.live_planning import (
-    OllamaPlanningClient,
     PlanningMode,
     PlannerUnavailable,
     PlanningBlocked,
-    planning_mode,
 )
-from packages.model_runtime.ollama_client import OllamaError
+from packages.custom_software.model_planning_client import ModelPlanningClient, planning_mode
 from packages.custom_software.live_projection import neutral_live_envelope, project_live_envelope
 from packages.custom_software.planning_orchestrator import (
     PlanningNeedsUserInput,
@@ -79,16 +77,12 @@ async def _run_live_plan(db, row, tenant_id, prompt):
         await db.commit()
 
     orchestrator = RecursiveRepairPlanningOrchestrator(
-        NormalizingPlanningClient(OllamaPlanningClient()), on_result=persist_result
+        NormalizingPlanningClient(ModelPlanningClient()), on_result=persist_result
     )
-    # Cloud model endpoints can reject or destabilize simultaneous structured
-    # planning loops. Queue plans locally by default; operators may raise the
-    # limit after validating their provider and database capacity.
+    # Provider/model selection, retries and cross-provider failover happen inside
+    # model_runtime. Planning only bounds concurrent structured planning sessions.
     async with _LIVE_PLANNING_GATE:
-        try:
-            outcome = await orchestrator.run(prompt)
-        except OllamaError as error:
-            raise PlannerUnavailable(error.public_message) from error
+        outcome = await orchestrator.run(prompt)
     outcome["invocations"] = orchestrator.results
     return _live_plan(prompt, outcome)
 
