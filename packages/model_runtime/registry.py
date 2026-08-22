@@ -76,6 +76,7 @@ def _failure(error: BaseException, *, provider: str, model_id: str) -> ModelInfe
     if isinstance(error, OllamaError):
         status = getattr(error, "status", None)
         classification = (
+            "quota_or_credits" if status == 402 else
             "rate_limited" if status == 429 else
             "auth" if status in {401, 403} else
             "model_unavailable" if status == 404 else
@@ -259,8 +260,9 @@ class ModelPool:
                 return await model.infer(request)
             except ModelInferenceError as error:
                 last_error = error
-                # Failover is allowed for normalized model/provider failures. A bad
-                # request should fail closed rather than being sprayed at vendors.
+                # Failover is allowed for model/provider availability and quota
+                # failures. A malformed request or bad credential fails closed
+                # rather than being sprayed at other vendors.
                 if error.classification in {"invalid_request", "auth"}:
                     break
                 continue
