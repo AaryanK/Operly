@@ -81,3 +81,26 @@ class StudioAgentEvent(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "sequence", name="uq_studio_agent_event_sequence"),
     )
+
+
+class StudioModelTrace(Base):
+    """Owner-only durable record of one Studio model-boundary debug event.
+
+    Payloads are redacted before persistence. A digest of the exact unredacted
+    payload is retained inside ``payload_json`` so operators can correlate the
+    record with the exact packet without storing provider credentials.
+    """
+
+    __tablename__ = "studio_model_traces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("studio_agent_runs.id", ondelete="CASCADE"), index=True)
+    call_index: Mapped[int] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(String(30))
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "call_index", "phase", name="uq_studio_model_trace_call_phase"),
+    )
