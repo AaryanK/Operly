@@ -15,9 +15,9 @@ class StudioProvider(BaseProvider):
     """Compatibility capability surface over the source-first Studio runtime.
 
     The public capability IDs remain stable during migration, but AI generation no
-    longer routes through SiteSchema/StudioAI. Source versions are the primary
-    editable artifact and the unified production service can publish either source
-    or a legacy schema version.
+    longer routes through the legacy schema generator. Source versions are the
+    primary editable artifact and the unified production service can publish either
+    source or a legacy schema version.
     """
 
     name = "operly_studio"

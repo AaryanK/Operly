@@ -1,7 +1,7 @@
 import os
 from unittest.mock import patch
 
-from packages.model_runtime.openrouter_client import OpenRouterClient
+from packages.model_runtime.registry import ModelChatAdapter, ModelPool
 from packages.studio import agent_runs, model_latency_policy, runtime_policy, source_agent
 from packages.studio.model_latency_policy import (
     StudioLatencyAwareCodingAgent,
@@ -10,57 +10,62 @@ from packages.studio.model_latency_policy import (
 )
 
 
-def test_studio_openrouter_uses_bounded_default_failover_chain():
-    with patch.dict(
-        os.environ,
-        {
-            "OPEN_ROUTER_API": "test-openrouter-key",
-            "OPEN_ROUTER_TIMEOUT_SECONDS": "600",
-            "OPEN_ROUTER_MAX_ATTEMPTS": "5",
-        },
-        clear=True,
-    ):
-        client = studio_coding_model_client("coding")
+def _adapter(client) -> ModelChatAdapter:
+    adapter = client.inner
+    assert isinstance(adapter, ModelChatAdapter)
+    return adapter
 
-    inner = client.inner
-    assert isinstance(inner, OpenRouterClient)
-    assert inner.model == "stealth/ox-alpha"
-    assert inner.timeout_seconds == 60
-    assert inner.max_attempts == 1
-    assert inner.fallback_models == [
+
+def _provider_model_ids(adapter: ModelChatAdapter) -> list[str]:
+    model = adapter.model
+    if isinstance(model, ModelPool):
+        return [item.provider_model_id for item in model.models]
+    return [model.provider_model_id]
+
+
+def test_studio_uses_bounded_provider_neutral_model_pool():
+    with patch.dict(os.environ, {}, clear=True):
+        adapter = _adapter(studio_coding_model_client("coding"))
+
+    assert isinstance(adapter.model, ModelPool)
+    assert _provider_model_ids(adapter) == [
+        "stealth/ox-alpha",
         "openai/gpt-oss-120b:free",
         "qwen/qwen3-coder-flash",
     ]
+    assert adapter.budget.timeout_seconds == 60
+    assert adapter.budget.attempts_per_model == 1
+    assert adapter.budget.max_models == 3
+    assert adapter.budget.max_output_tokens == 16_384
 
     _, edit_total, edit_slice = studio_budget("edit")
     _, generate_total, generate_slice = studio_budget("generate")
-    worst_case_model_chain = inner.timeout_seconds * (1 + len(inner.fallback_models))
+    worst_case_model_chain = adapter.budget.timeout_seconds * adapter.budget.max_models
     assert worst_case_model_chain < edit_slice < edit_total
     assert worst_case_model_chain < generate_slice < generate_total
 
 
-def test_studio_preserves_explicit_route_fallbacks_instead_of_defaults():
+def test_studio_preserves_explicit_role_fallbacks_through_model_runtime():
     with patch.dict(
         os.environ,
         {
-            "OPEN_ROUTER_API": "test-openrouter-key",
             "OPERLY_MODEL_CODING_FALLBACKS": "openrouter/test-fallback,openrouter/test-second",
         },
         clear=True,
     ):
-        client = studio_coding_model_client("coding")
+        adapter = _adapter(studio_coding_model_client("coding"))
 
-    assert client.inner.fallback_models == [
+    assert _provider_model_ids(adapter) == [
+        "stealth/ox-alpha",
         "openrouter/test-fallback",
         "openrouter/test-second",
     ]
 
 
-def test_studio_specific_fallback_env_overrides_route_and_stays_bounded():
+def test_studio_provider_specific_legacy_fallback_env_is_not_authority():
     with patch.dict(
         os.environ,
         {
-            "OPEN_ROUTER_API": "test-openrouter-key",
             "OPERLY_MODEL_CODING_FALLBACKS": "openrouter/route-fallback",
             "OPERLY_STUDIO_OPENROUTER_FALLBACKS": (
                 "openrouter/studio-first,openrouter/studio-second,openrouter/studio-third"
@@ -68,28 +73,34 @@ def test_studio_specific_fallback_env_overrides_route_and_stays_bounded():
         },
         clear=True,
     ):
-        client = studio_coding_model_client("coding")
+        adapter = _adapter(studio_coding_model_client("coding"))
 
-    assert client.inner.fallback_models == [
-        "openrouter/studio-first",
-        "openrouter/studio-second",
+    # Studio no longer has an OpenRouter-specific fallback policy. The shared model
+    # runtime owns candidate configuration, so only the generic role fallback applies.
+    assert _provider_model_ids(adapter) == [
+        "stealth/ox-alpha",
+        "openrouter/route-fallback",
     ]
 
 
-def test_studio_respects_an_explicitly_tighter_provider_timeout():
+def test_studio_timeout_and_output_budget_are_provider_neutral():
     with patch.dict(
         os.environ,
         {
-            "OPEN_ROUTER_API": "test-openrouter-key",
             "OPEN_ROUTER_TIMEOUT_SECONDS": "30",
             "OPEN_ROUTER_MAX_ATTEMPTS": "3",
+            "OPEN_ROUTER_MAX_TOKENS": "4096",
         },
         clear=True,
     ):
-        client = studio_coding_model_client("coding")
+        adapter = _adapter(studio_coding_model_client("coding"))
 
-    assert client.inner.timeout_seconds == 30
-    assert client.inner.max_attempts == 1
+    # Provider adapter settings may be tighter, but Studio's orchestration contract
+    # remains expressed only through InferenceBudget and never inspects that adapter.
+    assert adapter.budget.timeout_seconds == 60
+    assert adapter.budget.attempts_per_model == 1
+    assert adapter.budget.max_models == 3
+    assert adapter.budget.max_output_tokens == 16_384
 
 
 def test_latency_aware_agent_can_reach_declared_studio_budget():

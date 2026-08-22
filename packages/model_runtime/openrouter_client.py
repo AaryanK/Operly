@@ -132,6 +132,11 @@ class OpenRouterClient:
         self.last_model = self.model
         self.timeout_seconds = _bounded_int("OPEN_ROUTER_TIMEOUT_SECONDS", 180, 15, 600)
         self.max_attempts = _bounded_int("OPEN_ROUTER_MAX_ATTEMPTS", 3, 1, 5)
+        # A coding agent should make a bounded decision/tool call and iterate rather
+        # than reserve an enormous one-shot completion. Leaving max_tokens omitted
+        # can make OpenRouter assume the model's full output allowance (for example
+        # 65,536 tokens), which can fail credit checks before inference even starts.
+        self.max_tokens = _bounded_int("OPEN_ROUTER_MAX_TOKENS", 16_384, 1_024, 65_536)
 
         if not self.url.startswith(("https://", "http://")):
             raise RuntimeError("OPEN_ROUTER_URL must be an HTTP or HTTPS URL")
@@ -222,6 +227,7 @@ class OpenRouterClient:
             "model": model,
             "messages": _openrouter_messages(messages),
             "temperature": 0.2,
+            "max_tokens": self.max_tokens,
         }
         if tools:
             payload["tools"] = tools

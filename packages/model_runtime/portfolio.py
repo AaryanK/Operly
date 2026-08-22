@@ -2,6 +2,9 @@
 
 Set OPERLY_MODEL_PROVIDER + OPERLY_MODEL_DEFAULT to move every role to another
 registered provider/model. Role-specific variables override the global route.
+
+Compatibility routes may carry provider-local fallback model IDs. Cross-provider
+fallback belongs to the configured Model candidate pool (`*_CANDIDATES_JSON`).
 """
 from __future__ import annotations
 
@@ -18,6 +21,10 @@ class ModelRoute:
 
 _DEFAULT_PROVIDER = "openrouter"
 _DEFAULT_MODEL = "stealth/ox-alpha"
+_DEFAULT_CODING_FALLBACKS = (
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen3-coder-flash",
+)
 
 _DEFAULTS = {
     role: ModelRoute(_DEFAULT_PROVIDER, _DEFAULT_MODEL)
@@ -32,6 +39,19 @@ _DEFAULTS = {
         "bounded_task",
     )
 }
+# These are compatibility defaults for the default OpenRouter portfolio only.
+# Studio does not know these model IDs. If the operator selects another provider,
+# provider-local defaults are disabled unless explicitly configured for that role.
+_DEFAULTS["coding"] = ModelRoute(
+    _DEFAULT_PROVIDER,
+    _DEFAULT_MODEL,
+    _DEFAULT_CODING_FALLBACKS,
+)
+_DEFAULTS["repair"] = ModelRoute(
+    _DEFAULT_PROVIDER,
+    _DEFAULT_MODEL,
+    _DEFAULT_CODING_FALLBACKS,
+)
 
 
 def model_route(role: str) -> ModelRoute:
@@ -43,13 +63,21 @@ def model_route(role: str) -> ModelRoute:
     global_provider = os.getenv("OPERLY_MODEL_PROVIDER", default.provider).strip().lower()
     global_model = os.getenv("OPERLY_MODEL_DEFAULT", default.primary).strip()
     primary = os.getenv(env_key, global_model).strip()
-    fallback_text = os.getenv(env_key + "_FALLBACKS", ",".join(default.fallbacks))
+    provider = os.getenv(env_key + "_PROVIDER", global_provider).strip().lower()
+
+    explicit_fallbacks = os.getenv(env_key + "_FALLBACKS")
+    if explicit_fallbacks is None:
+        # Never reinterpret another provider's model IDs as belonging to the newly
+        # selected provider. Cross-provider failover is represented by ModelPool.
+        fallback_text = ",".join(default.fallbacks) if provider == default.provider else ""
+    else:
+        fallback_text = explicit_fallbacks
+
     fallbacks = tuple(
         item.strip()
         for item in fallback_text.split(",")
         if item.strip() and item.strip() != primary
     )
-    provider = os.getenv(env_key + "_PROVIDER", global_provider).strip().lower()
     return ModelRoute(provider=provider, primary=primary, fallbacks=fallbacks)
 
 

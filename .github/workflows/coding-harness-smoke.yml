@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "architecture/**"
+      - "fix/**"
     paths:
       - "apps/api/custom_software_router.py"
       - "apps/api/software_projects_router.py"
@@ -46,6 +47,7 @@ on:
       - "tests/test_custom_software_build_routes.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
+      - "tests/test_model_pool_failover.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -91,6 +93,7 @@ on:
       - "tests/test_custom_software_build_routes.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
+      - "tests/test_model_pool_failover.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -126,5 +129,6 @@ jobs:
           tests/test_custom_software_build_routes.py
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
+          tests/test_model_pool_failover.py
           tests/test_target_architecture_contracts.py
           tests/test_software_project_persistence.py
