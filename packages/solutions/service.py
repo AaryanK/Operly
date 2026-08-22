@@ -66,11 +66,10 @@ class SolutionService:
    items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all();return [{"id":x.id,"version":x.version_number,"status":"active" if x.active else "superseded","summary":x.summary,"created_at":x.created_at.isoformat()} for x in items]
   return [{"id":f"{runtime.id}:{runtime.version}","version":runtime.version,"status":"current","summary":"Current generated version","created_at":runtime.created_at.isoformat()}]
  async def create_presence(self,db,tenant_id,user_id,name=None):
-  profile=profile_payload(await db.get(CompanyProfile,tenant_id))["profile"]
-  if not profile:raise ValueError("Complete company understanding before creating a digital presence")
+  profile=profile_payload(await db.get(CompanyProfile,tenant_id))["profile"] or {}
   existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.solution_type==SolutionType.DIGITAL_PRESENCE,SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED))
   if existing:return await self.get(db,tenant_id,existing.id)
-  business=name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or "My Business"
+  business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or "Untitled Website").strip()[:200]
   description=str(profile.get("description") or "")[:500];site=blank_site(business,description).model_dump(mode="json");page=site["pages"][0];services=profile.get("products_services") or []
   if isinstance(services,str):services=[services]
   if services:page["sections"].append({"id":"services","type":"service_grid","props":{"heading":"What we offer","description":"","items":[{"title":str(x)[:180],"description":""} for x in services[:12]],"source_mode":"manual","catalog_item_ids":[]}})

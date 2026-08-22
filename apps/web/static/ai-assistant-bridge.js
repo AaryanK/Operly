@@ -121,13 +121,13 @@ if (!document.querySelector('script[data-operly-chat-enhancements]')) {
 if (!document.querySelector('link[data-operly-unified-solution-studio]')) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = "/static/unified-solution-studio.css?v=20260821-studio-v1";
+  link.href = "/static/unified-solution-studio.css?v=20260821-studio-v2";
   link.dataset.operlyUnifiedSolutionStudio = "1";
   document.head.append(link);
 }
 if (!document.querySelector('script[data-operly-unified-solution-studio]')) {
   const script = document.createElement("script");
-  script.src = "/static/unified-solution-studio.js?v=20260821-studio-v1";
+  script.src = "/static/unified-solution-studio.js?v=20260821-studio-v2";
   script.defer = true;
   script.dataset.operlyUnifiedSolutionStudio = "1";
   document.head.append(script);
