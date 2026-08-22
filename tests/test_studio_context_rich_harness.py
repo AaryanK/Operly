@@ -23,7 +23,7 @@ def _capability(identifier: str, name: str, description: str, category: str = "g
     }
 
 
-def test_studio_selects_task_relevant_capabilities_instead_of_dumping_registry():
+def test_studio_selects_only_task_relevant_capabilities_without_padding():
     capabilities = [
         _capability("discord.search_messages", "Search Discord", "Search channel history", "messaging"),
         _capability("account.update_profile", "Update account", "Change account settings", "account"),
@@ -45,9 +45,8 @@ def test_studio_selects_task_relevant_capabilities_instead_of_dumping_registry()
     )
     ids = {item["id"] for item in selected}
 
-    assert len(selected) == 4
-    assert "presence.website_form" in ids
-    assert "business.create_lead" in ids
+    assert len(selected) == 3
+    assert ids == {"business.search_leads", "business.create_lead", "presence.website_form"}
     assert "discord.search_messages" not in ids
 
 
@@ -76,10 +75,25 @@ def test_source_working_set_preloads_complete_small_site_files():
 
     assert complete == ["index.html", "styles.css", "app.js", "tests/app.test.js"]
     assert omitted == []
+    assert len(packet) <= 8_000
     assert "CURRENT SOURCE WORKING SET" in packet
     assert "<!doctype html>" in packet
     assert "export function boot" in packet
     assert "Do not list/read a complete unchanged file" in packet
+
+
+def test_source_working_set_counts_json_escaping_against_budget():
+    noisy = ('const markup = "<div class=\\"card\\">\\n";\n' * 500).encode("utf-8")
+    files = [
+        SourceFile("index.html", noisy, "seed"),
+        SourceFile("app.js", b"export const fallback = true;\n", "seed"),
+    ]
+
+    packet, complete, omitted = _source_working_set(files, char_limit=4_000)
+
+    assert len(packet) <= 4_000
+    assert "index.html" in omitted
+    assert "app.js" in complete
 
 
 def test_preloaded_read_is_short_circuited_until_that_file_changes():
