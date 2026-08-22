@@ -222,12 +222,20 @@ class PluginAgentHarness:
         registry = registry or await self.registry_for(context)
         key = self._session_key(context)
         existing = self._session_views.get(key)
-        if (
-            existing is not None
-            and existing.registry is registry
-            and existing.tenant_id == context.tenant_id
-            and existing.authority == authority
-        ):
+
+        if existing is not None and existing.tenant_id == context.tenant_id:
+            # Registry snapshots are intentionally refreshed so connector/plugin
+            # availability can change during a conversation. Preserve the session's
+            # discovered IDs while swapping in the fresh registry and authority.
+            # schemas() re-validates every exposed ID, so a revoked permission or
+            # disconnected plugin immediately disappears without broadening access.
+            existing.registry = registry
+            existing.authority = authority
+            existing.visible_predicate = lambda capability_id: self.capability_authorized(
+                capability_id,
+                authority,
+                context,
+            )
             return existing
 
         view = SessionCapabilityView(
