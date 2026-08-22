@@ -23,6 +23,8 @@ _FORBIDDEN_SECRET_KEYS = (
     "access_token",
     "refresh_token",
     "authorization",
+    "credential",
+    "bearer",
 )
 
 
@@ -75,12 +77,13 @@ def _binding(row: ServiceBindingRecord) -> ServiceBinding:
 class ServiceBindingStore:
     """Durable semantic-to-capability mappings for one SoftwareProject.
 
-    Creating a binding never grants runtime authority. When ``authority`` is
-    supplied we validate the caller can currently select the capability, but every
-    eventual invocation is independently re-evaluated by CapabilityFirewall.
+    Creating a binding never grants runtime authority. A registry may be supplied
+    to validate installation/current authority at configuration time, but it is not
+    required for a draft binding. Every actual invocation is independently
+    re-evaluated by CapabilityFirewall.
     """
 
-    def __init__(self, capability_registry) -> None:
+    def __init__(self, capability_registry=None) -> None:
         self.capability_registry = capability_registry
 
     async def _project(self, db, workspace_id: str, project_id: str) -> SoftwareProjectRecord:
@@ -103,6 +106,7 @@ class ServiceBindingStore:
         user_id: str,
         semantic_name: str,
         capability_id: str,
+        capability_version: str = "1.0.0",
         binding_mode: str = "capability_gateway",
         principal_scope: str = "project_runtime",
         configuration: Mapping[str, Any] | None = None,
@@ -110,17 +114,21 @@ class ServiceBindingStore:
     ) -> ServiceBinding:
         await self._project(db, workspace_id, project_id)
         clean_name = " ".join(str(semantic_name or "").split()).strip()
+        clean_capability = str(capability_id or "").strip()
         if not clean_name:
             raise ValueError("Binding semantic name is required")
+        if not clean_capability:
+            raise ValueError("Binding capability id is required")
 
-        definition = self.capability_registry.definition(str(capability_id or "").strip())
-        # Verify installation/configuration. Authority may be omitted while a plan
-        # is merely drafting possible bindings; execution never inherits this call.
-        self.capability_registry.resolve(
-            workspace_id,
-            definition.id,
-            authority=set(authority) if authority is not None else None,
-        )
+        if self.capability_registry is not None:
+            definition = self.capability_registry.definition(clean_capability)
+            self.capability_registry.resolve(
+                workspace_id,
+                definition.id,
+                authority=set(authority) if authority is not None else None,
+            )
+            clean_capability = definition.id
+            capability_version = definition.version
 
         existing = await db.scalar(
             select(ServiceBindingRecord).where(
@@ -135,8 +143,8 @@ class ServiceBindingStore:
                 tenant_id=workspace_id,
                 project_id=project_id,
                 semantic_name=clean_name[:160],
-                capability_id=definition.id,
-                capability_version=definition.version,
+                capability_id=clean_capability,
+                capability_version=str(capability_version or "1.0.0")[:40],
                 binding_mode=str(binding_mode or "capability_gateway")[:40],
                 principal_scope=str(principal_scope or "project_runtime")[:80],
                 configuration_json=payload,
@@ -147,8 +155,8 @@ class ServiceBindingStore:
         else:
             if existing.tenant_id != workspace_id:
                 raise PermissionError("Binding belongs to another workspace")
-            existing.capability_id = definition.id
-            existing.capability_version = definition.version
+            existing.capability_id = clean_capability
+            existing.capability_version = str(capability_version or "1.0.0")[:40]
             existing.binding_mode = str(binding_mode or "capability_gateway")[:40]
             existing.principal_scope = str(principal_scope or "project_runtime")[:80]
             existing.configuration_json = payload
