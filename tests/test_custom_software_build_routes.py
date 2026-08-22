@@ -1,10 +1,12 @@
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from apps.api.custom_software_router import _build_result, create_runner_build, repair_runner_build
+from apps.api.custom_software_router import _build_result, create_runner_build, preview_proxy, repair_runner_build, router
+from packages.custom_software.preview_proxy import PreviewRedirectError, preview_redirect_location, preview_request_target
 from packages.custom_software.schema import RunnerBuildInput, RunnerRepairInput
 
 
@@ -19,6 +21,24 @@ def _auth(role="owner"):
 class FakeDB:
     async def scalar(self, _statement):
         return None
+
+
+def test_preview_proxy_preserves_queries_and_rewrites_only_same_runner_redirects():
+    base="https://preview.runner.example/runtime-123"
+    assert preview_request_target(base,"api/items","page=2&sort=name")=="https://preview.runner.example/runtime-123/api/items?page=2&sort=name"
+    assert preview_redirect_location("preview-1",base,"/login?next=%2Fdashboard")=="/api/custom-software/previews/preview-1/login?next=%2Fdashboard"
+    assert preview_redirect_location("preview-1",base,"items/42#details")=="/api/custom-software/previews/preview-1/items/42#details"
+    with pytest.raises(PreviewRedirectError):
+        preview_redirect_location("preview-1",base,"https://169.254.169.254/latest/meta-data")
+
+
+def test_preview_proxy_supports_full_crud_and_never_follows_runner_redirects_server_side():
+    route=next(item for item in router.routes if item.path=="/api/custom-software/previews/{preview_id}/{path:path}")
+    assert {"GET","POST","PUT","PATCH","DELETE"} <= route.methods
+    source=inspect.getsource(preview_proxy)
+    assert "request.url.query" in source
+    assert "allow_redirects=False" in source
+    assert "preview_redirect_location" in source
 
 
 @pytest.mark.asyncio
