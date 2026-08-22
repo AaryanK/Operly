@@ -5,6 +5,7 @@ import pytest
 
 from packages.database.db import Base
 from packages.database.schema import import_all_models
+from packages.studio.agent_runs import _context_summary
 from packages.studio.schema import blank_site
 from packages.studio.source_agent import production_html, project_context
 
@@ -47,6 +48,36 @@ async def test_source_agent_context_is_point_form_and_selection_aware():
     assert "Pydantic" not in text
     assert "SiteSchema" not in text
     assert "Return JSON" not in text
+
+
+def test_studio_context_summary_surfaces_authorized_capability_groups():
+    summary, detail = _context_summary(
+        {
+            "route": "/",
+            "viewport": "desktop",
+            "conversation": [{"role": "user", "content": "Build the booking page"}],
+            "_operly_capabilities": [
+                {
+                    "id": "business.search_leads",
+                    "category": "business",
+                    "provider": "operly",
+                },
+                {
+                    "id": "gmail.search",
+                    "category": "messaging",
+                    "provider": "google",
+                },
+            ],
+        },
+        SimpleNamespace(source_version=4),
+    )
+
+    assert "2 authorized capabilities" in summary
+    assert "business" in summary
+    assert "messaging" in summary
+    assert detail["capabilityContext"]["count"] == 2
+    assert detail["capabilityContext"]["ids"] == ["business.search_leads", "gmail.search"]
+    assert detail["source"] == "S4"
 
 
 def test_legacy_blank_site_is_only_a_neutral_compatibility_snapshot():

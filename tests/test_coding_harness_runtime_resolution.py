@@ -71,6 +71,36 @@ def test_native_website_anchor_does_not_require_a_custom_interaction_contract():
     assert validate_runtime_contract(bundle) == "static-web-js"
 
 
+def test_native_server_bound_contact_form_does_not_require_js_interaction_contract():
+    bundle = _bundle([
+        (
+            "index.html",
+            "<!doctype html><form method='post' action='__OPERLY_FORM_ACTION__'>"
+            "<input name='name'><input type='email' name='email'>"
+            "<textarea name='message'></textarea><input type='hidden' name='website'>"
+            "<button type='submit'>Send</button></form><script src='app.js'></script>",
+        ),
+        ("app.js", "module.exports={siteName:()=> 'Operly'};"),
+        ("app.test.js", "const test=require('node:test');const assert=require('node:assert/strict');const {siteName}=require('./app.js');test('loads',()=>assert.equal(siteName(),'Operly'));"),
+    ])
+    assert validate_runtime_contract(bundle) == "static-web-js"
+
+
+def test_button_type_button_inside_native_form_still_requires_script_contract():
+    bundle = _bundle([
+        (
+            "index.html",
+            "<!doctype html><form method='post' action='__OPERLY_FORM_ACTION__'>"
+            "<input name='name'><button type='button'>Preview</button>"
+            "<button type='submit'>Send</button></form><script src='app.js'></script>",
+        ),
+        ("app.js", "module.exports={siteName:()=> 'Operly'};"),
+        ("app.test.js", "const test=require('node:test');require('./app.js');test('loads',()=>{});"),
+    ])
+    with pytest.raises(RuntimeResolutionError, match="data-operly-interaction"):
+        validate_runtime_contract(bundle)
+
+
 def test_visible_dead_button_is_rejected_even_when_preview_and_unit_test_shape_exist():
     bundle = _bundle([
         ("index.html", "<!doctype html><button>New Customer</button><script src='app.js'></script>"),
