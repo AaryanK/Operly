@@ -6,16 +6,16 @@ from sqlalchemy import select
 from packages.database.db import SessionFactory
 from packages.database.studio_source_models import StudioAgentRun
 from packages.studio.agent_runs import ACTIVE_STATES, launch_run, record_event
+from packages.studio.runtime_policy import apply_studio_runtime_policy
 
 
 async def resume_interrupted_studio_runs() -> int:
-    """Requeue persisted active runs whose in-process worker disappeared on restart.
+    """Install Studio policy, then requeue persisted active runs after restart."""
+    # The shared coding harness remains strict for arbitrary software. Studio gets a
+    # website-specific runtime/grounding/edit policy once all shared modules are fully
+    # imported, before any new or resumed Studio run can launch.
+    apply_studio_runtime_policy()
 
-    Railway currently starts a single web process, so replaying the persisted active
-    run set gives browser-visible work a real worker again instead of leaving a
-    permanent ghost `running` state. The source-version persistence layer remains
-    immutable/idempotent at the project level.
-    """
     async with SessionFactory() as db:
         rows = list(
             (
