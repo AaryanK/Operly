@@ -16,6 +16,7 @@ def _tokens(value: str) -> set[str]:
 class CapabilityRegistry:
     def __init__(self, *, enabled_resolver=None, config_resolver=None):
         self._providers: list[CapabilityProvider] = []
+        self._owner_by_capability: dict[str, str] = {}
         self._enabled_resolver = enabled_resolver or (lambda tenant_id, definition: True)
         self._config_resolver = config_resolver or (lambda tenant_id, definition: {})
 
@@ -25,13 +26,21 @@ class CapabilityRegistry:
         duplicates = {
             definition.id
             for definition in provider.capabilities
-            if any(existing.id == definition.id for existing in self.definitions())
+            if definition.id in self._owner_by_capability
         }
         if duplicates:
-            raise ValueError(
-                "Capability already registered: " + ", ".join(sorted(duplicates))
+            owners = ", ".join(
+                f"{capability} ({self._owner_by_capability[capability]})"
+                for capability in sorted(duplicates)
             )
+            raise ValueError(f"Capability already registered: {owners}")
         self._providers.append(provider)
+        for definition in provider.capabilities:
+            self._owner_by_capability[definition.id] = provider.name
+
+    def provider_name(self, capability: str) -> str:
+        definition = self.definition(capability)
+        return self._owner_by_capability.get(definition.id, definition.plugin_id or "core")
 
     def resolve(
         self,
@@ -104,10 +113,16 @@ class CapabilityRegistry:
             if authority is None
             else set(definition.permissions).issubset(authority)
         )
+        declared_owner = str(definition.plugin_id or "").strip()
+        plugin_id = (
+            declared_owner
+            if declared_owner and declared_owner != "core"
+            else self._owner_by_capability.get(definition.id, declared_owner or "core")
+        )
         return CapabilityDescriptor(
             id=definition.id,
             version=definition.version,
-            plugin_id=definition.plugin_id,
+            plugin_id=plugin_id,
             display_name=definition.display_name or definition.name,
             description=definition.description,
             risk=definition.risk_level,
