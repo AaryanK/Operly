@@ -1,32 +1,54 @@
-"""Studio-only model latency policy.
+"""Studio-only model latency and provider-failover policy.
 
-The shared provider adapters intentionally support generous retries because they are
-used by background and non-interactive workloads too. Studio is different: one owner
-is waiting on a durable, visible coding run. Its outer model-turn timeout must never
-expire before the provider's own request timeout, otherwise a healthy slow reasoning
-model is cancelled before the provider can return a response or a useful error.
-
-Keep this policy local to Studio so switching providers/models remains configuration
-and unrelated Operly harnesses retain their existing retry/timeout semantics.
+Studio is an interactive durable coding surface. A single preview or free provider
+must not be able to hold an owner-visible edit for minutes and then fail without a
+model response. Keep the shared provider adapters unchanged; Studio gets a bounded
+first-response window plus a small provider/model fallback chain.
 """
 from __future__ import annotations
+
+import os
 
 from packages.coding_harness.model_client import coding_model_client as _shared_coding_model_client
 from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.studio import agent_runs, runtime_policy, source_agent
 
-# OpenRouter's shared adapter defaults to a 180 second request timeout. Studio gives
-# that request a small outer margin so provider timeout/error handling wins the race
-# instead of asyncio.wait_for cancelling the call first.
-_STUDIO_PROVIDER_TIMEOUT_SECONDS = 180
+# One provider/model request gets at most one minute in Studio. With the primary and
+# two fallbacks this remains below the 195-second outer model-turn ceiling.
+_STUDIO_PROVIDER_TIMEOUT_SECONDS = 60
 _STUDIO_MODEL_SLICE_SECONDS = 195
-
-# Allow multiple rich model/tool turns while keeping one interactive edit bounded.
-# A full provider timeout can therefore happen without consuming the entire run.
 _STUDIO_EDIT_MAX_SECONDS = 420
 _STUDIO_GENERATE_MAX_SECONDS = 600
+_STUDIO_MAX_FALLBACK_MODELS = 2
+
+# Prefer a free, broadly hosted tool-capable model first. Keep a fast dedicated
+# coding model as the paid last resort. Operators can replace this list through
+# OPERLY_STUDIO_OPENROUTER_FALLBACKS without changing harness code.
+_DEFAULT_OPENROUTER_FALLBACKS = (
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen3-coder-flash",
+)
 
 _APPLIED = False
+
+
+def _studio_fallbacks(primary: str, configured: list[str] | tuple[str, ...]) -> list[str]:
+    explicit = os.getenv("OPERLY_STUDIO_OPENROUTER_FALLBACKS", "").strip()
+    if explicit:
+        candidates = [item.strip() for item in explicit.split(",") if item.strip()]
+    elif configured:
+        candidates = [str(item).strip() for item in configured if str(item).strip()]
+    else:
+        candidates = list(_DEFAULT_OPENROUTER_FALLBACKS)
+
+    selected: list[str] = []
+    for model in candidates:
+        if not model or model == primary or model in selected:
+            continue
+        selected.append(model)
+        if len(selected) >= _STUDIO_MAX_FALLBACK_MODELS:
+            break
+    return selected
 
 
 def studio_budget(operation: str) -> tuple[int, int, int]:
@@ -37,20 +59,26 @@ def studio_budget(operation: str) -> tuple[int, int, int]:
 
 
 def studio_coding_model_client(role: str = "coding"):
-    """Build the normal provider-neutral client, then align Studio-only deadlines."""
+    """Build the normal provider-neutral client, then apply Studio-only failover."""
     client = _shared_coding_model_client(role)
     inner = getattr(client, "inner", None)
     if isinstance(inner, OpenRouterClient):
-        # Respect an explicitly tighter provider timeout, but never allow Studio's
-        # provider request to exceed the outer per-turn budget.
         inner.timeout_seconds = min(
             int(inner.timeout_seconds),
             _STUDIO_PROVIDER_TIMEOUT_SECONDS,
         )
-        # Retrying the same reasoning request up to three times can outlive the
-        # interactive run and provides no new evidence. Model fallbacks, when
-        # configured on the route, remain available after this one primary attempt.
+        # Retrying the exact same reasoning request delays useful failover. Studio
+        # instead makes one attempt per model and moves to the next configured model.
         inner.max_attempts = 1
+        inner.fallback_models = _studio_fallbacks(inner.model, inner.fallback_models)
+        inner.fallback_model = inner.fallback_models[0] if inner.fallback_models else ""
+        client.operly_studio_route = {
+            "provider": "openrouter",
+            "primary": inner.model,
+            "fallbacks": list(inner.fallback_models),
+            "attemptTimeoutSeconds": inner.timeout_seconds,
+            "attemptsPerModel": inner.max_attempts,
+        }
     return client
 
 
@@ -66,8 +94,7 @@ class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
         )
         # CapabilityCodingAgent defaults to a 240s total / 90s slice. The durable
         # runner later clamps these values to studio_budget(). Raise the instance
-        # ceilings first so that clamp can actually produce 420/600s and 195s,
-        # instead of silently collapsing the policy back to the generic defaults.
+        # ceilings first so the Studio-specific 420/600s and 195s limits are real.
         self.max_seconds = max(self.max_seconds, _STUDIO_GENERATE_MAX_SECONDS)
         self.model_slice_seconds = max(
             self.model_slice_seconds,
@@ -76,21 +103,17 @@ class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
 
 
 def apply_studio_model_latency_policy() -> None:
-    """Install the deadline hierarchy after the website runtime policy is applied."""
+    """Install the deadline/failover hierarchy after website runtime policy."""
     global _APPLIED
     if _APPLIED:
         return
 
-    # The durable Studio runner resolves these module globals when each run starts.
     agent_runs._studio_budget = studio_budget
     agent_runs.coding_model_client = studio_coding_model_client
     agent_runs.OpenCodeStyleCodingAgent = StudioLatencyAwareCodingAgent
 
-    # Keep the policy source aligned so a later explicit runtime-policy application
-    # cannot silently restore the old 75/90 second model slices.
     runtime_policy._studio_budget = studio_budget
 
-    # Legacy direct source endpoints use the same provider-neutral coding boundary.
     source_agent.coding_model_client = studio_coding_model_client
     source_agent.OpenCodeStyleCodingAgent = StudioLatencyAwareCodingAgent
 
