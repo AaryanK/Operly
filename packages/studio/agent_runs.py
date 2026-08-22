@@ -43,6 +43,7 @@ TERMINAL_STATES = {"succeeded", "failed", "needs_input"}
 _TASKS: set[asyncio.Task] = set()
 _STUDIO_CAPABILITY_LIMIT = 12
 _STUDIO_SOURCE_CONTEXT_CHARS = 48_000
+_STUDIO_SPEC_TARGET_CHARS = 74_000
 _STOP_TERMS = {
     "about", "after", "again", "also", "and", "are", "build", "change", "current",
     "edit", "for", "from", "have", "into", "make", "page", "please", "site", "that",
@@ -140,8 +141,8 @@ def _relevant_studio_capabilities(
     limit: int = _STUDIO_CAPABILITY_LIMIT,
 ) -> list[dict[str, Any]]:
     """Select context, not actions: keep Studio's model packet relevant and bounded."""
-    if len(capabilities) <= limit:
-        return list(capabilities)
+    if not capabilities:
+        return []
     terms = _task_terms(task, context)
     studio_bias = {"asset", "business", "contact", "form", "image", "lead", "presence", "public", "website"}
     ranked: list[tuple[int, int, dict[str, Any]]] = []
@@ -159,7 +160,8 @@ def _relevant_studio_capabilities(
             elif term in searchable:
                 score += 1
         score += sum(1 for term in studio_bias if term in searchable)
-        ranked.append((score, -index, item))
+        if score > 0:
+            ranked.append((score, -index, item))
     ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
     return [item for _, _, item in ranked[: max(1, min(limit, 24))]]
 
@@ -203,16 +205,17 @@ def _source_priority(path: str) -> tuple[int, str]:
 
 def _source_working_set(files, *, char_limit: int = _STUDIO_SOURCE_CONTEXT_CHARS) -> tuple[str, list[str], list[str]]:
     """Inline complete small-site files so the model can start coding on turn one."""
-    budget = max(4_000, int(char_limit))
+    budget = max(0, int(char_limit))
     complete: list[dict[str, str]] = []
     complete_paths: list[str] = []
     omitted_paths: list[str] = []
-    used = 1200
+    fixed_overhead = 1400
+    used = fixed_overhead
     for item in sorted(files, key=lambda value: _source_priority(str(value.path))):
         path = str(item.path)
         text = item.content.decode("utf-8", errors="strict")
-        encoded_size = len(path) + len(text) + 80
-        if used + encoded_size <= budget:
+        encoded_size = len(json.dumps({"path": path, "content": text}, ensure_ascii=False, separators=(",", ":"))) + 2
+        if budget >= fixed_overhead and used + encoded_size <= budget:
             complete.append({"path": path, "content": text})
             complete_paths.append(path)
             used += encoded_size
@@ -476,12 +479,15 @@ STUDIO WEBSITE OVERRIDES
     preloaded_paths: list[str] = []
     omitted_paths: list[str] = []
     if files:
-        remaining = max(4_000, 78_000 - len(specification))
-        source_packet, preloaded_paths, omitted_paths = _source_working_set(
-            files,
-            char_limit=min(_STUDIO_SOURCE_CONTEXT_CHARS, remaining),
-        )
-        specification += source_packet
+        remaining = max(0, _STUDIO_SPEC_TARGET_CHARS - len(specification))
+        if remaining >= 1_400:
+            source_packet, preloaded_paths, omitted_paths = _source_working_set(
+                files,
+                char_limit=min(_STUDIO_SOURCE_CONTEXT_CHARS, remaining),
+            )
+            specification += source_packet
+        else:
+            omitted_paths = [str(item.path) for item in files]
         await progress(
             {
                 "phase": "context",
