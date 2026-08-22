@@ -1,7 +1,6 @@
 /* Canonical authenticated-workspace coherence layer.
-   Loaded after legacy shell/overhaul CSS so old light/green theme rules cannot
-   produce unreadable mixed-theme screens. This file owns visual tokens only;
-   feature-specific stylesheets continue to own layout/behavior. */
+   Loaded through regression.css with higher dashboard specificity so legacy
+   light/green runtime styles cannot win the cascade. */
 
 #dashboard {
   --shell-bg: #070914;
@@ -24,12 +23,12 @@
 #dashboard .app-main,
 #dashboard .content,
 #dashboard .operly-workspace-shell,
-#dashboard .operly-shell-main {
+#dashboard .operly-shell-main,
+#dashboard .topbar {
   background-color: var(--shell-bg) !important;
   color: var(--shell-ink) !important;
 }
 
-/* Never inherit the legacy green/light typography into the authenticated shell. */
 #dashboard h1,
 #dashboard h2,
 #dashboard h3,
@@ -41,6 +40,7 @@
 #dashboard legend,
 #dashboard label {
   color: var(--shell-ink) !important;
+  -webkit-text-fill-color: currentColor;
 }
 
 #dashboard p,
@@ -53,8 +53,6 @@
   color: var(--shell-muted) !important;
 }
 
-/* Normalize every common shell surface. The older frontend-overhaul stylesheet
-   paints many of these pure white and sets dark-green text with !important. */
 #dashboard .operly-shell-card,
 #dashboard .operly-shell-panel,
 #dashboard .operly-shell-hero,
@@ -128,6 +126,7 @@
 #dashboard button.primary {
   background: linear-gradient(135deg, #7297ff, #8e76ff) !important;
   color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
   border-color: transparent !important;
 }
 
@@ -136,6 +135,7 @@
 #dashboard button.secondary {
   background: var(--shell-surface-3) !important;
   color: var(--shell-ink) !important;
+  -webkit-text-fill-color: var(--shell-ink) !important;
   border-color: var(--shell-border) !important;
 }
 
@@ -147,7 +147,6 @@
   border-color: var(--shell-border) !important;
 }
 
-/* Explicitly cover the screens that exposed low-contrast headings. */
 #dashboard .operly-shell-hero h1,
 #dashboard .operly-shell-hero h2,
 #dashboard .operly-shell-hero h3,
@@ -164,9 +163,24 @@
   -webkit-text-fill-color: #f8f9ff !important;
 }
 
-/* Mobile: the desktop section navigation becomes a real off-canvas drawer;
-   it must never disappear just because the bottom workspace rail exists. */
+/* Keep legacy Studio controls readable when they appear inside the dark shell. */
+#dashboard .studio-toolbar,
+#dashboard .studio-toolbar .button,
+#dashboard .layer-button {
+  color: var(--shell-ink) !important;
+  -webkit-text-fill-color: var(--shell-ink) !important;
+}
+#dashboard .studio-toolbar .button,
+#dashboard .layer-button {
+  background: var(--shell-surface-2) !important;
+  border-color: var(--shell-border) !important;
+}
+
+/* Mobile navigation. Both the original #sidebar and the newer workspace section
+   navigation become off-canvas drawers. The bottom rail is not a replacement for
+   Home/CRM/Operations/Activity/Presence/Solutions/Plugins/MCP navigation. */
 @media (max-width: 760px) {
+  #dashboard .sidebar,
   #dashboard .operly-section-nav {
     display: flex !important;
     position: fixed !important;
@@ -174,22 +188,38 @@
     left: 0;
     bottom: 0;
     z-index: 1200;
-    width: min(86vw, 320px);
+    width: min(86vw, 320px) !important;
     max-width: 320px;
+    height: 100dvh;
     padding: max(18px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom));
     flex-direction: column;
     overflow-y: auto;
     background: #0b1020 !important;
+    color: var(--shell-ink) !important;
     border-right: 1px solid var(--shell-border) !important;
-    transform: translateX(-105%);
+    transform: translateX(-105%) !important;
     transition: transform .2s ease;
     box-shadow: 22px 0 50px rgba(0,0,0,.42);
   }
 
+  #dashboard .sidebar.open,
+  body.mobile-nav-open #dashboard .sidebar,
   #dashboard.mobile-nav-open .operly-section-nav,
   #dashboard .operly-section-nav.mobile-open,
   #dashboard .operly-section-nav.open {
-    transform: translateX(0);
+    transform: translateX(0) !important;
+  }
+
+  #dashboard .sidebar nav,
+  #dashboard .operly-section-nav {
+    gap: 6px;
+  }
+
+  #dashboard .sidebar nav button,
+  #dashboard .operly-section-nav button,
+  #dashboard .operly-section-nav a {
+    color: var(--shell-ink) !important;
+    -webkit-text-fill-color: var(--shell-ink) !important;
   }
 
   #dashboard .mobile-nav-toggle {
@@ -198,20 +228,23 @@
     min-width: 44px;
     min-height: 44px;
     color: var(--shell-ink) !important;
+    -webkit-text-fill-color: var(--shell-ink) !important;
     background: var(--shell-surface-2) !important;
     border: 1px solid var(--shell-border) !important;
   }
 
   #dashboard .mobile-nav-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 1150;
-    border: 0;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 1150 !important;
+    border: 0 !important;
     background: rgba(2, 5, 14, .68) !important;
     backdrop-filter: blur(3px);
-    display: none;
+    display: none !important;
   }
 
+  #dashboard .mobile-nav-backdrop.open,
+  body.mobile-nav-open #dashboard .mobile-nav-backdrop,
   #dashboard.mobile-nav-open .mobile-nav-backdrop {
     display: block !important;
   }
