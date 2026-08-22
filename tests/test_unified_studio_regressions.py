@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -9,7 +10,13 @@ from apps.api.security_headers import SecurityHeadersMiddleware
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant
 from packages.database.schema import import_all_models
+from packages.database.studio_models import StudioProject
+from packages.database.studio_source_models import StudioAgentRun
 from packages.solutions import LifecycleStatus, SolutionService
+from packages.studio.agent_runs import run_json
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class UnifiedStudioRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -38,6 +45,41 @@ class UnifiedStudioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(solution.name, "First Website")
         self.assertEqual(solution.lifecycle_status, LifecycleStatus.PREVIEW_READY)
         self.assertEqual(solution.preview_state, "ready")
+
+    async def test_studio_run_json_always_exposes_polling_identity_and_state(self):
+        project = StudioProject(
+            tenant_id=self.tenant.id,
+            name="Run contract",
+            slug="run-contract",
+            created_by=self.user.id,
+        )
+        self.db.add(project)
+        await self.db.flush()
+        run = StudioAgentRun(
+            tenant_id=self.tenant.id,
+            project_id=project.id,
+            operation="edit",
+            instruction="fix it",
+            state="queued",
+            created_by=self.user.id,
+        )
+        self.db.add(run)
+        await self.db.flush()
+
+        payload = await run_json(self.db, run)
+
+        self.assertEqual(payload["id"], run.id)
+        self.assertEqual(payload["state"], "queued")
+        self.assertEqual(payload["operation"], "edit")
+        self.assertIsInstance(payload["events"], list)
+
+    def test_browser_bridge_recovers_empty_studio_run_responses(self):
+        source = (ROOT / "apps" / "web" / "static" / "studio-ui-bridge.js").read_text("utf-8")
+
+        self.assertIn("studioRunSafeApi", source)
+        self.assertIn("/source/runs/latest", source)
+        self.assertIn("latest.id && latest.state", source)
+        self.assertIn("Studio source agent did not return a usable run record", source)
 
     async def test_solution_preview_redirect_is_same_origin_frameable(self):
         middleware = SecurityHeadersMiddleware(lambda scope, receive, send: None)
