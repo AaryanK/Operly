@@ -22,6 +22,27 @@
   function write(value){try{localStorage.setItem(KEY,value?"1":"0")}catch{}}
   function toggle(){const dashboard=$("#dashboard.workspace-shell-ready");if(!dashboard)return;const next=!dashboard.classList.contains("operly-nav-collapsed");write(next);apply(next)}
 
+  function ensureAuthenticatedScreenBoundary(){
+    const dashboard=$("#dashboard");
+    if(!dashboard||dashboard.classList.contains("hidden"))return false;
+    document.querySelectorAll(".screen").forEach(screen=>{
+      const active=screen===dashboard;
+      screen.classList.toggle("hidden",!active);
+      if(active){
+        screen.style.removeProperty("display");
+        screen.removeAttribute("aria-hidden");
+      }else{
+        // Several legacy/cosmetic stylesheets can style auth screens with higher
+        // specificity than the generic .hidden rule. Once the authenticated shell
+        // is visible, make the screen boundary explicit so no signed-out surface can
+        // remain painted over a valid session.
+        screen.style.setProperty("display","none","important");
+        screen.setAttribute("aria-hidden","true");
+      }
+    });
+    return true;
+  }
+
   function ensureSideToggle(){
     const head=$(".operly-workspace-head");
     if(!head)return false;
@@ -57,6 +78,7 @@
   }
 
   function mount(){
+    ensureAuthenticatedScreenBoundary();
     const dashboard=$("#dashboard.workspace-shell-ready");
     if(!dashboard)return false;
     ensureSideToggle();
@@ -115,6 +137,8 @@
   // The workspace shell and rail are intentionally re-renderable. Keep this
   // observer alive so collapse/settings controls are restored after workspace or
   // navigation refreshes instead of disappearing after the first successful mount.
+  // Observe class transitions too: authentication reveals #dashboard by removing
+  // .hidden, and that transition must immediately enforce the signed-in screen boundary.
   const observer=new MutationObserver(()=>mount());
-  observer.observe(document.documentElement,{childList:true,subtree:true});
+  observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["class"]});
 })();
