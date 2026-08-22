@@ -1,4 +1,8 @@
-"""Provider-neutral role routing for OPERLY's model portfolio."""
+"""Provider-neutral role routing for OPERLY's model portfolio.
+
+Set OPERLY_MODEL_PROVIDER + OPERLY_MODEL_DEFAULT to move every role to another
+registered provider/model. Role-specific variables override the global route.
+"""
 from __future__ import annotations
 
 import os
