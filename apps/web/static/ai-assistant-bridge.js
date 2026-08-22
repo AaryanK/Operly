@@ -132,3 +132,37 @@ if (!document.querySelector('script[data-operly-unified-solution-studio]')) {
   script.dataset.operlyUnifiedSolutionStudio = "1";
   document.head.append(script);
 }
+
+// Cosmic product system: one brand language across every Operly workspace page,
+// plus a persistent user-controlled collapse state for the section navigation.
+if (!document.querySelector('link[data-operly-cosmic-product]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/operly-cosmic.css?v=20260822-cosmic-v1";
+  link.dataset.operlyCosmicProduct = "1";
+  document.head.append(link);
+}
+if (!document.querySelector('script[data-operly-cosmic-product]')) {
+  const script = document.createElement("script");
+  script.src = "/static/operly-cosmic.js?v=20260822-cosmic-v1";
+  script.defer = true;
+  script.dataset.operlyCosmicProduct = "1";
+  document.head.append(script);
+}
+
+// Studio product-quality layer: readable controls, fit-to-window canvas,
+// persistent command bar, contextual quick actions, and collapsible editor panes.
+if (!document.querySelector('link[data-operly-studio-product]')) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/static/studio-product-overhaul.css?v=20260822-studio-product-v1";
+  link.dataset.operlyStudioProduct = "1";
+  document.head.append(link);
+}
+if (!document.querySelector('script[data-operly-studio-product]')) {
+  const script = document.createElement("script");
+  script.src = "/static/studio-product-overhaul.js?v=20260822-studio-product-v1";
+  script.defer = true;
+  script.dataset.operlyStudioProduct = "1";
+  document.head.append(script);
+}

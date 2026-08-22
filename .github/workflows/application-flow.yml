@@ -17,6 +17,8 @@ on:
       - "packages/mcp/**"
       - "packages/plugins/**"
       - "packages/security/**"
+      - "packages/solutions/**"
+      - "packages/studio/**"
       - "packages/workspace/**"
       - "requirements.txt"
       - "Dockerfile"
@@ -30,6 +32,9 @@ on:
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
       - "tests/test_google_workspace_capabilities.py"
+      - "tests/test_solutions.py"
+      - "tests/test_studio.py"
+      - "tests/test_studio_design_quality.py"
       - "tests/test_unified_application_flow.py"
       - "tests/test_workspace_security_boundary.py"
       - "tests/test_principal_access_architecture.py"
@@ -118,6 +123,11 @@ jobs:
           packages/capabilities/reminder_provider.py
           packages/capabilities/solution_provider.py
           packages/capabilities/website_provider.py
+          packages/solutions/service.py
+          packages/studio/schema.py
+          packages/studio/design.py
+          packages/studio/renderer.py
+          packages/studio/ai.py
       - name: Check browser JavaScript syntax
         run: |
           node --check apps/web/static/app.js
@@ -125,6 +135,9 @@ jobs:
           node --check apps/web/static/ai-assistant-bridge.js
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
+          node --check apps/web/static/operly-cosmic.js
+          node --check apps/web/static/studio-product-overhaul.js
+          node --check apps/web/static/unified-solution-studio.js
           node --check apps/web/static/settings-scopes.js
           node --check apps/web/static/time-sync.js
       - name: Run application-flow tests
@@ -145,6 +158,9 @@ jobs:
           tests/test_company_intelligence.py
           tests/test_company_operating_system.py
           tests/test_google_workspace_capabilities.py
+          tests/test_solutions.py
+          tests/test_studio.py
+          tests/test_studio_design_quality.py
           tests/test_unified_application_flow.py
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py

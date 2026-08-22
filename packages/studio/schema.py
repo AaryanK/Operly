@@ -6,22 +6,31 @@ class Strict(BaseModel): model_config=ConfigDict(extra="forbid",str_strip_whites
 Align=Literal["left","center","right"]
 class SEO(Strict): title:str=Field(max_length=120); description:str=Field(max_length=320)
 class NavItem(Strict): label:str=Field(max_length=80); target:str=Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
-class NavbarProps(Strict): site_title:str=Field(max_length=120); navigation:list[NavItem]=Field(default_factory=list,max_length=20); logo_asset_id:str|None=None
+class NavbarProps(Strict):
+    site_title:str=Field(max_length=120); navigation:list[NavItem]=Field(default_factory=list,max_length=20); logo_asset_id:str|None=None
+    variant:Literal["minimal","floating","solid"]="floating"
 class HeroProps(Strict):
     eyebrow:str=""; headline:str=Field(max_length=240); description:str=Field(default="",max_length=1200); primary_button_text:str="Contact us"; primary_button_target:str="contact"; secondary_button_text:str=""; secondary_button_target:str=""; image_asset_id:str|None=None; alignment:Align="left"
+    variant:Literal["split","centered","spotlight","editorial","immersive"]="split"
 class TextProps(Strict): heading:str=Field(max_length=240); body:str=Field(max_length=6000); alignment:Align="left"
 class ImageProps(Strict): asset_id:str|None=None; url:HttpUrl|None=None; alt_text:str=Field(max_length=300); caption:str=Field(default="",max_length=500); aspect_ratio:Literal["square","landscape","portrait","wide"]="landscape"
 class Item(Strict): title:str=Field(max_length=180); description:str=Field(max_length=800); image_asset_id:str|None=None
-class GridProps(Strict): heading:str=Field(max_length=240); description:str=Field(default="",max_length=1200); items:list[Item]=Field(default_factory=list,max_length=24)
+class GridProps(Strict):
+    heading:str=Field(max_length=240); description:str=Field(default="",max_length=1200); items:list[Item]=Field(default_factory=list,max_length=24)
+    variant:Literal["cards","bento","minimal","media","steps"]="cards"
 class ProductGridProps(GridProps): source_mode:Literal["manual","operly_catalog"]="manual"; catalog_item_ids:list[str]=Field(default_factory=list,max_length=24)
 class Stat(Strict): value:str=Field(max_length=40); label:str=Field(max_length=100)
-class StatsProps(Strict): heading:str=""; items:list[Stat]=Field(max_length=12)
+class StatsProps(Strict): heading:str=""; items:list[Stat]=Field(max_length=12); variant:Literal["strip","cards"]="strip"
 class TestimonialProps(Strict): quote:str=Field(max_length=1500); author:str=Field(max_length=150); role:str=""
 class FAQItem(Strict): question:str=Field(max_length=300); answer:str=Field(max_length=1500)
 class FAQProps(Strict): heading:str=Field(max_length=240); items:list[FAQItem]=Field(max_length=20)
-class CTAProps(Strict): heading:str=Field(max_length=240); description:str=Field(default="",max_length=1200); button_text:str=Field(max_length=80); button_target:str=Field(max_length=80)
+class CTAProps(Strict):
+    heading:str=Field(max_length=240); description:str=Field(default="",max_length=1200); button_text:str=Field(max_length=80); button_target:str=Field(max_length=80)
+    variant:Literal["banner","split","spotlight"]="banner"
 class FormProps(Strict): heading:str=Field(max_length=240); description:str=""; form_key:str=Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,79}$"); submit_button_text:str="Submit"; success_message:str="Thank you."
-class FooterProps(Strict): business_name:str=Field(max_length=200); public_contact:str=""; navigation:list[NavItem]=Field(default_factory=list,max_length=20); copyright_text:str=""
+class FooterProps(Strict):
+    business_name:str=Field(max_length=200); public_contact:str=""; navigation:list[NavItem]=Field(default_factory=list,max_length=20); copyright_text:str=""
+    variant:Literal["compact","columns"]="columns"
 
 def section(name, props):
     return type(name,(Strict,),{"__annotations__":{"id":str,"type":Literal[name.removesuffix('Section').lower()],"enabled":bool,"props":props},"enabled":True})
@@ -41,7 +50,12 @@ class ContactSection(Strict): id:str; type:Literal["contact_form"]; enabled:bool
 class FooterSection(Strict): id:str; type:Literal["footer"]; enabled:bool=True; props:FooterProps
 Section=Annotated[Union[NavbarSection,HeroSection,TextSection,ImageSection,StatsSection,FeatureSection,ProductSection,ServiceSection,GallerySection,TestimonialSection,FAQSection,CTASection,ContactSection,FooterSection],Field(discriminator="type")]
 class Theme(Strict):
-    primary:str="#185d43"; accent:str="#b9ee72"; background:str="#ffffff"; surface:str="#f3f5f1"; text:str="#13231c"; muted_text:str="#6e7b74"; border_radius:Literal["none","small","medium","large"]="medium"; font_family:Literal["system","serif"]="system"
+    primary:str="#185d43"; accent:str="#b9ee72"; background:str="#ffffff"; surface:str="#f3f5f1"; text:str="#13231c"; muted_text:str="#6e7b74"
+    border_radius:Literal["none","small","medium","large"]="medium"
+    font_family:Literal["system","serif","geometric"]="system"
+    mode:Literal["light","dark"]="light"
+    visual_style:Literal["minimal","editorial","luxury","playful","cosmic","bold"]="minimal"
+    container:Literal["compact","standard","wide"]="standard"
     @field_validator("primary","accent","background","surface","text","muted_text")
     @classmethod
     def color(cls,v):
@@ -62,4 +76,5 @@ class SiteSchema(Strict):
         return self
 
 def blank_site(title:str, description:str="") -> SiteSchema:
-    return SiteSchema.model_validate({"site":{"title":title,"description":description,"seo":{"title":title,"description":description[:320]}},"theme":{},"pages":[{"id":"home","slug":"home","title":"Home","seo":{"title":title,"description":description[:320]},"sections":[{"id":"hero","type":"hero","props":{"headline":title,"description":description}}]}]})
+    from packages.studio.design import compose_initial_site
+    return compose_initial_site(title,description)

@@ -1,0 +1,141 @@
+/* Operly cosmic product system — derived from the blue/violet/gold orbital brand mark. */
+:root{
+  --op-space-0:#050713;--op-space-1:#090d1a;--op-space-2:#0f1527;--op-space-3:#151e35;
+  --op-panel:rgba(16,23,42,.86);--op-panel-solid:#11182b;--op-panel-hover:#18223a;
+  --op-line:rgba(151,169,255,.15);--op-line-strong:rgba(128,148,255,.28);
+  --op-text:#f6f8ff;--op-muted:#a5afc5;--op-dim:#758099;
+  --op-blue:#4d91ff;--op-violet:#7c68ff;--op-gold:#ffb75e;--op-cyan:#64d9ff;
+  --op-good:#5ee0ad;--op-danger:#ff7d8b;
+  --op-glow:0 0 0 1px rgba(106,119,255,.08),0 22px 70px rgba(3,8,30,.38);
+  --op-radius:16px;
+}
+html,body{background:var(--op-space-0)!important;color:var(--op-text)}
+body{color-scheme:dark}
+#dashboard.workspace-shell-ready{
+  grid-template-columns:74px 252px minmax(0,1fr)!important;
+  background:
+    radial-gradient(900px 520px at 78% -10%,rgba(74,102,255,.16),transparent 62%),
+    radial-gradient(620px 420px at 22% 10%,rgba(255,166,84,.055),transparent 65%),
+    var(--op-space-0)!important;
+  transition:grid-template-columns .2s ease;
+}
+#dashboard.workspace-shell-ready.operly-nav-collapsed{grid-template-columns:74px 72px minmax(0,1fr)!important}
+#dashboard.workspace-shell-ready>.app-main{background:transparent!important;color:var(--op-text)!important}
+#dashboard.workspace-shell-ready .content{max-width:1500px!important;color:var(--op-text)!important}
+#dashboard.workspace-shell-ready .topbar{
+  background:rgba(6,9,20,.78)!important;border-bottom:1px solid var(--op-line)!important;
+  color:var(--op-text)!important;backdrop-filter:blur(22px) saturate(130%);
+}
+#dashboard.workspace-shell-ready .topbar input,#dashboard.workspace-shell-ready .topbar .search{
+  background:rgba(255,255,255,.045)!important;border-color:var(--op-line)!important;color:var(--op-text)!important;
+}
+
+/* Workspace rail */
+.operly-workspace-rail{
+  background:linear-gradient(180deg,#050713,#070a16)!important;border-right:1px solid var(--op-line)!important;
+}
+.operly-rail-logo,.operly-rail-item,.operly-rail-add,.operly-rail-account{
+  border:1px solid transparent!important;background:rgba(255,255,255,.055)!important;color:#e9edff!important;
+  box-shadow:none!important;transition:transform .16s ease,border-color .16s ease,background .16s ease,box-shadow .16s ease!important;
+}
+.operly-rail-logo{
+  color:#070915!important;background:linear-gradient(135deg,#7b6cff 0%,#55b7ff 48%,#ffc067 100%)!important;
+  box-shadow:0 8px 28px rgba(88,112,255,.24)!important;
+}
+.operly-rail-item:hover,.operly-rail-item.active{transform:translateY(-1px);border-color:var(--op-line-strong)!important;background:rgba(105,114,255,.15)!important}
+.operly-rail-item.active{color:#fff!important;box-shadow:0 0 24px rgba(77,145,255,.16)!important}
+.operly-rail-item.active::before{background:linear-gradient(#58a2ff,#ffbb68)!important}
+.operly-rail-add{color:var(--op-cyan)!important}
+.operly-rail-separator{background:var(--op-line)!important}
+
+/* Collapsible section navigation */
+.operly-section-nav{
+  background:linear-gradient(180deg,rgba(12,17,31,.98),rgba(7,11,22,.98))!important;
+  border-right:1px solid var(--op-line)!important;color:var(--op-text)!important;
+  box-shadow:12px 0 40px rgba(0,0,0,.13);
+}
+.operly-workspace-head{border-bottom:1px solid var(--op-line)!important;min-height:76px!important;padding:14px 13px!important}
+.operly-workspace-head strong{font-size:14px!important;color:#fff}.operly-workspace-head small{color:var(--op-muted)!important}
+.operly-side-toggle{
+  width:34px;height:34px;display:grid;place-items:center;flex:none;border:1px solid var(--op-line)!important;border-radius:10px;
+  background:rgba(255,255,255,.045)!important;color:var(--op-muted)!important;cursor:pointer;font:700 16px/1 inherit;
+}
+.operly-side-toggle:hover{color:#fff!important;background:rgba(102,121,255,.13)!important;border-color:var(--op-line-strong)!important}
+.operly-nav-group{color:#69758e!important;font-size:10px!important}.operly-nav-item{min-height:42px!important;color:#adb6ca!important;border:1px solid transparent!important}
+.operly-nav-item:hover{background:rgba(105,124,255,.075)!important;color:#fff!important;border-color:rgba(128,148,255,.08)!important}
+.operly-nav-item.active{background:linear-gradient(90deg,rgba(85,117,255,.18),rgba(117,87,255,.08))!important;color:#fff!important;border-color:rgba(116,135,255,.13)!important}
+.operly-nav-icon{color:#7f8ca7!important}.operly-nav-item.active .operly-nav-icon{color:#73b7ff!important;text-shadow:0 0 18px rgba(74,153,255,.45)}
+.operly-nav-pill{color:var(--op-gold)!important}.operly-nav-footer{background:rgba(5,8,17,.78)!important;border-top:1px solid var(--op-line)!important}
+.operly-user-avatar{background:linear-gradient(135deg,rgba(80,144,255,.22),rgba(255,183,94,.12))!important;border:1px solid var(--op-line)!important;color:#fff}
+.operly-user-meta small,.operly-user-menu{color:var(--op-muted)!important}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-section-nav{overflow:visible}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-workspace-head{padding:14px 10px;justify-content:center}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-workspace-head>button:not(.operly-side-toggle),
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-head-caret,
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-group,
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-item>span:not(.operly-nav-icon),
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-pill,
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-user-meta,
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-user-menu{display:none!important}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-side-toggle{transform:rotate(180deg)}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-scroll{padding:10px 8px}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-item{justify-content:center;padding:0!important}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-icon{width:auto;font-size:16px}
+#dashboard.workspace-shell-ready.operly-nav-collapsed .operly-nav-footer{display:flex;justify-content:center;padding:10px 8px}
+
+/* Shared page language */
+#dashboard.workspace-shell-ready .operly-shell-page{gap:20px!important}
+#dashboard.workspace-shell-ready .operly-shell-hero{
+  min-height:126px!important;padding:18px 22px!important;border:1px solid var(--op-line)!important;border-radius:22px!important;
+  background:
+    radial-gradient(500px 180px at 82% 0%,rgba(83,104,255,.18),transparent 70%),
+    linear-gradient(135deg,rgba(19,28,52,.95),rgba(10,15,29,.95))!important;
+  box-shadow:var(--op-glow)!important;
+}
+#dashboard.workspace-shell-ready .operly-shell-hero h2{color:#fff!important;font-size:clamp(30px,3vw,42px)!important;letter-spacing:-.045em!important}
+#dashboard.workspace-shell-ready .operly-shell-hero p{color:var(--op-muted)!important;font-size:13.5px!important}
+#dashboard.workspace-shell-ready .operly-shell-eyebrow{color:#8fb9ff!important}
+.operly-shell-card,.op-metric,.op-brief-card,.op-plugin-card,.operly-shell-row{
+  background:linear-gradient(180deg,rgba(17,24,43,.93),rgba(11,16,30,.93))!important;
+  border-color:var(--op-line)!important;color:var(--op-text)!important;box-shadow:var(--op-glow)!important;
+}
+.operly-shell-card h3,.operly-shell-card strong,.op-metric strong,.op-plugin-card h3,.operly-shell-row strong{color:#f6f8ff!important}
+.operly-shell-card p,.operly-shell-card small,.operly-shell-row small,.op-metric>span,.op-metric>small,.op-plugin-card p,.op-section-copy{color:var(--op-muted)!important}
+.operly-shell-row:hover,.op-plugin-card:hover{border-color:var(--op-line-strong)!important;background:linear-gradient(180deg,rgba(24,34,59,.96),rgba(13,19,35,.96))!important}
+.op-count-pill,.operly-status,.operly-permission{background:rgba(100,122,255,.1)!important;border-color:var(--op-line)!important;color:#b9c7ff!important}
+.op-contact-avatar,.op-plugin-icon,.op-zero-icon{background:linear-gradient(135deg,rgba(77,145,255,.17),rgba(255,183,94,.11))!important;color:#9ec8ff!important;border-color:var(--op-line)!important}
+.op-zero-state,.operly-page-loading,.op-error-state{color:var(--op-muted)!important}.op-zero-state strong,.op-error-state h2{color:#fff!important}
+.op-setup-banner{background:linear-gradient(120deg,#101a37,#19275a 58%,#49365b)!important;border:1px solid rgba(121,145,255,.2)!important;box-shadow:var(--op-glow)!important}
+.op-setup-banner p{color:#c0c9dc!important}.op-setup-banner .operly-shell-eyebrow{color:#ffd28d!important}
+.op-alert-row,.op-mini-row,.op-memory-row,.op-pulse-list>div{border-color:var(--op-line)!important}
+
+/* Controls */
+.operly-shell-button,.button,#dashboard.workspace-shell-ready button:not(.operly-rail-item):not(.operly-rail-logo):not(.operly-rail-add){font-size:13px}
+.operly-shell-button{min-height:38px!important;border-color:var(--op-line)!important;background:rgba(255,255,255,.055)!important;color:#edf1ff!important}
+.operly-shell-button:hover{background:rgba(95,119,255,.13)!important;border-color:var(--op-line-strong)!important}
+.operly-shell-button.primary,.operly-shell-button.accent{
+  background:linear-gradient(135deg,#5e72ff,#795eff)!important;border-color:rgba(146,153,255,.35)!important;color:#fff!important;
+  box-shadow:0 8px 26px rgba(87,91,255,.2)!important;
+}
+.operly-shell-input,.operly-shell-select,#dashboard.workspace-shell-ready input,#dashboard.workspace-shell-ready textarea,#dashboard.workspace-shell-ready select{
+  background:#0b1121!important;border-color:var(--op-line)!important;color:var(--op-text)!important;outline:none;
+}
+#dashboard.workspace-shell-ready input:focus,#dashboard.workspace-shell-ready textarea:focus,#dashboard.workspace-shell-ready select:focus{
+  border-color:rgba(92,154,255,.65)!important;box-shadow:0 0 0 3px rgba(77,145,255,.11)!important;
+}
+.operly-shell-modal{background:#0d1426!important;color:var(--op-text)!important;border:1px solid var(--op-line-strong)!important;box-shadow:0 36px 120px rgba(0,0,0,.56)!important}
+.operly-shell-modal::backdrop{background:rgba(2,4,11,.72)!important}.operly-shell-modal-body p{color:var(--op-muted)!important}
+.op-modal-heading button{background:rgba(255,255,255,.055)!important;color:var(--op-muted)!important}
+
+/* Tables / long content surfaces */
+#dashboard.workspace-shell-ready table{background:var(--op-panel)!important;color:var(--op-text)!important;border-color:var(--op-line)!important}
+#dashboard.workspace-shell-ready th,#dashboard.workspace-shell-ready td{border-color:var(--op-line)!important}
+#dashboard.workspace-shell-ready a{color:#86baff}
+#dashboard.workspace-shell-ready hr{border-color:var(--op-line)}
+
+@media(max-width:1080px){#dashboard.workspace-shell-ready{grid-template-columns:66px 220px minmax(0,1fr)!important}#dashboard.workspace-shell-ready.operly-nav-collapsed{grid-template-columns:66px 66px minmax(0,1fr)!important}}
+@media(max-width:760px){
+  #dashboard.workspace-shell-ready{display:block!important}.operly-side-toggle{display:none!important}
+  #dashboard.workspace-shell-ready .content{padding:16px!important}.operly-workspace-rail{background:rgba(5,7,19,.96)!important;backdrop-filter:blur(18px)}
+}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation-duration:.001ms!important}}
