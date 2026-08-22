@@ -6,7 +6,14 @@ from .contracts import (
     RuntimeValidation,
 )
 from .registry import RuntimeRegistry, default_runtime_registry
-from .builtins import PythonStdlibWebRuntime, StaticWebRuntime, register_builtin_runtimes
+
+
+def register_builtin_runtimes(registry=None):
+    """Lazy bootstrap avoids a coding-harness package import cycle."""
+    from .builtins import register_builtin_runtimes as _register
+
+    return _register(registry)
+
 
 __all__ = [
     "DependencyPolicy",
@@ -16,7 +23,5 @@ __all__ = [
     "RuntimeValidation",
     "RuntimeRegistry",
     "default_runtime_registry",
-    "PythonStdlibWebRuntime",
-    "StaticWebRuntime",
     "register_builtin_runtimes",
 ]
