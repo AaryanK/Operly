@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.company.events import append_event
 from packages.company.intelligence import profile_payload
 from packages.database.application_builder_models import ApplicationVersion, ManagedApplication
-from packages.database.custom_software_models import GeneratedProject, RunnerBuildRecord, RunnerPreviewRecord
+from packages.database.custom_software_models import GeneratedProject, GeneratedSourceBundle, RunnerBuildRecord, RunnerPreviewRecord
 from packages.database.models import Tenant
 from packages.database.product_models import CompanyProfile, SolutionDeployment, SolutionRecord
 from packages.database.studio_models import StudioDeployment, StudioProject, StudioVersion
@@ -117,6 +117,15 @@ class SolutionService:
         if row.runtime_type==RuntimeType.MANAGED_APP:
             items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all()
             return [{"id":x.id,"version":x.version_number,"status":"active" if x.active else "superseded","summary":x.summary,"created_at":x.created_at.isoformat()} for x in items]
+        if runtime.plan_id:
+            sources=(await db.scalars(select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id==tenant_id,GeneratedSourceBundle.plan_id==runtime.plan_id).order_by(desc(GeneratedSourceBundle.source_version)))).all()
+            if sources:
+                output=[]
+                for index,item in enumerate(sources):
+                    try:provenance=json.loads(item.provenance_json or "{}")
+                    except Exception:provenance={}
+                    output.append({"id":item.id,"version":item.source_version,"kind":"source","status":"current" if index==0 else "superseded","summary":provenance.get("summary") or provenance.get("sourceOperation") or "Generated source","created_at":item.created_at.isoformat()})
+                return output
         return [{"id":f"{runtime.id}:{runtime.version}","version":runtime.version,"status":"current","summary":"Current generated version","created_at":runtime.created_at.isoformat()}]
 
     async def create_presence(self,db,tenant_id,user_id,name=None):
