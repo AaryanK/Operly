@@ -23,14 +23,15 @@ from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
+from packages.plugins.runtime import default_plugin_runtime
 
 
 def default_registry(enabled_plugins=None) -> CapabilityRegistry:
-    """Build the current built-in registry during manifest-runtime migration.
+    """Build the canonical capability registry.
 
-    This remains bootstrap code, not the long-term extension mechanism. Discovery
-    capabilities are registered against the finished registry so agents can search
-    capability metadata without receiving every schema up front.
+    Built-ins are still explicit bootstrap entries during migration. Installed
+    plugin contributions are appended from PluginRuntime, so new external plugins
+    no longer require edits to the agent loop or this registry factory.
     """
 
     def enabled(tenant_id, definition):
@@ -42,7 +43,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         )
 
     registry = CapabilityRegistry(enabled_resolver=enabled)
-    for provider in (
+    builtins = (
         CompanyProvider(),
         ResearchProvider(),
         OperlyAnalyticsProvider(),
@@ -65,7 +66,14 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         GmailProvider(),
         GmailDraftLifecycleProvider(),
         GoogleCalendarProvider(),
-    ):
+    )
+    for provider in builtins:
         registry.register(provider)
+
+    for provider in default_plugin_runtime().capability_providers():
+        registry.register(provider)
+
+    # Discovery is registered last and points at the completed registry so plugin
+    # contributions are immediately searchable without changing model prompts.
     registry.register(CapabilityDiscoveryProvider(registry))
     return registry
