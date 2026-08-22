@@ -20,7 +20,7 @@ from packages.database.product_models import (
     SolutionImprovementProposal,
     SolutionJob,
 )
-from packages.solutions import RuntimeType, SolutionService, SolutionType
+from packages.solutions import SolutionService, SolutionType
 from packages.solutions.operations import PresenceOperationsService, proposal_json
 from packages.solutions.production import ProductionService, job_json
 from packages.solutions.service import solution_json
@@ -96,15 +96,9 @@ async def preview_solution(
 ):
     try:
         row, runtime = await service.resolve(db, auth.tenant.id, solution_id)
+        url = await service.preview_target(db, auth.tenant.id, row, runtime)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-
-    if row.runtime_type == RuntimeType.STUDIO:
-        url = f"/api/studio/projects/{runtime.id}/preview"
-    elif row.runtime_type == RuntimeType.MANAGED_APP:
-        url = f"/apps/{runtime.id}/preview"
-    else:
-        url = f"/api/custom-software/projects/{runtime.id}/preview"
     return RedirectResponse(url, status_code=307)
 
 

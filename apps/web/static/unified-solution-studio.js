@@ -196,6 +196,7 @@
     const path=new URL(response.url,location.origin).pathname; let match;
     if((match=path.match(/^\/api\/studio\/projects\/([^/]+)\/preview$/))) S.runtime={kind:"studio",id:match[1]};
     else if((match=path.match(/^\/apps\/([^/]+)\/preview$/))) S.runtime={kind:"app",id:match[1]};
+    else if((match=path.match(/^\/api\/custom-software\/previews\/([^/]+)\/?$/))) S.runtime={kind:"generated",id:null,previewUrl:path};
     else if((match=path.match(/^\/api\/custom-software\/projects\/([^/]+)\/preview$/))) S.runtime={kind:"generated",id:match[1]};
     else S.runtime={kind:"unknown",id:null};
     return S.runtime;
@@ -213,6 +214,7 @@
     if(rt?.kind==="studio" && S.source) return `/api/studio/projects/${rt.id}/source/preview/${sourceId?`?sourceId=${encodeURIComponent(sourceId)}`:""}`;
     if(rt?.kind==="studio") return `/api/studio/projects/${rt.id}/preview`;
     if(rt?.kind==="app") return `/apps/${rt.id}/preview`;
+    if(rt?.kind==="generated" && rt.previewUrl) return rt.previewUrl;
     if(rt?.kind==="generated") return `/api/custom-software/projects/${rt.id}/preview`;
     return S.active?`/api/solutions/${S.active.id}/preview`:"about:blank";
   }
