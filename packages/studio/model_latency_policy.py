@@ -7,9 +7,10 @@ output budgets, and cross-provider failover are enforced below this module by
 """
 from __future__ import annotations
 
-from packages.coding_harness.model_client import coding_model_client as _shared_coding_model_client
-from packages.model_runtime import InferenceBudget
+from packages.coding_harness.context_window import ContextBoundCodingClient
+from packages.model_runtime import InferenceBudget, model_chat_client_for_role
 from packages.studio import agent_runs, runtime_policy, source_agent
+from packages.studio.model_trace import TracingModelChatClient, install_agent_run_trace_context
 
 _STUDIO_PROVIDER_ATTEMPT_SECONDS = 60
 _STUDIO_MODEL_SLICE_SECONDS = 195
@@ -29,8 +30,12 @@ def studio_budget(operation: str) -> tuple[int, int, int]:
 
 
 def studio_coding_model_client(role: str = "coding"):
-    """Build a normal coding model with an interactive, provider-neutral budget."""
-    return _shared_coding_model_client(
+    """Build Studio's provider-neutral coding client with durable model tracing.
+
+    ContextBoundCodingClient stays outermost so the trace wrapper observes the
+    compacted messages that are actually forwarded into ModelChatAdapter.
+    """
+    adapter = model_chat_client_for_role(
         role,
         budget=InferenceBudget(
             timeout_seconds=_STUDIO_PROVIDER_ATTEMPT_SECONDS,
@@ -39,6 +44,7 @@ def studio_coding_model_client(role: str = "coding"):
             max_output_tokens=_STUDIO_MAX_OUTPUT_TOKENS,
         ),
     )
+    return ContextBoundCodingClient(TracingModelChatClient(adapter))
 
 
 class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
@@ -59,10 +65,12 @@ class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
 
 
 def apply_studio_model_latency_policy() -> None:
-    """Install Studio deadlines without importing a concrete provider class."""
+    """Install Studio deadlines and owner-only model tracing without provider coupling."""
     global _APPLIED
     if _APPLIED:
         return
+
+    install_agent_run_trace_context()
 
     agent_runs._studio_budget = studio_budget
     agent_runs.coding_model_client = studio_coding_model_client
