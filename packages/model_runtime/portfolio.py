@@ -22,8 +22,8 @@ class ModelRoute:
 _DEFAULT_PROVIDER = "openrouter"
 _DEFAULT_MODEL = "stealth/ox-alpha"
 _DEFAULT_CODING_FALLBACKS = (
-    "openai/gpt-oss-120b:free",
     "qwen/qwen3-coder-flash",
+    "openai/gpt-oss-120b:free",
 )
 
 _DEFAULTS = {
