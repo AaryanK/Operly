@@ -105,6 +105,22 @@ class SolutionService:
         if preview:return f"/api/custom-software/previews/{preview.id}/"
         return f"/api/custom-software/projects/{runtime.id}/preview"
 
+    async def runtime_descriptor(self,db:AsyncSession,tenant_id:str,row,runtime)->dict:
+        runtime_type=RuntimeType(row.runtime_type)
+        target=await self.preview_target(db,tenant_id,row,runtime)
+        if runtime_type==RuntimeType.STUDIO:
+            return {"kind":"studio","id":runtime.id,"previewUrl":target,"editable":True}
+        if runtime_type==RuntimeType.MANAGED_APP:
+            return {"kind":"app","id":runtime.id,"previewUrl":target,"editable":True}
+        return {
+            "kind":"generated",
+            "id":runtime.id,
+            "planId":runtime.plan_id,
+            "approvedVersion":runtime.approved_plan_version,
+            "previewUrl":target,
+            "editable":bool(runtime.plan_id and runtime.approved_plan_version),
+        }
+
     async def versions(self,db,tenant_id,solution_id):
         row,runtime=await self.resolve(db,tenant_id,solution_id)
         if row.runtime_type==RuntimeType.STUDIO:
