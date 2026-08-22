@@ -23,6 +23,8 @@ on:
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_coding_model_authorization.py"
       - "tests/test_custom_software_build_routes.py"
+      - "tests/test_coding_context_window.py"
+      - "tests/test_coding_context_working_set.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
@@ -45,6 +47,8 @@ on:
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_coding_model_authorization.py"
       - "tests/test_custom_software_build_routes.py"
+      - "tests/test_coding_context_window.py"
+      - "tests/test_coding_context_working_set.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -73,3 +77,5 @@ jobs:
           tests/test_coding_harness_execution_loop.py
           tests/test_coding_model_authorization.py
           tests/test_custom_software_build_routes.py
+          tests/test_coding_context_window.py
+          tests/test_coding_context_working_set.py
