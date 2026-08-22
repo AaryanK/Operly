@@ -477,6 +477,9 @@ def _tool_result_message(name: str, result: dict[str, Any]) -> dict[str, Any]:
     return {"role": "tool", "tool_name": name, "content": content}
 
 
+SOURCE_INSPECTION_TOOLS = frozenset({"list", "glob", "read", "grep", "diff", "inspect_visual"})
+
+
 class CapabilityCodingAgent:
     """OpenCode-inspired persistent tool-loop agent with OPERLY safety boundaries."""
 
@@ -551,9 +554,10 @@ class CapabilityCodingAgent:
         session = CodingSession(mode=mode, workspace=workspace, before=workspace.snapshot(), editor_context=editor_context)
         system = PLAN_SYSTEM if mode == "plan" else BUILD_SYSTEM
         files = workspace.list()
+        task_text = str(task or "")[:24_000]
         user_packet = {
             "approvedSpecification": spec,
-            "task": str(task or "")[:24_000],
+            "task": task_text,
             "workspaceFiles": files,
             "mode": mode,
             "executionBoundary": "No code executes in the OPERLY control plane; isolated-runner feedback is supplied on repair turns.",
@@ -568,7 +572,32 @@ class CapabilityCodingAgent:
         web_enabled = bool(os.getenv("OLLAMA_API_KEY", "").strip()) and os.getenv("OPERLY_CODING_WEB_TOOLS", "1").strip() not in {"0", "false", "False"}
         tools = self.registry.for_mode(mode, visual=bool(editor_context), web=web_enabled)
         schemas = [tool.schema() for tool in tools.values()]
+        initial_message_chars = len(json.dumps(session.messages, ensure_ascii=False, default=str))
+        await self._progress(
+            {
+                "step": 0,
+                "phase": "model_input",
+                "summary": (
+                    f"Model input prepared: {len(spec)} specification chars · {len(files)} workspace file"
+                    f"{'s' if len(files) != 1 else ''} · {len(schemas)} tool{'s' if len(schemas) != 1 else ''}."
+                ),
+                "detail": {
+                    "mode": mode,
+                    "systemPrompt": "PLAN_SYSTEM" if mode == "plan" else "BUILD_SYSTEM",
+                    "systemChars": len(system),
+                    "specificationChars": len(spec),
+                    "specificationDigest": hashlib.sha256(spec.encode("utf-8")).hexdigest(),
+                    "taskChars": len(task_text),
+                    "workspaceFileCount": len(files),
+                    "workspaceFiles": files[:50],
+                    "editorContextAvailable": bool(editor_context),
+                    "toolNames": list(tools),
+                    "initialMessageChars": initial_message_chars,
+                },
+            }
+        )
         nudges = 0
+        inspection_only_turns = 0
         started = time.monotonic()
 
         for step in range(1, self.max_steps + 1):
@@ -576,7 +605,17 @@ class CapabilityCodingAgent:
             if remaining <= 0:
                 detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
                 raise CodingHarnessError(f"Coding agent did not converge within {self.max_seconds} seconds.{detail}"[:4000])
-            await self._progress({"step": step, "phase": "model", "summary": "Reviewing the approved requirements and choosing the next coding actions."})
+            await self._progress(
+                {
+                    "step": step,
+                    "phase": "model",
+                    "summary": "Reviewing the approved requirements and choosing the next coding actions.",
+                    "detail": {
+                        "messageCount": len(session.messages),
+                        "messageChars": len(json.dumps(session.messages, ensure_ascii=False, default=str)),
+                    },
+                }
+            )
             try:
                 assistant = await asyncio.wait_for(
                     self.client.chat(session.messages, schemas),
@@ -605,8 +644,10 @@ class CapabilityCodingAgent:
                 session.messages.append({"role": "user", "content": f"Continue with project tools. Inspect or modify the actual workspace as needed, then call {finish_name}."})
                 continue
 
+            tool_names_this_turn: list[str] = []
             for call in calls:
                 name, args = _arguments(call)
+                tool_names_this_turn.append(name)
                 signature = _tool_signature(name, args)
                 session.call_signatures.append(signature)
                 if len(session.call_signatures) >= self.doom_loop_threshold and len(set(session.call_signatures[-self.doom_loop_threshold :])) == 1:
@@ -647,6 +688,33 @@ class CapabilityCodingAgent:
                     break
             if session.finished:
                 break
+
+            inspection_only = bool(tool_names_this_turn) and all(name in SOURCE_INSPECTION_TOOLS for name in tool_names_this_turn)
+            if require_change and mode in {"edit", "repair"} and not session.changed_paths() and inspection_only:
+                inspection_only_turns += 1
+            else:
+                inspection_only_turns = 0
+            if inspection_only_turns >= 2:
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have spent two model turns inspecting without changing the workspace. "
+                            "Use the current specification, source observations, and tool results already available "
+                            "and make the requested source change now. Do not reread unchanged source. If a material "
+                            "blocker truly prevents implementation, use the question tool."
+                        ),
+                    }
+                )
+                await self._progress(
+                    {
+                        "step": step,
+                        "phase": "guardrail",
+                        "summary": "No source progress across two inspection turns; asking the coding model to act on its existing context.",
+                        "detail": {"inspectionTurns": 2, "tools": tool_names_this_turn},
+                    }
+                )
+                inspection_only_turns = 0
 
         if not session.finished:
             detail = f" Last validation issue: {session.last_validation_error}" if session.last_validation_error else ""
