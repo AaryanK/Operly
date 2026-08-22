@@ -64,7 +64,7 @@ def _retry_after_seconds(value: str | None) -> float | None:
 
 
 class OllamaError(RuntimeError):
-    """A sanitized upstream Ollama failure safe to surface to OPERLY users."""
+    """A sanitized upstream provider failure safe to surface to OPERLY users."""
 
     def __init__(
         self,
@@ -94,25 +94,37 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, *, model: str | None = None, fallback_models: list[str] | tuple[str, ...] | None = None) -> None:
+    """Native Ollama adapter implementing OPERLY's shared chat contract."""
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        fallback_models: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         self.url = os.getenv("OLLAMA_URL", "https://ollama.com/api/chat").strip()
         self.api_key = os.getenv("OLLAMA_API_KEY", "").strip()
         self.model = (model or os.getenv("OLLAMA_MODEL", "gemma4:31b")).strip()
-        configured_fallbacks = fallback_models if fallback_models is not None else os.getenv("OLLAMA_FALLBACK_MODELS", os.getenv("OLLAMA_FALLBACK_MODEL", "")).split(",")
-        self.fallback_models = [str(item).strip() for item in configured_fallbacks if str(item).strip() and str(item).strip() != self.model]
+        configured_fallbacks = (
+            fallback_models
+            if fallback_models is not None
+            else os.getenv(
+                "OLLAMA_FALLBACK_MODELS",
+                os.getenv("OLLAMA_FALLBACK_MODEL", ""),
+            ).split(",")
+        )
+        self.fallback_models = [
+            str(item).strip()
+            for item in configured_fallbacks
+            if str(item).strip() and str(item).strip() != self.model
+        ]
         self.fallback_model = self.fallback_models[0] if self.fallback_models else ""
         self.last_model = self.model
         self.timeout_seconds = _bounded_int(
-            "OLLAMA_TIMEOUT_SECONDS",
-            default=180,
-            minimum=15,
-            maximum=600,
+            "OLLAMA_TIMEOUT_SECONDS", default=180, minimum=15, maximum=600
         )
         self.max_attempts = _bounded_int(
-            "OLLAMA_MAX_ATTEMPTS",
-            default=3,
-            minimum=1,
-            maximum=5,
+            "OLLAMA_MAX_ATTEMPTS", default=3, minimum=1, maximum=5
         )
 
         if not self.url.startswith(("https://", "http://")):
@@ -155,7 +167,14 @@ class OllamaClient:
                 last_error = primary_error
                 for fallback_model in self.fallback_models:
                     try:
-                        result = await self._chat_model(session, headers, fallback_model, messages, tools or [], attempts=1)
+                        result = await self._chat_model(
+                            session,
+                            headers,
+                            fallback_model,
+                            messages,
+                            tools or [],
+                            attempts=1,
+                        )
                         self.last_model = fallback_model
                         return result
                     except OllamaError as fallback_error:

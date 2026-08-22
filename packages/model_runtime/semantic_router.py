@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from packages.model_runtime.ollama_client import OllamaClient
 from packages.model_runtime.portfolio import model_route
+from packages.model_runtime.providers import ModelClient, model_client_for_route
 
 
 class SemanticRoutingError(ValueError):
@@ -69,7 +69,7 @@ def _bounded_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 class SemanticRouter:
-    def __init__(self, client: OllamaClient | None = None) -> None:
+    def __init__(self, client: ModelClient | None = None) -> None:
         self.client = client
 
     async def decide(
@@ -104,13 +104,7 @@ class SemanticRouter:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
         ]
-        if self.client is not None:
-            client = self.client
-        else:
-            route = model_route("bounded_task")
-            if route.provider != "ollama":
-                raise RuntimeError(f"Model provider {route.provider} is not installed")
-            client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
+        client = self.client or model_client_for_route(model_route("bounded_task"))
         response = await client.chat(messages, [])
 
         first_error: Exception | None = None
