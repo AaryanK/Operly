@@ -10,9 +10,10 @@ from packages.model_runtime import (
     ModelInferenceError,
     model_for_role,
 )
+from packages.model_runtime.ollama_client import OllamaError
 from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.model_runtime.portfolio import model_route
-from packages.model_runtime.registry import ModelPool
+from packages.model_runtime.registry import ModelPool, _failure
 
 
 class _FailingModel:
@@ -29,7 +30,7 @@ class _FailingModel:
         raise ModelInferenceError(
             f"{self.id} failed",
             classification=self.classification,
-            retryable=self.classification != "invalid_request",
+            retryable=self.classification not in {"invalid_request", "quota_or_credits"},
             provider="provider-a",
             model_id=self.id,
         )
@@ -96,6 +97,29 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider_model_id, "fallback")
         self.assertEqual(first.calls, 1)
         self.assertEqual(second.calls, 1)
+
+    async def test_credit_exhaustion_falls_through_to_next_model(self):
+        first = _FailingModel("paid-or-constrained", classification="quota_or_credits")
+        second = _SuccessModel("available-fallback")
+        pool = ModelPool([first, second], id="coding")
+
+        result = await pool.infer(
+            InferenceRequest(messages=({"role": "user", "content": "edit source"},))
+        )
+
+        self.assertEqual(result.provider_model_id, "available-fallback")
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+
+    def test_http_402_is_not_classified_as_bad_request(self):
+        error = _failure(
+            OllamaError("credits exhausted", status=402, retryable=False),
+            provider="openrouter",
+            model_id="example/model",
+        )
+
+        self.assertEqual(error.classification, "quota_or_credits")
+        self.assertFalse(error.retryable)
 
     async def test_openrouter_agent_turn_has_bounded_output_reservation(self):
         with patch.dict(
