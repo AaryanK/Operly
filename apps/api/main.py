@@ -36,6 +36,7 @@ from apps.api.session import router as session_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_router import router as studio_router
+from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_router import router as workspace_router
 from packages.connectors.runtime import connector_runtime
@@ -184,6 +185,7 @@ for router in (
     channel_identity_router,
     operations_router,
     studio_router,
+    studio_source_router,
     dashboard_studio_router,
     application_builder_router,
     custom_software_router,
