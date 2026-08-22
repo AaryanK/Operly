@@ -71,13 +71,15 @@ async def assert_schema_current(connection) -> None:
 
 
 def _auto_migrate_enabled() -> bool:
-    configured = os.getenv("OPERLY_AUTO_MIGRATE")
-    if configured is not None:
-        return configured.strip().lower() in {"1", "true", "yes", "on"}
-    # Railway services commonly run a single application instance during this
-    # migration phase. Defaulting on there makes copied/fresh deployments boot
-    # even when the platform overrides the Dockerfile start command.
-    return bool(os.getenv("RAILWAY_PUBLIC_DOMAIN"))
+    """Only migrate inside the web process when explicitly requested.
+
+    Railway production already runs the controlled migration command as a
+    pre-deploy step. Keeping web-process auto-migration opt-in avoids duplicate
+    migration work, startup health-check races, and multi-replica migration
+    contention.
+    """
+    configured = os.getenv("OPERLY_AUTO_MIGRATE", "")
+    return configured.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _upgrade_to_head() -> None:
