@@ -7,6 +7,11 @@ on:
       - "architecture/**"
     paths:
       - "apps/api/custom_software_router.py"
+      - "apps/api/software_projects_router.py"
+      - "apps/api/main.py"
+      - "alembic/versions/0030_universal_software_projects.py"
+      - "packages/database/schema.py"
+      - "packages/database/software_project_models.py"
       - "packages/coding_harness/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
@@ -39,10 +44,16 @@ on:
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
       - "tests/test_target_architecture_contracts.py"
+      - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
       - "apps/api/custom_software_router.py"
+      - "apps/api/software_projects_router.py"
+      - "apps/api/main.py"
+      - "alembic/versions/0030_universal_software_projects.py"
+      - "packages/database/schema.py"
+      - "packages/database/software_project_models.py"
       - "packages/coding_harness/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
@@ -75,6 +86,7 @@ on:
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
       - "tests/test_target_architecture_contracts.py"
+      - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -108,3 +120,4 @@ jobs:
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
           tests/test_target_architecture_contracts.py
+          tests/test_software_project_persistence.py
