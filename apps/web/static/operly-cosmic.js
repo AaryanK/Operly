@@ -38,7 +38,11 @@
     dashboard.classList.toggle("operly-nav-collapsed",collapsed);
     const button=$("#operly-side-toggle");
     if(button){
-      button.textContent=collapsed?"›":"‹";
+      const glyph=collapsed?"›":"‹";
+      // This function is called from a child-list MutationObserver. Replacing the
+      // same text node on every pass creates another child-list mutation and can
+      // lock the renderer in a self-triggering loop. Only mutate when state changes.
+      if(button.textContent!==glyph)button.textContent=glyph;
       button.setAttribute("aria-expanded",String(!collapsed));
       button.setAttribute("aria-label",collapsed?"Expand navigation":"Collapse navigation");
       button.title=collapsed?"Expand navigation (Ctrl+B)":"Collapse navigation (Ctrl+B)";
@@ -197,17 +201,16 @@
   reconcileAuthenticatedRoute();
   window.addEventListener("pageshow",()=>reconcileAuthenticatedRoute());
 
-  // The workspace shell and rail are intentionally re-renderable. Keep this
-  // observer alive so collapse/settings controls are restored after workspace or
-  // navigation refreshes instead of disappearing after the first successful mount.
-  const observer=new MutationObserver(()=>mount());
-  observer.observe(document.documentElement,{childList:true,subtree:true});
+  // Watch only the authenticated application subtree. The previous document-wide
+  // observer made unrelated public/auth DOM work invoke product-shell repairs.
+  const dashboardRoot=$("#dashboard");
+  if(dashboardRoot){
+    const observer=new MutationObserver(()=>mount());
+    observer.observe(dashboardRoot,{childList:true,subtree:true});
 
-  // Authentication reveals #dashboard by removing .hidden. Watch only that class
-  // transition instead of every class change in the application.
-  const dashboard=$("#dashboard");
-  if(dashboard){
+    // Authentication reveals #dashboard by removing .hidden. Watch only that class
+    // transition instead of every class change in the application.
     const authObserver=new MutationObserver(()=>ensureAuthenticatedScreenBoundary());
-    authObserver.observe(dashboard,{attributes:true,attributeFilter:["class"]});
+    authObserver.observe(dashboardRoot,{attributes:true,attributeFilter:["class"]});
   }
 })();
