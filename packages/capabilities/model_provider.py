@@ -1,8 +1,7 @@
 """Model-as-tool capability provider.
 
-The orchestrator requests a capability; OPERLY chooses the concrete model and
-provider. This keeps other models out of the harness contract and prevents the
-primary model from coupling itself to today's catalog.
+The orchestrator requests a capability and optional traits; OPERLY chooses the
+concrete model/provider. Provider/model identities never enter the agent contract.
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ class ModelInvocationProvider(BaseProvider):
         CapabilityDefinition(
             "model.invoke",
             "model_invoke",
-            "Delegate one bounded reasoning/coding/analysis subtask to another registered model selected by capability. Do not use this when the current model can complete the task directly.",
+            "Delegate one bounded subtask to another registered model selected by capability and traits. Use preference tags such as heavy for difficult reasoning, coding for implementation analysis, long-context for very large inputs, fast for latency-sensitive work, local for privacy/locality, or free for low-cost work. Do not delegate routine work the current model can complete directly.",
             {
                 "type": "object",
                 "properties": {
@@ -25,7 +24,7 @@ class ModelInvocationProvider(BaseProvider):
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 80,
-                        "description": "Required specialist capability such as reasoning, coding, vision, translation, or summarization.",
+                        "description": "Required specialist capability such as reasoning, coding, vision, translation, summarization, transcription, or speech.",
                     },
                     "objective": {
                         "type": "string",
@@ -36,6 +35,22 @@ class ModelInvocationProvider(BaseProvider):
                         "type": "string",
                         "maxLength": 12000,
                     },
+                    "prefer_tags": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 40},
+                        "maxItems": 8,
+                        "description": "Optional provider-neutral preferences such as heavy, fast, coding, long-context, local, private, reliable, or free.",
+                    },
+                    "avoid_tags": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 40},
+                        "maxItems": 8,
+                        "description": "Optional provider-neutral traits to avoid.",
+                    },
+                    "prefer_free": {
+                        "type": "boolean",
+                        "description": "Prefer free eligible models when true. Defaults to true unless heavy/quality preferences intentionally point elsewhere.",
+                    },
                 },
                 "required": ["capability", "objective"],
                 "additionalProperties": False,
@@ -44,6 +59,17 @@ class ModelInvocationProvider(BaseProvider):
             risk_level="read_only",
             permissions=("model:invoke",),
             approval_policy=ApprovalPolicy.AUTO,
+            plugin_id="builtin:operly_model_runtime",
+            category="model",
+            tags=frozenset({"model", "delegation", "kernel"}),
+            semantic_operations=frozenset(
+                {
+                    "delegate hard reasoning",
+                    "delegate coding analysis",
+                    "use specialist model",
+                    "use heavier model",
+                }
+            ),
         ),
     )
 
@@ -53,7 +79,9 @@ class ModelInvocationProvider(BaseProvider):
                 capability=str(arguments.get("capability") or ""),
                 objective=str(arguments.get("objective") or ""),
                 context=str(arguments.get("context") or ""),
-                prefer_free=True,
+                prefer_free=bool(arguments.get("prefer_free", True)),
+                prefer_tags=arguments.get("prefer_tags") or (),
+                avoid_tags=arguments.get("avoid_tags") or (),
                 exclude_orchestrator=True,
             )
         except (ValueError, LookupError, RuntimeError) as error:
@@ -64,7 +92,9 @@ class ModelInvocationProvider(BaseProvider):
             {
                 "provider": result.provider,
                 "model": result.model,
+                "resource_id": result.resource_id,
                 "capability": result.capability,
+                "selected_tags": list(result.selected_tags),
                 "content": result.content,
                 "delegated": True,
                 "tools_exposed": False,
@@ -79,5 +109,7 @@ class ModelInvocationProvider(BaseProvider):
                 "delegated": bool(result.evidence.get("delegated")),
                 "provider": result.evidence.get("provider"),
                 "model": result.evidence.get("model"),
+                "resource_id": result.evidence.get("resource_id"),
+                "selected_tags": result.evidence.get("selected_tags") or [],
             },
         )
