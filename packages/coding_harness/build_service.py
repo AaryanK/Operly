@@ -8,11 +8,11 @@ from sqlalchemy import select
 
 from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter, RunnerAdapter
-from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy, ResourcePolicy
+from packages.custom_software.runner_contracts import BuildSubmission
 from packages.custom_software.runner_service import _event, apply_runner_response
-from packages.custom_software.runtime_profiles import runtime_profile
 from packages.custom_software.source_bundles import SourceFile, build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle, RunnerBuildRecord
+from packages.runtime_plugins import register_builtin_runtimes
 
 
 class SourceRecordError(ValueError):
@@ -23,15 +23,33 @@ class RunnerProfileUnsupported(SourceRecordError):
     def __init__(self, profile_id: str, supported: list[str]):
         self.profile_id = profile_id
         self.supported = supported
-        super().__init__(f"Runner does not support source runtime {profile_id}; supported profiles: {', '.join(supported) or 'none'}")
+        super().__init__(
+            f"Runner does not support source runtime {profile_id}; supported profiles: "
+            f"{', '.join(supported) or 'none'}"
+        )
 
 
 def source_bundle_from_record(source: GeneratedSourceBundle):
     try:
         manifest = json.loads(source.manifest_json)
         rows = json.loads(source.files_json)
-        files = [SourceFile(str(item["path"]), str(item["content"]).encode("utf-8"), str(item.get("generatedBy") or "coding_harness")) for item in rows]
-        rebuilt = build_bundle(files, source.tenant_id, source.application_id, source.plan_id, source.plan_version, source.source_version, str(manifest["promptDigest"]))
+        files = [
+            SourceFile(
+                str(item["path"]),
+                str(item["content"]).encode("utf-8"),
+                str(item.get("generatedBy") or "coding_harness"),
+            )
+            for item in rows
+        ]
+        rebuilt = build_bundle(
+            files,
+            source.tenant_id,
+            source.application_id,
+            source.plan_id,
+            source.plan_version,
+            source.source_version,
+            str(manifest["promptDigest"]),
+        )
     except Exception as error:
         raise SourceRecordError("Stored source bundle is invalid") from error
     if rebuilt.digest != source.bundle_digest:
@@ -39,29 +57,22 @@ def source_bundle_from_record(source: GeneratedSourceBundle):
     return rebuilt
 
 
-def _submission_for_source(source: GeneratedSourceBundle, bundle, idempotency_key: str) -> BuildSubmission:
+def _submission_for_source(
+    source: GeneratedSourceBundle,
+    bundle,
+    idempotency_key: str,
+) -> BuildSubmission:
     try:
         profile_id = validate_runtime_contract(bundle)
-        profile = runtime_profile(profile_id)
-    except (RuntimeResolutionError, ValueError) as error:
+        runtime = register_builtin_runtimes().get(profile_id)
+        builder = getattr(runtime, "build_submission_from_record", None)
+        if builder is None:
+            raise ValueError(
+                f"Runtime plugin {profile_id} does not support legacy source-record builds"
+            )
+        return builder(source, bundle, idempotency_key)
+    except (RuntimeResolutionError, LookupError, ValueError) as error:
         raise SourceRecordError(str(error)) from error
-    resources = ResourcePolicy.model_validate(profile["resources"])
-    return BuildSubmission(
-        workspaceId=source.tenant_id,
-        applicationId=source.application_id,
-        planVersion=source.plan_version,
-        sourceVersion=source.source_version,
-        stackId=profile_id,
-        sourceBundleDigest=source.bundle_digest,
-        operations=profile["operations"],
-        healthCheck=HealthCheck.model_validate(profile["health"]),
-        resources=resources,
-        network=NetworkPolicy(mode="none"),
-        requiredPorts=profile["ports"],
-        artifactPaths=profile["artifactPaths"],
-        maxDurationSeconds=resources.durationSeconds,
-        idempotencyKey=idempotency_key,
-    )
 
 
 async def _check_runner_profile(adapter: RunnerAdapter, profile_id: str) -> None:
@@ -90,7 +101,12 @@ async def submit_source_build(
     adapter: RunnerAdapter | None = None,
     attempt: int = 1,
 ):
-    existing = await db.scalar(select(RunnerBuildRecord).where(RunnerBuildRecord.tenant_id == tenant_id, RunnerBuildRecord.idempotency_key == idempotency_key))
+    existing = await db.scalar(
+        select(RunnerBuildRecord).where(
+            RunnerBuildRecord.tenant_id == tenant_id,
+            RunnerBuildRecord.idempotency_key == idempotency_key,
+        )
+    )
     if existing:
         return existing
     if source.tenant_id != tenant_id or source.plan_id != plan_row.id:
@@ -117,15 +133,41 @@ async def submit_source_build(
     )
     db.add(row)
     await db.flush()
-    await _event(db, row, "created", message=f"Coding harness build record created for attempt {row.attempt}")
-    await _event(db, row, "queued", message=f"Harness-authored source submitted with negotiated runtime {submission.stackId}")
+    await _event(
+        db,
+        row,
+        "created",
+        message=f"Coding harness build record created for attempt {row.attempt}",
+    )
+    await _event(
+        db,
+        row,
+        "queued",
+        message=f"Harness-authored source submitted with runtime plugin {submission.stackId}",
+    )
     await db.commit()
 
     try:
         response = await adapter.submit(submission, bundle)
     except Exception as error:
-        await _event(db, row, "failed", event_type="runner_unavailable", message="runner_unavailable", details={"message": str(error), "runtime": submission.stackId})
-        row.result_json = json.dumps({"code": "runner_unavailable", "runtime": submission.stackId, "failureEvidence": {"classification": "runner_unavailable", "message": str(error)}})
+        await _event(
+            db,
+            row,
+            "failed",
+            event_type="runner_unavailable",
+            message="runner_unavailable",
+            details={"message": str(error), "runtime": submission.stackId},
+        )
+        row.result_json = json.dumps(
+            {
+                "code": "runner_unavailable",
+                "runtime": submission.stackId,
+                "failureEvidence": {
+                    "classification": "runner_unavailable",
+                    "message": str(error),
+                },
+            }
+        )
         row.completed_at = datetime.utcnow()
         await db.commit()
         await db.refresh(row)
