@@ -29,9 +29,13 @@ class OllamaClient:
     """Legacy constructor delegating to the selected model-provider plugin."""
 
     def __new__(cls, *, model=None, fallback_models=None):
+        provider = _configured_provider()
+        default_model = (
+            "openai/gpt-oss-120b:free" if provider == "openrouter" else "gemma4:31b"
+        )
         route = ModelRoute(
-            provider=_configured_provider(),
-            primary=str(model or os.getenv("OLLAMA_MODEL", "gemma4:31b")).strip(),
+            provider=provider,
+            primary=str(model or default_model).strip(),
             fallbacks=tuple(fallback_models or ()),
         )
         return model_client_for_route(route)
