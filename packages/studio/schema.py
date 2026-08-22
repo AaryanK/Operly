@@ -1,3 +1,9 @@
+"""Legacy SiteSchema compatibility models.
+
+New Operly website generation/editing is source-agent driven. These Pydantic
+models remain authoritative only when reading, rendering or rolling back an old
+schema-backed Studio version; the model is no longer asked to serialize them.
+"""
 import json, re
 from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator, field_validator
@@ -31,9 +37,6 @@ class FormProps(Strict): heading:str=Field(max_length=240); description:str=""; 
 class FooterProps(Strict):
     business_name:str=Field(max_length=200); public_contact:str=""; navigation:list[NavItem]=Field(default_factory=list,max_length=20); copyright_text:str=""
     variant:Literal["compact","columns"]="columns"
-
-def section(name, props):
-    return type(name,(Strict,),{"__annotations__":{"id":str,"type":Literal[name.removesuffix('Section').lower()],"enabled":bool,"props":props},"enabled":True})
 class NavbarSection(Strict): id:str; type:Literal["navbar"]; enabled:bool=True; props:NavbarProps
 class HeroSection(Strict): id:str; type:Literal["hero"]; enabled:bool=True; props:HeroProps
 class TextSection(Strict): id:str; type:Literal["text"]; enabled:bool=True; props:TextProps
@@ -50,10 +53,10 @@ class ContactSection(Strict): id:str; type:Literal["contact_form"]; enabled:bool
 class FooterSection(Strict): id:str; type:Literal["footer"]; enabled:bool=True; props:FooterProps
 Section=Annotated[Union[NavbarSection,HeroSection,TextSection,ImageSection,StatsSection,FeatureSection,ProductSection,ServiceSection,GallerySection,TestimonialSection,FAQSection,CTASection,ContactSection,FooterSection],Field(discriminator="type")]
 class Theme(Strict):
-    primary:str="#185d43"; accent:str="#b9ee72"; background:str="#ffffff"; surface:str="#f3f5f1"; text:str="#13231c"; muted_text:str="#6e7b74"
+    primary:str="#4b96ff"; accent:str="#ffb45f"; background:str="#080b17"; surface:str="#11182b"; text:str="#f7f8ff"; muted_text:str="#a7b0c6"
     border_radius:Literal["none","small","medium","large"]="medium"
     font_family:Literal["system","serif","geometric"]="system"
-    mode:Literal["light","dark"]="light"
+    mode:Literal["light","dark"]="dark"
     visual_style:Literal["minimal","editorial","luxury","playful","cosmic","bold"]="minimal"
     container:Literal["compact","standard","wide"]="standard"
     @field_validator("primary","accent","background","surface","text","muted_text")
@@ -76,5 +79,14 @@ class SiteSchema(Strict):
         return self
 
 def blank_site(title:str, description:str="") -> SiteSchema:
-    from packages.studio.design import compose_initial_site
-    return compose_initial_site(title,description)
+    """Tiny neutral compatibility snapshot used until source-agent materialization."""
+    clean_title=(title or "Untitled Website").strip()[:150]
+    clean_description=(description or "").strip()[:500]
+    return SiteSchema.model_validate({
+        "site":{"title":clean_title,"description":clean_description,"seo":{"title":clean_title[:120],"description":clean_description[:320]}},
+        "theme":{},
+        "pages":[{
+            "id":"home","slug":"home","title":"Home","seo":{"title":clean_title[:120],"description":clean_description[:320]},
+            "sections":[{"id":"legacy-placeholder","type":"hero","props":{"eyebrow":"Website draft","headline":clean_title,"description":"This legacy placeholder will be replaced by the Operly source agent when the website is generated or edited.","primary_button_text":"Contact us","primary_button_target":"contact","variant":"centered","alignment":"center"}}]
+        }]
+    })

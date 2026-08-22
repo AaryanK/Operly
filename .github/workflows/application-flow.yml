@@ -13,6 +13,7 @@ on:
       - "packages/channels/**"
       - "packages/connectors/**"
       - "packages/context/**"
+      - "packages/coding_harness/**"
       - "packages/database/**"
       - "packages/mcp/**"
       - "packages/plugins/**"
@@ -35,6 +36,7 @@ on:
       - "tests/test_solutions.py"
       - "tests/test_studio.py"
       - "tests/test_studio_design_quality.py"
+      - "tests/test_studio_source_agent.py"
       - "tests/test_unified_application_flow.py"
       - "tests/test_workspace_security_boundary.py"
       - "tests/test_principal_access_architecture.py"
@@ -65,6 +67,8 @@ jobs:
           apps/api/company_router.py
           apps/api/connectors_router.py
           apps/api/solutions_router.py
+          apps/api/studio_router.py
+          apps/api/studio_source_router.py
           apps/api/workspace_router.py
           apps/api/approvals_router.py
           apps/api/integrations_router.py
@@ -75,6 +79,7 @@ jobs:
           alembic/versions/0025_principal_conversations.py
           alembic/versions/0026_action_provenance.py
           alembic/versions/0027_global_human_memory.py
+          alembic/versions/0028_studio_source_agent.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
@@ -82,6 +87,7 @@ jobs:
           packages/database/workspace_security_models.py
           packages/database/principal_models.py
           packages/database/company_models.py
+          packages/database/studio_source_models.py
           packages/database/schema.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
@@ -124,10 +130,12 @@ jobs:
           packages/capabilities/solution_provider.py
           packages/capabilities/website_provider.py
           packages/solutions/service.py
+          packages/solutions/production.py
           packages/studio/schema.py
           packages/studio/design.py
           packages/studio/renderer.py
           packages/studio/ai.py
+          packages/studio/source_agent.py
       - name: Check browser JavaScript syntax
         run: |
           node --check apps/web/static/app.js
@@ -136,7 +144,6 @@ jobs:
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
           node --check apps/web/static/operly-cosmic.js
-          node --check apps/web/static/studio-product-overhaul.js
           node --check apps/web/static/unified-solution-studio.js
           node --check apps/web/static/settings-scopes.js
           node --check apps/web/static/time-sync.js
@@ -161,6 +168,7 @@ jobs:
           tests/test_solutions.py
           tests/test_studio.py
           tests/test_studio_design_quality.py
+          tests/test_studio_source_agent.py
           tests/test_unified_application_flow.py
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py
@@ -173,7 +181,10 @@ jobs:
           SESSION_SECRET: ci-session-secret-that-is-long-and-unique
           AUTH_TOKEN_PEPPER: ci-auth-token-pepper-that-is-over-thirty-two-bytes
           RAILWAY_PUBLIC_DOMAIN: smoke.operly.test
+          OPERLY_AUTO_MIGRATE: "false"
         run: |
+          rm -f ./ci-railway-smoke.db ./ci-railway-smoke.db-*
+          python -m packages.database.migrate upgrade --allow-production
           uvicorn apps.api.main:app --host 127.0.0.1 --port 8765 >/tmp/operly-smoke.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT

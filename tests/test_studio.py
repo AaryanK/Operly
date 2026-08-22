@@ -31,7 +31,7 @@ class SchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):SiteSchema.model_validate(d)
 class RendererTests(unittest.TestCase):
     def test_escaping_and_determinism(self):
-        s=blank_site("A & B","<hello>");a=render_site(s,"home","public");b=render_site(s,"home","public");self.assertEqual(a,b);self.assertIn("&lt;hello&gt;",a);self.assertNotIn("<hello>",a)
+        s=blank_site("A <hello>");a=render_site(s,"home","public");b=render_site(s,"home","public");self.assertEqual(a,b);self.assertIn("&lt;hello&gt;",a);self.assertNotIn("<hello>",a)
     def test_no_script_or_handlers(self):
         html=render_site(blank_site("A"),"home","public").lower();self.assertNotIn("<script",html);self.assertNotIn("onclick=",html)
     def test_url_sanitization(self):self.assertEqual(safe_url("javascript:alert(1)"),"#");self.assertEqual(safe_url("http://bad.test"),"#")
