@@ -135,7 +135,7 @@ class ConfiguredModel:
         if not self.id or not self.provider or not self.provider_model_id:
             raise ValueError("Configured model requires resource, provider, and model ids")
 
-    def _client(self):
+    def _client(self, *, budget: InferenceBudget | None = None):
         client = model_client_for_route(
             ModelRoute(provider=self.provider, primary=self.provider_model_id)
         )
@@ -148,6 +148,11 @@ class ConfiguredModel:
             client.fallback_models = []
         if hasattr(client, "fallback_model"):
             client.fallback_model = ""
+        # Output-token policy is expressed by the provider-neutral InferenceBudget.
+        # Adapters expose their translated field below this boundary; callers never
+        # need to know whether a vendor calls it max_tokens, num_predict, etc.
+        if budget and budget.max_output_tokens is not None and hasattr(client, "max_tokens"):
+            client.max_tokens = max(1, int(budget.max_output_tokens))
         return client
 
     async def infer(self, request: InferenceRequest) -> InferenceResult:
@@ -167,7 +172,7 @@ class ConfiguredModel:
                 )
             )
             try:
-                client = self._client()
+                client = self._client(budget=budget)
                 call = client.chat(list(request.messages), list(request.tools))
                 if budget.timeout_seconds is not None:
                     message = await asyncio.wait_for(
