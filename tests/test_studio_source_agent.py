@@ -3,9 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from packages.coding_harness.opencode_agent import VirtualWorkspace
+from packages.custom_software.source_bundles import SourceFile
 from packages.database.db import Base
 from packages.database.schema import import_all_models
 from packages.studio.agent_runs import _context_summary
+from packages.studio.runtime_policy import (
+    StudioWebsiteContractError,
+    _safe_fuzzy_edit,
+    validate_studio_website,
+)
 from packages.studio.schema import blank_site
 from packages.studio.source_agent import production_html, project_context
 
@@ -105,6 +112,66 @@ def test_source_production_flattens_css_blocks_generated_js_and_wires_contact_fo
     assert "<script" not in html.lower()
     assert "/api/public/presence/solution-123/forms/contact" in html
     assert "__OPERLY_FORM_ACTION__" not in html
+
+
+def test_studio_website_contract_accepts_native_navigation_forms_and_css_toggle():
+    files = [
+        SourceFile(
+            "index.html",
+            b"""<!doctype html><html><body>
+            <nav><a href='#about'>About</a><input type='checkbox' id='menu'></nav>
+            <form method='post' action='__OPERLY_FORM_ACTION__'>
+              <input name='name'><input type='email' name='email'>
+              <textarea name='message'></textarea><button type='submit'>Send</button>
+            </form></body></html>""",
+            "test",
+        )
+    ]
+    report = validate_studio_website(files, '- Known facts: {"location":"Kathmandu, Nepal"}')
+    assert report["nativeBrowserBehavior"] is True
+    assert report["groundingChecked"] is True
+
+
+def test_studio_website_contract_rejects_invented_metrics_and_testimonials():
+    facts = '- Known facts: {"name":"Antu Hill Travels","location":"Kathmandu, Nepal"}'
+    metric = [
+        SourceFile(
+            "index.html",
+            b"<!doctype html><html><body><b>15k+</b><p>Happy Travelers</p></body></html>",
+            "test",
+        )
+    ]
+    with pytest.raises(StudioWebsiteContractError, match="Unsupported business metric"):
+        validate_studio_website(metric, facts)
+
+    testimonial = [
+        SourceFile(
+            "index.html",
+            b"<!doctype html><html><body><blockquote class='testimonial'>Best trip ever</blockquote></body></html>",
+            "test",
+        )
+    ]
+    with pytest.raises(StudioWebsiteContractError, match="Unsupported testimonial"):
+        validate_studio_website(testimonial, facts)
+
+
+def test_studio_fuzzy_edit_recovers_from_whitespace_only_source_drift():
+    workspace = VirtualWorkspace(
+        [
+            SourceFile(
+                "index.html",
+                b"<section>\n  <h2>Explore Nepal</h2>\n  <p>Plan your journey.</p>\n</section>",
+                "test",
+            )
+        ]
+    )
+    _safe_fuzzy_edit(
+        workspace,
+        "index.html",
+        "<section><h2>Explore Nepal</h2><p>Plan your journey.</p></section>",
+        "<section><h2>Explore Nepal</h2><p>Start in Kathmandu and travel across Nepal.</p></section>",
+    )
+    assert "Start in Kathmandu" in workspace.raw("index.html")
 
 
 def test_studio_agent_run_models_are_registered_for_durable_progress():
