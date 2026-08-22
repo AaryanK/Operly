@@ -10,7 +10,6 @@ from packages.business_brain.context_loader import (
     load_business_context,
     load_conversation_messages,
 )
-from packages.business_brain.ollama_client import OllamaClient
 from packages.business_brain.security import (
     MAX_ASSISTANT_TEXT,
     MAX_USER_TEXT,
@@ -24,7 +23,7 @@ from packages.context.service import ContextService
 from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.application_builder_models import ManagedApplication
 from packages.database.db import session_scope
-from packages.model_runtime.portfolio import model_route
+from packages.model_runtime import model_chat_client_for_role
 from packages.security.execution_context import (
     ExecutionContextError,
     resolve_execution_context,
@@ -62,7 +61,11 @@ SECURITY BOUNDARIES:
 13. Ask for missing critical details instead of guessing. Keep the answer concise and operational.
 
 BUSINESS REASONING:
-- Choose among supplied plugins from evidence and capability descriptions; do not use keyword routing.
+- The tool list is intentionally incomplete. Absence from the current tool list does not mean Operly lacks that capability.
+- When you need an operation that is not currently exposed, call capability.search with the operation you need.
+- Use capability.describe on promising search results before attempting them. Describing a capability exposes its exact schema when the current session is allowed to use it.
+- Discovery metadata is not permission. All execution still goes through the normal Operly capability boundary.
+- Choose among supplied/discovered plugins from evidence and capability descriptions; do not use keyword routing.
 - Inspect relevant company or CRM state before consequential work.
 - In private surfaces, use account.* tools for questions spanning the human's authorized workspaces.
 - Use runtime.context when an explicit time re-check is useful; trusted session context already supplies current actor/workspace time.
@@ -72,7 +75,7 @@ BUSINESS REASONING:
 - Read-only plugins execute automatically.
 - Consequential plugins can return WAITING_APPROVAL; report that state accurately.
 - Continue reasoning from each plugin observation in this same conversation.
-- Use solution.generate only when available plugins genuinely cannot satisfy the objective.
+- Use solution.generate only when available or discoverable capabilities genuinely cannot satisfy the objective.
 """.strip()
 
 
@@ -80,8 +83,7 @@ class AgentService:
     """Persistent model loop with one canonical plugin execution path."""
 
     def __init__(self) -> None:
-        route = model_route("business_agent")
-        self.client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
+        self.client = model_chat_client_for_role("business_agent")
         self.plugin_harness = PluginAgentHarness()
         self.rate_limiter = SlidingWindowRateLimiter(limit=20, window_seconds=60)
         self.max_steps = 6
