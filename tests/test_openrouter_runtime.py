@@ -2,6 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from packages.model_runtime.ollama_client import OllamaClient
 from packages.model_runtime.openrouter_client import OpenRouterClient, _openrouter_messages
 from packages.model_runtime.portfolio import ModelRoute, model_route
 from packages.model_runtime.providers import (
@@ -42,6 +43,21 @@ class OpenRouterRuntimeTests(unittest.TestCase):
                 route = model_route(role)
                 self.assertEqual(route.provider, "openrouter")
                 self.assertEqual(route.primary, "openai/gpt-oss-120b:free")
+
+    def test_explicit_ollama_route_does_not_switch_because_openrouter_key_exists(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPEN_ROUTER_API": "openrouter-key",
+                "OLLAMA_API_KEY": "ollama-key",
+            },
+            clear=True,
+        ):
+            client = model_client_for_route(ModelRoute("ollama", "gemma4:31b"))
+
+        self.assertIsInstance(client, OllamaClient)
+        self.assertEqual(client.model, "gemma4:31b")
+        self.assertEqual(client.api_key, "ollama-key")
 
     def test_tool_observation_recovers_provider_call_id(self):
         translated = _openrouter_messages(
