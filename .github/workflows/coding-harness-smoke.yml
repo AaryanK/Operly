@@ -12,6 +12,7 @@ on:
       - "alembic/versions/0030_universal_software_projects.py"
       - "packages/database/schema.py"
       - "packages/database/software_project_models.py"
+      - "packages/agents/**"
       - "packages/coding_harness/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
@@ -21,6 +22,7 @@ on:
       - "packages/service_bindings/**"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
+      - "packages/custom_software/model_planning_client.py"
       - "packages/custom_software/provider_planning.py"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
@@ -35,6 +37,7 @@ on:
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
+      - "tests/test_planning_model_runtime_boundary.py"
       - "tests/test_planning_output_normalizer.py"
       - "tests/test_scope_convergence.py"
       - "tests/test_coding_harness_runtime_resolution.py"
@@ -54,6 +57,7 @@ on:
       - "alembic/versions/0030_universal_software_projects.py"
       - "packages/database/schema.py"
       - "packages/database/software_project_models.py"
+      - "packages/agents/**"
       - "packages/coding_harness/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
@@ -63,6 +67,7 @@ on:
       - "packages/service_bindings/**"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
+      - "packages/custom_software/model_planning_client.py"
       - "packages/custom_software/provider_planning.py"
       - "packages/custom_software/live_projection.py"
       - "packages/custom_software/plan_service.py"
@@ -77,6 +82,7 @@ on:
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
+      - "tests/test_planning_model_runtime_boundary.py"
       - "tests/test_planning_output_normalizer.py"
       - "tests/test_scope_convergence.py"
       - "tests/test_coding_harness_runtime_resolution.py"
@@ -111,6 +117,7 @@ jobs:
           tests/test_coding_agent_input_guardrail.py
           tests/test_live_plan_projection.py
           tests/test_live_projection_independence.py
+          tests/test_planning_model_runtime_boundary.py
           tests/test_planning_output_normalizer.py
           tests/test_scope_convergence.py
           tests/test_coding_harness_runtime_resolution.py
