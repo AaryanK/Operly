@@ -347,7 +347,6 @@
       throw new Error(evidence.message||build.failureClassification||`Generated app build stopped in ${build.state||"an unknown state"}`);
     }
     rt.previewUrl=build.preview.url;
-    S.source=build.source||updated;
     await loadPreview(rt.previewUrl);
     previewState("ready","Verified app preview");
     const repairs=Number(build.repairCount||0);
