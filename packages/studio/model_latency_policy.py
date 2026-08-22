@@ -54,6 +54,27 @@ def studio_coding_model_client(role: str = "coding"):
     return client
 
 
+class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
+    """Website agent whose internal ceilings are high enough for Studio's policy."""
+
+    def __init__(self, client=None, max_steps=None, registry=None, progress_callback=None) -> None:
+        super().__init__(
+            client=client,
+            max_steps=max_steps,
+            registry=registry,
+            progress_callback=progress_callback,
+        )
+        # CapabilityCodingAgent defaults to a 240s total / 90s slice. The durable
+        # runner later clamps these values to studio_budget(). Raise the instance
+        # ceilings first so that clamp can actually produce 420/600s and 195s,
+        # instead of silently collapsing the policy back to the generic defaults.
+        self.max_seconds = max(self.max_seconds, _STUDIO_GENERATE_MAX_SECONDS)
+        self.model_slice_seconds = max(
+            self.model_slice_seconds,
+            _STUDIO_MODEL_SLICE_SECONDS,
+        )
+
+
 def apply_studio_model_latency_policy() -> None:
     """Install the deadline hierarchy after the website runtime policy is applied."""
     global _APPLIED
@@ -63,6 +84,7 @@ def apply_studio_model_latency_policy() -> None:
     # The durable Studio runner resolves these module globals when each run starts.
     agent_runs._studio_budget = studio_budget
     agent_runs.coding_model_client = studio_coding_model_client
+    agent_runs.OpenCodeStyleCodingAgent = StudioLatencyAwareCodingAgent
 
     # Keep the policy source aligned so a later explicit runtime-policy application
     # cannot silently restore the old 75/90 second model slices.
@@ -70,5 +92,6 @@ def apply_studio_model_latency_policy() -> None:
 
     # Legacy direct source endpoints use the same provider-neutral coding boundary.
     source_agent.coding_model_client = studio_coding_model_client
+    source_agent.OpenCodeStyleCodingAgent = StudioLatencyAwareCodingAgent
 
     _APPLIED = True
