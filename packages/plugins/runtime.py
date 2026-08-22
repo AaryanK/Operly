@@ -1,8 +1,8 @@
 """Manifest-driven plugin contribution runtime.
 
 During migration built-ins may still be bootstrapped by ``default_registry``. New
-plugin code should register resources here so capabilities/models/runtimes can be
-composed without editing agent or Studio code.
+plugin code registers resources here so capabilities/models/runtimes can be composed
+without editing agent or Studio code.
 """
 from __future__ import annotations
 
@@ -39,6 +39,14 @@ class PluginContribution:
 
 
 class PluginRuntime:
+    """Process-local registry for installed plugin contributions.
+
+    This object owns registration/lifecycle composition only. Capability execution
+    still goes through CapabilityRegistry + CapabilityFirewall, model execution goes
+    through model_runtime, and generated code execution goes through RuntimeRegistry
+    + the isolated runner. Registering a plugin is never an execution bypass.
+    """
+
     def __init__(self) -> None:
         self.manifests = PluginManifestRegistry()
         self._contributions: dict[str, PluginContribution] = {}
@@ -48,19 +56,34 @@ class PluginRuntime:
         plugin_id = contribution.manifest.id
         if plugin_id in self._contributions and not replace:
             raise ValueError(f"Plugin already registered: {plugin_id}")
+
         self.manifests.register(contribution.manifest, replace=replace)
         self._contributions[plugin_id] = contribution
 
+        # Model provider/discovery plugins own their own provider-runtime
+        # registration. The harness never learns vendor names.
         for registrar in contribution.model_provider_registrars:
             registrar()
         for registrar in contribution.model_discoverer_registrars:
             registrar()
+
+        # Runtime plugins join the canonical runtime registry immediately. This is
+        # trusted execution metadata, not model-authored shell configuration.
+        if contribution.runtime_plugins:
+            from packages.runtime_plugins.registry import default_runtime_registry
+
+            runtime_registry = default_runtime_registry()
+            for runtime in contribution.runtime_plugins:
+                runtime_registry.register(runtime, replace=replace)
 
     def contribution(self, plugin_id: str) -> PluginContribution:
         try:
             return self._contributions[plugin_id]
         except KeyError as error:
             raise LookupError(f"Unknown plugin: {plugin_id}") from error
+
+    def contributions(self) -> tuple[PluginContribution, ...]:
+        return tuple(self._contributions.values())
 
     def capability_providers(self) -> tuple[Any, ...]:
         return tuple(
@@ -75,6 +98,19 @@ class PluginRuntime:
             for contribution in self._contributions.values()
             for runtime in contribution.runtime_plugins
         )
+
+    async def install(self, plugin_id: str, context: Any = None) -> None:
+        contribution = self.contribution(plugin_id)
+        if contribution.lifecycle is not None:
+            await contribution.lifecycle.install(context)
+
+    async def uninstall(self, plugin_id: str, context: Any = None) -> None:
+        contribution = self.contribution(plugin_id)
+        if plugin_id in self._started and contribution.lifecycle is not None:
+            await contribution.lifecycle.stop(context)
+            self._started.discard(plugin_id)
+        if contribution.lifecycle is not None:
+            await contribution.lifecycle.uninstall(context)
 
     async def start(self, context: Any = None) -> None:
         for plugin_id, contribution in self._contributions.items():
@@ -102,7 +138,10 @@ class PluginRuntime:
                 return plugin_id, PluginHealthResult(False, type(error).__name__)
 
         rows = await asyncio.gather(
-            *(one(plugin_id, contribution) for plugin_id, contribution in self._contributions.items())
+            *(
+                one(plugin_id, contribution)
+                for plugin_id, contribution in self._contributions.items()
+            )
         )
         return dict(rows)
 
