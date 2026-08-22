@@ -13,6 +13,18 @@ class InteractionContractError(ValueError):
 
 
 _CONTROL_TAGS = {"button", "form", "input", "select", "textarea"}
+_NATIVE_INTRINSIC_INPUT_TYPES = {
+    "checkbox",
+    "radio",
+    "range",
+    "color",
+    "date",
+    "datetime-local",
+    "month",
+    "time",
+    "week",
+    "file",
+}
 _REQUIRED_FIELDS = {
     "id", "control", "event", "handler", "operation", "success",
     "rejection", "stateChange", "stateProbe", "uiEvidence", "uiProjection",
@@ -62,6 +74,16 @@ class _ControlInventory(HTMLParser):
                 button_type = str(values.get("type") or "submit").strip().lower()
                 if button_type in {"submit", "reset"}:
                     return
+
+        # Some standalone inputs have complete browser-native state semantics and are
+        # commonly used by static websites without JavaScript. A CSS-only mobile-nav
+        # checkbox, date picker, radio group, range/color picker, etc. should not be
+        # forced through an invented domain-operation contract. Plain text/search
+        # inputs outside a real form remain suspicious and are still validated below.
+        if tag == "input" and not role_control:
+            input_type = str(values.get("type") or "text").strip().lower()
+            if input_type in _NATIVE_INTRINSIC_INPUT_TYPES:
+                return
 
         # Normal anchors already have deterministic browser behavior through href.
         # Requiring a JavaScript interaction manifest for ordinary website navigation
@@ -123,12 +145,12 @@ def validate_interaction_contract(bundle: SourceBundle) -> dict:
     missing_annotations = [tag for tag, interaction_id in inventory.controls if not interaction_id]
     if missing_annotations:
         raise InteractionContractError(
-            "Every visible interactive control must declare a unique data-operly-interaction id; "
+            "Every visible scripted control must declare a unique data-operly-interaction id; "
             f"missing on {', '.join(missing_annotations[:8])}"
         )
     ids = [interaction_id for _, interaction_id in inventory.controls if interaction_id]
     if len(ids) != len(set(ids)):
-        raise InteractionContractError("Visible interactive controls must use unique data-operly-interaction ids")
+        raise InteractionContractError("Visible scripted controls must use unique data-operly-interaction ids")
 
     artifact = next((item for item in bundle.files if item.path.lower() == "operly.interactions.json"), None)
     if artifact is None:
