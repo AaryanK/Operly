@@ -24,8 +24,18 @@
 
   function ensureAuthenticatedScreenBoundary(){
     const dashboard=$("#dashboard");
-    if(!dashboard||dashboard.classList.contains("hidden"))return false;
-    document.querySelectorAll(".screen").forEach(screen=>{
+    if(!dashboard)return false;
+    const screens=document.querySelectorAll(".screen");
+    if(dashboard.classList.contains("hidden")){
+      // Signed-out routing is class-driven. Release any inline visibility locks
+      // from the prior authenticated session so login/signup/onboarding can show.
+      screens.forEach(screen=>{
+        screen.style.removeProperty("display");
+        screen.removeAttribute("aria-hidden");
+      });
+      return false;
+    }
+    screens.forEach(screen=>{
       const active=screen===dashboard;
       screen.classList.toggle("hidden",!active);
       if(active){
