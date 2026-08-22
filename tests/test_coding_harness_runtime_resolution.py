@@ -86,6 +86,29 @@ def test_native_server_bound_contact_form_does_not_require_js_interaction_contra
     assert validate_runtime_contract(bundle) == "static-web-js"
 
 
+def test_css_only_nav_checkbox_is_native_browser_state_not_script_contract():
+    bundle = _bundle([
+        (
+            "index.html",
+            "<!doctype html><label for='nav-toggle'>Menu</label><input id='nav-toggle' type='checkbox'>"
+            "<nav>Menu items</nav><script src='app.js'></script>",
+        ),
+        ("app.js", "module.exports={siteName:()=> 'Operly'};"),
+        ("app.test.js", "const test=require('node:test');const assert=require('node:assert/strict');const {siteName}=require('./app.js');test('loads',()=>assert.equal(siteName(),'Operly'));"),
+    ])
+    assert validate_runtime_contract(bundle) == "static-web-js"
+
+
+def test_plain_text_input_outside_native_form_is_still_rejected_as_unwired():
+    bundle = _bundle([
+        ("index.html", "<!doctype html><input type='text' placeholder='Search'><script src='app.js'></script>"),
+        ("app.js", "module.exports={siteName:()=> 'Operly'};"),
+        ("app.test.js", "const test=require('node:test');require('./app.js');test('loads',()=>{});"),
+    ])
+    with pytest.raises(RuntimeResolutionError, match="data-operly-interaction"):
+        validate_runtime_contract(bundle)
+
+
 def test_button_type_button_inside_native_form_still_requires_script_contract():
     bundle = _bundle([
         (
