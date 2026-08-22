@@ -22,7 +22,6 @@ from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
-from packages.model_runtime.catalog import has_delegate_models
 
 
 def default_registry(enabled_plugins=None) -> CapabilityRegistry:
@@ -30,8 +29,8 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
 
     Legacy provider definitions remain importable during migration, but the live
     execution path only registers the unified providers listed here. Model
-    delegation is exposed only when a specialist model exists beyond the current
-    orchestrator, so the base model cannot pointlessly recurse into itself.
+    delegation is a normal built-in capability; provider discovery decides at
+    invocation time whether a suitable specialist resource exists.
     """
 
     def enabled(tenant_id, definition):
@@ -43,7 +42,7 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         )
 
     registry = CapabilityRegistry(enabled_resolver=enabled)
-    providers = [
+    for provider in (
         CompanyProvider(),
         ResearchProvider(),
         OperlyAnalyticsProvider(),
@@ -61,13 +60,11 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
         PresenceOperationsProvider(),
+        ModelInvocationProvider(),
         DiscordProvider(),
         GmailProvider(),
         GmailDraftLifecycleProvider(),
         GoogleCalendarProvider(),
-    ]
-    if has_delegate_models():
-        providers.append(ModelInvocationProvider())
-    for provider in providers:
+    ):
         registry.register(provider)
     return registry
