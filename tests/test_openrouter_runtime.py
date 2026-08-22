@@ -20,15 +20,15 @@ class OpenRouterRuntimeTests(unittest.TestCase):
             clear=True,
         ):
             client = model_client_for_route(
-                ModelRoute("openrouter", "openai/gpt-oss-120b:free")
+                ModelRoute("openrouter", "stealth/ox-alpha")
             )
 
         self.assertIsInstance(client, OpenRouterClient)
         self.assertEqual(client.url, "https://openrouter.ai/api/v1/chat/completions")
-        self.assertEqual(client.model, "openai/gpt-oss-120b:free")
+        self.assertEqual(client.model, "stealth/ox-alpha")
         self.assertEqual(client.api_key, "test-openrouter-key")
 
-    def test_all_default_roles_use_free_gpt_oss_through_openrouter(self):
+    def test_all_default_roles_use_ox_alpha_through_openrouter(self):
         with patch.dict(os.environ, {}, clear=True):
             for role in (
                 "requirements_analyst",
@@ -42,7 +42,7 @@ class OpenRouterRuntimeTests(unittest.TestCase):
             ):
                 route = model_route(role)
                 self.assertEqual(route.provider, "openrouter")
-                self.assertEqual(route.primary, "openai/gpt-oss-120b:free")
+                self.assertEqual(route.primary, "stealth/ox-alpha")
 
     def test_global_model_switch_is_env_only(self):
         with patch.dict(
