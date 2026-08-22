@@ -220,25 +220,15 @@ def frontend_shell() -> HTMLResponse:
     return HTMLResponse(
         html,
         headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
-            "Expires": "0",
         },
     )
 
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    return frontend_shell()
-
-
-@app.get("/{path:path}")
-async def spa(path: str):
-    if path.startswith("api/"):
-        return FileResponse(WEB_STATIC / "404.html", status_code=404)
-    if "." in Path(path).name:
-        candidate = WEB_STATIC / path
-        if candidate.exists() and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(WEB_STATIC / "404.html", status_code=404)
+@app.get("/{path:path}", include_in_schema=False)
+async def frontend(path: str):
+    requested = WEB_STATIC / path
+    if path and requested.is_file():
+        return FileResponse(requested)
     return frontend_shell()
