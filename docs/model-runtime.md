@@ -32,6 +32,10 @@ Provider adapters register with `register_model_provider(name, factory)`. A new
 provider only needs to implement the shared model client contract; harnesses then
 receive it through `model_client_for_route(model_route(role))`.
 
+There is deliberately no Gemma-only, Ox-only, OpenRouter-only, or Ollama-only
+model guardrail in the harness. Defaults choose Ox Alpha today; they do not limit
+what registered providers/models may be selected tomorrow.
+
 ## Model resources
 
 Models are catalog resources separate from providers. Each resource declares a
@@ -65,6 +69,12 @@ Routing asks for a capability, not a model name. Today the selector prefers free
 eligible resources and then priority. This policy can later include quality,
 latency, privacy and budget without changing the harness.
 
+The catalog currently contains the configured/registered resources; it is not a
+hard-coded copy of a provider's entire marketplace. Provider catalog discovery can
+be layered on top of this same resource contract so OpenRouter, Ollama, or future
+providers can publish their available models/capabilities without changing the
+harness.
+
 ## Models as tools
 
 When at least one specialist exists beyond the current orchestrator, OPERLY adds a
@@ -81,7 +91,3 @@ This keeps the intended boundary:
 - additional models become capabilities/tools available to the orchestrator;
 - future image/audio/video model adapters can join the same resource catalog while
   keeping modality-specific transport inside their provider/model plugin boundary.
-
-Coding and repair retain an independent owner allowlist through
-`OPERLY_CODING_ALLOWED_MODELS`, so changing a global model cannot silently grant a
-new model authority to execute coding-agent requests.
