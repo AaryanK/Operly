@@ -35,7 +35,10 @@ class RuntimeRegistry:
             if match.matched:
                 matches.append((match.score, plugin.spec.id, plugin))
         if not matches:
-            raise LookupError("No installed runtime plugin matches the source tree")
+            raise LookupError(
+                "No isolated runner profile matches the source tree; "
+                "no installed runtime plugin recognized this source shape"
+            )
         matches.sort(key=lambda item: (-item[0], item[1]))
         selected = matches[0][2]
         validation = selected.validate(source)
