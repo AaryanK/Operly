@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from packages.model_runtime.openrouter_client import OpenRouterClient, _convert_content
+from packages.model_runtime.openrouter_client import OpenRouterClient, _openrouter_messages
 from packages.model_runtime.portfolio import ModelRoute, model_route
 from packages.model_runtime.providers import (
     installed_model_providers,
@@ -43,18 +43,44 @@ class OpenRouterRuntimeTests(unittest.TestCase):
                 self.assertEqual(route.provider, "openrouter")
                 self.assertEqual(route.primary, "openai/gpt-oss-120b:free")
 
-    def test_tool_and_image_shapes_are_provider_adapter_concerns(self):
-        tool = _convert_content(
-            {"role": "tool", "tool_name": "call_123", "content": "{\"ok\":true}"}
-        )
-        image = _convert_content(
-            {"role": "user", "content": "inspect", "images": ["abc123"]}
+    def test_tool_observation_recovers_provider_call_id(self):
+        translated = _openrouter_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "crm.search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_name": "crm.search",
+                    "content": "{\"ok\":true}",
+                },
+            ]
         )
 
-        self.assertEqual(tool["tool_call_id"], "call_123")
-        self.assertNotIn("tool_name", tool)
-        self.assertEqual(image["content"][0], {"type": "text", "text": "inspect"})
-        self.assertTrue(image["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(translated[1]["tool_call_id"], "call_123")
+        self.assertNotIn("tool_name", translated[1])
+
+    def test_image_translation_is_provider_adapter_concern(self):
+        translated = _openrouter_messages(
+            [{"role": "user", "content": "inspect", "images": ["abc123"]}]
+        )
+
+        self.assertEqual(
+            translated[0]["content"][0], {"type": "text", "text": "inspect"}
+        )
+        self.assertTrue(
+            translated[0]["content"][1]["image_url"]["url"].startswith(
+                "data:image/png;base64,"
+            )
+        )
 
     def test_provider_registry_is_extensible_without_harness_changes(self):
         class StubClient:
@@ -63,7 +89,9 @@ class OpenRouterRuntimeTests(unittest.TestCase):
             async def chat(self, messages, tools=None):
                 return {"role": "assistant", "content": "ok"}
 
-        register_model_provider("unit-test-provider", lambda route: StubClient(), replace=True)
+        register_model_provider(
+            "unit-test-provider", lambda route: StubClient(), replace=True
+        )
         client = model_client_for_route(ModelRoute("unit-test-provider", "anything"))
 
         self.assertIsInstance(client, StubClient)
