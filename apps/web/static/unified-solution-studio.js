@@ -191,6 +191,14 @@
 
   async function runtime() {
     if(S.runtime) return S.runtime;
+    const hint=S.active?.runtime;
+    if(hint?.kind==="studio" && hint.id){S.runtime={kind:"studio",id:hint.id};return S.runtime;}
+    if(hint?.kind==="app" && hint.id){S.runtime={kind:"app",id:hint.id};return S.runtime;}
+    if(hint?.kind==="generated" && hint.id){
+      const project=await api(`/custom-software/projects/${hint.id}`);
+      S.runtime={kind:"generated",id:hint.id,planId:project.planId||null,approvedVersion:project.approvedPlanVersion||null,previewUrl:S.active.preview?.url||`/api/custom-software/projects/${hint.id}/preview`};
+      return S.runtime;
+    }
     const response=await fetch(`/api/solutions/${encodeURIComponent(S.active.id)}/preview`,{credentials:"same-origin",redirect:"follow",cache:"no-store"});
     if(!response.ok) throw new Error(`Preview could not be resolved (${response.status})`);
     const path=new URL(response.url,location.origin).pathname; let match;
@@ -314,6 +322,38 @@
     changebar();
   }
 
+  function generatedEditMode(instruction) {
+    if(S.selected) return "visual";
+    if(/\b(api|backend|database|server|endpoint|persist|storage|auth|login|worker|job)\b/i.test(instruction)) return "backend";
+    if(/\b(css|style|layout|responsive|frontend|button|color|spacing|mobile|tablet|component)\b/i.test(instruction)) return "frontend";
+    return "source";
+  }
+
+  function generatedBuildKey() {
+    const suffix=globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2);
+    return `studio-edit-${Date.now()}-${suffix}`.slice(0,120);
+  }
+
+  async function generatedEdit(rt,instruction) {
+    if(!rt.planId||!rt.approvedVersion) throw new Error("This generated Solution is not linked to an approved coding plan yet.");
+    const mode=generatedEditMode(instruction);
+    previewState("loading","Editing source…");
+    const updated=await api(`/coding-harness/plans/${rt.planId}/source/edits`,{method:"POST",body:JSON.stringify({planId:rt.planId,approvedVersion:rt.approvedVersion,instruction,mode,context:sourceContext()})});
+    msg("ai",updated.summary||"The source edit is ready. I’m building and verifying it now.",`Source S${updated.sourceVersion} · ${mode}`);
+    previewState("loading","Building & verifying…");
+    const build=await api("/coding-harness/builds",{method:"POST",body:JSON.stringify({planId:rt.planId,approvedVersion:rt.approvedVersion,idempotencyKey:generatedBuildKey()})});
+    if(build.state!=="preview_ready"||!build.preview?.url){
+      const evidence=build.result?.failureEvidence||{};
+      throw new Error(evidence.message||build.failureClassification||`Generated app build stopped in ${build.state||"an unknown state"}`);
+    }
+    rt.previewUrl=build.preview.url;
+    await loadPreview(rt.previewUrl);
+    previewState("ready","Verified app preview");
+    const repairs=Number(build.repairCount||0);
+    msg("ai","Updated, built, tested and loaded the verified application preview.",`Source S${build.source?.sourceVersion||updated.sourceVersion}${repairs?` · ${repairs} automatic repair${repairs===1?"":"s"}`:" · checks passed"}`);
+    await history();
+  }
+
   async function send() {
     const input=$("#ss-input"),button=$("#ss-send"),instruction=input?.value.trim();
     if(!instruction||!S.active||button?.disabled) return;
@@ -323,9 +363,10 @@
       const rt=await runtime();
       if(rt.kind==="studio") await websiteEdit(rt,instruction);
       else if(rt.kind==="app") await appEdit(rt,instruction);
-      else msg("ai","This generated-software runtime still uses its dedicated coding-harness flow. I did not mutate it from this Studio session.","No change applied");
+      else if(rt.kind==="generated") await generatedEdit(rt,instruction);
+      else msg("ai","I could not resolve this Solution's editable runtime.","No change applied");
     } catch(error) {
-      msg("ai",friendly(error),"Your previous version is unchanged");
+      msg("ai",friendly(error),"Your previous verified version is unchanged");
       previewState("ready","Preview unchanged");
     } finally {
       setBusy(false);input.focus();
