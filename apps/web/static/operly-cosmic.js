@@ -137,8 +137,14 @@
   // The workspace shell and rail are intentionally re-renderable. Keep this
   // observer alive so collapse/settings controls are restored after workspace or
   // navigation refreshes instead of disappearing after the first successful mount.
-  // Observe class transitions too: authentication reveals #dashboard by removing
-  // .hidden, and that transition must immediately enforce the signed-in screen boundary.
   const observer=new MutationObserver(()=>mount());
-  observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["class"]});
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+
+  // Authentication reveals #dashboard by removing .hidden. Watch only that class
+  // transition instead of every class change in the application.
+  const dashboard=$("#dashboard");
+  if(dashboard){
+    const authObserver=new MutationObserver(()=>ensureAuthenticatedScreenBoundary());
+    authObserver.observe(dashboard,{attributes:true,attributeFilter:["class"]});
+  }
 })();
