@@ -17,6 +17,7 @@ from packages.capabilities.providers import (
 )
 from packages.capabilities.registry import CapabilityRegistry
 from packages.capabilities.reminder_provider import ReminderProvider
+from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
@@ -47,6 +48,7 @@ def _builtin_providers():
         WorkspaceProvider(),
         OperationsProvider(),
         StudioProvider(),
+        SoftwareProjectProvider(),
         ReminderProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
