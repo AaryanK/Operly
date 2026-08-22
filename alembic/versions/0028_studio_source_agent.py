@@ -14,6 +14,13 @@ depends_on = None
 
 
 def upgrade():
+    bind = op.get_bind()
+    # The historical 0001 baseline materializes all currently registered core
+    # models on a brand-new database. Therefore a fresh install may already have
+    # this table before Alembic reaches 0028, while a real 0027 -> 0028 upgrade
+    # will not. Support both paths without weakening the revision boundary.
+    if sa.inspect(bind).has_table("studio_source_versions"):
+        return
     op.create_table(
         "studio_source_versions",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -38,6 +45,9 @@ def upgrade():
 
 
 def downgrade():
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("studio_source_versions"):
+        return
     op.drop_index("ix_studio_source_versions_project_id", table_name="studio_source_versions")
     op.drop_index("ix_studio_source_versions_tenant_id", table_name="studio_source_versions")
     op.drop_table("studio_source_versions")
