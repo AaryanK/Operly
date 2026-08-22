@@ -1,4 +1,9 @@
-"""Shared model-runtime primitives used across OPERLY layers."""
+"""Shared model-runtime primitives used across OPERLY layers.
+
+The public orchestration boundary is Model.infer(). Provider clients remain
+exported only for compatibility while callers migrate; new code should use the
+contracts and registry helpers below.
+"""
 
 from .catalog import (
     ModelResource,
@@ -7,6 +12,16 @@ from .catalog import (
     register_model_resource,
     replace_discovered_resources,
     select_model_resource,
+)
+from .contracts import (
+    InferenceBudget,
+    InferenceRequest,
+    InferenceResult,
+    Model,
+    ModelInferenceError,
+    ModelSelector,
+    ModelTraits,
+    ModelUsage,
 )
 from .discovery import (
     installed_model_discoverers,
@@ -22,10 +37,39 @@ from .providers import (
     model_client_for_route,
     register_model_provider,
 )
+from .registry import (
+    ConfiguredModel,
+    ModelAttemptEvent,
+    ModelChatAdapter,
+    ModelPool,
+    ModelRegistry,
+    default_model_registry,
+    model_chat_client_for_role,
+    model_for_role,
+    register_model_telemetry_sink,
+)
 from .semantic_router import SemanticDecision, SemanticRouter, SemanticRoutingError
 from .service import ModelInvocationResult, ModelInvocationService
 
 __all__ = [
+    "InferenceBudget",
+    "InferenceRequest",
+    "InferenceResult",
+    "Model",
+    "ModelInferenceError",
+    "ModelSelector",
+    "ModelTraits",
+    "ModelUsage",
+    "ConfiguredModel",
+    "ModelPool",
+    "ModelRegistry",
+    "ModelAttemptEvent",
+    "ModelChatAdapter",
+    "default_model_registry",
+    "model_for_role",
+    "model_chat_client_for_role",
+    "register_model_telemetry_sink",
+    # Compatibility exports below this line. New callers should not depend on them.
     "OllamaClient",
     "OllamaError",
     "OpenRouterClient",

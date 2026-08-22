@@ -33,15 +33,17 @@ from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
+from apps.api.software_projects_router import router as software_projects_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_router import router as studio_router
 from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_router import router as workspace_router
-from packages.connectors.runtime import connector_runtime
+from packages.capabilities.defaults import bootstrap_builtin_plugins
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.plugins import default_plugin_runtime
 from packages.studio.agent_resume import resume_interrupted_studio_runs
 
 load_dotenv(override=False)
@@ -134,12 +136,14 @@ async def lifespan(app: FastAPI):
     validate_runtime_configuration()
     await init_db()
     await bootstrap_admin()
-    await connector_runtime.start()
+    bootstrap_builtin_plugins()
+    plugin_runtime = default_plugin_runtime()
+    await plugin_runtime.start()
     await resume_interrupted_studio_runs()
     try:
         yield
     finally:
-        await connector_runtime.stop()
+        await plugin_runtime.stop()
 
 
 app = FastAPI(title="OPERLY API", version="0.1.0", lifespan=lifespan)
@@ -194,6 +198,7 @@ for router in (
     custom_software_router,
     architecture_pack_router,
     coding_harness_router,
+    software_projects_router,
     solutions_router,
     solutions_public_router,
 ):

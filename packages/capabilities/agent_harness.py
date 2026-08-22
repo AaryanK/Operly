@@ -2,15 +2,19 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.actions.service import ActionService
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.firewall import (
+    ActionBackedCapabilityFirewall,
+    CapabilityInvocation,
+)
+from packages.capabilities.session_view import SessionCapabilityView
 from packages.database.db import session_scope
 from packages.security.execution_context import (
+    ExecutionContext,
     ExecutionContextError,
     resolve_execution_context,
 )
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
-from packages.security.temporal_context import resolve_temporal_context
 
 
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
@@ -37,6 +41,22 @@ _DISCORD_CURRENT_CONTEXT = {
     "discord.create_thread",
 }
 
+# Migration-safe starter set. Everything else is discoverable through the permanent
+# capability kernel instead of being injected into every model turn. These are
+# general observation/context operations, not vendor-specific tools.
+_DEFAULT_INITIAL_CAPABILITIES = frozenset(
+    {
+        "company.read_state",
+        "company.search_events",
+        "runtime.context",
+        "context.human.search",
+        "context.private_workspace_search",
+        "context.tenant.search",
+        "context.conversation.search",
+        "solution.inspect",
+    }
+)
+
 
 @dataclass(slots=True)
 class PluginInvocationContext:
@@ -49,10 +69,21 @@ class PluginInvocationContext:
 
 
 class PluginAgentHarness:
-    """Single execution authority between the reasoning model and plugins."""
+    """Agent-facing capability view over one canonical invocation boundary.
+
+    Authorization details intentionally remain compatible with the current system.
+    Consequential execution is delegated to CapabilityFirewall so future auth work
+    does not require rewriting every agent/transport surface again.
+
+    Capability visibility is session-scoped and progressive. The model starts with
+    a small kernel plus general observation tools, then uses capability.search and
+    capability.describe to expose exact schemas as needed. Discovery never grants
+    permission; execution still crosses the firewall.
+    """
 
     def __init__(self, registry=None):
         self.registry = registry
+        self._session_views: dict[str, SessionCapabilityView] = {}
 
     async def registry_for(self, context: PluginInvocationContext):
         if self.registry:
@@ -117,12 +148,15 @@ class PluginAgentHarness:
     def authority(self, role: str) -> set[str]:
         return default_permissions(role)
 
-    async def authority_for(self, context: PluginInvocationContext) -> set[str]:
+    async def execution_context_for(
+        self,
+        context: PluginInvocationContext,
+    ) -> ExecutionContext | None:
         if not context.user_id:
-            return set()
+            return None
         try:
             async with session_scope() as db:
-                execution = await resolve_execution_context(
+                return await resolve_execution_context(
                     db,
                     workspace_id=context.tenant_id,
                     user_id=context.user_id,
@@ -132,13 +166,14 @@ class PluginAgentHarness:
                     require_membership=True,
                 )
         except ExecutionContextError:
-            return set()
-        return set(execution.permissions)
+            return None
+
+    async def authority_for(self, context: PluginInvocationContext) -> set[str]:
+        execution = await self.execution_context_for(context)
+        return set(execution.permissions) if execution else set()
 
     @staticmethod
     def _is_private_surface(context: PluginInvocationContext) -> bool:
-        # Web/MCP calls are personal unless their client explicitly declares a shared
-        # origin. Discord is private only for a DM; a guild/server is workspace-bound.
         if context.channel == "discord":
             return bool(context.metadata.get("is_direct"))
         return not bool(context.metadata.get("shared_surface"))
@@ -161,16 +196,73 @@ class PluginAgentHarness:
             return False
         return True
 
+    @staticmethod
+    def _session_key(context: PluginInvocationContext) -> str:
+        conversation = str(context.metadata.get("_conversation_id") or "").strip()
+        principal = str(context.user_id or "anonymous")
+        # A real conversation ID is preferred. The fallback still scopes transient
+        # exposure to one principal/workspace/channel tuple instead of global state.
+        return ":".join(
+            (
+                context.tenant_id,
+                principal,
+                context.channel,
+                conversation or "ephemeral",
+            )
+        )
+
+    async def session_view_for(
+        self,
+        context: PluginInvocationContext,
+        *,
+        authority: set[str] | None = None,
+        registry=None,
+    ) -> SessionCapabilityView:
+        authority = set(authority) if authority is not None else await self.authority_for(context)
+        registry = registry or await self.registry_for(context)
+        key = self._session_key(context)
+        existing = self._session_views.get(key)
+
+        if existing is not None and existing.tenant_id == context.tenant_id:
+            # Registry snapshots are intentionally refreshed so connector/plugin
+            # availability can change during a conversation. Preserve the session's
+            # discovered IDs while swapping in the fresh registry and authority.
+            # schemas() re-validates every exposed ID, so a revoked permission or
+            # disconnected plugin immediately disappears without broadening access.
+            existing.registry = registry
+            existing.authority = authority
+            existing.visible_predicate = lambda capability_id: self.capability_authorized(
+                capability_id,
+                authority,
+                context,
+            )
+            return existing
+
+        view = SessionCapabilityView(
+            registry,
+            context.tenant_id,
+            authority,
+            visible_predicate=lambda capability_id: self.capability_authorized(
+                capability_id,
+                authority,
+                context,
+            ),
+            initial_ids=_DEFAULT_INITIAL_CAPABILITIES,
+        )
+        self._session_views[key] = view
+        return view
+
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         authority = await self.authority_for(context)
         if not authority:
             return []
         registry = await self.registry_for(context)
-        return [
-            item.model_tool_schema()
-            for item in registry.metadata(context.tenant_id, authority=authority)
-            if self.capability_authorized(item.id, authority, context)
-        ]
+        view = await self.session_view_for(
+            context,
+            authority=authority,
+            registry=registry,
+        )
+        return view.schemas()
 
     def handles(self, name: str) -> bool:
         if self.registry:
@@ -185,82 +277,62 @@ class PluginAgentHarness:
         *,
         call_id: str | None = None,
     ) -> dict[str, Any]:
-        authority = await self.authority_for(context)
+        execution = await self.execution_context_for(context)
+        if execution is None:
+            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+        authority = set(execution.permissions)
         if not authority or not self.capability_authorized(name, authority, context):
             return {"ok": False, "error": "Unknown or unauthorized plugin"}
+
         registry = await self.registry_for(context)
-        arguments = dict(arguments)
-
-        async with session_scope() as db:
-            service = ActionService(
-                db,
-                registry,
-                authority=authority,
-                actor_id=context.user_id,
-            )
-            try:
-                definition = next(
-                    item
-                    for item in registry.metadata(context.tenant_id, authority=authority)
-                    if item.id == name and self.capability_authorized(item.id, authority, context)
-                )
-            except StopIteration:
-                return {"ok": False, "error": "Unknown or unauthorized plugin"}
-
-            rationale = str(
-                arguments.pop("_rationale", "")
-                or f"Model selected {name} for the current objective"
-            )[:2000]
-            expected = str(
-                arguments.pop("_expected_outcome", "") or definition.description
-            )[:2000]
-            runtime_metadata = dict(context.metadata)
-            if context.user_id:
-                runtime_metadata["principal_id"] = f"user:{context.user_id}"
-            runtime_metadata.setdefault(
-                "client_id",
-                str(context.metadata.get("client_id") or context.channel or "operly"),
-            )
-            temporal = await resolve_temporal_context(
-                db,
-                user_id=context.user_id,
-                tenant_id=context.tenant_id,
-            )
-            runtime_metadata["temporal_context"] = temporal.as_dict()
-
-            try:
-                action = await service.propose(
-                    tenant_id=context.tenant_id,
-                    objective=context.objective,
-                    capability=name,
-                    arguments=arguments,
-                    rationale=rationale,
-                    expected_outcome=expected,
-                    risk_level=definition.risk_level,
-                    causation_id=call_id,
-                    idempotency_key=(
-                        f"{context.tenant_id}:{call_id}" if call_id else None
-                    ),
-                    runtime_context={
-                        "channel": context.channel,
-                        "metadata": runtime_metadata,
-                        "temporal_context": temporal.as_dict(),
-                    },
-                )
-            except (ValueError, PermissionError, LookupError) as error:
-                return {"ok": False, "error": str(error)}
-
-            await db.commit()
-            result = json.loads(action.result_json or "{}")
+        view = await self.session_view_for(
+            context,
+            authority=authority,
+            registry=registry,
+        )
+        if name not in view.exposed_ids or not view._visible(name):
             return {
-                "ok": action.status in {"VERIFIED", "WAITING_APPROVAL"},
-                "action_id": action.id,
-                "plugin": name,
-                "status": action.status,
-                "approval_id": action.approval_id,
-                "observation": result.get("evidence", {}),
-                "verification": json.loads(action.verification_json or "{}"),
+                "ok": False,
+                "error": "Capability is not exposed in this model session; discover and describe it first",
             }
+
+        try:
+            definition = registry.definition(name)
+        except LookupError:
+            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+
+        clean_arguments = dict(arguments)
+        rationale = str(
+            clean_arguments.pop("_rationale", "")
+            or f"Model selected {name} for the current objective"
+        )[:2000]
+        expected = str(
+            clean_arguments.pop("_expected_outcome", "") or definition.description
+        )[:2000]
+
+        # Discovery metadata needs the current authority set but cannot derive it
+        # from model-visible arguments. Pass it only in runtime invocation metadata.
+        runtime_metadata = dict(context.metadata)
+        if name in {"capability.search", "capability.describe"}:
+            runtime_metadata["authority"] = sorted(authority)
+
+        firewall = ActionBackedCapabilityFirewall(registry)
+        result = await firewall.invoke(
+            CapabilityInvocation(
+                capability_id=name,
+                arguments=clean_arguments,
+                objective=context.objective,
+                rationale=rationale,
+                expected_outcome=expected,
+                call_id=call_id,
+                channel=context.channel,
+                metadata=runtime_metadata,
+            ),
+            execution,
+        )
+        payload = result.as_dict()
+        view.observe(name, payload)
+        return payload
 
     async def run_session(
         self,

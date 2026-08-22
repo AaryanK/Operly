@@ -12,7 +12,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from packages.model_runtime import OllamaClient, model_route
+from packages.model_runtime import model_chat_client_for_role
 
 
 class Strict(BaseModel):
@@ -208,10 +208,7 @@ async def resolve_capability_placement(
     if not text:
         raise PlacementResolutionError("capability request is empty")
     if client is None:
-        route = model_route("capability_placement")
-        if route.provider != "ollama":
-            raise RuntimeError(f"Model provider {route.provider} is not installed")
-        client = OllamaClient(model=route.primary, fallback_models=route.fallbacks)
+        client = model_chat_client_for_role("capability_placement")
     packet = {
         "userRequest": text[:8000],
         "workspace": workspace.model_dump(mode="json"),

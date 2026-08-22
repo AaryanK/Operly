@@ -3,29 +3,39 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
-from packages.model_runtime.catalog import select_model_resource
+from packages.model_runtime.contracts import InferenceRequest, ModelSelector
 from packages.model_runtime.discovery import refresh_model_discovery
-from packages.model_runtime.portfolio import ModelRoute, model_route
-from packages.model_runtime.providers import model_client_for_route
+from packages.model_runtime.portfolio import model_route
+from packages.model_runtime.registry import default_model_registry
 
 
 @dataclass(frozen=True, slots=True)
 class ModelInvocationResult:
     provider: str
     model: str
+    resource_id: str
     capability: str
+    selected_tags: tuple[str, ...]
     content: str
 
 
-class ModelInvocationService:
-    """Route a bounded specialist request by capability, not model identity.
+def _norm_tags(values: Iterable[str]) -> frozenset[str]:
+    return frozenset(
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    )
 
-    Delegated calls intentionally receive no tools. This makes model-as-tool
-    delegation one level deep by default and prevents unbounded model recursion.
-    Provider catalog discovery happens behind the model-runtime boundary; the
-    harness does not know or care where the selected resource came from.
+
+class ModelInvocationService:
+    """Route a bounded specialist request by capabilities and model traits.
+
+    The caller never chooses a provider/model id. It states the specialist
+    capability it needs plus optional preference tags such as ``heavy``, ``fast``,
+    ``coding``, ``long-context``, ``local`` or ``free``. Delegated calls receive no
+    tools, keeping model-to-model delegation one level deep by default.
     """
 
     async def invoke(
@@ -35,6 +45,8 @@ class ModelInvocationService:
         objective: str,
         context: str = "",
         prefer_free: bool = True,
+        prefer_tags: Iterable[str] = (),
+        avoid_tags: Iterable[str] = (),
         exclude_orchestrator: bool = True,
     ) -> ModelInvocationResult:
         clean_capability = str(capability or "").strip().lower()
@@ -42,32 +54,34 @@ class ModelInvocationService:
         if not clean_capability or not clean_objective:
             raise ValueError("Model capability and objective are required")
 
+        preferred = set(_norm_tags(prefer_tags))
+        avoided = _norm_tags(avoid_tags)
+        if prefer_free:
+            preferred.add("free")
+        if preferred & set(avoided):
+            raise ValueError("Model preference and avoidance tags must not overlap")
+
         try:
             ttl = float(os.getenv("OPERLY_MODEL_DISCOVERY_TTL_SECONDS", "600"))
         except ValueError:
             ttl = 600.0
         await refresh_model_discovery(ttl_seconds=max(0.0, ttl))
 
-        orchestrator = model_route("business_agent")
-        exclude = (
-            (orchestrator.provider, orchestrator.primary)
-            if exclude_orchestrator
-            else None
-        )
-        resource = select_model_resource(
-            clean_capability,
-            exclude=exclude,
-            prefer_free=prefer_free,
-        )
-        if resource is None:
-            raise LookupError(
-                f"No delegated model is available for capability: {clean_capability}"
-            )
+        excluded: set[str] = set()
+        if exclude_orchestrator:
+            orchestrator = model_route("business_agent")
+            excluded.add(f"{orchestrator.provider}:{orchestrator.primary}")
 
-        client = model_client_for_route(
-            ModelRoute(provider=resource.provider, primary=resource.id)
+        registry = default_model_registry()
+        selector = ModelSelector(
+            requires=frozenset({clean_capability}),
+            prefer_tags=frozenset(preferred),
+            avoid_tags=avoided,
+            prefer_free=prefer_free,
+            exclude_resource_ids=frozenset(excluded),
         )
-        messages: list[dict[str, Any]] = [
+        model = registry.resolve(selector)
+        messages: tuple[dict[str, Any], ...] = (
             {
                 "role": "system",
                 "content": (
@@ -80,18 +94,25 @@ class ModelInvocationService:
                 "role": "user",
                 "content": (
                     f"Capability: {clean_capability}\n"
-                    f"Objective: {clean_objective}\n"
+                    + (
+                        "Preferred traits: " + ", ".join(sorted(preferred)) + "\n"
+                        if preferred
+                        else ""
+                    )
+                    + f"Objective: {clean_objective}\n"
                     + (f"Context:\n{str(context)[:12000]}" if context else "")
                 ),
             },
-        ]
-        response = await client.chat(messages, [])
-        content = str(response.get("content") or "").strip()
+        )
+        result = await model.infer(InferenceRequest(messages=messages))
+        content = str(result.message.get("content") or "").strip()
         if not content:
             raise RuntimeError("Delegated model returned no usable content")
         return ModelInvocationResult(
-            provider=resource.provider,
-            model=resource.id,
+            provider=result.provider,
+            model=result.provider_model_id,
+            resource_id=result.model_resource_id,
             capability=clean_capability,
+            selected_tags=tuple(sorted(model.tags)),
             content=content,
         )
