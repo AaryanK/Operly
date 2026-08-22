@@ -11,7 +11,8 @@ from packages.database.application_builder_models import ApplicationVersion,Mana
 from packages.database.custom_software_models import GeneratedProject,GeneratedSourceBundle,RunnerBuildRecord,RunnerPreviewRecord
 from packages.database.product_models import CompanyProfile,SolutionDeployment,SolutionRecord
 from packages.database.studio_models import StudioDeployment,StudioProject,StudioVersion
-from packages.studio.schema import SiteSchema,blank_site
+from packages.studio.design import compose_initial_site
+from packages.studio.schema import SiteSchema
 from packages.studio.service import StudioService
 
 class LifecycleStatus(StrEnum):
@@ -70,13 +71,14 @@ class SolutionService:
   existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.solution_type==SolutionType.DIGITAL_PRESENCE,SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED))
   if existing:return await self.get(db,tenant_id,existing.id)
   business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or "Untitled Website").strip()[:200]
-  description=str(profile.get("description") or "")[:500];site=blank_site(business,description).model_dump(mode="json");page=site["pages"][0];services=profile.get("products_services") or []
+  description=str(profile.get("description") or "")[:500]
+  services=profile.get("products_services") or []
   if isinstance(services,str):services=[services]
-  if services:page["sections"].append({"id":"services","type":"service_grid","props":{"heading":"What we offer","description":"","items":[{"title":str(x)[:180],"description":""} for x in services[:12]],"source_mode":"manual","catalog_item_ids":[]}})
-  contact=profile.get("contact") or {};public_contact=", ".join((contact.get("emails",[])+contact.get("phones",[]))[:4]) if isinstance(contact,dict) else str(contact)
-  page["sections"].append({"id":"contact","type":"contact_form","props":{"heading":"Contact us","description":"Tell us how we can help.","form_key":"contact","submit_button_text":"Send inquiry","success_message":"Thanks — we'll be in touch."}});page["sections"].append({"id":"footer","type":"footer","props":{"business_name":business,"public_contact":public_contact,"navigation":[],"copyright_text":business}});schema=SiteSchema.model_validate(site)
-  p=await StudioService.create_project(db,tenant_id,user_id,business,description);v=await db.get(StudioVersion,p.active_draft_version_id);v.schema_json=schema.model_dump_json();await db.flush()
-  context={"company_profile":profile,"planning_request":{"objective":"Get this business online","business_identity":business,"description":description,"products_services":services,"contact":contact,"brand":profile.get("brand",{}),"target_customers":profile.get("target_customers"),"service_areas":profile.get("service_areas")}}
+  contact=profile.get("contact") or {}
+  schema=compose_initial_site(business,description,services,contact)
+  p=await StudioService.create_project(db,tenant_id,user_id,business,description)
+  v=await db.get(StudioVersion,p.active_draft_version_id);v.schema_json=schema.model_dump_json();await db.flush()
+  context={"company_profile":profile,"design_plan":{"visual_style":schema.theme.visual_style,"mode":schema.theme.mode,"container":schema.theme.container},"planning_request":{"objective":"Get this business online","business_identity":business,"description":description,"products_services":services,"contact":contact,"brand":profile.get("brand",{}),"target_customers":profile.get("target_customers"),"service_areas":profile.get("service_areas")}}
   row=await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=business,description=description,solution_type=SolutionType.DIGITAL_PRESENCE,lifecycle_status=LifecycleStatus.PREVIEW_READY,current_version_reference=v.id,preview_state="ready",preview_url="/api/solutions/{solution_id}/preview",production_state="offline",production_url=None,visibility="private",context_json=json.dumps(context,sort_keys=True));await append_event(db,tenant_id=tenant_id,event_type="solution.created",payload={"solution_id":row.id,"solution_type":row.solution_type,"status":row.lifecycle_status},source="solutions");return row
  async def approve(self,db,tenant_id,solution_id,user_id):
   from packages.solutions.production import ProductionService
