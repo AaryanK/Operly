@@ -1,10 +1,9 @@
 import unittest
 from pathlib import Path
 
-from packages.custom_software.live_planning import PlanningContextPacket
+from packages.custom_software.live_planning import PlanningContextPacket, RequirementsAnalysis
 from packages.custom_software.model_planning_client import ModelPlanningClient
 from packages.model_runtime import InferenceResult
-from packages.custom_software.live_planning import RequirementAnalysis
 
 
 class _FakeModel:
@@ -14,7 +13,14 @@ class _FakeModel:
         return InferenceResult(
             message={
                 "role": "assistant",
-                "content": '{"root_objective":"Build a tiny operations tool","requirements":[],"global_constraints":[],"ambiguities":[],"conflicts":[],"planning_assumptions":[]}',
+                "content": (
+                    '{"root_objective":"Build a tiny operations tool","requirements":['
+                    '{"requirement_id":"R-001","source_excerpt":"Build a tiny operations tool",'
+                    '"normalized_requirement":"Provide a tiny operations tool",'
+                    '"category":"product","priority":"mandatory",'
+                    '"acceptance_criteria":["The operations tool is available"]}],'
+                    '"global_exclusions":[],"questions_requiring_user_input":[],"safe_assumptions":[]}'
+                ),
             },
             model_resource_id="fake-planner",
             provider="test-provider",
@@ -29,24 +35,18 @@ class PlanningModelRuntimeBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def test_structured_planning_uses_model_infer_contract(self):
         client = ModelPlanningClient(model_resolver=lambda role: _FakeModel())
         context = PlanningContextPacket(
-            original_prompt="Build a tiny operations tool",
-            root_objective="Build a tiny operations tool",
-            current_node_id="root",
-            current_node_path=("root",),
-            parent_summary=None,
-            sibling_summaries=[],
-            dependency_summaries=[],
-            requirement_ledger=[],
-            constraints=[],
-            assumptions=[],
-            unresolved_questions=[],
-            depth=0,
-            budget_remaining={},
+            role="requirements_analyst",
+            untrusted_requirements={"prompt": "Build a tiny operations tool"},
+            current_contract={},
+            related_contracts={},
+            constraints={},
+            previous_findings=[],
+            budget={"remaining_calls": 10},
         )
         result = await client.generate_structured(
             role="requirements_analyst",
             context=context,
-            output_schema=RequirementAnalysis,
+            output_schema=RequirementsAnalysis,
             request_id="req-1",
             timeout_seconds=30,
         )
@@ -54,6 +54,7 @@ class PlanningModelRuntimeBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider, "test-provider")
         self.assertEqual(result.model_id, "test-model")
         self.assertEqual(result.structured_output["root_objective"], "Build a tiny operations tool")
+        self.assertEqual(result.structured_output["requirements"][0]["requirement_id"], "R-001")
 
     def test_live_plan_service_has_no_provider_transport_dependency(self):
         root = Path(__file__).resolve().parents[1]
