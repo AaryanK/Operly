@@ -171,6 +171,11 @@ class TracingModelChatClient:
         self._call_index = 0
 
     @property
+    def model(self) -> Any:
+        """Keep the debug wrapper transparent to existing model provenance code."""
+        return getattr(self.inner, "model", None)
+
+    @property
     def last_model(self) -> str:
         return str(getattr(self.inner, "last_model", getattr(getattr(self.inner, "model", None), "id", "unknown")))
 
