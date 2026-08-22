@@ -1,8 +1,7 @@
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
+from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.firewall import ActionBackedCapabilityFirewall, CapabilityDecision, CapabilityInvocation
 from packages.capabilities.providers import BaseProvider
@@ -178,6 +177,43 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("demo.send", {row["function"]["name"] for row in view.schemas()})
 
+    async def test_session_discovery_survives_registry_refresh_but_rechecks_authority(self):
+        first = CapabilityRegistry()
+        first.register(_DemoProvider())
+        second = CapabilityRegistry()
+        second.register(_DemoProvider())
+        harness = PluginAgentHarness()
+        context = PluginInvocationContext(
+            tenant_id="workspace-a",
+            user_id="user-a",
+            role="owner",
+            objective="send a notification",
+            channel="web",
+            metadata={"_conversation_id": "conversation-a"},
+        )
+
+        view = await harness.session_view_for(
+            context,
+            authority={"demo:read", "demo:send"},
+            registry=first,
+        )
+        view.expose({"demo.send"})
+        refreshed = await harness.session_view_for(
+            context,
+            authority={"demo:read", "demo:send"},
+            registry=second,
+        )
+        self.assertIs(refreshed, view)
+        self.assertIn("demo.send", {row["function"]["name"] for row in refreshed.schemas()})
+
+        reduced = await harness.session_view_for(
+            context,
+            authority={"demo:read"},
+            registry=second,
+        )
+        self.assertIn("demo.send", reduced.exposed_ids)
+        self.assertNotIn("demo.send", {row["function"]["name"] for row in reduced.schemas()})
+
     async def test_firewall_evaluation_preserves_existing_permission_and_approval_contract(self):
         registry = CapabilityRegistry()
         registry.register(_DemoProvider())
@@ -222,16 +258,20 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.get("static-web-js").spec.id, "static-web-js")
         self.assertEqual(registry.get("python-stdlib-web").spec.id, "python-stdlib-web")
 
-    def test_studio_has_no_concrete_model_provider_import(self):
+    def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]
-        source = (root / "packages/studio/model_latency_policy.py").read_text()
-        self.assertNotIn("OpenRouterClient", source)
-        self.assertNotIn("OllamaClient", source)
-        placement = (root / "packages/capability_sandbox/target_resolution.py").read_text()
-        self.assertNotIn("OllamaClient", placement)
-        planning = (root / "packages/custom_software/provider_planning.py").read_text()
-        self.assertNotIn("OpenRouterClient", planning)
-        self.assertNotIn("OllamaClient", planning)
+        protected = (
+            "packages/studio/model_latency_policy.py",
+            "packages/coding_harness/model_client.py",
+            "packages/custom_software/provider_planning.py",
+            "packages/capability_sandbox/target_resolution.py",
+            "packages/business_brain/agent.py",
+        )
+        forbidden = ("OpenRouterClient", "OllamaClient", "model_client_for_route")
+        for relative in protected:
+            source = (root / relative).read_text()
+            for token in forbidden:
+                self.assertNotIn(token, source, f"{relative} leaked model transport {token}")
 
 
 if __name__ == "__main__":
