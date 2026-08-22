@@ -109,6 +109,7 @@ class SoftwareProjectProvider(BaseProvider):
                     "project_id": {"type": "string"},
                     "semantic_name": {"type": "string"},
                     "capability_id": {"type": "string"},
+                    "capability_version": {"type": "string"},
                     "binding_mode": {"type": "string"},
                     "principal_scope": {"type": "string"},
                     "configuration": {"type": "object"},
@@ -148,37 +149,28 @@ class SoftwareProjectProvider(BaseProvider):
         ),
     )
 
-    def __init__(self, registry) -> None:
+    def __init__(self) -> None:
         self.projects = SoftwareProjectService()
-        self.bindings = ServiceBindingStore(registry)
+        # Exact capability validation may be performed by the configuration UI or
+        # planner before creating the binding. Runtime authority is always checked
+        # later by CapabilityGateway -> CapabilityFirewall.
+        self.bindings = ServiceBindingStore()
 
     async def execute(self, context, capability_name, arguments):
         if capability_name == "software.project.list":
             projects = await self.projects.list(context.db, context.tenant_id)
-            return CapabilityResult(
-                True,
-                False,
-                {"projects": [_project_json(project) for project in projects]},
-            )
+            return CapabilityResult(True, False, {"projects": [_project_json(project) for project in projects]})
 
         if capability_name == "software.project.inspect":
             try:
-                project = await self.projects.get(
-                    context.db,
-                    context.tenant_id,
-                    str(arguments["project_id"]),
-                )
+                project = await self.projects.get(context.db, context.tenant_id, str(arguments["project_id"]))
             except LookupError as error:
                 return CapabilityResult(False, False, {"reason": str(error)})
             return CapabilityResult(True, False, {"project": _project_json(project)}, project.id)
 
         if capability_name == "software.binding.list":
             try:
-                project = await self.projects.get(
-                    context.db,
-                    context.tenant_id,
-                    str(arguments["project_id"]),
-                )
+                project = await self.projects.get(context.db, context.tenant_id, str(arguments["project_id"]))
                 bindings = await self.bindings.list(
                     context.db,
                     workspace_id=context.tenant_id,
@@ -194,11 +186,7 @@ class SoftwareProjectProvider(BaseProvider):
 
         if capability_name == "software.binding.create":
             try:
-                project = await self.projects.get(
-                    context.db,
-                    context.tenant_id,
-                    str(arguments["project_id"]),
-                )
+                project = await self.projects.get(context.db, context.tenant_id, str(arguments["project_id"]))
                 binding = await self.bindings.create(
                     context.db,
                     workspace_id=context.tenant_id,
@@ -206,6 +194,7 @@ class SoftwareProjectProvider(BaseProvider):
                     user_id=context.actor_id or "OPERLY",
                     semantic_name=str(arguments["semantic_name"]),
                     capability_id=str(arguments["capability_id"]),
+                    capability_version=str(arguments.get("capability_version") or "1.0.0"),
                     binding_mode=str(arguments.get("binding_mode") or "capability_gateway"),
                     principal_scope=str(arguments.get("principal_scope") or "project_runtime"),
                     configuration=arguments.get("configuration") or {},
@@ -233,23 +222,14 @@ class SoftwareProjectProvider(BaseProvider):
                 )
             except LookupError as error:
                 return CapabilityResult(False, False, {"reason": str(error)})
-            return CapabilityResult(
-                True,
-                True,
-                {"binding_id": binding.id, "revoked": True},
-                binding.id,
-            )
+            return CapabilityResult(True, True, {"binding_id": binding.id, "revoked": True}, binding.id)
 
         return CapabilityResult(False, False, {"reason": "unsupported_software_capability"})
 
     async def verify(self, context, capability_name, arguments, result):
         if not result.success:
             return CapabilityResult(False, result.changed, result.evidence, result.external_reference)
-        if capability_name in {
-            "software.project.list",
-            "software.project.inspect",
-            "software.binding.list",
-        }:
+        if capability_name in {"software.project.list", "software.project.inspect", "software.binding.list"}:
             return CapabilityResult(True, False, {"observed": True, **result.evidence}, result.external_reference)
         if capability_name == "software.binding.create":
             try:
