@@ -181,7 +181,10 @@ jobs:
           SESSION_SECRET: ci-session-secret-that-is-long-and-unique
           AUTH_TOKEN_PEPPER: ci-auth-token-pepper-that-is-over-thirty-two-bytes
           RAILWAY_PUBLIC_DOMAIN: smoke.operly.test
+          OPERLY_AUTO_MIGRATE: "false"
         run: |
+          rm -f ./ci-railway-smoke.db ./ci-railway-smoke.db-*
+          python -m packages.database.migrate upgrade --allow-production
           uvicorn apps.api.main:app --host 127.0.0.1 --port 8765 >/tmp/operly-smoke.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
