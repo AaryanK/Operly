@@ -42,6 +42,7 @@ from apps.api.workspace_router import router as workspace_router
 from packages.connectors.runtime import connector_runtime
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.studio.agent_resume import resume_interrupted_studio_runs
 
 load_dotenv(override=False)
 
@@ -133,6 +134,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await bootstrap_admin()
     await connector_runtime.start()
+    await resume_interrupted_studio_runs()
     try:
         yield
     finally:
