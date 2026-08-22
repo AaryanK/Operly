@@ -1,16 +1,15 @@
-"""Coding-model provider boundary.
+"""Coding-model boundary over the shared Model.infer runtime.
 
-The coding harness depends only on OPERLY's shared chat contract. Provider and
-model selection live in the model-runtime plugin registry, so switching models
-does not change workspace, execution, repair, or context-window semantics.
+The coding harness never sees a provider route. A temporary chat adapter preserves
+the existing persistent tool-loop interface while provider/model selection, retry,
+and cross-provider failover live entirely inside ``packages.model_runtime``.
 """
 from __future__ import annotations
 
 from typing import Any, Protocol
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
-from packages.model_runtime import model_client_for_route
-from packages.model_runtime.portfolio import model_route
+from packages.model_runtime import InferenceBudget, model_chat_client_for_role
 
 
 class CodingModelClient(Protocol):
@@ -21,12 +20,16 @@ class CodingModelClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def coding_model_client(role: str = "coding") -> CodingModelClient:
-    """Return the configured model/provider plugin behind bounded session context.
+def coding_model_client(
+    role: str = "coding",
+    *,
+    budget: InferenceBudget | None = None,
+) -> CodingModelClient:
+    """Return the selected Model behind bounded coding-session context.
 
-    There is intentionally no model-id or provider allowlist here. Coding and
-    repair use the same provider-agnostic model routing contract as every other
-    Operly harness role; changing the model or provider is configuration, not a
-    code authorization event.
+    There is intentionally no provider/model allowlist or provider-specific policy
+    here. ``budget`` is provider-neutral and is enforced by the model runtime.
     """
-    return ContextBoundCodingClient(model_client_for_route(model_route(role)))
+    return ContextBoundCodingClient(
+        model_chat_client_for_role(role, budget=budget)
+    )
