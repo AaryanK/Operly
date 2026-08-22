@@ -1,40 +1,31 @@
-from unittest.mock import patch
-
 from packages.coding_harness.model_client import coding_model_client
-from packages.model_runtime.portfolio import ModelRoute
+
+
+def _primary_model(client):
+    model = client.inner.model
+    models = getattr(model, "models", None)
+    return models[0] if models else model
 
 
 def test_coding_route_is_not_restricted_to_gemma_or_ollama(monkeypatch):
     monkeypatch.setenv("OPERLY_MODEL_CODING_PROVIDER", "openrouter")
     monkeypatch.setenv("OPERLY_MODEL_CODING", "stealth/ox-alpha")
+    monkeypatch.delenv("OPERLY_MODEL_CODING_CANDIDATES_JSON", raising=False)
 
-    fake_client = object()
-    with patch(
-        "packages.coding_harness.model_client.model_client_for_route",
-        return_value=fake_client,
-    ) as factory, patch(
-        "packages.coding_harness.model_client.ContextBoundCodingClient",
-        side_effect=lambda client: client,
-    ):
-        client = coding_model_client("coding")
+    client = coding_model_client("coding")
+    primary = _primary_model(client)
 
-    assert client is fake_client
-    assert factory.call_args.args[0] == ModelRoute("openrouter", "stealth/ox-alpha")
+    assert primary.provider == "openrouter"
+    assert primary.provider_model_id == "stealth/ox-alpha"
 
 
 def test_coding_route_accepts_arbitrary_registered_provider_and_model(monkeypatch):
     monkeypatch.setenv("OPERLY_MODEL_CODING_PROVIDER", "future-provider")
     monkeypatch.setenv("OPERLY_MODEL_CODING", "future/model")
+    monkeypatch.delenv("OPERLY_MODEL_CODING_CANDIDATES_JSON", raising=False)
 
-    fake_client = object()
-    with patch(
-        "packages.coding_harness.model_client.model_client_for_route",
-        return_value=fake_client,
-    ) as factory, patch(
-        "packages.coding_harness.model_client.ContextBoundCodingClient",
-        side_effect=lambda client: client,
-    ):
-        client = coding_model_client("coding")
+    client = coding_model_client("coding")
+    primary = _primary_model(client)
 
-    assert client is fake_client
-    assert factory.call_args.args[0] == ModelRoute("future-provider", "future/model")
+    assert primary.provider == "future-provider"
+    assert primary.provider_model_id == "future/model"
