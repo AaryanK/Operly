@@ -21,6 +21,7 @@ class InferenceBudget:
     timeout_seconds: float | None = None
     attempts_per_model: int = 1
     max_models: int | None = None
+    max_output_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
