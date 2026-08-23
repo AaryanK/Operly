@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import packages.coding_harness.execution_loop as loop
 from packages.coding_harness.build_service import RunnerProfileUnsupported
+from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
 
 
 class FakeDB:
@@ -51,6 +52,51 @@ async def _runtime_capability_mismatch_scenario(monkeypatch):
 
 def test_runtime_capability_mismatch_is_repaired_into_supported_source(monkeypatch):
     asyncio.run(_runtime_capability_mismatch_scenario(monkeypatch))
+
+
+async def _fullstack_capability_mismatch_scenario(monkeypatch):
+    source = SimpleNamespace(id="fullstack-s1", source_version=1)
+    row = SimpleNamespace(id="p1", approved_version=1)
+    repair_calls = 0
+
+    async def latest_source(*_):
+        return source
+
+    async def submit(*args, **kwargs):
+        raise RunnerProfileUnsupported(
+            FULLSTACK_RUNTIME_ID,
+            ["python-stdlib-web", "static-web-js"],
+            required_version=1,
+        )
+
+    async def repair(*args, **kwargs):
+        nonlocal repair_calls
+        repair_calls += 1
+        raise AssertionError("Full-stack infrastructure absence must not be treated as a source repair")
+
+    monkeypatch.setattr(loop, "latest_source", latest_source)
+    monkeypatch.setattr(loop, "submit_source_build", submit)
+    monkeypatch.setattr(loop, "repair_source_for_plan", repair)
+
+    try:
+        await loop.build_with_repair(
+            FakeDB(),
+            "tenant",
+            "user",
+            row,
+            object(),
+            "abcdefgh",
+            max_repairs=2,
+        )
+    except RunnerProfileUnsupported as error:
+        assert error.profile_id == FULLSTACK_RUNTIME_ID
+    else:
+        raise AssertionError("Missing full-stack runner support must remain an infrastructure failure")
+    assert repair_calls == 0
+
+
+def test_fullstack_capability_mismatch_never_downshifts_product_requirements(monkeypatch):
+    asyncio.run(_fullstack_capability_mismatch_scenario(monkeypatch))
 
 
 async def _runner_test_failure_scenario(monkeypatch):

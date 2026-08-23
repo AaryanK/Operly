@@ -20,13 +20,29 @@ class SourceRecordError(ValueError):
 
 
 class RunnerProfileUnsupported(SourceRecordError):
-    def __init__(self, profile_id: str, supported: list[str]):
+    def __init__(
+        self,
+        profile_id: str,
+        supported: list[str],
+        *,
+        required_version: int | None = None,
+        advertised_version: int | None = None,
+    ):
         self.profile_id = profile_id
         self.supported = supported
-        super().__init__(
-            f"Runner does not support source runtime {profile_id}; supported profiles: "
-            f"{', '.join(supported) or 'none'}"
-        )
+        self.required_version = required_version
+        self.advertised_version = advertised_version
+        if advertised_version is not None and required_version is not None:
+            detail = (
+                f"Runner advertises {profile_id} profileVersion={advertised_version}, "
+                f"but Operly requires profileVersion={required_version}"
+            )
+        else:
+            detail = (
+                f"Runner does not support source runtime {profile_id}; supported profiles: "
+                f"{', '.join(supported) or 'none'}"
+            )
+        super().__init__(detail)
 
 
 def source_bundle_from_record(source: GeneratedSourceBundle):
@@ -75,7 +91,11 @@ def _submission_for_source(
         raise SourceRecordError(str(error)) from error
 
 
-async def _check_runner_profile(adapter: RunnerAdapter, profile_id: str) -> None:
+async def _check_runner_profile(
+    adapter: RunnerAdapter,
+    profile_id: str,
+    profile_version: int,
+) -> None:
     try:
         capabilities = await adapter.capabilities()
     except Exception:
@@ -87,7 +107,59 @@ async def _check_runner_profile(adapter: RunnerAdapter, profile_id: str) -> None
     profiles = capabilities.get("profiles") or {}
     supported = sorted(str(key) for key in profiles)
     if profile_id not in profiles:
-        raise RunnerProfileUnsupported(profile_id, supported)
+        raise RunnerProfileUnsupported(
+            profile_id,
+            supported,
+            required_version=profile_version,
+        )
+    advertised = profiles.get(profile_id) or {}
+    try:
+        advertised_version = int(advertised.get("profileVersion", 0))
+    except (TypeError, ValueError):
+        advertised_version = 0
+    if advertised_version != int(profile_version):
+        raise RunnerProfileUnsupported(
+            profile_id,
+            supported,
+            required_version=int(profile_version),
+            advertised_version=advertised_version,
+        )
+
+
+async def _record_profile_mismatch(db, row, submission: BuildSubmission, error: RunnerProfileUnsupported):
+    await _event(
+        db,
+        row,
+        "failed",
+        event_type="runner_profile_unsupported",
+        message="runner_profile_unsupported",
+        details={
+            "message": str(error),
+            "runtime": submission.stackId,
+            "runtimeVersion": submission.stackVersion,
+            "supportedProfiles": ",".join(error.supported),
+            "advertisedVersion": error.advertised_version,
+        },
+    )
+    # `failed` is the generic durable terminal state; preserve the more precise
+    # infrastructure classification for UI, repair policy and trace consumers.
+    row.failure_classification = "runner_profile_unsupported"
+    row.result_json = json.dumps(
+        {
+            "code": "runner_profile_unsupported",
+            "runtime": submission.stackId,
+            "runtimeVersion": submission.stackVersion,
+            "supportedProfiles": error.supported,
+            "advertisedVersion": error.advertised_version,
+            "failureEvidence": {
+                "classification": "runner_profile_unsupported",
+                "message": str(error),
+            },
+        }
+    )
+    row.completed_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
 
 
 async def submit_source_build(
@@ -117,8 +189,10 @@ async def submit_source_build(
     bundle = source_bundle_from_record(source)
     submission = _submission_for_source(source, bundle, idempotency_key)
     adapter = adapter or ExternalRunnerAdapter()
-    await _check_runner_profile(adapter, submission.stackId)
 
+    # The build record exists before runner capability negotiation. A missing or
+    # stale runner profile is infrastructure failure evidence, not an exception
+    # that should disappear from Studio/Activity traces.
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
@@ -143,9 +217,18 @@ async def submit_source_build(
         db,
         row,
         "queued",
-        message=f"Harness-authored source submitted with runtime plugin {submission.stackId}",
+        message=(
+            f"Harness-authored source submitted with runtime plugin "
+            f"{submission.stackId}@{submission.stackVersion}"
+        ),
     )
     await db.commit()
+
+    try:
+        await _check_runner_profile(adapter, submission.stackId, submission.stackVersion)
+    except RunnerProfileUnsupported as error:
+        await _record_profile_mismatch(db, row, submission, error)
+        raise
 
     try:
         response = await adapter.submit(submission, bundle)
@@ -156,12 +239,18 @@ async def submit_source_build(
             "failed",
             event_type="runner_unavailable",
             message="runner_unavailable",
-            details={"message": str(error), "runtime": submission.stackId},
+            details={
+                "message": str(error),
+                "runtime": submission.stackId,
+                "runtimeVersion": submission.stackVersion,
+            },
         )
+        row.failure_classification = "runner_unavailable"
         row.result_json = json.dumps(
             {
                 "code": "runner_unavailable",
                 "runtime": submission.stackId,
+                "runtimeVersion": submission.stackVersion,
                 "failureEvidence": {
                     "classification": "runner_unavailable",
                     "message": str(error),

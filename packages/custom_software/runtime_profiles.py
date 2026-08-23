@@ -12,6 +12,7 @@ _NODE_STATIC_SERVER = """const http=require('http'),fs=require('fs'),p=require('
 
 
 _COMMON_RESOURCES={"cpu":1,"memoryMb":512,"processes":32,"openFiles":256,"diskMb":256,"durationSeconds":300,"idleSeconds":60,"logBytes":1000000,"artifactBytes":10000000,"previewSeconds":1800}
+_FULLSTACK_RESOURCES={"cpu":2,"memoryMb":1536,"processes":64,"openFiles":512,"diskMb":1024,"durationSeconds":600,"idleSeconds":120,"logBytes":2000000,"artifactBytes":50000000,"previewSeconds":1800}
 _COMMON_FILESYSTEM={"source":"read_only_after_stage","writable":["runtime","artifacts","logs","tmp"],"hostMounts":False,"engineSocket":False}
 
 PROFILES={
@@ -20,6 +21,20 @@ PROFILES={
  },
  "static-web-js":{
   "profileVersion":1,"baseRuntime":"node:22-slim","language":"HTML/CSS/JavaScript with Node 22 verification","dependencyManifests":[],"operations":["stage_source","static_analysis","build","test","start","health_check","acceptance_test"],"commands":{"static_analysis":["node","-e",_NODE_STATIC_ANALYSIS],"build":["node","-e",_NODE_STATIC_BUILD],"test":["node","--test"],"start":["node","-e",_NODE_STATIC_SERVER,"--","--host","0.0.0.0","--port","8080"]},"ports":[8080],"health":{"path":"/","expectedStatus":200,"bodyMarker":None},"filesystem":_COMMON_FILESYSTEM,"network":{"install":"none","runtime":"none"},"resources":_COMMON_RESOURCES,"artifactPaths":["artifacts"]
+ },
+ "operly-fullstack-v1":{
+  "profileVersion":1,
+  "baseRuntime":"operly-fullstack-python312-node22-v1",
+  "language":"Controlled Python 3.12 backend/workers with static or npm-built browser frontend",
+  "dependencyManifests":["backend/requirements.lock","frontend/package-lock.json"],
+  "operations":["stage_source","resolve_dependencies","static_analysis","build","test","start","health_check","acceptance_test"],
+  "execution":{"backend":{"mode":"python-cli","entrypoint":"backend/app.py"},"worker":{"mode":"optional-python-cli","entrypoint":"workers/worker.py"},"frontend":{"modes":["static","npm-build"],"staticRoot":"frontend","buildRoot":"frontend/dist"}},
+  "ports":[8080],
+  "health":{"path":"/health","expectedStatus":200,"bodyMarker":None},
+  "filesystem":_COMMON_FILESYSTEM,
+  "network":{"install":"dependency_registry_only","runtime":"loopback_only"},
+  "resources":_FULLSTACK_RESOURCES,
+  "artifactPaths":["artifacts","frontend/dist"]
  }
 }
 
@@ -31,4 +46,4 @@ def runtime_profile(profile_id:str)->dict:
 
 def runtime_capabilities()->dict:
  """Public runner capability description; commands remain deterministic server policy."""
- return {"protocolVersion":1,"profiles":{key:{"profileVersion":value["profileVersion"],"baseRuntime":value["baseRuntime"],"language":value["language"],"operations":value["operations"]} for key,value in PROFILES.items()}}
+ return {"protocolVersion":2,"profiles":{key:{"profileVersion":value["profileVersion"],"baseRuntime":value["baseRuntime"],"language":value["language"],"operations":value["operations"]} for key,value in PROFILES.items()}}

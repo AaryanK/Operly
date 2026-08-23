@@ -22,6 +22,7 @@ from packages.runtime_plugins.contracts import (
     RuntimePluginSpec,
     RuntimeValidation,
 )
+from packages.runtime_plugins.fullstack_runtime import FullStackRuntime
 from packages.runtime_plugins.registry import RuntimeRegistry, default_runtime_registry
 
 
@@ -194,6 +195,7 @@ def _build_submission(plugin, source_record, source_bundle, idempotency_key: str
         planVersion=source_record.plan_version,
         sourceVersion=source_record.source_version,
         stackId=plugin.spec.id,
+        stackVersion=int(plugin.spec.version),
         sourceBundleDigest=source_record.bundle_digest,
         operations=list(plugin.spec.operations),
         healthCheck=HealthCheck.model_validate(profile["health"]),
@@ -208,7 +210,7 @@ def _build_submission(plugin, source_record, source_bundle, idempotency_key: str
 
 def register_builtin_runtimes(registry: RuntimeRegistry | None = None) -> RuntimeRegistry:
     registry = registry or default_runtime_registry()
-    for plugin in (PythonStdlibWebRuntime(), StaticWebRuntime()):
+    for plugin in (PythonStdlibWebRuntime(), StaticWebRuntime(), FullStackRuntime()):
         try:
             registry.register(plugin)
         except ValueError:

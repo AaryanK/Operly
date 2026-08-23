@@ -1,11 +1,10 @@
-"""Contract for the next real generated-software runtime.
+"""Controlled source contract for the first real full-stack Solution runtime.
 
-``operly-fullstack-v1`` is intentionally a *project contract* first. It describes
-what a generated full-stack Solution may contain, how dependencies are declared,
-and which Operly capabilities it expects to bind. It does not silently make the
-existing stdlib/static runner capable of installing or deploying arbitrary code.
-Execution can be enabled only when an isolated runner advertises the matching
-profile and dependency/network policy.
+The contract deliberately exposes *execution modes*, not arbitrary runner commands.
+The coding model authors application source and a typed manifest; a trusted runner
+owns dependency installation, process entrypoints, ports, networking and resource
+policy. A source tree can be submitted only when the remote isolated runner
+advertises the matching ``operly-fullstack-v1`` profile/version.
 """
 from __future__ import annotations
 
@@ -13,15 +12,19 @@ import json
 import posixpath
 import re
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from packages.runtime_plugins.contracts import RuntimeValidation
 
 FULLSTACK_RUNTIME_ID = "operly-fullstack-v1"
+FULLSTACK_PROFILE_VERSION = 1
 FULLSTACK_SCHEMA_VERSION = "operly.solution/v1"
 FULLSTACK_MANIFEST = "operly.solution.json"
-FULLSTACK_EXECUTION_ENABLED = False
+# Control-plane execution support is enabled. Production still fails closed unless
+# the configured isolated runner advertises this exact runtime profile/version.
+FULLSTACK_EXECUTION_ENABLED = True
 
 _REQUIRED_LAYOUT = {
     "frontend": "frontend",
@@ -36,6 +39,11 @@ _PACKAGE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@/_.-]{0,119}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9*_.+!<>=~^|-]{0,79}$")
 _CAPABILITY = re.compile(r"^[a-z][a-z0-9_.:-]{1,159}$")
 _SEMANTIC_NAME = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
+_HEALTH_PATH = re.compile(r"^/[A-Za-z0-9_./-]*$")
+_PYTHON_LOCK = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,99})==([A-Za-z0-9][A-Za-z0-9_.+!-]{0,79})$"
+)
+_NPM_INTEGRITY = re.compile(r"^(?:sha512|sha384|sha256)-[A-Za-z0-9+/=]+$")
 
 
 class _StrictModel(BaseModel):
@@ -49,6 +57,10 @@ def _safe_relative_path(value: str) -> str:
     if normalized in {".", ".."} or normalized.startswith("../") or "/../" in normalized:
         raise ValueError("Project path traversal is forbidden")
     return normalized.rstrip("/")
+
+
+def _normalized_python_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
 
 
 class FullStackLayout(_StrictModel):
@@ -71,6 +83,22 @@ class FullStackLayout(_StrictModel):
                 "operly-fullstack-v1 uses the canonical frontend/backend/workers/tests/migrations layout"
             )
         return self
+
+
+class FullStackExecution(_StrictModel):
+    """Runner-owned execution modes; no model-authored runner commands are accepted."""
+
+    frontend: Literal["static", "npm-build"] = "static"
+    backend: Literal["python-cli"] = "python-cli"
+    worker: Literal["none", "python-cli"] = "none"
+    healthPath: str = "/health"
+
+    @field_validator("healthPath")
+    @classmethod
+    def health_path(cls, value: str) -> str:
+        if not _HEALTH_PATH.fullmatch(value):
+            raise ValueError("healthPath must be a safe absolute HTTP path")
+        return value
 
 
 class FullStackDependency(_StrictModel):
@@ -126,7 +154,9 @@ class FullStackBindingRequest(_StrictModel):
 class FullStackSolutionManifest(_StrictModel):
     schemaVersion: Literal["operly.solution/v1"] = FULLSTACK_SCHEMA_VERSION
     runtime: Literal["operly-fullstack-v1"] = FULLSTACK_RUNTIME_ID
+    runtimeVersion: Literal[1] = FULLSTACK_PROFILE_VERSION
     layout: FullStackLayout = Field(default_factory=FullStackLayout)
+    execution: FullStackExecution = Field(default_factory=FullStackExecution)
     dependencies: tuple[FullStackDependency, ...] = Field(default=(), max_length=100)
     bindings: tuple[FullStackBindingRequest, ...] = Field(default=(), max_length=100)
 
@@ -138,6 +168,8 @@ class FullStackSolutionManifest(_StrictModel):
         semantic_names = [item.semanticName for item in self.bindings]
         if len(semantic_names) != len(set(semantic_names)):
             raise ValueError("Binding semanticName values must be unique")
+        if any(item.ecosystem == "npm" for item in self.dependencies) and self.execution.frontend != "npm-build":
+            raise ValueError("npm dependencies require execution.frontend=npm-build")
         return self
 
 
@@ -169,8 +201,84 @@ def parse_fullstack_manifest(source) -> FullStackSolutionManifest:
     return FullStackSolutionManifest.model_validate(raw)
 
 
+def _json_file(files: dict[str, bytes], path: str, errors: list[str]) -> dict | None:
+    payload = files.get(path)
+    if payload is None:
+        return None
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        errors.append(f"{path} must contain UTF-8 JSON")
+        return None
+    if not isinstance(value, dict):
+        errors.append(f"{path} must contain a JSON object")
+        return None
+    return value
+
+
+def _validate_python_lock(files: dict[str, bytes], manifest: FullStackSolutionManifest, errors: list[str]) -> None:
+    payload = files.get("backend/requirements.lock")
+    if payload is None:
+        return
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        errors.append("backend/requirements.lock must contain UTF-8 text")
+        return
+    locked: set[str] = set()
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _PYTHON_LOCK.fullmatch(line)
+        if not match:
+            errors.append(
+                f"backend/requirements.lock line {number} must be an exact registry pin name==version; URLs, options and editable installs are forbidden"
+            )
+            continue
+        name = _normalized_python_name(match.group(1))
+        if name in locked:
+            errors.append(f"backend/requirements.lock contains duplicate package: {match.group(1)}")
+        locked.add(name)
+    for dependency in (item for item in manifest.dependencies if item.ecosystem == "python"):
+        if _normalized_python_name(dependency.name) not in locked:
+            errors.append(
+                f"Manifest Python dependency is absent from requirements.lock: {dependency.name}"
+            )
+
+
+def _validate_npm_lock(package_lock: dict | None, errors: list[str]) -> None:
+    if package_lock is None:
+        return
+    if package_lock.get("lockfileVersion") not in {2, 3}:
+        errors.append("frontend/package-lock.json must use npm lockfileVersion 2 or 3")
+    packages = package_lock.get("packages")
+    if not isinstance(packages, dict):
+        errors.append("frontend/package-lock.json must contain a packages object")
+        return
+    for path, record in packages.items():
+        if not path:
+            continue
+        if not isinstance(record, dict):
+            errors.append(f"package-lock entry must be an object: {path}")
+            continue
+        if record.get("link"):
+            errors.append(f"Local/link npm dependencies are forbidden: {path}")
+            continue
+        resolved = record.get("resolved")
+        integrity = record.get("integrity")
+        if not isinstance(resolved, str):
+            errors.append(f"npm lock entry requires a registry resolved URL: {path}")
+        else:
+            parsed = urlparse(resolved)
+            if parsed.scheme != "https" or parsed.hostname != "registry.npmjs.org":
+                errors.append(f"npm lock entry must resolve through registry.npmjs.org: {path}")
+        if not isinstance(integrity, str) or not _NPM_INTEGRITY.fullmatch(integrity):
+            errors.append(f"npm lock entry requires sha256/sha384/sha512 integrity: {path}")
+
+
 def validate_fullstack_source(source) -> RuntimeValidation:
-    """Validate the source-tree boundary before any runner can execute it."""
+    """Validate the complete source-tree boundary before any runner can execute it."""
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -196,27 +304,60 @@ def validate_fullstack_source(source) -> RuntimeValidation:
         if not any(path.startswith(required + "/") for path in files):
             errors.append(f"Full-stack Solution requires source under {required}/")
 
+    if "backend/app.py" not in files:
+        errors.append("operly-fullstack-v1 requires backend/app.py as the trusted Python CLI entrypoint")
+    if manifest.execution.worker == "python-cli" and "workers/worker.py" not in files:
+        errors.append("execution.worker=python-cli requires workers/worker.py")
+
+    test_paths = [path for path in files if path.startswith("tests/")]
+    if not any(path.endswith((".py", ".js", ".mjs", ".cjs")) for path in test_paths):
+        errors.append("Full-stack Solution requires executable Python or Node tests under tests/")
+
     ecosystems = {dependency.ecosystem for dependency in manifest.dependencies}
-    if "npm" in ecosystems:
-        if "frontend/package.json" not in files or "frontend/package-lock.json" not in files:
-            errors.append("npm dependencies require frontend/package.json and frontend/package-lock.json")
     if "python" in ecosystems and "backend/requirements.lock" not in files:
         errors.append("Python dependencies require backend/requirements.lock")
+    _validate_python_lock(files, manifest, errors)
+
+    package_json = _json_file(files, "frontend/package.json", errors)
+    package_lock = _json_file(files, "frontend/package-lock.json", errors)
+    if manifest.execution.frontend == "npm-build":
+        if package_json is None or package_lock is None:
+            errors.append("npm-build frontend requires frontend/package.json and frontend/package-lock.json")
+        elif not isinstance(package_json.get("scripts"), dict) or not package_json["scripts"].get("build"):
+            errors.append("npm-build frontend requires a package.json build script")
+    elif "frontend/index.html" not in files:
+        errors.append("static frontend requires frontend/index.html")
+
+    if "npm" in ecosystems:
+        if package_json is None or package_lock is None:
+            errors.append("npm dependencies require frontend/package.json and frontend/package-lock.json")
+        elif package_json is not None:
+            declared = {}
+            for key in ("dependencies", "devDependencies"):
+                values = package_json.get(key) or {}
+                if isinstance(values, dict):
+                    declared.update({str(name).lower(): str(version) for name, version in values.items()})
+            for dependency in (item for item in manifest.dependencies if item.ecosystem == "npm"):
+                if dependency.name.lower() not in declared:
+                    errors.append(f"Manifest npm dependency is absent from package.json: {dependency.name}")
+        _validate_npm_lock(package_lock, errors)
 
     if not manifest.dependencies:
         warnings.append("No third-party dependencies requested")
     if not manifest.bindings:
         warnings.append("No Operly service bindings requested")
 
-    return RuntimeValidation(not errors, tuple(errors), tuple(warnings))
+    return RuntimeValidation(not errors, tuple(dict.fromkeys(errors)), tuple(warnings))
 
 
 __all__ = [
     "FULLSTACK_RUNTIME_ID",
+    "FULLSTACK_PROFILE_VERSION",
     "FULLSTACK_SCHEMA_VERSION",
     "FULLSTACK_MANIFEST",
     "FULLSTACK_EXECUTION_ENABLED",
     "FullStackLayout",
+    "FullStackExecution",
     "FullStackDependency",
     "FullStackBindingRequest",
     "FullStackSolutionManifest",

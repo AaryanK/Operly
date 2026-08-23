@@ -67,8 +67,20 @@ class BundleAndPolicyTests(unittest.TestCase):
         )
         with self.assertRaises(ValidationError):
             BuildSubmission(**common, requiredPorts=[22])
-        with self.assertRaises(ValidationError):
-            NetworkPolicy(mode="approved_hosts", approvedHosts=["169.254.169.254"])
+        for host in (
+            "169.254.169.254",
+            "172.31.255.254",
+            "::1",
+            "fe80::1",
+            "metadata.google.internal",
+            "https://example.com/path",
+        ):
+            with self.subTest(host=host), self.assertRaises(ValidationError):
+                NetworkPolicy(mode="approved_hosts", approvedHosts=[host])
+        self.assertEqual(
+            NetworkPolicy(mode="approved_hosts", approvedHosts=["api.example.com."]).approvedHosts,
+            ["api.example.com"],
+        )
         with self.assertRaises(ValidationError):
             BuildSubmission(**common, dependencies=[{"name": "../evil", "version": "1.0"}])
 
