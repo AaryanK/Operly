@@ -3,17 +3,31 @@ import { useEffect } from "react";
 import { PersonalHome } from "../account/PersonalHome";
 import { ScopeRail } from "../account/ScopeRail";
 import { WorkspaceShell } from "../workspace/WorkspaceShell";
-import { navigate, personalPath } from "./routes";
+import { navigate, personalPath, workspacePath } from "./routes";
 import { useRoute } from "./useRoute";
 import { useScope } from "./useScope";
 
 export function App() {
   const route = useRoute();
   const { loading, transitioning, error, profile, workspaces, activatePersonal, activateWorkspace } = useScope();
+  const workspace = route.kind === "workspace"
+    ? workspaces.find((item) => item.id === route.workspaceId || item.slug === route.workspaceId)
+    : undefined;
 
   useEffect(() => {
     if (route.kind === "unknown" && !loading) navigate(personalPath(), { replace: true });
   }, [route, loading]);
+
+  useEffect(() => {
+    if (!profile || loading || transitioning) return;
+    if (route.kind === "personal" && profile.current_workspace_id) {
+      activatePersonal(personalPath()).catch(() => undefined);
+      return;
+    }
+    if (route.kind === "workspace" && workspace && profile.current_workspace_id !== workspace.id) {
+      activateWorkspace(workspace.id, workspacePath(workspace.id, route.section)).catch(() => undefined);
+    }
+  }, [activatePersonal, activateWorkspace, loading, profile, route, transitioning, workspace]);
 
   if (loading && !profile) {
     return <div className="boot-screen"><span>✦</span><p>Opening Operly…</p></div>;
@@ -45,6 +59,9 @@ export function App() {
   );
 
   if (route.kind === "personal") {
+    if (profile?.current_workspace_id || transitioning) {
+      return <div className="boot-screen"><span>✦</span><p>Switching to your private Operly…</p></div>;
+    }
     return (
       <div className="authenticated-shell">
         {rail(true)}
@@ -53,7 +70,6 @@ export function App() {
     );
   }
 
-  const workspace = workspaces.find((item) => item.id === route.workspaceId || item.slug === route.workspaceId);
   if (!workspace) {
     return (
       <div className="authenticated-shell">
@@ -65,6 +81,10 @@ export function App() {
         </main>
       </div>
     );
+  }
+
+  if (profile?.current_workspace_id !== workspace.id || transitioning) {
+    return <div className="boot-screen"><span>✦</span><p>Entering {workspace.name}…</p></div>;
   }
 
   return (
