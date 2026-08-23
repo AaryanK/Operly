@@ -31,9 +31,21 @@ class ModelRequirements:
 
     def selector(self) -> ModelSelector:
         return ModelSelector(
-            requires=frozenset(str(item).strip().lower() for item in self.requires if str(item).strip()),
-            prefer_tags=frozenset(str(item).strip().lower() for item in self.prefer_tags if str(item).strip()),
-            avoid_tags=frozenset(str(item).strip().lower() for item in self.avoid_tags if str(item).strip()),
+            requires=frozenset(
+                str(item).strip().lower()
+                for item in self.requires
+                if str(item).strip()
+            ),
+            prefer_tags=frozenset(
+                str(item).strip().lower()
+                for item in self.prefer_tags
+                if str(item).strip()
+            ),
+            avoid_tags=frozenset(
+                str(item).strip().lower()
+                for item in self.avoid_tags
+                if str(item).strip()
+            ),
             prefer_free=self.prefer_free,
         )
 
@@ -58,7 +70,10 @@ def _context_rank(model: ConfiguredModel, minimum: int | None) -> int:
     return 0 if int(available) >= int(minimum) else 2
 
 
-def _provider_diverse(candidates: Iterable[ConfiguredModel], limit: int) -> list[ConfiguredModel]:
+def _provider_diverse(
+    candidates: Iterable[ConfiguredModel],
+    limit: int,
+) -> list[ConfiguredModel]:
     rows = list(candidates)
     selected: list[ConfiguredModel] = []
     seen: set[str] = set()
@@ -73,6 +88,57 @@ def _provider_diverse(candidates: Iterable[ConfiguredModel], limit: int) -> list
         if model in selected:
             continue
         selected.append(model)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _flatten(model: Model) -> list[ConfiguredModel]:
+    if isinstance(model, ConfiguredModel):
+        return [model]
+    if isinstance(model, ModelPool):
+        return [item for item in model.models if isinstance(item, ConfiguredModel)]
+    return []
+
+
+def _compatible_fallbacks(
+    selected: list[ConfiguredModel],
+    *,
+    requirements: ModelRequirements,
+    fallback_role: str | None,
+    limit: int,
+) -> list[ConfiguredModel]:
+    """Backfill unsatisfied pool slots from the legacy role chain.
+
+    Capability selection remains authoritative. The role pool is consulted only
+    when the dynamic catalog cannot provide enough candidates (common during the
+    migration on deployments with sparse catalog metadata). Candidates must still
+    satisfy the concrete capability requirements and are de-duplicated by provider
+    model identity.
+    """
+    if not fallback_role or len(selected) >= limit:
+        return selected
+    try:
+        fallback_models = _flatten(model_for_role(fallback_role))
+    except (LookupError, RuntimeError):
+        return selected
+
+    required = set(requirements.requires)
+    minimum = requirements.min_context_tokens
+    seen = {
+        (str(model.provider), str(model.provider_model_id))
+        for model in selected
+    }
+    for model in fallback_models:
+        identity = (str(model.provider), str(model.provider_model_id))
+        if identity in seen:
+            continue
+        if not required.issubset(set(model.capabilities)):
+            continue
+        if minimum and _context_rank(model, minimum) >= 2:
+            continue
+        selected.append(model)
+        seen.add(identity)
         if len(selected) >= limit:
             break
     return selected
@@ -93,7 +159,9 @@ def model_for_requirements(
     candidates = list(registry.candidates(requirements.selector()))
     minimum = requirements.min_context_tokens
     if minimum:
-        candidates = [model for model in candidates if _context_rank(model, minimum) < 2]
+        candidates = [
+            model for model in candidates if _context_rank(model, minimum) < 2
+        ]
         candidates.sort(
             key=lambda model: (
                 _context_rank(model, minimum),
@@ -106,8 +174,18 @@ def model_for_requirements(
 
     limit = max(1, int(requirements.max_models or 1))
     selected = _provider_diverse(candidates, limit)
+    selected = _compatible_fallbacks(
+        selected,
+        requirements=requirements,
+        fallback_role=fallback_role,
+        limit=limit,
+    )
     if selected:
-        return selected[0] if len(selected) == 1 else ModelPool(selected, id="requirements:dynamic")
+        return (
+            selected[0]
+            if len(selected) == 1
+            else ModelPool(selected, id="requirements:dynamic")
+        )
     if fallback_role:
         return model_for_role(fallback_role)
     required = ", ".join(sorted(requirements.requires)) or "text"
