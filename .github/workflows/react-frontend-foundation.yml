@@ -50,3 +50,5 @@ jobs:
           grep -q 'WorkspaceOperly' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
+      - name: Build Railway-style production image
+        run: docker build --tag operly-frontend-pr .
