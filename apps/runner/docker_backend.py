@@ -253,6 +253,7 @@ class DockerIsolationBackend:
         egress_proxy = preview_proxy = None
         runtime_image_tag = None
         resources: dict = {}
+        success = False
         try:
             self._verify_host()
             if submission.stackId != FULLSTACK_RUNTIME_ID:
@@ -491,6 +492,7 @@ class DockerIsolationBackend:
                     "USER 10001:10001",
                     "WORKDIR /workspace",
                     "ENV PYTHONDONTWRITEBYTECODE=1",
+                    f"LABEL operly.runner.managed=true operly.runner.job={job_id}",
                 ],
             )
             resources["runtimeImage"] = runtime_image_tag
@@ -658,19 +660,24 @@ class DockerIsolationBackend:
                 ],
                 "preview": {"id": preview_id},
             }
+            success = True
             return ExecutionOutcome(response, resources, preview_upstream)
         except JobCancelled:
             return self._failed(job_id, events, "cancelled", "Build was cancelled")
         except IsolationFailure as error:
-            classification = "health_check_failure" if "health check" in str(error).lower() else "runtime_crash"
+            lowered = str(error).lower()
+            if "health check" in lowered:
+                classification = "health_check_failure"
+            elif "worker" in lowered or "runtime" in lowered:
+                classification = "runtime_crash"
+            else:
+                classification = "runner_infrastructure_failure"
             return self._failed(job_id, events, classification, str(error))
         except DockerException as error:
             return self._failed(job_id, events, "runner_infrastructure_failure", str(error))
         finally:
-            # Success keeps runtime resources alive for preview. Failure returns no
-            # resources and must leave no executable residue on the runner host.
-            keep = bool(runtime_container and preview_proxy and resources.get("previewUpstream"))
-            if not keep:
+            # Only a verified preview-ready outcome may keep executable resources.
+            if not success:
                 self._cleanup_objects(
                     preview_proxy=preview_proxy,
                     runtime_container=runtime_container,
@@ -732,6 +739,24 @@ class DockerIsolationBackend:
             runtime_image_tag=resources.get("runtimeImage"),
             network=network,
         )
+
+    def cleanup_job_id(self, job_id: str) -> None:
+        label = f"operly.runner.job={job_id}"
+        for container in self.client.containers.list(all=True, filters={"label": label}):
+            try:
+                container.remove(force=True)
+            except (DockerException, NotFound):
+                pass
+        for image in self.client.images.list(filters={"label": label}):
+            try:
+                self.client.images.remove(image.id, force=True)
+            except (DockerException, ImageNotFound):
+                pass
+        for network in self.client.networks.list(filters={"label": label}):
+            try:
+                network.remove()
+            except (DockerException, NotFound):
+                pass
 
     def inspect_runtime(self, resources: dict) -> dict:
         container_id = resources.get("runtimeContainer")
