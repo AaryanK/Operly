@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-from packages.capabilities.contracts import CapabilityDescriptor, CapabilityProvider
+from packages.capabilities.contracts import (
+    CapabilityAvailability,
+    CapabilityDescriptor,
+    CapabilityProvider,
+)
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9_.:-]+")
@@ -87,6 +91,9 @@ class CapabilityRegistry:
             )
         ]
 
+    def _config(self, tenant_id: str, definition) -> dict:
+        return dict(self._config_resolver(tenant_id, definition) or {})
+
     def provider_config(self, tenant_id: str, capability: str) -> dict:
         provider = self.resolve(tenant_id, capability)
         definition = next(
@@ -94,7 +101,7 @@ class CapabilityRegistry:
             for x in provider.capabilities
             if x.id == capability or x.name == capability
         )
-        return dict(self._config_resolver(tenant_id, definition) or {})
+        return self._config(tenant_id, definition)
 
     def descriptor(
         self,
@@ -105,7 +112,7 @@ class CapabilityRegistry:
     ) -> CapabilityDescriptor:
         definition = self.definition(capability)
         installed = bool(self._enabled_resolver(tenant_id, definition))
-        config = dict(self._config_resolver(tenant_id, definition) or {})
+        config = self._config(tenant_id, definition)
         configured = bool(config.get("configured", True))
         healthy = config.get("healthy")
         authorized = (
@@ -137,6 +144,66 @@ class CapabilityRegistry:
             authorized=authorized,
         )
 
+    def availability(
+        self,
+        tenant_id: str,
+        capability: str,
+        *,
+        authority: set[str] | None = None,
+    ) -> CapabilityAvailability:
+        definition = self.definition(capability)
+        descriptor = self.descriptor(tenant_id, capability, authority=authority)
+        config = self._config(tenant_id, definition)
+        missing_scopes = tuple(
+            str(item) for item in config.get("missing_scopes", ()) if str(item).strip()
+        )
+        missing_connector = str(config.get("missing_connector") or "").strip() or None
+        permission_denied = descriptor.authorized is False
+        healthy = descriptor.healthy
+        available = bool(
+            descriptor.installed
+            and descriptor.configured
+            and healthy is not False
+            and not permission_denied
+            and not missing_scopes
+            and not missing_connector
+        )
+
+        reason = str(config.get("reason") or "").strip() or None
+        next_action = str(config.get("next_action") or "").strip() or None
+        retryable = bool(config.get("retryable", healthy is False))
+        if not available and reason is None:
+            if not descriptor.installed:
+                reason = "capability_disabled"
+                next_action = next_action or "Enable the capability for this workspace."
+            elif permission_denied:
+                reason = "permission_denied"
+                next_action = next_action or "Request a role or permission that authorizes this capability."
+            elif missing_connector:
+                reason = "missing_connector"
+                next_action = next_action or f"Connect {missing_connector}."
+            elif missing_scopes:
+                reason = "missing_scopes"
+                next_action = next_action or "Reconnect the integration with the required scopes."
+            elif not descriptor.configured:
+                reason = "not_configured"
+                next_action = next_action or "Configure this capability before using it."
+            elif healthy is False:
+                reason = "unhealthy"
+                next_action = next_action or "Retry after the provider recovers or reconnect the integration."
+
+        return CapabilityAvailability(
+            available=available,
+            configured=descriptor.configured,
+            healthy=healthy,
+            missing_scopes=missing_scopes,
+            missing_connector=missing_connector,
+            permission_denied=permission_denied,
+            retryable=retryable,
+            next_action=next_action,
+            reason=reason,
+        )
+
     def describe(
         self,
         tenant_id: str,
@@ -150,6 +217,11 @@ class CapabilityRegistry:
             try:
                 definition = self.definition(str(capability))
                 descriptor = self.descriptor(
+                    tenant_id,
+                    definition.id,
+                    authority=authority,
+                )
+                availability = self.availability(
                     tenant_id,
                     definition.id,
                     authority=authority,
@@ -172,6 +244,7 @@ class CapabilityRegistry:
                 "configured": descriptor.configured,
                 "healthy": descriptor.healthy,
                 "authorized": descriptor.authorized,
+                "availability": availability.as_dict(),
             }
             if include_schema:
                 row["input_schema"] = definition.input_schema
@@ -191,8 +264,8 @@ class CapabilityRegistry:
     ) -> list[dict]:
         """Discover enabled capabilities without granting execution authority.
 
-        Search is intentionally metadata-only. ``authorized`` is reported as a
-        separate field and callers must still invoke through the canonical harness.
+        Search is intentionally metadata-only. ``authorized`` and structured
+        availability are reported separately; execution still crosses the harness.
         """
         wanted_tokens = _tokens(query)
         wanted_categories = {
@@ -225,6 +298,11 @@ class CapabilityRegistry:
                 definition.id,
                 authority=authority,
             )
+            availability = self.availability(
+                tenant_id,
+                definition.id,
+                authority=authority,
+            )
             ranked.append(
                 (
                     score,
@@ -243,6 +321,7 @@ class CapabilityRegistry:
                         "configured": descriptor.configured,
                         "healthy": descriptor.healthy,
                         "authorized": descriptor.authorized,
+                        "availability": availability.as_dict(),
                     },
                 )
             )
