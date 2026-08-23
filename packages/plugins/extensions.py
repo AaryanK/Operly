@@ -101,10 +101,24 @@ def default_application_plugins() -> ApplicationPluginRegistry:
     return _DEFAULT_APPLICATION_PLUGINS
 
 
+# Compatibility names describe the same application-extension contract and let
+# live call sites migrate without preserving a ``packages.harness`` package.
+RuntimePlugin = ApplicationPlugin
+RuntimePluginContext = ApplicationPluginContext
+RuntimePluginRegistry = ApplicationPluginRegistry
+RuntimePluginUnavailable = ApplicationPluginUnavailable
+default_runtime_plugins = default_application_plugins
+
+
 __all__ = [
     "ApplicationPlugin",
     "ApplicationPluginContext",
     "ApplicationPluginRegistry",
     "ApplicationPluginUnavailable",
     "default_application_plugins",
+    "RuntimePlugin",
+    "RuntimePluginContext",
+    "RuntimePluginRegistry",
+    "RuntimePluginUnavailable",
+    "default_runtime_plugins",
 ]
