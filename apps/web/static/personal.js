@@ -51,11 +51,13 @@
     const host=$p("#personal-messages");if(host)host.innerHTML="";
     add("assistant","This is your private Personal AI. You can use Operly without a workspace, or privately ask about workspaces you are authorized to access.");
     await loadWorkspaces().catch(error=>add("assistant",error.message,"Workspace list unavailable"));
-    $p("#personal-send")?.addEventListener("click",send,{once:false});
-    $p("#personal-input")?.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();send();}},{once:false});
-    $p("#personal-create-workspace")?.addEventListener("click",createWorkspace,{once:false});
-    $p("#personal-logout")?.addEventListener("click",async()=>{try{await api("/auth/logout",{method:"POST",body:"{}"});location.assign("/login");}catch(error){add("assistant",error.message,"Sign out failed");}},{once:false});
+    const sendButton=$p("#personal-send"),input=$p("#personal-input"),create=$p("#personal-create-workspace"),logout=$p("#personal-logout");
+    if(sendButton&&!sendButton.dataset.bound){sendButton.dataset.bound="1";sendButton.addEventListener("click",send);}
+    if(input&&!input.dataset.bound){input.dataset.bound="1";input.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();send();}});}
+    if(create&&!create.dataset.bound){create.dataset.bound="1";create.addEventListener("click",createWorkspace);}
+    if(logout&&!logout.dataset.bound){logout.dataset.bound="1";logout.addEventListener("click",async()=>{try{await api("/auth/logout",{method:"POST",body:"{}"});location.assign("/login");}catch(error){add("assistant",error.message,"Sign out failed");}});}
   }
 
   window.operlyPersonal={mount,loadWorkspaces,send};
+  if(!$p("#personal")?.classList.contains("hidden")) mount().catch(()=>{});
 })();
