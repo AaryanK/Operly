@@ -53,6 +53,17 @@
     $$("[data-modern-workspace]", target).forEach(button => button.addEventListener("click", async () => { await api("/session/switch-workspace", {method:"POST", body:JSON.stringify({tenant_id:button.dataset.modernWorkspace})}); location.reload(); }));
   }
 
+  async function signOut(path) {
+    try {
+      await api(path, {method:"POST", body:"{}"});
+      if (typeof state !== "undefined") state.me = null;
+      closePopovers();
+      location.replace("/login");
+    } catch (error) {
+      alert(`We couldn't sign you out: ${error?.message || "Unknown error"}`);
+    }
+  }
+
   async function accountPopover(anchor) {
     closePopovers(); let me = {}, sessions = [];
     try { [me, sessions] = await Promise.all([api("/me"), api("/auth/sessions")]); } catch {}
@@ -63,8 +74,8 @@
     document.body.append(pop); placePopover(pop, anchor);
     $("[data-op-account]", pop)?.addEventListener("click", () => { closePopovers(); renderAccountWorkspaces(); });
     $("[data-op-security]", pop)?.addEventListener("click", () => { closePopovers(); renderSecuritySessions(sessions, name, email); });
-    $("[data-op-logout]", pop)?.addEventListener("click", async () => { try { await api("/auth/logout", {method:"POST"}); } finally { location.assign("/login"); } });
-    $("[data-op-logout-all]", pop)?.addEventListener("click", async () => { try { await api("/auth/logout-all", {method:"POST"}); } finally { location.assign("/login"); } });
+    $("[data-op-logout]", pop)?.addEventListener("click", () => signOut("/auth/logout"));
+    $("[data-op-logout-all]", pop)?.addEventListener("click", () => signOut("/auth/logout-all"));
   }
 
   function renderSecuritySessions(sessions, name, email) {
@@ -114,6 +125,21 @@
     observer.observe(document.documentElement,{subtree:true,childList:true}); repair();
   }
 
-  function boot() { enhancePublicLanding(); enhanceShellEvents(); observeApp(); }
+  async function enforceAuthenticatedShell() {
+    if (location.pathname !== "/app" || typeof api !== "function") return;
+    try {
+      await api("/me");
+    } catch {
+      if (typeof state !== "undefined") state.me = null;
+      location.replace("/login");
+    }
+  }
+
+  function boot() {
+    enhancePublicLanding();
+    enhanceShellEvents();
+    observeApp();
+    enforceAuthenticatedShell();
+  }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot,{once:true}); else boot();
 })();

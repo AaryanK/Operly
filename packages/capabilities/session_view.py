@@ -26,6 +26,7 @@ class SessionCapabilityView:
     def __post_init__(self) -> None:
         self.exposed_ids.update(DEFAULT_KERNEL_IDS)
         self.exposed_ids.update(str(item) for item in self.initial_ids if str(item))
+        self.expose_seamless_defaults()
 
     def _visible(self, capability_id: str) -> bool:
         if self.visible_predicate and not self.visible_predicate(capability_id):
@@ -41,7 +42,31 @@ class SessionCapabilityView:
             return False
         return True
 
+    @staticmethod
+    def _seamless_default(definition) -> bool:
+        """Return whether an authorized capability should be visible immediately.
+
+        Normal observations and low-risk operations should not depend on a model
+        remembering a search/describe ceremony. Connected integrations are also
+        surfaced directly after their provider/scope gate succeeds. Medium/high-risk
+        or uncommon capabilities remain progressively discoverable, and every call
+        still crosses the canonical firewall/approval boundary.
+        """
+        if definition.risk_level in {"read_only", "low"}:
+            return True
+        if definition.integration_provider:
+            return True
+        return False
+
+    def expose_seamless_defaults(self) -> None:
+        for definition in self.registry.definitions():
+            if self._seamless_default(definition) and self._visible(definition.id):
+                self.exposed_ids.add(definition.id)
+
     def schemas(self) -> list[dict[str, Any]]:
+        # Registry/connector availability can change during a conversation. Refresh
+        # the seamless set every turn while _visible() removes anything revoked.
+        self.expose_seamless_defaults()
         schemas = []
         for capability_id in sorted(self.exposed_ids):
             if not self._visible(capability_id):
@@ -57,10 +82,11 @@ class SessionCapabilityView:
                 self.exposed_ids.add(clean)
 
     def observe(self, capability_id: str, invocation_result: dict[str, Any]) -> None:
-        """Expand exact schemas only after capability.describe.
+        """Expand exact schemas after capability.describe.
 
-        Search results remain metadata. A describe call is the explicit transition
-        from discovery to schema exposure; execution still goes through firewall.
+        Search/describe remains useful for uncommon medium/high-risk capabilities,
+        but ordinary reads, low-risk operations, and connector tools are already
+        available without spending model turns on discovery.
         """
         if capability_id != "capability.describe":
             return

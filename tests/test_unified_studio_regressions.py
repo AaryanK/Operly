@@ -81,6 +81,15 @@ class UnifiedStudioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("latest.id && latest.state", source)
         self.assertIn("Studio source agent did not return a usable run record", source)
 
+    def test_modern_logout_requires_confirmed_server_logout_and_hard_exits_app(self):
+        source = (ROOT / "apps" / "web" / "static" / "operly-modern.js").read_text("utf-8")
+
+        self.assertIn('await api(path, {method:"POST", body:"{}"})', source)
+        self.assertIn('location.replace("/login")', source)
+        self.assertIn('if (location.pathname !== "/app"', source)
+        self.assertIn('await api("/me")', source)
+        self.assertNotIn('finally { location.assign("/login")', source)
+
     async def test_solution_preview_redirect_is_same_origin_frameable(self):
         middleware = SecurityHeadersMiddleware(lambda scope, receive, send: None)
 

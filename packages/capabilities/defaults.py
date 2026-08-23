@@ -1,6 +1,7 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
+from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
@@ -45,6 +46,7 @@ def _builtin_providers():
         ActionLifecycleProvider(),
         UnifiedWebsiteProvider(),
         UnifiedBusinessProvider(),
+        CRMReadProvider(),
         WorkspaceProvider(),
         OperationsProvider(),
         StudioProvider(),
