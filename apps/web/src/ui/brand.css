@@ -6,6 +6,9 @@
 .scope-brand.active { background: #080b12; box-shadow: 0 0 0 1px rgba(132,116,255,.35), 0 10px 30px rgba(103,86,244,.30); }
 .scope-brand:hover { background: #080b12; border-color: rgba(159,145,255,.62); }
 
+.assistant-avatar.brand-avatar { padding: 0; overflow: hidden; background: #080b12; border-color: rgba(133,116,255,.30); }
+.assistant-avatar.brand-avatar .operly-mark { width: 100%; height: 100%; border-radius: inherit; }
+
 .branded-boot {
   position: relative;
   isolation: isolate;
