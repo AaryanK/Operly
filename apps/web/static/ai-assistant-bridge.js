@@ -19,122 +19,119 @@ document.addEventListener("click", async (event) => {
   }
 }, true);
 
-// The current production frontend still contains older structural styles, but
-// workspace-shell + operly-cosmic own the product chrome and brand language.
-if (!document.querySelector('script[data-operly-workspace-shell]')) {
+/*
+ * Authenticated frontend bootstrap.
+ *
+ * The previous bridge loaded several visual generations at runtime
+ * (operly-modern, frontend-overhaul, viewport-fix, operly-cosmic) after
+ * personal.css. Those global styles changed the same CSS variables and even
+ * authenticated-screen visibility, which caused white-on-white text and let the
+ * workspace UI remain visible on /channels/@me.
+ *
+ * Keep structural feature code, but load one account-shell visual contract last.
+ */
+function ensureStyle(href, marker, sharedMarker = null) {
+  if (document.querySelector(`link[${marker}]`)) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = href;
+  link.setAttribute(marker, "1");
+  if (sharedMarker) link.setAttribute(sharedMarker, "1");
+  document.head.append(link);
+}
+
+function ensureScript(src, marker) {
+  if (document.querySelector(`script[${marker}]`)) return;
   const script = document.createElement("script");
-  script.src = "/static/workspace-shell.js?v=20260822-shell-v3";
+  script.src = src;
   script.defer = true;
-  script.dataset.operlyWorkspaceShell = "1";
+  script.setAttribute(marker, "1");
   document.head.append(script);
 }
 
-for (const [href, marker] of [
-  ["/static/operly-modern.css?v=20260821-modern-v1", "core"],
-  ["/static/operly-modern-extras.css?v=20260821-modern-v1", "extras"],
-]) {
-  if (!document.querySelector(`link[data-operly-modern-${marker}]`)) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = href;
-    link.dataset[`operlyModern${marker[0].toUpperCase()}${marker.slice(1)}`] = "1";
-    document.head.append(link);
+// Preload the workspace structural styles with fresh revisions. The shared data
+// markers intentionally satisfy workspace-shell.js/settings-scopes.js style
+// guards so they do not inject older cached URLs afterward.
+ensureStyle(
+  "/static/workspace-shell.css?v=20260823-account-shell-v2",
+  "data-operly-workspace-shell-style",
+  "data-operly-workspace-shell",
+);
+ensureStyle(
+  "/static/frontend-overhaul.css?v=20260823-account-shell-v2",
+  "data-operly-frontend-overhaul",
+);
+ensureStyle(
+  "/static/settings-scopes.css?v=20260823-account-shell-v2",
+  "data-operly-settings-scopes-style",
+  "data-operly-settings-scopes",
+);
+
+// One final authenticated color/visibility contract. It is intentionally loaded
+// after structural styles, but unlike the removed legacy themes it is scoped to
+// Personal and workspace authenticated surfaces.
+ensureStyle(
+  "/static/account-shell-clean.css?v=20260823-account-shell-v2",
+  "data-operly-account-shell-clean",
+);
+
+// Canonical workspace navigation/content implementation. Personal/workspace
+// selection itself is owned by personal.js and its global scope rail.
+ensureScript(
+  "/static/workspace-shell.js?v=20260823-account-shell-v2",
+  "data-operly-workspace-shell",
+);
+
+// Workspace/personal connector settings remain functional, but their style file
+// is already preloaded above with the current revision.
+ensureScript(
+  "/static/settings-scopes.js?v=20260823-account-shell-v2",
+  "data-operly-settings-scopes",
+);
+
+// Semantic and chat behavior layers are feature-scoped rather than theme layers.
+ensureScript(
+  "/static/operations-semantic-fix.js?v=20260823-account-shell-v2",
+  "data-operly-operations-semantic-fix",
+);
+ensureStyle(
+  "/static/chat-enhancements.css?v=20260823-account-shell-v2",
+  "data-operly-chat-enhancements-style",
+);
+ensureScript(
+  "/static/chat-enhancements.js?v=20260823-account-shell-v2",
+  "data-operly-chat-enhancements",
+);
+
+// The unified Studio script is loaded explicitly by index.html. Only its scoped
+// stylesheet belongs here.
+ensureStyle(
+  "/static/unified-solution-studio.css?v=20260823-account-shell-v2",
+  "data-operly-unified-solution-studio",
+);
+
+// Small mobile navigation behavior replacing the removed operly-cosmic.js shell
+// interceptor. No fetch interception, route rewriting, or global theme mutation.
+document.addEventListener("click", (event) => {
+  const dashboard = document.querySelector("#dashboard.workspace-shell-ready");
+  if (!dashboard) return;
+  if (event.target.closest("#mobile-nav-toggle")) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const open = !dashboard.classList.contains("operly-mobile-nav-open");
+    dashboard.classList.toggle("operly-mobile-nav-open", open);
+    document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", String(open));
+    return;
   }
-}
+  if (event.target.closest(".mobile-nav-backdrop") || event.target.closest(".operly-nav-item")) {
+    dashboard.classList.remove("operly-mobile-nav-open");
+    document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
+  }
+}, true);
 
-if (!document.querySelector('link[data-operly-frontend-overhaul]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/frontend-overhaul.css?v=20260821-command-center-v1";
-  link.dataset.operlyFrontendOverhaul = "1";
-  document.head.append(link);
-}
-
-if (!document.querySelector('link[data-operly-viewport-fix]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/viewport-fix.css?v=20260821-viewport-v1";
-  link.dataset.operlyViewportFix = "1";
-  document.head.append(link);
-}
-
-if (!document.querySelector('script[data-operly-modern]')) {
-  const script = document.createElement("script");
-  script.src = "/static/operly-modern.js?v=20260821-modern-v1";
-  script.defer = true;
-  script.dataset.operlyModern = "1";
-  document.head.append(script);
-}
-
-if (!document.querySelector('script[data-operly-settings-scopes]')) {
-  const script = document.createElement("script");
-  script.src = "/static/settings-scopes.js?v=20260821-scopes-v1";
-  script.defer = true;
-  script.dataset.operlySettingsScopes = "1";
-  document.head.append(script);
-}
-
-if (!document.querySelector('script[data-operly-time-sync]')) {
-  const script = document.createElement("script");
-  script.src = "/static/time-sync.js?v=20260821-time-v1";
-  script.defer = true;
-  script.dataset.operlyTimeSync = "1";
-  document.head.append(script);
-}
-
-if (!document.querySelector('script[data-operly-operations-semantic-fix]')) {
-  const script = document.createElement("script");
-  script.src = "/static/operations-semantic-fix.js?v=20260821-semantics-v1";
-  script.defer = true;
-  script.dataset.operlyOperationsSemanticFix = "1";
-  document.head.append(script);
-}
-
-if (!document.querySelector('link[data-operly-chat-enhancements]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/chat-enhancements.css?v=20260821-chat-v1";
-  link.dataset.operlyChatEnhancements = "1";
-  document.head.append(link);
-}
-if (!document.querySelector('script[data-operly-chat-enhancements]')) {
-  const script = document.createElement("script");
-  script.src = "/static/chat-enhancements.js?v=20260821-chat-v1";
-  script.defer = true;
-  script.dataset.operlyChatEnhancements = "1";
-  document.head.append(script);
-}
-
-// One Studio implementation. No MutationObserver enhancement layer and no
-// hard-coded prompt chips sit on top of this editor anymore.
-if (!document.querySelector('link[data-operly-unified-solution-studio]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/unified-solution-studio.css?v=20260822-source-agent-v1";
-  link.dataset.operlyUnifiedSolutionStudio = "1";
-  document.head.append(link);
-}
-if (!document.querySelector('script[data-operly-unified-solution-studio]')) {
-  const script = document.createElement("script");
-  script.src = "/static/unified-solution-studio.js?v=20260822-source-agent-v1";
-  script.defer = true;
-  script.dataset.operlyUnifiedSolutionStudio = "1";
-  document.head.append(script);
-}
-
-// Single brand system for authenticated product surfaces plus user-controlled
-// workspace navigation collapse.
-if (!document.querySelector('link[data-operly-cosmic-product]')) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "/static/operly-cosmic.css?v=20260822-system-v2";
-  link.dataset.operlyCosmicProduct = "1";
-  document.head.append(link);
-}
-if (!document.querySelector('script[data-operly-cosmic-product]')) {
-  const script = document.createElement("script");
-  script.src = "/static/operly-cosmic.js?v=20260822-system-v5";
-  script.defer = true;
-  script.dataset.operlyCosmicProduct = "1";
-  document.head.append(script);
-}
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const dashboard = document.querySelector("#dashboard.workspace-shell-ready");
+  dashboard?.classList.remove("operly-mobile-nav-open");
+  document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
+});
