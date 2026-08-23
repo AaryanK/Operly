@@ -19,25 +19,21 @@ document.addEventListener("click", async (event) => {
   }
 }, true);
 
-/*
- * Authenticated frontend bootstrap.
+/* Authenticated frontend bootstrap.
  *
- * The previous bridge loaded several visual generations at runtime
- * (operly-modern, frontend-overhaul, viewport-fix, operly-cosmic) after
- * personal.css. Those global styles changed the same CSS variables and even
- * authenticated-screen visibility, which caused white-on-white text and let the
- * workspace UI remain visible on /channels/@me.
- *
- * Keep structural feature code, but load one account-shell visual contract last.
+ * Structural legacy CSS is kept only where current HTML still depends on it.
+ * authenticated-ui.css is the sole runtime owner of product colors, surfaces,
+ * component appearance, settings layout and responsive behavior.
  */
-function ensureStyle(href, marker, sharedMarker = null) {
-  if (document.querySelector(`link[${marker}]`)) return;
+function ensureStyle(href, marker, extraMarkers = []) {
+  if (document.querySelector(`link[${marker}]`)) return document.querySelector(`link[${marker}]`);
   const link = document.createElement("link");
   link.rel = "stylesheet";
   link.href = href;
   link.setAttribute(marker, "1");
-  if (sharedMarker) link.setAttribute(sharedMarker, "1");
+  for (const extra of extraMarkers) link.setAttribute(extra, "1");
   document.head.append(link);
+  return link;
 }
 
 function ensureScript(src, marker) {
@@ -49,69 +45,54 @@ function ensureScript(src, marker) {
   document.head.append(script);
 }
 
-// Preload the workspace structural styles with fresh revisions. The shared data
-// markers intentionally satisfy workspace-shell.js/settings-scopes.js style
-// guards so they do not inject older cached URLs afterward.
+// workspace-shell.css still provides structural selectors for the current static
+// shell. It does not own the final visual system.
 ensureStyle(
-  "/static/workspace-shell.css?v=20260823-account-shell-v2",
+  "/static/workspace-shell.css?v=20260823-ui-system-v3",
   "data-operly-workspace-shell-style",
+  ["data-operly-workspace-shell"],
+);
+
+// One final authenticated visual contract. Compatibility markers intentionally
+// prevent workspace-shell.js and settings-scopes.js from re-injecting the old
+// frontend-overhaul/settings-scopes cosmetic stylesheets.
+ensureStyle(
+  "/static/authenticated-ui.css?v=20260823-ui-system-v3",
+  "data-operly-authenticated-ui",
+  ["data-operly-frontend-overhaul", "data-operly-settings-scopes", "data-operly-account-shell-clean"],
+);
+
+ensureScript(
+  "/static/workspace-shell.js?v=20260823-ui-system-v3",
   "data-operly-workspace-shell",
 );
-ensureStyle(
-  "/static/frontend-overhaul.css?v=20260823-account-shell-v2",
-  "data-operly-frontend-overhaul",
-);
-ensureStyle(
-  "/static/settings-scopes.css?v=20260823-account-shell-v2",
-  "data-operly-settings-scopes-style",
+ensureScript(
+  "/static/settings-scopes.js?v=20260823-ui-system-v3",
   "data-operly-settings-scopes",
 );
-
-// One final authenticated color/visibility contract. It is intentionally loaded
-// after structural styles, but unlike the removed legacy themes it is scoped to
-// Personal and workspace authenticated surfaces.
-ensureStyle(
-  "/static/account-shell-clean.css?v=20260823-account-shell-v2",
-  "data-operly-account-shell-clean",
-);
-
-// Canonical workspace navigation/content implementation. Personal/workspace
-// selection itself is owned by personal.js and its global scope rail.
 ensureScript(
-  "/static/workspace-shell.js?v=20260823-account-shell-v2",
-  "data-operly-workspace-shell",
-);
-
-// Workspace/personal connector settings remain functional, but their style file
-// is already preloaded above with the current revision.
-ensureScript(
-  "/static/settings-scopes.js?v=20260823-account-shell-v2",
-  "data-operly-settings-scopes",
-);
-
-// Semantic and chat behavior layers are feature-scoped rather than theme layers.
-ensureScript(
-  "/static/operations-semantic-fix.js?v=20260823-account-shell-v2",
+  "/static/operations-semantic-fix.js?v=20260823-ui-system-v3",
   "data-operly-operations-semantic-fix",
 );
 ensureStyle(
-  "/static/chat-enhancements.css?v=20260823-account-shell-v2",
+  "/static/chat-enhancements.css?v=20260823-ui-system-v3",
   "data-operly-chat-enhancements-style",
 );
 ensureScript(
-  "/static/chat-enhancements.js?v=20260823-account-shell-v2",
+  "/static/chat-enhancements.js?v=20260823-ui-system-v3",
   "data-operly-chat-enhancements",
 );
-
-// The unified Studio script is loaded explicitly by index.html. Only its scoped
-// stylesheet belongs here.
 ensureStyle(
-  "/static/unified-solution-studio.css?v=20260823-account-shell-v2",
+  "/static/unified-solution-studio.css?v=20260823-ui-system-v3",
   "data-operly-unified-solution-studio",
 );
+ensureScript(
+  "/static/authenticated-ui.js?v=20260823-ui-system-v3",
+  "data-operly-authenticated-ui-script",
+);
 
-// Small mobile navigation behavior replacing the removed operly-cosmic.js shell
-// interceptor. No fetch interception, route rewriting, or global theme mutation.
+// Shared tablet/mobile workspace navigation. This is intentionally tiny and
+// does not intercept fetch, auth, routing or model behavior.
 document.addEventListener("click", (event) => {
   const dashboard = document.querySelector("#dashboard.workspace-shell-ready");
   if (!dashboard) return;
