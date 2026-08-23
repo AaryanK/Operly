@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.business_brain import AgentInput, get_agent_service
+from packages.business_brain.conversation_artifacts import artifact_context, recent_artifacts
+from packages.business_brain.personal_agent import get_personal_agent_service
 from packages.channels.envelope import ChannelEnvelope, ChannelResponse
 from packages.channels.guest_chat import get_guest_conversation_service
 from packages.channels.identity import IdentityService
@@ -122,6 +124,8 @@ class ChannelService:
     async def handle(cls, envelope: ChannelEnvelope) -> ChannelResponse:
         from packages.database.db import session_scope
 
+        attachment_prompt = ""
+        attachment_names: list[str] = []
         async with session_scope() as db:
             resolved = await cls.resolve(db, envelope)
             if envelope.is_direct and resolved.user_id is None:
@@ -158,13 +162,29 @@ class ChannelService:
                     status="guest",
                 )
 
+            if envelope.is_direct and resolved.tenant_id is None and resolved.user_id:
+                # A person is a valid Operly identity even with zero workspaces.
+                # Keep this DM in account scope rather than fabricating a tenant.
+                user = await IdentityService.user(db, resolved.user_id)
+                display_name = user.display_name if user else envelope.actor_name
+                await db.commit()
+                result = await get_personal_agent_service().run(
+                    user_id=resolved.user_id,
+                    display_name=display_name,
+                    message=envelope.text,
+                    conversation_id=f"{envelope.provider}:{envelope.external_conversation_id}",
+                    selected_workspace_id=None,
+                )
+                return ChannelResponse(
+                    message=result["message"],
+                    conversation_id=result.get("conversation_id"),
+                    user_id=resolved.user_id,
+                    status="ok",
+                )
+
             if resolved.tenant_id is None:
                 return ChannelResponse(
-                    message=(
-                        "Your Operly account does not currently have a workspace membership."
-                        if envelope.is_direct
-                        else "This channel space is not bound to an Operly workspace yet. Connect it through an explicit workspace installation flow first."
-                    ),
+                    message="This channel space is not bound to an Operly workspace yet. Connect it through an explicit workspace installation flow first.",
                     user_id=resolved.user_id,
                     status="tenant_required",
                 )
@@ -207,6 +227,19 @@ class ChannelService:
                         metadata={"direct": envelope.is_direct, "scope_repaired": True},
                     )
 
+            artifacts = await recent_artifacts(
+                db,
+                tenant_id=resolved.tenant_id,
+                user_id=resolved.user_id,
+                actor_external_id=envelope.external_user_id,
+                channel=envelope.provider,
+                conversation_id=envelope.external_conversation_id,
+                is_direct=envelope.is_direct,
+                limit=6,
+            )
+            attachment_prompt, attachment_names = artifact_context(artifacts)
+            await db.commit()
+
         result = await get_agent_service().run(
             AgentInput(
                 tenant_id=resolved.tenant_id,
@@ -216,6 +249,8 @@ class ChannelService:
                 conversation_id=conversation_id,
                 text=envelope.text,
                 images=list(envelope.images),
+                attachment_context=attachment_prompt,
+                attachment_names=attachment_names,
                 metadata={
                     **dict(envelope.metadata),
                     "user_id": resolved.user_id,
@@ -227,6 +262,7 @@ class ChannelService:
                     "is_direct": envelope.is_direct,
                     "accessible_workspaces": resolved.options if envelope.is_direct else [],
                     "dm_execution_anchor": resolved.tenant_id if envelope.is_direct else None,
+                    "retained_artifact_count": len(attachment_names) if attachment_prompt else 0,
                 },
             )
         )
@@ -243,6 +279,7 @@ class ChannelService:
                 metadata={
                     "direct": envelope.is_direct,
                     "execution_anchor_only": envelope.is_direct,
+                    "retained_artifacts": bool(attachment_prompt),
                 },
             )
 
