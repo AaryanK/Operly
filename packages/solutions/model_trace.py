@@ -26,7 +26,8 @@ _SCOPE: ContextVar[SolutionModelTraceScope | None] = ContextVar(
     "operly_solution_model_trace",
     default=None,
 )
-_INSTALLED = False
+_TELEMETRY_INSTALLED = False
+_BUILDER_HOOK_INSTALLED = False
 
 
 def _canonical(value: Any) -> str:
@@ -90,15 +91,40 @@ async def telemetry_sink(event: ModelAttemptEvent) -> None:
 
 
 def install_telemetry() -> None:
-    global _INSTALLED
-    if _INSTALLED:
+    global _TELEMETRY_INSTALLED
+    if _TELEMETRY_INSTALLED:
         return
     register_model_telemetry_sink(telemetry_sink)
-    _INSTALLED = True
+    _TELEMETRY_INSTALLED = True
+
+
+def install_application_builder_trace() -> None:
+    """Install one context-aware wrapper at the managed-app model factory seam.
+
+    The wrapper is permanent but inert outside a Solution trace ContextVar, so
+    concurrent non-creation requests keep their normal clients and semantics.
+    """
+    global _BUILDER_HOOK_INSTALLED
+    if _BUILDER_HOOK_INSTALLED:
+        return
+    from packages.application_builder import ai as builder_ai
+
+    original = builder_ai.model_chat_client_for_role
+    if getattr(original, "_operly_solution_trace_wrapped", False):
+        _BUILDER_HOOK_INSTALLED = True
+        return
+
+    def traced_factory(*args, **kwargs):
+        return trace_client(original(*args, **kwargs))
+
+    traced_factory._operly_solution_trace_wrapped = True  # type: ignore[attr-defined]
+    builder_ai.model_chat_client_for_role = traced_factory
+    _BUILDER_HOOK_INSTALLED = True
 
 
 def begin(job_id: str):
     install_telemetry()
+    install_application_builder_trace()
     return _SCOPE.set(SolutionModelTraceScope(job_id=job_id))
 
 
