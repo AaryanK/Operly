@@ -15,17 +15,25 @@
   const isWebsite = () => S.runtime?.kind === "studio";
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const activeRun = run => ["queued","running"].includes(run?.state);
+  const generationFailed = solution => solution?.runtime?.kind === "app" && (
+    solution?.status === "failed" || ["failed","retryable"].includes(String(solution?.generation?.status||""))
+  );
+
+  function errorDetail(error) {
+    if (!error) return null;
+    const raw=String(error.message||error);
+    try {
+      const parsed=JSON.parse(raw);
+      return parsed?.detail || parsed;
+    } catch { return null; }
+  }
 
   function friendly(error) {
     if (!error) return "Something went wrong.";
-    const raw = String(error.message || error);
-    try {
-      const parsed = JSON.parse(raw);
-      const detail = parsed.detail || parsed;
-      if (typeof detail === "string") return detail;
-      if (detail?.message) return detail.message;
-    } catch {}
-    return raw.replace(/^Error:\s*/i, "").slice(0,1200);
+    const detail=errorDetail(error);
+    if(typeof detail==="string") return detail;
+    if(detail?.message) return detail.message;
+    return String(error.message||error).replace(/^Error:\s*/i, "").slice(0,1200);
   }
 
   function detailText(value, limit=700) {
@@ -209,6 +217,34 @@
       <div class="ss-run-head"><div><span class="ss-run-dot ${esc(run.state)}"></span><strong>${esc(stateLabel)}</strong><small>${esc(run.modelId||"authorizing model")}${elapsed?` · ${esc(elapsed)}`:""}</small></div><span>${esc(run.operation||"edit")}</span></div>
       <div class="ss-run-now">${esc(latest?.summary||"Preparing Studio agent…")}</div>
       <details ${activeRun(run)?"open":""}><summary>Agent activity <span>${events.length} event${events.length===1?"":"s"}</span></summary><div class="ss-run-events">${rows||'<p>Waiting for the first harness event…</p>'}</div></details>`;
+  }
+
+  function renderManagedGenerationTrace(data) {
+    const host=$("#ss-run-trace");if(!host)return;
+    const attempt=data?.attempts?.[0];
+    if(!attempt){host.hidden=false;host.innerHTML='<p>Initial-generation trace is not available yet.</p>';return;}
+    const stages=(attempt.stages||[]).map(stage=>`<div class="ss-run-event ${stage.status==="failed"?"bad":""}"><i></i><div><strong>${esc(stage.stage||"generation")}: ${esc(stage.status||"")}</strong>${stage.detail?`<em>${esc(stage.detail)}</em>`:""}</div></div>`).join("");
+    const attempts=(attempt.modelAttempts||[]).map(row=>`${row.phase||"attempt"} · ${row.provider||"provider"} · ${row.modelId||row.resourceId||"model"}${row.latencyMs!=null?` · ${row.latencyMs}ms`:""}${row.classification?` · ${row.classification}`:""}`).join("\n");
+    const calls=JSON.stringify(attempt.modelCalls||[],null,2).slice(0,60000);
+    host.hidden=false;
+    host.innerHTML=`
+      <div class="ss-run-head"><div><span class="ss-run-dot ${attempt.status==="succeeded"?"succeeded":"failed"}"></span><strong>Initial generation · attempt ${esc(attempt.attempt)}</strong><small>${attempt.aiInvoked?"Model boundary captured":"AI was not invoked"}</small></div><span>${esc(attempt.status||"")}</span></div>
+      <div class="ss-run-now">${attempt.failureClassification?`Stopped: ${esc(attempt.failureClassification)}`:"Generation trajectory"}</div>
+      <details open><summary>Creation stages <span>${(attempt.stages||[]).length}</span></summary><div class="ss-run-events">${stages||'<p>No stage events recorded.</p>'}</div></details>
+      <details><summary>Provider/model attempts <span>${(attempt.modelAttempts||[]).length}</span></summary><pre>${esc(attempts||"No model attempt was made.")}</pre></details>
+      <details><summary>Redacted model request/response trace</summary><pre>${esc(calls||"No model boundary payload was recorded.")}</pre></details>`;
+  }
+
+  async function loadManagedGenerationTrace() {
+    if(!S.active?.id || S.active?.runtime?.kind!=="app") return null;
+    try{
+      const trace=await api(`/solutions/${S.active.id}/generation-trace`);
+      renderManagedGenerationTrace(trace);
+      return trace;
+    }catch(error){
+      const host=$("#ss-run-trace");if(host){host.hidden=false;host.innerHTML=`<p>${esc(friendly(error))}</p>`;}
+      return null;
+    }
   }
 
   async function runtime() {
@@ -447,6 +483,54 @@
     finally{button.disabled=false;button.textContent="Publish"}
   }
 
+  function showGenerationFailure(solution,message="") {
+    S.active=solution||S.active;
+    S.runtime=S.active?.runtime?.kind==="app"?{kind:"app",id:S.active.runtime.id}:S.runtime;
+    previewState("error","Initial generation failed");
+    const errorHost=$("#ss-preview-error");
+    if(errorHost){
+      errorHost.hidden=false;
+      const strong=$("strong",errorHost);if(strong)strong.textContent="Application generation stopped safely";
+      const copy=$("p",errorHost);if(copy)copy.textContent=message||S.active?.generation?.error||"The blank bootstrap was not promoted to a preview-ready application.";
+      const retry=$("#ss-retry",errorHost);if(retry){retry.textContent="Retry generation";retry.disabled=false;}
+    }
+    const open=$("#ss-open-preview");if(open){open.removeAttribute("href");open.setAttribute("aria-disabled","true");}
+    const publishButton=$("#ss-publish");if(publishButton)publishButton.disabled=true;
+    const sendButton=$("#ss-send");if(sendButton)sendButton.disabled=true;
+    loadManagedGenerationTrace();
+  }
+
+  async function retryManagedGeneration() {
+    if(!S.active?.id || !generationFailed(S.active)) return loadPreview();
+    const retry=$("#ss-retry");if(retry){retry.disabled=true;retry.textContent="Retrying…";}
+    previewState("loading","Retrying initial generation…");
+    try{
+      const result=await api(`/solutions/${S.active.id}/retry-generation`,{method:"POST",body:"{}"});
+      const solution=result.solution;
+      if(!solution)throw new Error("Generation retry returned no Solution");
+      const index=S.solutions.findIndex(item=>item.id===solution.id);
+      if(index>=0)S.solutions[index]=solution;else S.solutions.unshift(solution);
+      S.active=solution;S.runtime=null;
+      const publishButton=$("#ss-publish");if(publishButton)publishButton.disabled=false;
+      const sendButton=$("#ss-send");if(sendButton)sendButton.disabled=false;
+      const open=$("#ss-open-preview");if(open)open.removeAttribute("aria-disabled");
+      await loadManagedGenerationTrace();
+      await loadPreview();await history();
+      previewState("ready","Generated application preview");
+      msg("ai","Initial generation succeeded. A validated non-bootstrap application version is now active.","Retry complete");
+    }catch(error){
+      const detail=errorDetail(error);
+      if(detail?.solution){
+        const solution=detail.solution;
+        const index=S.solutions.findIndex(item=>item.id===solution.id);
+        if(index>=0)S.solutions[index]=solution;else S.solutions.unshift(solution);
+        showGenerationFailure(solution,detail.message||friendly(error));
+      }else showGenerationFailure(S.active,friendly(error));
+    }finally{
+      const button=$("#ss-retry");if(button&&generationFailed(S.active)){button.disabled=false;button.textContent="Retry generation";}
+    }
+  }
+
   function setPane(side,open) {
     if(side==="left") S.leftOpen=open; else S.rightOpen=open;
     const shell=$(".ss-shell"); if(!shell) return;
@@ -459,9 +543,9 @@
     $("#ss-back")?.addEventListener("click",()=>{S.runPollToken++;setImmersive(false);list()});
     $("#ss-project-toggle")?.addEventListener("click",()=>setPane("left",!S.leftOpen));
     $("#ss-inspector-toggle")?.addEventListener("click",()=>setPane("right",!S.rightOpen));
-    $("#ss-refresh")?.addEventListener("click",()=>loadPreview());
+    $("#ss-refresh")?.addEventListener("click",()=>generationFailed(S.active)?retryManagedGeneration():loadPreview());
     $("#ss-publish")?.addEventListener("click",publish);
-    $("#ss-retry")?.addEventListener("click",()=>loadPreview());
+    $("#ss-retry")?.addEventListener("click",()=>generationFailed(S.active)?retryManagedGeneration():loadPreview());
     $("#ss-send")?.addEventListener("click",send);
     const input=$("#ss-input");
     input?.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(220,Math.max(64,input.scrollHeight))+"px"});
@@ -471,8 +555,8 @@
       $("#ss-canvas").dataset.view=S.viewport;renderContextLine();
     }));
     $("#ss-frame")?.addEventListener("load",()=>{
-      const errorHost=$("#ss-preview-error");if(errorHost)errorHost.hidden=true;
-      if(S.source) previewState("ready","Source preview"); else bindLegacyFrame($("#ss-frame"));
+      const errorHost=$("#ss-preview-error");if(errorHost&&!generationFailed(S.active))errorHost.hidden=true;
+      if(S.source) previewState("ready","Source preview"); else if(!generationFailed(S.active))bindLegacyFrame($("#ss-frame"));
     });
   }
 
@@ -502,6 +586,13 @@
         </div>
       </section>`;
     wireEditor();renderInspector();
+    if(generationFailed(solution)){
+      S.runtime={kind:"app",id:solution.runtime.id};
+      await history();
+      showGenerationFailure(solution,solution?.generation?.error||"Initial application generation failed safely.");
+      msg("ai","Initial generation stopped safely. The bootstrap is not considered a usable preview. Inspect the creation trace above or retry from the exact stored objective.",`Attempt ${solution?.generation?.attempt||""}`.trim());
+      return;
+    }
     try{
       const rt=await runtime();await refreshSourceState(rt);await loadPreview();await history();
       const latest=await resumeLatestRun(rt);
@@ -526,6 +617,14 @@
       await editor(solution,{generate:solution.runtime?.kind==="studio"});
       if(solution.runtime?.kind!=="studio") msg("ai",`Created as ${kind(solution)} from your objective.`,result.classification?.reason||"Intent classified before runtime creation");
     }catch(ex){
+      const detail=errorDetail(ex);
+      if(detail?.code==="initial_generation_failed" && detail.solution){
+        const solution=detail.solution;
+        const index=S.solutions.findIndex(item=>item.id===solution.id);
+        if(index>=0)S.solutions[index]=solution;else S.solutions.unshift(solution);
+        await editor(solution);
+        return;
+      }
       if(error){error.hidden=false;error.textContent=friendly(ex);}
       if(button){button.disabled=false;button.textContent="Create Solution";}
     }
@@ -543,7 +642,7 @@
 
   function card(solution) {
     const preview=solution.preview?.url;
-    return `<article class="ss-card"><div class="ss-thumb">${preview?`<iframe src="${esc(preview)}" tabindex="-1" loading="lazy" sandbox=""></iframe>`:`<div>No preview yet</div>`}</div><div class="ss-cardbody"><div><small>${esc(kind(solution))}</small><em>${esc(status(solution))}</em></div><h3>${esc(solution.name)}</h3><p>${esc(solution.description||"Open Studio to build and refine this Solution.")}</p><footer><span>${solution.production?.state==="live"?"● Live":"Private"}</span><button data-open-solution="${esc(solution.id)}">Open Studio →</button></footer></div></article>`;
+    return `<article class="ss-card"><div class="ss-thumb">${preview?`<iframe src="${esc(preview)}" tabindex="-1" loading="lazy" sandbox=""></iframe>`:`<div>${generationFailed(solution)?"Generation failed · retry available":"No preview yet"}</div>`}</div><div class="ss-cardbody"><div><small>${esc(kind(solution))}</small><em>${esc(status(solution))}</em></div><h3>${esc(solution.name)}</h3><p>${esc(solution.description||"Open Studio to build and refine this Solution.")}</p><footer><span>${solution.production?.state==="live"?"● Live":"Private"}</span><button data-open-solution="${esc(solution.id)}">Open Studio →</button></footer></div></article>`;
   }
 
   async function list() {
