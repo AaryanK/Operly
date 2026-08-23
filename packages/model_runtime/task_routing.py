@@ -11,11 +11,6 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
-from packages.harness.plugins import (
-    RuntimePluginContext,
-    RuntimePluginUnavailable,
-    default_runtime_plugins,
-)
 from packages.model_runtime.contracts import (
     InferenceBudget,
     InferenceRequest,
@@ -26,7 +21,11 @@ from packages.model_runtime.contracts import (
 from packages.model_runtime.registry import ModelChatAdapter, model_for_role as _base_model_for_role
 from packages.model_runtime.requirements import ModelRequirements, model_for_requirements
 from packages.model_runtime.semantic_router import SemanticRouter, SemanticRoutingError
-
+from packages.plugins.extensions import (
+    ApplicationPluginContext,
+    ApplicationPluginUnavailable,
+    default_application_plugins,
+)
 
 _TOKEN_RE = re.compile(r"[a-z0-9_-]+")
 
@@ -84,10 +83,40 @@ _ROUTE_SPECS: dict[str, tuple[str, str, str]] = {
 
 _SPECIALIST_HINTS = frozenset(
     {
-        "code", "implement", "debug", "fix", "studio", "website", "app", "html", "javascript",
-        "validate", "verify", "audit", "review", "test", "research", "investigate", "compare",
-        "market", "competitor", "evidence", "plan", "strategy", "roadmap", "design", "architect",
-        "proposal", "send", "create", "update", "delete", "schedule", "email", "remind", "approve",
+        "code",
+        "implement",
+        "debug",
+        "fix",
+        "studio",
+        "website",
+        "app",
+        "html",
+        "javascript",
+        "validate",
+        "verify",
+        "audit",
+        "review",
+        "test",
+        "research",
+        "investigate",
+        "compare",
+        "market",
+        "competitor",
+        "evidence",
+        "plan",
+        "strategy",
+        "roadmap",
+        "design",
+        "architect",
+        "proposal",
+        "send",
+        "create",
+        "update",
+        "delete",
+        "schedule",
+        "email",
+        "remind",
+        "approve",
     }
 )
 
@@ -121,31 +150,49 @@ def classify_business_task(objective: str) -> TaskRouteDecision:
 
     if has("code", "implement", "debug", "fix", "studio", "website", "app", "html", "javascript"):
         return TaskRouteDecision(
-            "coding_or_studio", "coding", "workspace_write_with_validation", 0.55,
+            "coding_or_studio",
+            "coding",
+            "workspace_write_with_validation",
+            0.55,
             "fallback heuristic identified a coding/studio workload shape",
         )
     if has("validate", "verify", "audit", "review", "check", "test"):
         return TaskRouteDecision(
-            "validation", "global_validator", "read_first_validation", 0.52,
+            "validation",
+            "global_validator",
+            "read_first_validation",
+            0.52,
             "fallback heuristic identified a validation workload shape",
         )
     if has("research", "investigate", "find", "compare", "market", "competitor", "evidence"):
         return TaskRouteDecision(
-            "research", "requirements_analyst", "read_research_sources", 0.50,
+            "research",
+            "requirements_analyst",
+            "read_research_sources",
+            0.50,
             "fallback heuristic identified a research workload shape",
         )
     if has("plan", "strategy", "roadmap", "design", "architect", "proposal"):
         return TaskRouteDecision(
-            "planning", "planner", "read_then_propose", 0.48,
+            "planning",
+            "planner",
+            "read_then_propose",
+            0.48,
             "fallback heuristic identified a planning workload shape",
         )
     if has("send", "create", "update", "delete", "schedule", "email", "remind", "approve"):
         return TaskRouteDecision(
-            "bounded_operation", "bounded_task", "bounded_action_with_approval", 0.46,
+            "bounded_operation",
+            "bounded_task",
+            "bounded_action_with_approval",
+            0.46,
             "fallback heuristic identified a bounded operation",
         )
     return TaskRouteDecision(
-        "business_reasoning", "business_agent", "progressive_capability_access", 0.35,
+        "business_reasoning",
+        "business_agent",
+        "progressive_capability_access",
+        0.35,
         "fallback heuristic identified general business reasoning",
     )
 
@@ -168,12 +215,7 @@ def requirements_for_task(
     decision: TaskRouteDecision,
     request: InferenceRequest,
 ) -> ModelRequirements:
-    """Translate a workload shape into model capabilities and preferences.
-
-    Mixed tasks are represented by the union of their actual requirements. In
-    particular, exposed tools add the `tools` requirement regardless of semantic
-    role instead of forcing the request onto `business_agent`.
-    """
+    """Translate a workload shape into model capabilities and preferences."""
     required = {"text"}
     preferred = {"reliable"}
     if request.tools:
@@ -211,14 +253,14 @@ class ModelTaskRouterPlugin:
     kind = "task_router"
     priority = 10
 
-    def supports(self, payload: dict[str, Any], context: RuntimePluginContext) -> bool:
+    def supports(self, payload: dict[str, Any], context: ApplicationPluginContext) -> bool:
         del context
         return bool(str(payload.get("objective") or "").strip())
 
     async def invoke(
         self,
         payload: dict[str, Any],
-        context: RuntimePluginContext,
+        context: ApplicationPluginContext,
     ) -> TaskRouteDecision:
         objective = str(payload.get("objective") or "").strip()
         try:
@@ -253,10 +295,10 @@ class ModelTaskRouterPlugin:
                 },
             )
         except (ModelInferenceError, SemanticRoutingError, LookupError, RuntimeError) as error:
-            raise RuntimePluginUnavailable(str(error)) from error
+            raise ApplicationPluginUnavailable(str(error)) from error
 
         if not semantic.domain_match or not semantic.known or not semantic.route_id:
-            raise RuntimePluginUnavailable("router model did not choose one bounded workload shape")
+            raise ApplicationPluginUnavailable("router model did not choose one bounded workload shape")
         task_type, tool_policy, _ = _ROUTE_SPECS[semantic.route_id]
         return TaskRouteDecision(
             task_type=task_type,
@@ -274,21 +316,21 @@ class DeterministicTaskRouterPlugin:
     kind = "task_router"
     priority = 1000
 
-    def supports(self, payload: dict[str, Any], context: RuntimePluginContext) -> bool:
+    def supports(self, payload: dict[str, Any], context: ApplicationPluginContext) -> bool:
         del context
         return bool(str(payload.get("objective") or "").strip())
 
     async def invoke(
         self,
         payload: dict[str, Any],
-        context: RuntimePluginContext,
+        context: ApplicationPluginContext,
     ) -> TaskRouteDecision:
         del context
         return classify_business_task(str(payload.get("objective") or ""))
 
 
 def _ensure_router_plugins() -> None:
-    registry = default_runtime_plugins()
+    registry = default_application_plugins()
     installed = {plugin.id for plugin in registry.installed("task_router")}
     if ModelTaskRouterPlugin.id not in installed:
         registry.register(ModelTaskRouterPlugin())
@@ -301,7 +343,7 @@ async def route_business_task(
     *,
     request: InferenceRequest | None = None,
 ) -> TaskRouteDecision:
-    """Route through the installed task-router plugin chain."""
+    """Route through the installed task-router extension chain."""
     _ensure_router_plugins()
     metadata = dict(request.metadata) if request is not None else {}
     has_attachment_message = False
@@ -311,7 +353,7 @@ async def route_business_task(
             and "ATTACHMENT ANALYSIS" in str(message.get("content") or "")
             for message in request.messages
         )
-    return await default_runtime_plugins().invoke(
+    return await default_application_plugins().invoke(
         "task_router",
         {
             "objective": objective,
@@ -319,7 +361,7 @@ async def route_business_task(
             "has_attachments": bool(metadata.get("has_attachments")) or has_attachment_message,
             "attachment_count": int(metadata.get("attachment_count") or 0),
         },
-        RuntimePluginContext(
+        ApplicationPluginContext(
             channel=str(metadata.get("channel") or ""),
             surface=str(metadata.get("surface") or ""),
             metadata=metadata,
