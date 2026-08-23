@@ -1,10 +1,7 @@
 """Pluggable model-provider registry for OPERLY's shared harnesses.
 
-Models are infrastructure plugins. Harnesses depend only on the small
-``chat(messages, tools)`` contract; provider-specific authentication, payload
-translation and transport live behind registered adapters. Adding or replacing a
-model backend therefore does not require changes to business, planning, routing,
-or coding harness logic.
+Harnesses depend only on the small chat(messages, tools) contract. Provider-specific
+authentication, payload translation, and transport live behind registered adapters.
 """
 from __future__ import annotations
 
@@ -12,6 +9,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from packages.model_runtime.ollama_client import OllamaClient
+from packages.model_runtime.openai_compatible_client import OpenAICompatibleClient
 from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.model_runtime.portfolio import ModelRoute
 
@@ -36,7 +34,6 @@ def register_model_provider(
     *,
     replace: bool = False,
 ) -> None:
-    """Register a model provider exactly like another OPERLY runtime plugin."""
     key = str(name or "").strip().lower()
     if not key:
         raise ValueError("Model provider name is required")
@@ -46,7 +43,6 @@ def register_model_provider(
 
 
 def model_client_for_route(route: ModelRoute) -> ModelClient:
-    """Instantiate the provider selected by a role route."""
     key = str(route.provider or "").strip().lower()
     factory = _PROVIDER_FACTORIES.get(key)
     if factory is None:
@@ -70,5 +66,41 @@ def _openrouter_factory(route: ModelRoute) -> ModelClient:
     return OpenRouterClient(model=route.primary, fallback_models=route.fallbacks)
 
 
+def _groq_factory(route: ModelRoute) -> ModelClient:
+    return OpenAICompatibleClient(
+        provider="groq",
+        model=route.primary,
+        fallback_models=route.fallbacks,
+        default_url="https://api.groq.com/openai/v1/chat/completions",
+        api_key_envs=("GROQ_API_KEY", "groq_api_key"),
+        env_prefix="GROQ",
+    )
+
+
+def _gemini_factory(route: ModelRoute) -> ModelClient:
+    return OpenAICompatibleClient(
+        provider="gemini",
+        model=route.primary,
+        fallback_models=route.fallbacks,
+        default_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        api_key_envs=("GEMINI_API_KEY", "gemini_api_key", "GOOGLE_API_KEY"),
+        env_prefix="GEMINI",
+    )
+
+
+def _nvidia_factory(route: ModelRoute) -> ModelClient:
+    return OpenAICompatibleClient(
+        provider="nvidia",
+        model=route.primary,
+        fallback_models=route.fallbacks,
+        default_url="https://integrate.api.nvidia.com/v1/chat/completions",
+        api_key_envs=("NVIDIA_API_KEY", "nvidia_api_key"),
+        env_prefix="NVIDIA",
+    )
+
+
 register_model_provider("ollama", _ollama_factory)
 register_model_provider("openrouter", _openrouter_factory)
+register_model_provider("groq", _groq_factory)
+register_model_provider("gemini", _gemini_factory)
+register_model_provider("nvidia", _nvidia_factory)
