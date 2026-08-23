@@ -2,7 +2,7 @@
 
 The public orchestration boundary is Model.infer(). Provider clients remain
 exported only for compatibility while callers migrate; new code should use the
-contracts and registry helpers below.
+contracts, requirements, and registry helpers below.
 """
 
 from .catalog import (
@@ -49,6 +49,11 @@ from .registry import (
     model_chat_client_for_role,
     register_model_telemetry_sink,
 )
+from .requirements import (
+    ModelRequirements,
+    model_chat_client_for_requirements,
+    model_for_requirements,
+)
 from .routing_policy import (
     RoleRoutingProfile,
     auto_portfolio_enabled,
@@ -65,6 +70,7 @@ from .task_routing import (
     TaskRoutedBusinessModel,
     classify_business_task,
     model_for_role,
+    requirements_for_task,
     route_business_task,
 )
 
@@ -77,6 +83,9 @@ __all__ = [
     "ModelSelector",
     "ModelTraits",
     "ModelUsage",
+    "ModelRequirements",
+    "model_for_requirements",
+    "model_chat_client_for_requirements",
     "ConfiguredModel",
     "ModelPool",
     "ModelRegistry",
@@ -96,6 +105,7 @@ __all__ = [
     "ModelTaskRouterPlugin",
     "DeterministicTaskRouterPlugin",
     "classify_business_task",
+    "requirements_for_task",
     "route_business_task",
     "provider_is_configured",
     # Compatibility exports below this line. New callers should not depend on them.
