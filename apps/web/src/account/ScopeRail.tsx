@@ -1,4 +1,5 @@
 import { PersonalProfile, WorkspaceSummary } from "../app/types";
+import { OperlyMark } from "../ui/OperlyMark";
 
 type Props = {
   profile: PersonalProfile | null;
@@ -18,7 +19,7 @@ function initials(value: string): string {
 
 export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal, transitioning = false, onPersonal, onWorkspace, onAccount, onCreateWorkspace }: Props) {
   return <nav className="scope-rail" aria-label="Operly spaces" aria-busy={transitioning}>
-    <button className={`scope-mark ${personal ? "active" : ""}`} aria-label="Personal Operly" title="Personal Operly" disabled={transitioning} onClick={onPersonal}>✦</button>
+    <button className={`scope-mark scope-brand ${personal ? "active" : ""}`} aria-label="Personal Operly" title="Personal Operly" disabled={transitioning} onClick={onPersonal}><OperlyMark label="Personal Operly" /></button>
     <span className="scope-divider" aria-hidden="true" />
     <div className="scope-list">
       {workspaces.map((workspace) => <button key={workspace.id} className={`scope-mark ${activeWorkspaceId === workspace.id ? "active" : ""}`} aria-label={workspace.name} title={workspace.name} disabled={transitioning} onClick={() => onWorkspace(workspace.id)}>{workspace.logo_url ? <img src={workspace.logo_url} alt="" /> : initials(workspace.name)}</button>)}

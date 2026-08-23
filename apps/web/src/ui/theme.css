@@ -1,0 +1,227 @@
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+
+html[data-theme="dark"] {
+  --ui-canvas: #0b0f18;
+  --ui-panel: #111723;
+  --ui-panel-muted: #171e2b;
+  --ui-panel-glass: rgba(17, 23, 35, .84);
+  --ui-ink: #f2f5fb;
+  --ui-muted: #97a2b7;
+  --ui-line: #252e3d;
+  --ui-line-strong: #344054;
+  --ui-accent: #8173ff;
+  --ui-accent-strong: #a79dff;
+  --ui-accent-soft: #211d3d;
+  --ui-accent-cyan: #64d4f3;
+  --ui-accent-gradient: linear-gradient(135deg, #8c79ff 0%, #6c78ff 48%, #58c8eb 100%);
+  --ui-rail: #070a11;
+  --ui-nav: #0e131e;
+  --ui-nav-ink: #f8f9fc;
+  --ui-danger: #ff8d82;
+  --ui-shadow-soft: 0 10px 30px rgba(0, 0, 0, .20);
+  --ui-shadow: 0 18px 55px rgba(0, 0, 0, .28);
+  --ui-shadow-float: 0 24px 70px rgba(0, 0, 0, .40);
+  --ui-glow: 0 0 0 1px rgba(129, 115, 255, .12), 0 18px 55px rgba(88, 76, 210, .12);
+  background: var(--ui-canvas);
+}
+
+body, .authenticated-shell, .workspace-page, .personal-surface, .ai-chat-panel,
+.surface-header, .conversation-stage, .personal-history, .conversation-list-panel,
+.data-card, .presence-card, .solution-compose-card, .solutions-library, .info-banner,
+.metric-card, .destination-card, .plugin-card, .solution-card, .connector-card, .role-card,
+.account-settings-card, .account-settings-main, .account-settings-nav,
+.settings-callout, .create-workspace-card, .account-identity, .personal-connector-card,
+.workspace-settings-list > button, .settings-boundary-grid > div, .composer,
+.suggestion-grid button, .inline-form, input, textarea, select, button {
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease;
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 78% -10%, rgba(126, 104, 255, .13), transparent 32%),
+    radial-gradient(circle at 22% 110%, rgba(82, 195, 229, .08), transparent 30%),
+    var(--ui-canvas);
+}
+html[data-theme="dark"] .authenticated-shell {
+  background: radial-gradient(circle at 90% 0%, rgba(129,115,255,.07), transparent 28%), var(--ui-canvas);
+}
+html[data-theme="dark"] .workspace-page { background: var(--ui-canvas); }
+html[data-theme="dark"] .surface-header {
+  background: radial-gradient(circle at 90% -30%, rgba(129,115,255,.10), transparent 34%), rgba(17,23,35,.90);
+  border-bottom-color: var(--ui-line);
+}
+html[data-theme="dark"] .workspace-hero { background: var(--ui-panel); }
+html[data-theme="dark"] .personal-surface,
+html[data-theme="dark"] .ai-chat-panel { background: rgba(13,18,28,.96); }
+html[data-theme="dark"] .conversation-stage {
+  background:
+    radial-gradient(circle at 76% 4%, rgba(129,115,255,.06), transparent 25%),
+    radial-gradient(circle at 20% 82%, rgba(91,199,234,.04), transparent 22%),
+    linear-gradient(180deg, #0f1520 0%, #0b1019 100%);
+  scrollbar-color: #394457 transparent;
+}
+html[data-theme="dark"] .personal-history,
+html[data-theme="dark"] .conversation-list-panel,
+html[data-theme="dark"] .account-settings-nav {
+  background: radial-gradient(circle at 100% 0%, rgba(129,115,255,.07), transparent 30%), linear-gradient(180deg, #151b27, #101620);
+}
+html[data-theme="dark"] .history-list > button { color: var(--ui-ink); }
+html[data-theme="dark"] .history-list > button:hover,
+html[data-theme="dark"] .history-list > button.active,
+html[data-theme="dark"] .account-settings-nav > button:hover,
+html[data-theme="dark"] .account-settings-nav > button.active {
+  background: #1a2230;
+  color: var(--ui-ink);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+html[data-theme="dark"] .history-head button,
+html[data-theme="dark"] .account-settings-main > header > button,
+html[data-theme="dark"] .secondary-button {
+  background: #171e2a;
+  color: var(--ui-ink);
+  border-color: var(--ui-line);
+}
+
+html[data-theme="dark"] .metric-card,
+html[data-theme="dark"] .destination-card,
+html[data-theme="dark"] .data-card,
+html[data-theme="dark"] .plugin-card,
+html[data-theme="dark"] .solution-card,
+html[data-theme="dark"] .connector-card,
+html[data-theme="dark"] .role-card,
+html[data-theme="dark"] .presence-card,
+html[data-theme="dark"] .solution-compose-card,
+html[data-theme="dark"] .solutions-library,
+html[data-theme="dark"] .info-banner,
+html[data-theme="dark"] .inline-form,
+html[data-theme="dark"] .settings-boundary-grid > div,
+html[data-theme="dark"] .settings-callout,
+html[data-theme="dark"] .create-workspace-card,
+html[data-theme="dark"] .account-identity,
+html[data-theme="dark"] .personal-connector-card,
+html[data-theme="dark"] .workspace-settings-list > button,
+html[data-theme="dark"] .suggestion-grid button {
+  background: linear-gradient(180deg, rgba(21,28,41,.98), rgba(15,21,32,.98));
+  border-color: var(--ui-line);
+  color: var(--ui-ink);
+  box-shadow: var(--ui-shadow-soft);
+}
+html[data-theme="dark"] .destination-card:hover,
+html[data-theme="dark"] .plugin-card:hover,
+html[data-theme="dark"] .solution-card:hover,
+html[data-theme="dark"] .connector-card:hover,
+html[data-theme="dark"] .workspace-settings-list > button:hover,
+html[data-theme="dark"] .suggestion-grid button:hover {
+  border-color: rgba(151,137,255,.42);
+  background: linear-gradient(180deg, #1b2332, #141b28);
+  box-shadow: 0 18px 45px rgba(0,0,0,.28);
+}
+html[data-theme="dark"] .data-row,
+html[data-theme="dark"] .message-row { border-top-color: var(--ui-line); }
+html[data-theme="dark"] .data-row small,
+html[data-theme="dark"] .data-row p,
+html[data-theme="dark"] .message-row p,
+html[data-theme="dark"] .plugin-card p,
+html[data-theme="dark"] .solution-card > p,
+html[data-theme="dark"] .destination-card p { color: var(--ui-muted); }
+
+html[data-theme="dark"] .assistant-message p,
+html[data-theme="dark"] .chat-message p,
+html[data-theme="dark"] .message-content { color: #d9dfeb; }
+html[data-theme="dark"] .chat-message.user > div:last-child {
+  background: rgba(29,37,52,.92);
+  border-color: #313b4d;
+}
+html[data-theme="dark"] .chat-message.user > div:last-child > strong { color: #aeb8ca; }
+html[data-theme="dark"] .message-content h3,
+html[data-theme="dark"] .message-content h4 { color: var(--ui-ink); }
+html[data-theme="dark"] .message-content code { background: #1e2634; color: #e4e9f2; }
+html[data-theme="dark"] .message-content pre { border-color: #303a4b; background: #080b12; color: #eef2fa; }
+html[data-theme="dark"] .message-table-wrap { border-color: var(--ui-line); background: #111824; }
+html[data-theme="dark"] .message-content table th { background: #1a2230; color: #f0f3f9; }
+html[data-theme="dark"] .message-content table td { border-top-color: var(--ui-line); color: #d9dfeb; }
+
+html[data-theme="dark"] .composer {
+  background: rgba(18,24,36,.90);
+  border-color: rgba(113,125,151,.48);
+  box-shadow: var(--ui-shadow-float), 0 0 0 1px rgba(129,115,255,.05);
+}
+html[data-theme="dark"] .composer textarea { color: var(--ui-ink); }
+html[data-theme="dark"] .composer textarea::placeholder { color: #7f8ba0; }
+html[data-theme="dark"] .attach-button {
+  background: linear-gradient(135deg, #24203e, #152a35) !important;
+  color: #b9b0ff !important;
+}
+html[data-theme="dark"] .attachment-strip > span { background: #1a2230; color: #cbd3df; }
+
+html[data-theme="dark"] .form-stack label { color: #c0c8d6; }
+html[data-theme="dark"] .form-stack input,
+html[data-theme="dark"] .form-stack select,
+html[data-theme="dark"] .form-stack textarea,
+html[data-theme="dark"] .inline-form input,
+html[data-theme="dark"] .inline-form select,
+html[data-theme="dark"] .solution-compose-card input,
+html[data-theme="dark"] .solution-compose-card textarea {
+  background: #0f1520;
+  color: var(--ui-ink);
+  border-color: var(--ui-line);
+}
+html[data-theme="dark"] .form-stack input:focus,
+html[data-theme="dark"] .form-stack select:focus,
+html[data-theme="dark"] .form-stack textarea:focus,
+html[data-theme="dark"] .inline-form input:focus,
+html[data-theme="dark"] .inline-form select:focus,
+html[data-theme="dark"] .solution-compose-card input:focus,
+html[data-theme="dark"] .solution-compose-card textarea:focus {
+  border-color: #7568e8;
+  box-shadow: 0 0 0 3px rgba(117,104,232,.16);
+}
+html[data-theme="dark"] .account-settings-card { background: #111723; }
+html[data-theme="dark"] .account-settings-main > header { background: rgba(17,23,35,.96); }
+html[data-theme="dark"] .danger-button { background: #2a1718; border-color: #603034; color: #ffaaa2; }
+html[data-theme="dark"] .success-banner { background: #10271d; border-color: #28563e; color: #88dfaa; }
+html[data-theme="dark"] .inline-error { background: #2a1718; border-color: #603034; color: #ffaaa2; }
+html[data-theme="dark"] .status-chip { background: #1d2532; color: #aeb8c8; }
+html[data-theme="dark"] .status-active,
+html[data-theme="dark"] .status-connected,
+html[data-theme="dark"] .status-healthy,
+html[data-theme="dark"] .status-completed,
+html[data-theme="dark"] .status-succeeded,
+html[data-theme="dark"] .status-live,
+html[data-theme="dark"] .status-exposed { background: #123122; color: #8ce0ad; }
+html[data-theme="dark"] .status-pending,
+html[data-theme="dark"] .status-attention,
+html[data-theme="dark"] .status-publishing { background: #362b13; color: #efd082; }
+html[data-theme="dark"] .status-failed,
+html[data-theme="dark"] .status-error,
+html[data-theme="dark"] .status-disabled,
+html[data-theme="dark"] .status-rejected,
+html[data-theme="dark"] .status-hidden { background: #32191b; color: #ff9f97; }
+
+.appearance-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; max-width: 680px; }
+.appearance-choice { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-panel); color: var(--ui-ink); text-align: left; }
+.appearance-choice:hover { border-color: rgba(129,116,255,.42); transform: translateY(-1px); }
+.appearance-choice.active { border-color: rgba(109,93,252,.58); box-shadow: 0 0 0 3px rgba(109,93,252,.08), var(--ui-shadow-soft); }
+.appearance-preview { height: 94px; display: grid; grid-template-columns: 24px 1fr; overflow: hidden; margin-bottom: 11px; border: 1px solid rgba(128,136,154,.22); border-radius: 10px; }
+.appearance-preview > span { background: #171c29; }
+.appearance-preview > div { position: relative; background: #f6f7fb; }
+.appearance-preview > div::before, .appearance-preview > div::after { content: ""; position: absolute; left: 12px; right: 12px; border-radius: 5px; background: #fff; box-shadow: 0 3px 10px rgba(17,24,39,.08); }
+.appearance-preview > div::before { top: 14px; height: 20px; }
+.appearance-preview > div::after { top: 43px; height: 34px; }
+.appearance-choice[data-choice="dark"] .appearance-preview > span,
+.appearance-choice[data-choice="system"] .appearance-preview > span { background: #080b12; }
+.appearance-choice[data-choice="dark"] .appearance-preview > div { background: #101621; }
+.appearance-choice[data-choice="dark"] .appearance-preview > div::before,
+.appearance-choice[data-choice="dark"] .appearance-preview > div::after { background: #1b2331; }
+.appearance-choice[data-choice="system"] .appearance-preview > div { background: linear-gradient(90deg, #f6f7fb 0 50%, #101621 50%); }
+.appearance-choice[data-choice="system"] .appearance-preview > div::before,
+.appearance-choice[data-choice="system"] .appearance-preview > div::after { background: linear-gradient(90deg, #fff 0 50%, #1b2331 50%); }
+.appearance-choice strong, .appearance-choice small { display: block; }
+.appearance-choice small { margin-top: 4px; color: var(--ui-muted); line-height: 1.4; }
+.appearance-current { margin-top: 14px; color: var(--ui-muted); font-size: 12px; }
+
+@media (max-width: 680px) {
+  .appearance-grid { grid-template-columns: 1fr; }
+  .appearance-preview { height: 74px; }
+}

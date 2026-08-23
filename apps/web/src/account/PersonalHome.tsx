@@ -3,6 +3,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { api, apiForm } from "../api";
 import { PersonalProfile } from "../app/types";
 import { MessageContent } from "../ui/MessageContent";
+import { OperlyMark } from "../ui/OperlyMark";
 
 type Conversation = { id: string; title?: string | null; updated_at?: string | null };
 type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null };
@@ -113,8 +114,8 @@ export function PersonalHome({ profile }: Props) {
       <main className="personal-surface">
         <header className="surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><span className="privacy-pill">Private</span></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
-          {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar">✦</span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
-          {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className="assistant-avatar">{item.role === "assistant" ? "✦" : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}
+          {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
+          {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}
           {busy && <div className="working-state"><span></span>Operly is working…</div>}
           {error && <div className="inline-error">{error}</div>}
         </div>
