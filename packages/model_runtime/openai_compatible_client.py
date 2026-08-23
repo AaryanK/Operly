@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 import aiohttp
 
+from packages.model_runtime.contracts import ModelInferenceError
 from packages.model_runtime.ollama_client import OllamaError
 from packages.model_runtime.openrouter_client import _openrouter_messages
 
@@ -193,9 +194,21 @@ class OpenAICompatibleClient:
                         if isinstance(error_body, dict)
                         else error_body
                     )
+                detail = str(upstream or response_text or "unknown upstream error")[:500]
+                # A 413 is normally a route/model capacity or context/TPM limit,
+                # not evidence that the provider-neutral request itself is bad.
+                # Surface it as a model-specific failure so ModelPool can try a
+                # different route/provider instead of failing the whole run closed.
+                if response.status == 413:
+                    raise ModelInferenceError(
+                        f"{self.provider} request failed (413): {detail}",
+                        classification="request_too_large",
+                        retryable=False,
+                        provider=self.provider,
+                        model_id=model,
+                    )
                 raise OllamaError(
-                    f"{self.provider} request failed ({response.status}): "
-                    f"{str(upstream or response_text or 'unknown upstream error')[:500]}",
+                    f"{self.provider} request failed ({response.status}): {detail}",
                     status=response.status,
                     retryable=response.status in _RETRYABLE_STATUSES,
                 )

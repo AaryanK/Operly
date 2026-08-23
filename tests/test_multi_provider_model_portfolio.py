@@ -45,21 +45,51 @@ class _FakeResponse:
         )
 
 
+class _RequestTooLargeResponse:
+    status = 413
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def text(self):
+        return json.dumps(
+            {
+                "error": {
+                    "message": (
+                        "Request too large for model on tokens per minute: "
+                        "Limit 8000, Requested 18606"
+                    )
+                }
+            }
+        )
+
+
 class _FakeSession:
-    def __init__(self):
+    def __init__(self, response=None):
         self.url = None
         self.headers = None
         self.payload = None
+        self.response = response or _FakeResponse()
 
     def post(self, url, *, headers, json):
         self.url = url
         self.headers = headers
         self.payload = json
-        return _FakeResponse()
+        return self.response
 
 
 class _FailingModel:
-    def __init__(self, model_id, *, provider="provider-a", classification="response_timeout"):
+    def __init__(
+        self,
+        model_id,
+        *,
+        provider="provider-a",
+        classification="response_timeout",
+        retryable=True,
+    ):
         self.id = model_id
         self.provider = provider
         self.tags = frozenset({"text"})
@@ -67,13 +97,14 @@ class _FailingModel:
         self.traits = object()
         self.calls = 0
         self.classification = classification
+        self.retryable = retryable
 
     async def infer(self, request):
         self.calls += 1
         raise ModelInferenceError(
             f"{self.id} failed",
             classification=self.classification,
-            retryable=True,
+            retryable=self.retryable,
             provider=self.provider,
             model_id=self.id,
         )
@@ -148,6 +179,29 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["usage"]["total_tokens"], 12)
         self.assertEqual(result["finish_reason"], "stop")
 
+    async def test_openai_compatible_413_becomes_route_specific_size_failure(self):
+        with patch.dict(os.environ, {"groq_api_key": "test-key"}, clear=True):
+            client = OpenAICompatibleClient(
+                provider="groq",
+                model="openai/gpt-oss-20b",
+                default_url="https://api.groq.com/openai/v1/chat/completions",
+                api_key_envs=("GROQ_API_KEY", "groq_api_key"),
+                env_prefix="GROQ",
+            )
+            session = _FakeSession(_RequestTooLargeResponse())
+            with self.assertRaises(ModelInferenceError) as caught:
+                await client._request_once(
+                    session,
+                    {"Authorization": "Bearer test-key"},
+                    "openai/gpt-oss-20b",
+                    [{"role": "user", "content": "large packet"}],
+                    [],
+                )
+
+        self.assertEqual(caught.exception.classification, "request_too_large")
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(caught.exception.provider, "groq")
+
     def test_lowercase_railway_keys_activate_cards_for_all_five_providers(self):
         with patch.dict(os.environ, self.provider_env, clear=True):
             cards = model_resources()
@@ -215,6 +269,23 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.provider_model_id, "fast-fallback")
         self.assertEqual(primary.calls, 1)
         self.assertEqual(fallback.calls, 2)
+
+    async def test_request_too_large_falls_through_to_next_model(self):
+        too_small = _FailingModel(
+            "small-context-route",
+            classification="request_too_large",
+            retryable=False,
+        )
+        larger_route = _SuccessModel("larger-route")
+        pool = ModelPool([too_small, larger_route], id="size-fallback")
+
+        result = await pool.infer(
+            InferenceRequest(messages=({"role": "user", "content": "large work"},))
+        )
+
+        self.assertEqual(result.provider_model_id, "larger-route")
+        self.assertEqual(too_small.calls, 1)
+        self.assertEqual(larger_route.calls, 1)
 
     async def test_provider_rate_limit_skips_other_routes_on_same_provider(self):
         first = _FailingModel(
