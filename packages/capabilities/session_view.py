@@ -69,6 +69,9 @@ class SessionCapabilityView:
                 self.exposed_ids.add(definition.id)
 
     def schemas(self) -> list[dict[str, Any]]:
+        # Registry/connector availability can change during a conversation. Refresh
+        # the seamless set every turn while _visible() removes anything revoked.
+        self.expose_seamless_defaults()
         schemas = []
         for capability_id in sorted(self.exposed_ids):
             if not self._visible(capability_id):
