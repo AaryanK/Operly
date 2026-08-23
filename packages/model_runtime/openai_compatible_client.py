@@ -15,6 +15,15 @@ from packages.model_runtime.openrouter_client import _openrouter_messages
 
 
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_TOOL_CALL_VALIDATION_MARKERS = (
+    "tool call validation failed",
+    "tool_call_validation",
+    "tool_use_failed",
+    "failed_generation",
+    "parameters for tool",
+    "tool arguments",
+    "function call validation",
+)
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -69,9 +78,9 @@ def _compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
                     continue
                 function["arguments"] = _wire_tool_arguments(function.get("arguments"))
 
-        # Some provider-neutral/legacy histories still carry function_call rather
-        # than tool_calls. _openrouter_messages currently drops that legacy field,
-        # so preserve it explicitly for compatible providers when present.
+    # Some provider-neutral/legacy histories still carry function_call rather
+    # than tool_calls. _openrouter_messages currently drops that legacy field,
+    # so preserve it explicitly for compatible providers when present.
     for index, original in enumerate(messages):
         if index >= len(translated) or not isinstance(original, dict):
             break
@@ -84,6 +93,20 @@ def _compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         translated[index]["function_call"] = normalized
 
     return translated
+
+
+def _provider_generated_tool_error(status: int, detail: str, tools: list[dict[str, Any]]) -> bool:
+    """Recognize provider rejection of the model's generated tool call.
+
+    This is not equivalent to a malformed Operly request. The provider accepted
+    our messages/schemas, generated a call, then rejected that generated call
+    against the schema. Treat it as model-route failure so ModelPool can repair by
+    trying another model/provider.
+    """
+    if status != 400 or not tools:
+        return False
+    text = str(detail or "").lower()
+    return any(marker in text for marker in _TOOL_CALL_VALIDATION_MARKERS)
 
 
 class OpenAICompatibleClient:
@@ -181,9 +204,7 @@ class OpenAICompatibleClient:
         last_error: OllamaError | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return await self._request_once(
-                    session, headers, model, messages, tools
-                )
+                return await self._request_once(session, headers, model, messages, tools)
             except OllamaError as error:
                 last_error = error
                 if not error.retryable or attempt >= attempts:
@@ -221,11 +242,7 @@ class OpenAICompatibleClient:
         if tools:
             payload["tools"] = tools
 
-        async with session.post(
-            self.url,
-            headers=headers,
-            json=payload,
-        ) as response:
+        async with session.post(self.url, headers=headers, json=payload) as response:
             response_text = await response.text()
             try:
                 body = json.loads(response_text) if response_text else {}
@@ -242,10 +259,16 @@ class OpenAICompatibleClient:
                         else error_body
                     )
                 detail = str(upstream or response_text or "unknown upstream error")[:500]
+                if _provider_generated_tool_error(response.status, detail, tools):
+                    raise ModelInferenceError(
+                        f"{self.provider} generated an invalid tool call: {detail}",
+                        classification="tool_call_validation",
+                        retryable=True,
+                        provider=self.provider,
+                        model_id=model,
+                    )
                 # A 413 is normally a route/model capacity or context/TPM limit,
                 # not evidence that the provider-neutral request itself is bad.
-                # Surface it as a model-specific failure so ModelPool can try a
-                # different route/provider instead of failing the whole run closed.
                 if response.status == 413:
                     raise ModelInferenceError(
                         f"{self.provider} request failed (413): {detail}",
@@ -261,9 +284,7 @@ class OpenAICompatibleClient:
                 )
 
             if not isinstance(body, dict):
-                raise OllamaError(
-                    f"{self.provider} returned invalid JSON", retryable=True
-                )
+                raise OllamaError(f"{self.provider} returned invalid JSON", retryable=True)
             choices = body.get("choices")
             if not isinstance(choices, list) or not choices:
                 raise OllamaError(
