@@ -19,6 +19,10 @@ from sqlalchemy import select
 from packages.database.db import SessionFactory
 from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.model_runtime.registry import ModelAttemptEvent, register_model_telemetry_sink
+from packages.model_runtime.trace_context import (
+    ProviderWireEvent,
+    register_provider_wire_telemetry_sink,
+)
 
 _INSTALLED = False
 _MAX_TRACE_JSON_CHARS = 4_000_000
@@ -115,12 +119,52 @@ def _encoded_envelope(payload: dict[str, Any]) -> str:
             "payload": {
                 "notice": "Trace exceeded the durable debug-payload limit.",
                 "phase": payload.get("phase"),
-                "attemptId": payload.get("attemptId"),
+                "attemptId": payload.get("attemptId") or payload.get("wireCallId"),
                 "resourceId": payload.get("resourceId"),
                 "provider": payload.get("provider"),
                 "providerModelId": payload.get("providerModelId"),
             },
         }
+    )
+
+
+def _trace_row(
+    *,
+    metadata: dict[str, Any],
+    run_id: str,
+    conversation_id: str,
+    attempt_id: str,
+    phase: str,
+    resource_id: str,
+    provider: str,
+    provider_model_id: str,
+    payload: dict[str, Any],
+    attempt: int = 1,
+    latency_ms: int | None = None,
+    classification: str | None = None,
+    retryable: bool | None = None,
+) -> ModelRuntimeTrace:
+    return ModelRuntimeTrace(
+        run_id=run_id[:64],
+        conversation_id=conversation_id[:255],
+        tenant_id=(str(metadata.get("tenant_id") or "").strip() or None),
+        user_id=(str(metadata.get("user_id") or "").strip() or None),
+        principal_id=(str(metadata.get("principal_id") or "").strip() or None),
+        channel=(str(metadata.get("channel") or "").strip() or None),
+        surface=(str(metadata.get("surface") or "").strip() or None),
+        component=(str(metadata.get("runtime_component") or "").strip() or None),
+        step=(int(metadata["runtime_step"]) if metadata.get("runtime_step") is not None else None),
+        attempt_id=attempt_id[:36],
+        phase=phase[:20],
+        resource_id=resource_id[:255],
+        provider=provider[:80],
+        provider_model_id=provider_model_id[:255],
+        attempt=max(1, int(attempt or 1)),
+        latency_ms=(int(latency_ms) if latency_ms is not None else None),
+        classification=(classification[:80] if classification else None),
+        retryable=retryable,
+        payload_json=_encoded_envelope(payload),
+        created_at=datetime.utcnow(),
     )
 
 
@@ -150,27 +194,53 @@ async def persist_model_attempt(event: ModelAttemptEvent) -> None:
         "input": getattr(event, "input_payload", None),
         "output": getattr(event, "output_payload", None),
     }
-    row = ModelRuntimeTrace(
-        run_id=run_id[:64],
-        conversation_id=conversation_id[:255],
-        tenant_id=(str(metadata.get("tenant_id") or "").strip() or None),
-        user_id=(str(metadata.get("user_id") or "").strip() or None),
-        principal_id=(str(metadata.get("principal_id") or "").strip() or None),
-        channel=(str(metadata.get("channel") or "").strip() or None),
-        surface=(str(metadata.get("surface") or "").strip() or None),
-        component=(str(metadata.get("runtime_component") or "").strip() or None),
-        step=(int(metadata["runtime_step"]) if metadata.get("runtime_step") is not None else None),
-        attempt_id=attempt_id[:36],
-        phase=str(event.phase)[:20],
-        resource_id=str(event.resource_id)[:255],
-        provider=str(event.provider)[:80],
-        provider_model_id=str(event.provider_model_id)[:255],
-        attempt=max(1, int(event.attempt or 1)),
-        latency_ms=(int(event.latency_ms) if event.latency_ms is not None else None),
-        classification=(str(event.classification)[:80] if event.classification else None),
+    row = _trace_row(
+        metadata=metadata,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        attempt_id=attempt_id,
+        phase=str(event.phase),
+        resource_id=str(event.resource_id),
+        provider=str(event.provider),
+        provider_model_id=str(event.provider_model_id),
+        payload=payload,
+        attempt=event.attempt,
+        latency_ms=event.latency_ms,
+        classification=event.classification,
         retryable=event.retryable,
-        payload_json=_encoded_envelope(payload),
-        created_at=datetime.utcnow(),
+    )
+    async with SessionFactory() as db:
+        db.add(row)
+        await db.commit()
+
+
+async def persist_provider_wire_event(event: ProviderWireEvent) -> None:
+    metadata = dict(event.metadata or {})
+    conversation_id = str(metadata.get("conversation_id") or "").strip()
+    run_id = str(metadata.get("runtime_run_id") or "").strip()
+    if not conversation_id or not run_id or not event.wire_call_id:
+        return
+    phase = "wire_request" if event.phase == "request" else "wire_response"
+    payload = {
+        "phase": phase,
+        "wireCallId": event.wire_call_id,
+        "provider": event.provider,
+        "providerModelId": event.provider_model_id,
+        "status": event.status,
+        "responseMetadata": event.response_metadata,
+        "metadata": metadata,
+        "wire": event.payload,
+    }
+    row = _trace_row(
+        metadata=metadata,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        attempt_id=event.wire_call_id,
+        phase=phase,
+        resource_id=f"wire:{event.provider}:{event.provider_model_id}",
+        provider=str(event.provider),
+        provider_model_id=str(event.provider_model_id),
+        payload=payload,
     )
     async with SessionFactory() as db:
         db.add(row)
@@ -182,6 +252,7 @@ def ensure_model_trace_sink() -> None:
     if _INSTALLED:
         return
     register_model_telemetry_sink(persist_model_attempt)
+    register_provider_wire_telemetry_sink(persist_provider_wire_event)
     _INSTALLED = True
 
 
