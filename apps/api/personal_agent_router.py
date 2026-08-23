@@ -15,6 +15,17 @@ class PersonalChatInput(BaseModel):
     selected_workspace_id: str | None = Field(default=None, max_length=36)
 
 
+@router.get("/me")
+async def personal_me(auth: AccountAuthContext = Depends(get_account_auth_context)):
+    return {
+        "id": auth.user.id,
+        "email": auth.user.email,
+        "display_name": auth.user.display_name,
+        "scope": "workspace" if auth.session.tenant_id else "personal",
+        "current_workspace_id": auth.session.tenant_id,
+    }
+
+
 @router.post("/chat")
 async def chat(
     payload: PersonalChatInput,
