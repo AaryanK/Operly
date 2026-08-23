@@ -1,15 +1,21 @@
-"""Source-backed custom software generation vertical slice.
+"""Custom-software package surface.
 
-During the live-planning provider migration, older modules still import the legacy
-``OllamaPlanningClient`` and ``planning_mode`` names from ``live_planning``. Patch
-those public compatibility names at package import time so all existing call sites
-use the shared model-provider registry without duplicating the planning engine.
+Do not import the live planning/model-provider stack at package import time. Runtime
+protocol modules (runner contracts and source bundles) are shared with a dedicated
+isolated runner and must remain dependency-light. Planning exports are resolved only
+when a caller actually asks for them.
 """
-
-from . import live_planning as _live_planning
-from .provider_planning import ProviderPlanningClient, provider_planning_mode
-
-_live_planning.OllamaPlanningClient = ProviderPlanningClient
-_live_planning.planning_mode = provider_planning_mode
+from __future__ import annotations
 
 __all__ = ["ProviderPlanningClient", "provider_planning_mode"]
+
+
+def __getattr__(name: str):
+    if name in {"ProviderPlanningClient", "provider_planning_mode"}:
+        from .provider_planning import ProviderPlanningClient, provider_planning_mode
+
+        return {
+            "ProviderPlanningClient": ProviderPlanningClient,
+            "provider_planning_mode": provider_planning_mode,
+        }[name]
+    raise AttributeError(name)
