@@ -169,9 +169,9 @@ async def test_common_assistant_requests_bypass_specialist_router(prompt):
         "packages.model_runtime.task_routing.route_business_task",
         router,
     ), patch(
-        "packages.model_runtime.task_routing._base_model_for_role",
+        "packages.model_runtime.task_routing.model_for_requirements",
         return_value=target,
-    ) as base_role:
+    ) as resolver:
         model = TaskRoutedBusinessModel()
         await model.infer(
             InferenceRequest(
@@ -181,15 +181,20 @@ async def test_common_assistant_requests_bypass_specialist_router(prompt):
         )
 
     router.assert_not_awaited()
-    base_role.assert_called_once_with("business_agent")
+    requirements = resolver.call_args.args[0]
+    assert resolver.call_args.kwargs["fallback_role"] == "business_agent"
+    assert {"text", "tools"}.issubset(requirements.requires)
     assert model.last_decision is not None
     assert model.last_decision.role == "business_agent"
     assert target.request.tools == (_account_tool(),)
-    assert target.request.metadata["task_route"]["executionRole"] == "business_agent"
+    metadata = target.request.metadata["task_route"]
+    assert metadata["compatibilityRole"] == "business_agent"
+    assert metadata["toolSchemasForwarded"] is True
+    assert set(metadata["modelRequirements"]["requires"]) >= {"text", "tools"}
 
 
 @pytest.mark.asyncio
-async def test_non_tool_specialist_is_not_given_tool_schemas_in_primary_tool_loop():
+async def test_planning_with_tools_keeps_planning_shape_and_requires_tool_capability():
     target = CapturingModel()
     decision = TaskRouteDecision(
         task_type="planning",
@@ -203,9 +208,9 @@ async def test_non_tool_specialist_is_not_given_tool_schemas_in_primary_tool_loo
         "packages.model_runtime.task_routing.route_business_task",
         router,
     ), patch(
-        "packages.model_runtime.task_routing._base_model_for_role",
+        "packages.model_runtime.task_routing.model_for_requirements",
         return_value=target,
-    ) as base_role:
+    ) as resolver:
         model = TaskRoutedBusinessModel()
         await model.infer(
             InferenceRequest(
@@ -215,15 +220,19 @@ async def test_non_tool_specialist_is_not_given_tool_schemas_in_primary_tool_loo
         )
 
     router.assert_awaited_once()
-    base_role.assert_called_once_with("business_agent")
+    requirements = resolver.call_args.args[0]
+    assert {"text", "reasoning", "tools"}.issubset(requirements.requires)
+    assert resolver.call_args.kwargs["fallback_role"] == "business_agent"
     assert target.request.tools == (_account_tool(),)
-    assert target.request.metadata["task_route"]["role"] == "planner"
-    assert target.request.metadata["task_route"]["executionRole"] == "business_agent"
-    assert target.request.metadata["task_route"]["toolSchemasForwarded"] is True
+    metadata = target.request.metadata["task_route"]
+    assert metadata["role"] == "planner"
+    assert metadata["compatibilityRole"] == "planner"
+    assert metadata["toolSchemasForwarded"] is True
+    assert "executionRole" not in metadata
 
 
 @pytest.mark.asyncio
-async def test_non_tool_specialist_without_tool_loop_receives_no_tools():
+async def test_planning_without_tools_requires_reasoning_not_tool_support():
     target = CapturingModel()
     decision = TaskRouteDecision(
         task_type="planning",
@@ -236,15 +245,18 @@ async def test_non_tool_specialist_without_tool_loop_receives_no_tools():
         "packages.model_runtime.task_routing.route_business_task",
         AsyncMock(return_value=decision),
     ), patch(
-        "packages.model_runtime.task_routing._base_model_for_role",
+        "packages.model_runtime.task_routing.model_for_requirements",
         return_value=target,
-    ) as base_role:
+    ) as resolver:
         model = TaskRoutedBusinessModel()
         await model.infer(
             InferenceRequest(messages=({"role": "user", "content": "plan a growth strategy"},))
         )
 
-    base_role.assert_called_once_with("planner")
+    requirements = resolver.call_args.args[0]
+    assert resolver.call_args.kwargs["fallback_role"] == "planner"
+    assert {"text", "reasoning"}.issubset(requirements.requires)
+    assert "tools" not in requirements.requires
     assert target.request.tools == ()
     assert target.request.metadata["task_route"]["toolSchemasForwarded"] is False
 
