@@ -24,10 +24,30 @@ class SolutionType(StrEnum):
     DIGITAL_PRESENCE="digital_presence"; BUSINESS_APP="business_app"; CUSTOM_SOLUTION="custom_solution"
 
 
+def _context_payload(row) -> dict:
+    try:
+        value=json.loads(row.context_json or "{}")
+    except Exception:
+        return {}
+    return value if isinstance(value,dict) else {}
+
+
+def _generation_payload(row):
+    initial=_context_payload(row).get("initialGeneration")
+    if not isinstance(initial,dict):return None
+    result={}
+    for key in ("status","stage","jobId","attempt","changeSetId","versionId","bootstrapVersionId"):
+        value=initial.get(key)
+        if value is not None:result[key]=value
+    if initial.get("error"):
+        result["error"]=" ".join(str(initial.get("error")).split())[:1000]
+    return result or None
+
+
 def solution_json(row):
     preview=row.preview_url.replace("{solution_id}",row.id) if row.preview_url else None
     runtime_kind={RuntimeType.STUDIO:"studio",RuntimeType.MANAGED_APP:"app",RuntimeType.GENERATED_PROJECT:"generated"}.get(row.runtime_type,"unknown")
-    return {"id":row.id,"name":row.name,"description":row.description,"solution_type":row.solution_type,"status":row.lifecycle_status,"current_version":row.current_version_reference,"preview":{"state":row.preview_state,"url":preview},"production":{"state":row.production_state,"url":row.production_url},"visibility":row.visibility,"runtime":{"kind":runtime_kind,"id":row.runtime_reference},"created_at":row.created_at.isoformat(),"updated_at":row.updated_at.isoformat()}
+    return {"id":row.id,"name":row.name,"description":row.description,"solution_type":row.solution_type,"status":row.lifecycle_status,"current_version":row.current_version_reference,"preview":{"state":row.preview_state,"url":preview},"production":{"state":row.production_state,"url":row.production_url},"visibility":row.visibility,"runtime":{"kind":runtime_kind,"id":row.runtime_reference},"generation":_generation_payload(row),"created_at":row.created_at.isoformat(),"updated_at":row.updated_at.isoformat()}
 
 
 class SolutionService:
@@ -92,7 +112,17 @@ class SolutionService:
 
         apps=(await db.scalars(select(ManagedApplication).where(ManagedApplication.tenant_id==tenant_id))).all()
         for app in apps:
-            await self._record(db,tenant_id,RuntimeType.MANAGED_APP,app.id,name=app.name,description=app.description,solution_type=SolutionType.BUSINESS_APP,lifecycle_status=LifecycleStatus.PREVIEW_READY if app.active_version_id else LifecycleStatus.DRAFT,current_version_reference=app.active_version_id,preview_state="ready" if app.active_version_id else "unavailable",preview_url=f"/api/solutions/{{solution_id}}/preview" if app.active_version_id else None,production_state="offline",production_url=None,visibility="private",context_json="{}")
+            existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.MANAGED_APP,SolutionRecord.runtime_reference==app.id))
+            active=await db.get(ApplicationVersion,app.active_version_id) if app.active_version_id else None
+            # ApplicationBuilderService.create() persists a bootstrap v1 so the
+            # editor has a schema to target. That bootstrap is runtime state, not
+            # evidence that owner-requested generation succeeded. Only a later
+            # applied version is preview-ready.
+            generated_ready=bool(active and active.version_number>1)
+            initial=(_context_payload(existing).get("initialGeneration") if existing else None) or {}
+            generation_failed=isinstance(initial,dict) and initial.get("status") in {"retryable","failed"}
+            lifecycle=LifecycleStatus.PREVIEW_READY if generated_ready else LifecycleStatus.FAILED if generation_failed else LifecycleStatus.DRAFT
+            await self._record(db,tenant_id,RuntimeType.MANAGED_APP,app.id,name=app.name,description=app.description,solution_type=SolutionType.BUSINESS_APP,lifecycle_status=lifecycle,current_version_reference=active.id if generated_ready else None,preview_state="ready" if generated_ready else "unavailable",preview_url=f"/api/solutions/{{solution_id}}/preview" if generated_ready else None,production_state="offline",production_url=None,visibility="private",context_json=existing.context_json if existing else "{}")
 
         projects=(await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==tenant_id))).all()
         for p in projects:
@@ -123,7 +153,9 @@ class SolutionService:
     async def preview_target(self,db:AsyncSession,tenant_id:str,row,runtime)->str:
         runtime_type=RuntimeType(row.runtime_type)
         if runtime_type==RuntimeType.STUDIO:return f"/api/studio/projects/{runtime.id}/preview"
-        if runtime_type==RuntimeType.MANAGED_APP:return f"/apps/{runtime.id}/preview"
+        if runtime_type==RuntimeType.MANAGED_APP:
+            if row.preview_state!="ready":raise LookupError("Solution preview is not ready")
+            return f"/apps/{runtime.id}/preview"
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
         if preview:return f"/api/custom-software/previews/{preview.id}/"
         return f"/api/custom-software/projects/{runtime.id}/preview"
