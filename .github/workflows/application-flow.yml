@@ -115,7 +115,6 @@ jobs:
           packages/model_runtime/task_routing.py
           packages/business/service.py
           packages/company/intelligence.py
-          packages/company/provenance.py
           packages/workspace/service.py
           packages/database/db.py
           packages/database/account_connector_models.py
