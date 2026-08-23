@@ -88,59 +88,102 @@ class PluginAgentHarness:
 
         from sqlalchemy import select
         from packages.connectors.google_provider import (
-            CALENDAR,
-            CALENDAR_FREEBUSY,
-            CALENDAR_LIST_READONLY,
             GMAIL_MODIFY,
             GMAIL_READONLY,
             GMAIL_SEND,
         )
         from packages.database.connector_models import TenantConnector
 
-        enabled_external: set[str] = set()
         async with session_scope() as db:
-            rows = (
-                await db.scalars(
-                    select(TenantConnector).where(
-                        TenantConnector.tenant_id == context.tenant_id,
-                        TenantConnector.enabled.is_(True),
-                        TenantConnector.status == "connected",
+            rows = list(
+                (
+                    await db.scalars(
+                        select(TenantConnector).where(
+                            TenantConnector.tenant_id == context.tenant_id,
+                        )
                     )
-                )
-            ).all()
-            for row in rows:
-                scopes = set(json.loads(row.granted_scopes_json or "[]"))
-                if scopes & {GMAIL_SEND, GMAIL_MODIFY}:
-                    enabled_external.update({"messaging.send", "gmail.send_email"})
-                if scopes & {GMAIL_READONLY, GMAIL_MODIFY}:
-                    enabled_external.update({"gmail.search", "gmail.read_message"})
-                if GMAIL_MODIFY in scopes:
-                    enabled_external.update(
-                        {
-                            "gmail.modify_labels",
-                            "gmail.create_draft",
-                            "gmail.list_drafts",
-                            "gmail.get_draft",
-                            "gmail.update_draft",
-                            "gmail.send_draft",
-                            "gmail.delete_draft",
-                        }
-                    )
-                if CALENDAR in scopes:
-                    enabled_external.update(
-                        {
-                            "calendar.create_event",
-                            "calendar.list_events",
-                            "calendar.update_event",
-                            "calendar.delete_event",
-                        }
-                    )
-                if CALENDAR_FREEBUSY in scopes:
-                    enabled_external.add("calendar.freebusy")
-                if CALENDAR_LIST_READONLY in scopes:
-                    enabled_external.add("calendar.list_calendars")
+                ).all()
+            )
 
-        return default_registry(enabled_external)
+        by_provider: dict[str, list] = {}
+        for row in rows:
+            by_provider.setdefault(str(row.provider or "").lower(), []).append(row)
+
+        def config_resolver(_tenant_id, definition):
+            provider = str(definition.integration_provider or "").lower()
+            if not provider:
+                return {"configured": True, "healthy": None}
+            candidates = by_provider.get(provider, [])
+            if provider == "discord":
+                return {"configured": True, "healthy": None}
+            if not candidates:
+                return {
+                    "configured": False,
+                    "healthy": None,
+                    "missing_connector": provider,
+                    "reason": "connector_missing",
+                    "next_action": f"Connect {provider.title()} to this workspace.",
+                    "retryable": False,
+                }
+
+            connected = [row for row in candidates if row.enabled and row.status == "connected"]
+            if not connected:
+                disabled = any(not row.enabled for row in candidates)
+                reason = "connector_disabled" if disabled else "connector_disconnected"
+                return {
+                    "configured": False,
+                    "healthy": False if any(row.status == "error" for row in candidates) else None,
+                    "missing_connector": provider,
+                    "reason": reason,
+                    "next_action": "Enable or reconnect the integration for this workspace.",
+                    "retryable": reason == "connector_disconnected",
+                }
+
+            union_scopes: set[str] = set()
+            for row in connected:
+                try:
+                    union_scopes.update(json.loads(row.granted_scopes_json or "[]"))
+                except (TypeError, json.JSONDecodeError):
+                    pass
+
+            required = set(definition.credential_scopes or ())
+            satisfied = not required or required.issubset(union_scopes)
+            if definition.id in {"messaging.send", "gmail.send_email"}:
+                satisfied = bool(union_scopes & {GMAIL_SEND, GMAIL_MODIFY})
+                required = {GMAIL_SEND}
+            elif definition.id in {"gmail.search", "gmail.read_message"}:
+                satisfied = bool(union_scopes & {GMAIL_READONLY, GMAIL_MODIFY})
+                required = {GMAIL_READONLY}
+            missing_scopes = [] if satisfied else sorted(required - union_scopes or required)
+
+            health_values = {str(row.health_status or "unknown").lower() for row in connected}
+            healthy = False if health_values & {"error", "failed", "unhealthy"} else True if health_values & {"healthy", "ok"} else None
+            last_error = next((str(row.last_error)[:300] for row in connected if row.last_error), None)
+            if healthy is False:
+                return {
+                    "configured": True,
+                    "healthy": False,
+                    "missing_scopes": missing_scopes,
+                    "reason": "provider_unhealthy",
+                    "next_action": "Retry after the provider recovers or reconnect the integration.",
+                    "retryable": True,
+                    "provider_error": last_error,
+                }
+            if missing_scopes:
+                return {
+                    "configured": False,
+                    "healthy": healthy,
+                    "missing_scopes": missing_scopes,
+                    "reason": "oauth_scope_missing",
+                    "next_action": "Reconnect the integration and grant the required OAuth scope.",
+                    "retryable": False,
+                }
+            return {"configured": True, "healthy": healthy, "retryable": False}
+
+        # Keep known capabilities registered even when their connector is missing.
+        # Availability explains connector/scope/health state; progressive exposure
+        # still prevents unusable capabilities from cluttering the model surface.
+        return default_registry(None, config_resolver=config_resolver)
 
     def authority(self, role: str) -> set[str]:
         return default_permissions(role)
@@ -303,11 +346,7 @@ class PluginAgentHarness:
         registry = await self.registry_for(context)
         authority = await self.authority_for(context)
         try:
-            return registry.availability(
-                context.tenant_id,
-                name,
-                authority=authority,
-            ).as_dict()
+            definition = registry.definition(name)
         except LookupError:
             return {
                 "available": False,
@@ -316,10 +355,29 @@ class PluginAgentHarness:
                 "missingScopes": [],
                 "missingConnector": None,
                 "permissionDenied": False,
+                "surfaceHidden": False,
+                "exposed": False,
                 "retryable": False,
                 "nextAction": "Use capability.search to discover an installed operation.",
-                "reason": "unknown_capability",
+                "reason": "not_registered",
             }
+        payload = registry.availability(
+            context.tenant_id,
+            definition.id,
+            authority=authority,
+        ).as_dict()
+        surface_allowed = self.capability_authorized(definition.id, authority, context)
+        payload["surfaceHidden"] = not surface_allowed and not payload.get("permissionDenied")
+        if payload["surfaceHidden"]:
+            payload["available"] = False
+            payload["reason"] = "surface_hidden"
+            payload["nextAction"] = "Use this capability from an allowed private/workspace surface."
+        try:
+            view = await self.session_view_for(context, authority=authority, registry=registry)
+            payload["exposed"] = definition.id in view.exposed_ids and view._visible(definition.id)
+        except Exception:
+            payload["exposed"] = False
+        return payload
 
     def handles(self, name: str) -> bool:
         if self.registry:
@@ -346,6 +404,8 @@ class PluginAgentHarness:
                     "missingScopes": [],
                     "missingConnector": None,
                     "permissionDenied": True,
+                    "surfaceHidden": False,
+                    "exposed": False,
                     "retryable": False,
                     "nextAction": "Use an authenticated workspace context with sufficient permission.",
                     "reason": "permission_denied",
@@ -366,10 +426,16 @@ class PluginAgentHarness:
             registry=registry,
         )
         if name not in view.exposed_ids or not view._visible(name):
+            payload = await self.availability(name, context)
+            payload["available"] = False
+            payload["exposed"] = False
+            if payload.get("reason") in {None, "available"}:
+                payload["reason"] = "not_exposed"
+            payload["nextAction"] = payload.get("nextAction") or "Discover/describe this capability in the current agent session."
             return {
                 "ok": False,
                 "error": "Capability is not exposed in this model session; discover and describe it first",
-                "availability": await self.availability(name, context),
+                "availability": payload,
             }
 
         try:
