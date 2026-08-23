@@ -88,6 +88,7 @@ class AgentRuntime:
         model,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         infer = getattr(model, "infer", None)
         if callable(infer):
@@ -96,6 +97,7 @@ class AgentRuntime:
                     messages=tuple(messages),
                     tools=tuple(tools),
                     budget=self.inference_budget,
+                    metadata=dict(metadata or {}),
                 )
             )
             return dict(result.message)
@@ -127,6 +129,7 @@ class AgentRuntime:
         schemas: SchemaLoader,
         invoke: CapabilityInvoker,
         on_observation: ObservationHook | None = None,
+        inference_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         trace: list[AgentTraceEntry] = []
         budget = self.execution_budget
@@ -138,7 +141,12 @@ class AgentRuntime:
 
         while steps_used < allowed_steps and steps_used < budget.max_steps:
             tools = list(await _resolve(schemas()) or [])
-            message = await self._infer(model, messages, tools)
+            message = await self._infer(
+                model,
+                messages,
+                tools,
+                metadata=inference_metadata,
+            )
             messages.append(message)
             steps_used += 1
             calls = message.get("tool_calls") or []
