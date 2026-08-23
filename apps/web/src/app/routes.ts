@@ -9,7 +9,8 @@ export type WorkspaceSection =
   | "connections"
   | "plugins"
   | "members"
-  | "access";
+  | "access"
+  | "settings";
 
 export type OperlyRoute =
   | { kind: "personal" }
@@ -32,6 +33,7 @@ export const workspaceSections: Array<{
   { id: "plugins", label: "Plugins", group: "extend" },
   { id: "members", label: "Members & roles", group: "admin" },
   { id: "access", label: "AI & MCP access", group: "admin" },
+  { id: "settings", label: "Settings", group: "admin" },
 ];
 
 const workspaceSectionIds = new Set<WorkspaceSection>(workspaceSections.map((item) => item.id));
