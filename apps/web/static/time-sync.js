@@ -1,6 +1,8 @@
 (() => {
   const cacheKey = "operly:last-timezone";
   const retryKey = "operly:timezone-retry";
+  const rejectedKey = "operly:timezone-rejected:v2";
+  const rejectionTtlMs = 6 * 60 * 60 * 1000;
   let retryTimer = null;
   let inFlight = false;
 
@@ -12,9 +14,32 @@
       ?.slice(name.length + 1) || "";
   }
 
-  function emitFailure(status, retryable) {
+  function rejected(timezone) {
+    try {
+      const value = JSON.parse(localStorage.getItem(rejectedKey) || "null");
+      if (!value || value.timezone !== timezone || Number(value.until || 0) <= Date.now()) {
+        if (value) localStorage.removeItem(rejectedKey);
+        return false;
+      }
+      return true;
+    } catch {
+      localStorage.removeItem(rejectedKey);
+      return false;
+    }
+  }
+
+  function rememberRejection(timezone, status, reason) {
+    localStorage.setItem(rejectedKey, JSON.stringify({
+      timezone,
+      status,
+      reason: String(reason || "rejected").slice(0, 400),
+      until: Date.now() + rejectionTtlMs,
+    }));
+  }
+
+  function emitFailure(status, retryable, reason="") {
     document.dispatchEvent(new CustomEvent("operly:timezone-sync-error", {
-      detail: { status, retryable },
+      detail: { status, retryable, reason: String(reason || "").slice(0, 400) },
     }));
   }
 
@@ -28,11 +53,23 @@
     }, delayMs);
   }
 
+  async function responseReason(response) {
+    try {
+      const payload = await response.json();
+      const detail = payload?.detail ?? payload;
+      if (typeof detail === "string") return detail;
+      return detail?.message || detail?.code || "rejected";
+    } catch {
+      return `HTTP ${response.status}`;
+    }
+  }
+
   async function syncTimezone() {
     if (inFlight || !document.body || !document.querySelector("#dashboard")) return;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!timezone) return;
     if (localStorage.getItem(cacheKey) === timezone) return;
+    if (rejected(timezone)) return;
 
     const retryAt = Number(localStorage.getItem(retryKey) || "0");
     if (retryAt > Date.now()) {
@@ -58,18 +95,24 @@
       if (response.ok) {
         localStorage.setItem(cacheKey, timezone);
         localStorage.removeItem(retryKey);
+        localStorage.removeItem(rejectedKey);
         return;
       }
 
       localStorage.removeItem(cacheKey);
       const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+      const reason = await responseReason(response);
       if (response.status !== 401 && response.status !== 403) {
-        emitFailure(response.status, retryable);
+        emitFailure(response.status, retryable, reason);
       }
-      if (retryable) scheduleRetry(5000);
+      if (retryable) {
+        scheduleRetry(5000);
+      } else if (response.status !== 401 && response.status !== 403) {
+        rememberRejection(timezone, response.status, reason);
+      }
     } catch (_) {
       localStorage.removeItem(cacheKey);
-      emitFailure(0, true);
+      emitFailure(0, true, "network_error");
       scheduleRetry(5000);
     } finally {
       inFlight = false;
