@@ -125,6 +125,21 @@
     observer.observe(document.documentElement,{subtree:true,childList:true}); repair();
   }
 
-  function boot() { enhancePublicLanding(); enhanceShellEvents(); observeApp(); }
+  async function enforceAuthenticatedShell() {
+    if (location.pathname !== "/app" || typeof api !== "function") return;
+    try {
+      await api("/me");
+    } catch {
+      if (typeof state !== "undefined") state.me = null;
+      location.replace("/login");
+    }
+  }
+
+  function boot() {
+    enhancePublicLanding();
+    enhanceShellEvents();
+    observeApp();
+    enforceAuthenticatedShell();
+  }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot,{once:true}); else boot();
 })();
