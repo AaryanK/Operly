@@ -9,6 +9,68 @@
     pickers.forEach(node => node.remove());
   }
 
+  function prunePersonalScopePicker(root = document) {
+    const personal = root instanceof Element && root.matches('#personal.personal-home')
+      ? root
+      : root.querySelector?.('#personal.personal-home') || $('#personal.personal-home');
+    if (!personal) return;
+    const compose = $('.personal-compose', personal);
+    if (!compose) return;
+    compose.querySelector('label[for="personal-workspace-select"]')?.remove();
+    compose.querySelector('#personal-workspace-select')?.remove();
+    compose.querySelector('.compose-context-note')?.remove();
+  }
+
+  function enhancePersonalMessages(root = document) {
+    const renderer = window.operlyChatEnhancements?.renderMarkdown;
+    if (typeof renderer !== 'function') return false;
+    const messages = [];
+    if (root instanceof Element && root.matches('.personal-message.assistant')) messages.push(root);
+    if (root.querySelectorAll) messages.push(...root.querySelectorAll('.personal-message.assistant'));
+    for (const message of messages) {
+      if (message.dataset.personalMarkdownRendered === '1') continue;
+      const body = $('.personal-message-body', message);
+      const paragraph = body?.querySelector(':scope > p');
+      if (!paragraph) continue;
+      const block = document.createElement('div');
+      block.className = 'personal-message-markdown ai-markdown';
+      block.innerHTML = renderer(paragraph.textContent || '');
+      paragraph.replaceWith(block);
+      message.dataset.personalMarkdownRendered = '1';
+    }
+    return true;
+  }
+
+  function stabilizePersonalConversationLayout() {
+    const personal = $('#personal.personal-home');
+    if (!personal || personal.classList.contains('hidden')) return;
+    const main = $('.personal-panel:not(.personal-side)', personal);
+    const messages = $('#personal-messages', personal);
+    const compose = $('.personal-compose', personal);
+    if (!main || !messages || !compose) return;
+
+    const phone = window.innerWidth <= 700;
+    main.style.setProperty('display', 'grid', 'important');
+    main.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
+    main.style.setProperty('height', phone ? 'calc(100dvh - 64px)' : '100dvh', 'important');
+    main.style.setProperty('min-height', '0', 'important');
+    main.style.setProperty('overflow', 'hidden', 'important');
+
+    messages.style.setProperty('min-height', '0', 'important');
+    messages.style.setProperty('height', 'auto', 'important');
+    messages.style.setProperty('overflow-y', 'auto', 'important');
+    messages.style.setProperty('padding-bottom', phone ? '16px' : '24px', 'important');
+
+    compose.style.setProperty('position', 'static', 'important');
+    compose.style.setProperty('left', 'auto', 'important');
+    compose.style.setProperty('right', 'auto', 'important');
+    compose.style.setProperty('bottom', 'auto', 'important');
+    compose.style.setProperty('width', '100%', 'important');
+    compose.style.setProperty('border-top', '1px solid var(--ui-line)', 'important');
+    compose.style.setProperty('background', '#fff', 'important');
+    compose.style.setProperty('padding', phone ? '10px 10px 12px' : '12px max(28px,calc((100% - 920px)/2)) 18px', 'important');
+  }
+
   function ensurePersonalMobileNavigation() {
     const personal = $('#personal.personal-home');
     if (!personal) return;
@@ -53,10 +115,14 @@
       $('#mobile-nav-toggle')?.setAttribute('aria-expanded', 'false');
     }
     if (window.innerWidth > 860) setPersonalMobileNavigation(false);
+    stabilizePersonalConversationLayout();
   }
 
   function repair(root = document) {
     pruneAssistantApplicationPicker(root);
+    prunePersonalScopePicker(root);
+    enhancePersonalMessages(root);
+    stabilizePersonalConversationLayout();
     ensurePersonalMobileNavigation();
   }
 
@@ -68,9 +134,13 @@
       scheduled = false;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
-          if (node instanceof Element) pruneAssistantApplicationPicker(node);
+          if (!(node instanceof Element)) continue;
+          pruneAssistantApplicationPicker(node);
+          enhancePersonalMessages(node);
         }
       }
+      prunePersonalScopePicker();
+      stabilizePersonalConversationLayout();
       ensurePersonalMobileNavigation();
     });
   });
@@ -82,6 +152,12 @@
     window.addEventListener('keydown', event => {
       if (event.key === 'Escape') setPersonalMobileNavigation(false);
     });
+    let markdownAttempts = 0;
+    const markdownTimer = window.setInterval(() => {
+      markdownAttempts += 1;
+      const ready = enhancePersonalMessages();
+      if (ready || markdownAttempts >= 12) window.clearInterval(markdownTimer);
+    }, 150);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once: true});
