@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import random
@@ -32,10 +33,56 @@ def _first_env(names: Iterable[str]) -> str:
     return ""
 
 
+def _wire_tool_arguments(value: Any) -> str:
+    """Serialize provider-neutral parsed tool arguments for OpenAI-compatible wire schemas."""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        # Never let an adapter-shape mismatch become a provider 400/agent 500.
+        # Stringifying the value keeps the payload valid while preserving a bounded,
+        # inspectable representation for providers that require a JSON string field.
+        return json.dumps(str(value), ensure_ascii=False)
+
+
 def _compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    translated = _openrouter_messages(messages)
+    # _openrouter_messages copies the top-level message but intentionally preserves
+    # nested provider-neutral structures. Deep-copy here before wire normalization so
+    # failover/replay never mutates the caller-owned shared conversation history.
+    translated = copy.deepcopy(_openrouter_messages(messages))
     for message in translated:
         message.pop("reasoning_details", None)
+
+        calls = message.get("tool_calls")
+        if isinstance(calls, list):
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict) or "arguments" not in function:
+                    continue
+                function["arguments"] = _wire_tool_arguments(function.get("arguments"))
+
+        # Some provider-neutral/legacy histories still carry function_call rather
+        # than tool_calls. _openrouter_messages currently drops that legacy field,
+        # so preserve it explicitly for compatible providers when present.
+    for index, original in enumerate(messages):
+        if index >= len(translated) or not isinstance(original, dict):
+            break
+        legacy = original.get("function_call")
+        if not isinstance(legacy, dict):
+            continue
+        normalized = copy.deepcopy(legacy)
+        if "arguments" in normalized:
+            normalized["arguments"] = _wire_tool_arguments(normalized.get("arguments"))
+        translated[index]["function_call"] = normalized
+
     return translated
 
 
