@@ -1,8 +1,8 @@
 """Contract for the next real generated-software runtime.
 
-``operly-fullstack-v1`` is intentionally a *project contract* first.  It describes
+``operly-fullstack-v1`` is intentionally a *project contract* first. It describes
 what a generated full-stack Solution may contain, how dependencies are declared,
-and which Operly capabilities it expects to bind.  It does not silently make the
+and which Operly capabilities it expects to bind. It does not silently make the
 existing stdlib/static runner capable of installing or deploying arbitrary code.
 Execution can be enabled only when an isolated runner advertises the matching
 profile and dependency/network policy.
@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import posixpath
 import re
-from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -82,7 +81,7 @@ class FullStackDependency(_StrictModel):
     @field_validator("name")
     @classmethod
     def package_name(cls, value: str) -> str:
-        if not _PACKAGE.fullmatch(value) or value.startswith(('.', '/')) or ".." in value:
+        if not _PACKAGE.fullmatch(value) or value.startswith((".", "/")) or ".." in value:
             raise ValueError("Dependency name is not a registry package name")
         return value
 
@@ -92,6 +91,14 @@ class FullStackDependency(_StrictModel):
         if not _VERSION.fullmatch(value):
             raise ValueError("Dependency version must be a bounded registry version/range")
         return value
+
+    @model_validator(mode="after")
+    def ecosystem_name(self):
+        if self.ecosystem == "python" and "/" in self.name:
+            raise ValueError("Python dependency names cannot contain registry path separators")
+        if self.ecosystem == "npm" and self.name.startswith("@") and self.name.count("/") != 1:
+            raise ValueError("Scoped npm packages must use @scope/package form")
+        return self
 
 
 class FullStackBindingRequest(_StrictModel):
@@ -193,9 +200,8 @@ def validate_fullstack_source(source) -> RuntimeValidation:
     if "npm" in ecosystems:
         if "frontend/package.json" not in files or "frontend/package-lock.json" not in files:
             errors.append("npm dependencies require frontend/package.json and frontend/package-lock.json")
-    if "python" in ecosystems:
-        if "backend/requirements.lock" not in files:
-            errors.append("Python dependencies require backend/requirements.lock")
+    if "python" in ecosystems and "backend/requirements.lock" not in files:
+        errors.append("Python dependencies require backend/requirements.lock")
 
     if not manifest.dependencies:
         warnings.append("No third-party dependencies requested")
