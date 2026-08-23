@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/runner/**"
+      - "packages/custom_software/__init__.py"
       - "packages/custom_software/runner_contracts.py"
       - "packages/custom_software/source_bundles.py"
       - "packages/runtime_plugins/**"
@@ -27,19 +28,40 @@ jobs:
         run: docker build -f apps/runner/Dockerfile --target job -t operly-runner-job:test .
       - name: Build trusted proxy image
         run: docker build -f apps/runner/Dockerfile --target proxy -t operly-runner-proxy:test .
+      - name: Build runner gateway image
+        run: docker build -f apps/runner/Dockerfile --target gateway -t operly-runner-gateway:test .
       - name: Run production isolation acceptance
         env:
           OPERLY_REAL_ISOLATION_RUNNER: "1"
           OPERLY_RUNNER_JOB_IMAGE: operly-runner-job:test
           OPERLY_RUNNER_PROXY_IMAGE: operly-runner-proxy:test
         run: python -m unittest -v tests.test_production_runner_service
-      - name: Assert no managed test containers leaked
+      - name: Assert no managed isolation resources leaked
         if: always()
         run: |
-          leaked="$(docker ps -aq --filter label=operly.runner.managed=true)"
-          if [ -n "$leaked" ]; then
+          containers="$(docker ps -aq --filter label=operly.runner.managed=true)"
+          networks="$(docker network ls -q --filter label=operly.runner.managed=true)"
+          images="$(docker images -q --filter label=operly.runner.managed=true)"
+          leaked=0
+          if [ -n "$containers" ]; then
+            echo "Managed containers leaked:" >&2
             docker ps -a --filter label=operly.runner.managed=true
-            docker rm -f $leaked || true
-            echo "Runner test leaked managed containers" >&2
+            docker rm -f $containers || true
+            leaked=1
+          fi
+          if [ -n "$networks" ]; then
+            echo "Managed networks leaked:" >&2
+            docker network ls --filter label=operly.runner.managed=true
+            docker network rm $networks || true
+            leaked=1
+          fi
+          if [ -n "$images" ]; then
+            echo "Managed temporary runtime images leaked:" >&2
+            docker images --filter label=operly.runner.managed=true
+            docker image rm -f $images || true
+            leaked=1
+          fi
+          if [ "$leaked" -ne 0 ]; then
+            echo "Runner isolation acceptance leaked managed resources" >&2
             exit 1
           fi
