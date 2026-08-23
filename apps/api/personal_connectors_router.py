@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
+from packages.connectors.account_google import account_access_token
 from packages.connectors.account_secrets import read_account_secret, store_account_secret
 from packages.connectors.google_provider import (
     CALENDAR,
@@ -21,7 +22,6 @@ from packages.connectors.google_provider import (
     GMAIL_MODIFY,
     GMAIL_READONLY,
     GMAIL_SEND,
-    access_token,
     request_json,
 )
 from packages.database.account_connector_models import AccountConnector, AccountConnectorSecret
@@ -262,7 +262,7 @@ async def test_personal_connector(
     if not row:
         raise HTTPException(404, "Personal connector not found")
     try:
-        token = await access_token(db, row)
+        token = await account_access_token(db, row)
         await request_json("GET", "https://www.googleapis.com/oauth2/v3/userinfo", token)
         row.health_status = "healthy"
         row.last_error = None
