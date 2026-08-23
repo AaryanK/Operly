@@ -1,0 +1,31 @@
+name: assistant-first-routing
+
+on:
+  pull_request:
+    paths:
+      - "packages/channels/service.py"
+      - "packages/model_runtime/task_routing.py"
+      - "tests/test_dm_workspace_switch.py"
+      - "tests/test_assistant_first_personal_dm.py"
+      - ".github/workflows/assistant-first-routing.yml"
+  workflow_dispatch:
+
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile changed runtime
+        run: python -m py_compile packages/channels/service.py packages/model_runtime/task_routing.py
+      - name: Run assistant-first and DM regressions
+        env:
+          ADMIN_PASSWORD: test-admin-password-1234
+          SESSION_SECRET: test-session-secret-that-is-long-enough
+          AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
+          OPERLY_ENV: test
+        run: python -m pytest -q tests/test_assistant_first_personal_dm.py tests/test_dm_workspace_switch.py

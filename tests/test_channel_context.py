@@ -208,16 +208,19 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((first.tenant_id, first.role), (operly_id, "owner"))
         self.assertEqual((second.tenant_id, second.role), (coffee_id, "manager"))
-        # A private DM always has a safe execution anchor now, but account.* tools
-        # can see every membership listed in options. The anchor is not the user's
-        # visibility/security boundary.
-        self.assertIn(personal_dm.tenant_id, {operly_id, coffee_id})
-        self.assertTrue(personal_dm.allow_tenant_context)
+        # A private DM is rooted in Personal AI, never a workspace chosen from
+        # membership order. All memberships remain visible as account-authorized
+        # options, and an explicit workspace mention becomes only a remembered
+        # focus hint; it does not grant the DM workspace-agent authority.
+        self.assertIsNone(personal_dm.tenant_id)
+        self.assertFalse(personal_dm.allow_tenant_context)
         self.assertEqual(personal_dm.user_id, aaryan_id)
         self.assertEqual({item["id"] for item in personal_dm.options}, {operly_id, coffee_id})
         self.assertEqual({item["role"] for item in personal_dm.options}, {"owner", "manager"})
         self.assertEqual(selected_dm.tenant_id, coffee_id)
+        self.assertFalse(selected_dm.allow_tenant_context)
         self.assertEqual(continued_dm.tenant_id, coffee_id)
+        self.assertFalse(continued_dm.allow_tenant_context)
 
     async def test_new_discord_space_is_provisional_and_unlinked_actor_has_no_authority(self):
         async with self.sessions() as db:

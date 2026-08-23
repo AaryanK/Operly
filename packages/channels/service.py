@@ -33,16 +33,17 @@ class ChannelService:
 
     @classmethod
     async def _resolve_direct_tenant(cls, db: AsyncSession, envelope: ChannelEnvelope, *, user_id: str) -> TenantResolution:
-        """Pick an execution anchor for a private DM, never an account visibility boundary.
+        """Resolve an optional workspace focus for a private DM.
 
-        Personal account.* capabilities remain able to inspect every workspace the
-        human is actually a member of. An explicit workspace name selects that
-        workspace for ordinary business tools; otherwise the remembered preference
-        is used, falling back deterministically to the first membership.
+        A private DM always remains account scoped. An explicit workspace reference or
+        remembered focus may be supplied to Personal AI as a disambiguation hint, but
+        membership alone never turns the DM into a workspace agent and we never choose
+        the first membership merely to create an execution anchor.
         """
         memberships = await IdentityService.memberships(db, user_id=user_id)
+        options = [{"id": t.id, "name": t.name, "role": m.role} for m, t in memberships]
         if not memberships:
-            return TenantResolution(None, None, user_id, False, [])
+            return TenantResolution(None, None, user_id, False, options)
         state = await IdentityService.conversation_state(
             db,
             provider=envelope.provider,
@@ -54,17 +55,16 @@ class ChannelService:
             for membership, tenant in memberships
             if cls._mentions_tenant(envelope.text, tenant)
         ]
-        if len(explicit) == 1:
-            membership, tenant = explicit[0]
-        elif state and state.active_tenant_id:
-            match = next(
+        selected = explicit[0] if len(explicit) == 1 else None
+        if selected is None and state and state.active_tenant_id:
+            selected = next(
                 (item for item in memberships if item[0].tenant_id == state.active_tenant_id),
                 None,
             )
-            membership, tenant = match or memberships[0]
-        else:
-            membership, tenant = memberships[0]
+        if selected is None:
+            return TenantResolution(None, None, user_id, False, options)
 
+        membership, tenant = selected
         workspace_changed = bool(
             state
             and state.active_tenant_id
@@ -80,7 +80,8 @@ class ChannelService:
             clear_agent_conversation=workspace_changed,
             metadata={
                 "direct": True,
-                "execution_anchor_only": True,
+                "personal_scope": True,
+                "workspace_focus_only": True,
                 "workspace_count": len(memberships),
             },
         )
@@ -88,8 +89,8 @@ class ChannelService:
             tenant.id,
             membership.role,
             user_id,
-            True,
-            [{"id": t.id, "name": t.name, "role": m.role} for m, t in memberships],
+            False,
+            options,
         )
 
     @classmethod
@@ -162,18 +163,33 @@ class ChannelService:
                     status="guest",
                 )
 
-            if envelope.is_direct and resolved.tenant_id is None and resolved.user_id:
-                # A person is a valid Operly identity even with zero workspaces.
-                # Keep this DM in account scope rather than fabricating a tenant.
+            if envelope.is_direct and resolved.user_id:
+                # A linked private DM is always the person's account-scoped Personal
+                # AI. A resolved workspace is only a focus/disambiguation hint for
+                # account-authorized reads; it is not the root execution scope.
                 user = await db.get(AppUser, resolved.user_id)
                 display_name = user.display_name if user else envelope.actor_name
+                await IdentityService.upsert_conversation_state(
+                    db,
+                    provider=envelope.provider,
+                    external_user_id=envelope.external_user_id,
+                    external_conversation_id=envelope.external_conversation_id,
+                    user_id=resolved.user_id,
+                    active_tenant_id=resolved.tenant_id,
+                    clear_agent_conversation=True,
+                    metadata={
+                        "direct": True,
+                        "personal_scope": True,
+                        "workspace_focus_only": bool(resolved.tenant_id),
+                    },
+                )
                 await db.commit()
                 result = await get_personal_agent_service().run(
                     user_id=resolved.user_id,
                     display_name=display_name,
                     message=envelope.text,
                     conversation_id=f"{envelope.provider}:{envelope.external_conversation_id}",
-                    selected_workspace_id=None,
+                    selected_workspace_id=resolved.tenant_id,
                 )
                 return ChannelResponse(
                     message=result["message"],
@@ -260,8 +276,8 @@ class ChannelService:
                     "external_space_id": envelope.external_space_id,
                     "external_conversation_id": envelope.external_conversation_id,
                     "is_direct": envelope.is_direct,
-                    "accessible_workspaces": resolved.options if envelope.is_direct else [],
-                    "dm_execution_anchor": resolved.tenant_id if envelope.is_direct else None,
+                    "accessible_workspaces": [],
+                    "dm_execution_anchor": None,
                     "retained_artifact_count": len(attachment_names) if attachment_prompt else 0,
                 },
             )
@@ -277,8 +293,8 @@ class ChannelService:
                 active_tenant_id=resolved.tenant_id,
                 agent_conversation_id=result.get("conversation_id"),
                 metadata={
-                    "direct": envelope.is_direct,
-                    "execution_anchor_only": envelope.is_direct,
+                    "direct": False,
+                    "workspace_scope": True,
                     "retained_artifacts": bool(attachment_prompt),
                 },
             )
