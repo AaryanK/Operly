@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -19,6 +20,13 @@ from packages.company.intelligence import (
     observe_evidence,
     profile_payload,
     synthesize_profile,
+)
+from packages.company.provenance import (
+    get_subject as get_profile_subject,
+    list_evidence as list_scoped_evidence,
+    list_subjects as list_profile_subjects,
+    mark_evidence_inactive,
+    resolve_conflict,
 )
 from packages.company.research import research_company
 from packages.company.state import get_company_state
@@ -45,6 +53,19 @@ class AnswerInput(BaseModel):
 
 class ProfilePatch(BaseModel):
     fields: dict[str, object]
+
+
+class ResolveConflictInput(BaseModel):
+    evidence_id: str = Field(min_length=1, max_length=64)
+
+
+class EvidenceStateInput(BaseModel):
+    state: Literal["stale", "superseded"]
+
+
+def _require_owner(auth: AuthContext) -> None:
+    if auth.role != "owner":
+        raise HTTPException(status_code=403, detail="Only owners can inspect or resolve company evidence provenance")
 
 
 def action_payload(row):
@@ -134,6 +155,101 @@ async def get_evidence(
     ]
 
 
+@router.get("/company/profile-subjects")
+async def profile_subjects(
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_owner(auth)
+    return await list_profile_subjects(db, auth.tenant.id)
+
+
+@router.get("/company/profile-subjects/{subject_id}")
+async def profile_subject_detail(
+    subject_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_owner(auth)
+    try:
+        return await get_profile_subject(db, auth.tenant.id, subject_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/company/profile-subjects/{subject_id}/evidence")
+async def profile_subject_evidence(
+    subject_id: str,
+    field: str | None = None,
+    include_inactive: bool = True,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_owner(auth)
+    try:
+        return await list_scoped_evidence(
+            db,
+            auth.tenant.id,
+            subject_id,
+            field_key=field,
+            include_inactive=include_inactive,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.post("/company/profile-subjects/{subject_id}/conflicts/{field_key}/resolve")
+async def resolve_profile_subject_conflict(
+    subject_id: str,
+    field_key: str,
+    payload: ResolveConflictInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_owner(auth)
+    try:
+        result = await resolve_conflict(
+            db,
+            auth.tenant.id,
+            subject_id,
+            field_key,
+            payload.evidence_id,
+            actor_user_id=auth.user.id,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await db.commit()
+    return result
+
+
+@router.post("/company/profile-subjects/{subject_id}/evidence/{evidence_id}/state")
+async def set_profile_evidence_state(
+    subject_id: str,
+    evidence_id: str,
+    payload: EvidenceStateInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_owner(auth)
+    try:
+        result = await mark_evidence_inactive(
+            db,
+            auth.tenant.id,
+            subject_id,
+            evidence_id,
+            actor_user_id=auth.user.id,
+            state=payload.state,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await db.commit()
+    return result
+
+
 @router.get("/company/questions")
 async def get_questions(
     auth: AuthContext = Depends(get_auth_context),
@@ -179,7 +295,9 @@ async def patch_profile(
                 "owner",
                 confidence=1,
                 owner_confirmed=True,
+                owner_initiated=True,
                 source_reference=f"owner:{auth.user.id}",
+                actor_user_id=auth.user.id,
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
