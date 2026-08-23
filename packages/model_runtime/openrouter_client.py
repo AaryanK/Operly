@@ -6,10 +6,16 @@ import json
 import os
 import random
 from typing import Any
+from uuid import uuid4
 
 import aiohttp
 
 from packages.model_runtime.ollama_client import OllamaError
+from packages.model_runtime.trace_context import (
+    ProviderWireEvent,
+    current_trace_metadata,
+    emit_provider_wire_event,
+)
 
 
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
@@ -246,6 +252,18 @@ class OpenRouterClient:
         self.last_response_payload = None
         self.last_response_status = None
         self.last_response_metadata = {}
+        wire_call_id = str(uuid4())
+        trace_metadata = current_trace_metadata()
+        await emit_provider_wire_event(
+            ProviderWireEvent(
+                phase="request",
+                wire_call_id=wire_call_id,
+                provider="openrouter",
+                provider_model_id=model,
+                payload=copy.deepcopy(self.last_request_payload),
+                metadata=trace_metadata,
+            )
+        )
 
         async with session.post(self.url, headers=headers, json=payload) as response:
             response_text = await response.text()
@@ -263,6 +281,18 @@ class OpenRouterClient:
                 copy.deepcopy(body)
                 if isinstance(body, (dict, list))
                 else str(response_text or "")[:20_000]
+            )
+            await emit_provider_wire_event(
+                ProviderWireEvent(
+                    phase="response",
+                    wire_call_id=wire_call_id,
+                    provider="openrouter",
+                    provider_model_id=model,
+                    payload=copy.deepcopy(self.last_response_payload),
+                    status=self.last_response_status,
+                    response_metadata=dict(self.last_response_metadata),
+                    metadata=trace_metadata,
+                )
             )
 
             if response.status != 200:
