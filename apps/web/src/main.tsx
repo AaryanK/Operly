@@ -5,6 +5,7 @@ import { App } from "./app/App";
 import "./ui/tokens.css";
 import "./ui/app.css";
 import "./ui/members.css";
+import "./ui/messages.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operly frontend root was not found");
