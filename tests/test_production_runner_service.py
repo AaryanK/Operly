@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 from unittest.mock import patch
 
 from packages.custom_software.source_bundles import SourceFile, build_bundle
-from packages.runtime_plugins import FULLSTACK_RUNTIME_ID, register_builtin_runtimes
+from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
+from packages.runtime_plugins.fullstack_runtime import FullStackRuntime
 
 
 _BACKEND_APP = b'''import argparse\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n\ndef response_for(path):\n    if path == "/health": return 200, b"ok"\n    if path == "/": return 200, b"isolated-operly-runner"\n    return 404, b"not-found"\n\nclass Handler(BaseHTTPRequestHandler):\n    def do_GET(self):\n        status, body = response_for(self.path.split("?", 1)[0])\n        self.send_response(status)\n        self.end_headers()\n        self.wfile.write(body)\n    def log_message(self, *args): return\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument("--host", default="127.0.0.1")\n    parser.add_argument("--port", type=int, default=8080)\n    args = parser.parse_args()\n    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()\n\nif __name__ == "__main__": main()\n'''
@@ -52,7 +53,11 @@ def _bundle_and_submission():
         source_version=1,
         bundle_digest=bundle.digest,
     )
-    submission = register_builtin_runtimes().get(FULLSTACK_RUNTIME_ID).build_submission_from_record(
+    runtime = FullStackRuntime()
+    self_check = runtime.validate(bundle)
+    if not self_check.valid:
+        raise AssertionError(self_check.errors)
+    submission = runtime.build_submission_from_record(
         record, bundle, "production-isolation-test"
     )
     payload = {
@@ -102,6 +107,23 @@ class RunnerStoreTests(unittest.TestCase):
             self.assertEqual(second.id, "job-1")
             reopened = RunnerStore(root)
             self.assertEqual(reopened.by_idempotency("idempotency-key").id, "job-1")
+
+    def test_preview_ready_records_are_queryable_for_restart_reconciliation(self):
+        from apps.runner.store import RunnerStore
+
+        with tempfile.TemporaryDirectory() as root:
+            store = RunnerStore(root)
+            store.create("job-preview", "preview-key", {"hello": "world"})
+            store.update(
+                "job-preview",
+                state="preview_ready",
+                response={"jobId": "job-preview", "state": "preview_ready"},
+                resources={"runtimeContainer": "runtime-1"},
+                preview_id="preview-job-preview",
+                preview_token="opaque-preview-token",
+                preview_upstream="http://172.20.0.3:8082",
+            )
+            self.assertEqual([item.id for item in store.preview_ready()], ["job-preview"])
 
 
 @unittest.skipUnless(
@@ -184,6 +206,13 @@ class ProductionIsolationAcceptance(unittest.TestCase):
             self.assertEqual(health.status_code, 200, health.text)
             self.assertEqual(health.json()["isolation"], "dedicated_host_container_per_job")
 
+            unauthorized = client.get("/v1/capabilities")
+            self.assertEqual(unauthorized.status_code, 401)
+            expected = hmac.new(
+                self.token.encode(), unauthorized.content, hashlib.sha256
+            ).hexdigest()
+            self.assertEqual(unauthorized.headers.get("X-Operly-Signature"), expected)
+
             created = self._request(client, "POST", "/v1/builds", payload)
             self.assertEqual(created.status_code, 202, created.text)
             job_id = created.json()["jobId"]
@@ -215,6 +244,7 @@ class ProductionIsolationAcceptance(unittest.TestCase):
             self.assertTrue(inspection["networks"][0].startswith("operly-job-"))
 
             runtime = self.docker.containers.get(record.resources["runtimeContainer"])
+            runtime.reload()
             socket_check = runtime.exec_run(
                 ["test", "!", "-e", "/var/run/docker.sock"],
                 user="10001:10001",
