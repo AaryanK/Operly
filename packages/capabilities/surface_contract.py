@@ -27,11 +27,11 @@ class CapabilityDomainContract:
 CORE_DOMAIN_CONTRACTS = (
     CapabilityDomainContract("workspace", lambda item: item.startswith(("workspace.", "account."))),
     CapabilityDomainContract("context", lambda item: item.startswith("context.")),
-    CapabilityDomainContract("actions", lambda item: item.startswith("action.")),
+    CapabilityDomainContract("actions", lambda item: item.startswith("actions.")),
     CapabilityDomainContract("studio", lambda item: item.startswith("studio.")),
     CapabilityDomainContract("gmail", lambda item: item.startswith("gmail.")),
     CapabilityDomainContract("crm", lambda item: item.startswith("crm.")),
-    CapabilityDomainContract("reminders", lambda item: item.startswith("reminder.")),
+    CapabilityDomainContract("reminders", lambda item: item.startswith("reminders.")),
     CapabilityDomainContract(
         "connectors",
         lambda item: item.startswith(("gmail.", "calendar.", "discord.")),
