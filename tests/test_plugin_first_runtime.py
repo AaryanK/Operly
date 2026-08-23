@@ -135,14 +135,18 @@ class TaskRouterPluginTests(unittest.IsolatedAsyncioTestCase):
             tools=(),
         )
         with patch(
-            "packages.model_runtime.task_routing._base_model_for_role",
+            "packages.model_runtime.task_routing.model_for_requirements",
             return_value=specialist,
-        ), patch(
+        ) as resolver, patch(
             "packages.model_runtime.task_routing.route_business_task",
             new=AsyncMock(side_effect=AssertionError("router should not run twice")),
         ):
             result = await TaskRoutedBusinessModel().infer(request)
 
+        resolver.assert_called_once()
+        requirements = resolver.call_args.args[0]
+        self.assertEqual(resolver.call_args.kwargs["fallback_role"], "bounded_task")
+        self.assertEqual(requirements.requires, frozenset({"text"}))
         self.assertEqual(result.message["content"], "done")
         self.assertEqual(specialist.requests[0].metadata["task_route"]["role"], "bounded_task")
 
