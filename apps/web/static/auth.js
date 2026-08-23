@@ -10,6 +10,7 @@ const AUTH_ROUTES = {
 };
 
 const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);
+let accountHomeNavigationObserver = null;
 
 function setFormMessage(id, message, kind = "error") {
   const element = $(id);
@@ -38,6 +39,43 @@ function commitPersonalScreen() {
   document.title = "Personal AI · OPERLY";
 }
 
+function installPersonalHomeNavigation() {
+  const install = () => {
+    const rail = $("#operly-workspace-rail");
+    if (rail && !rail.querySelector("[data-personal-home]")) {
+      const button = document.createElement("button");
+      button.className = "operly-rail-item operly-personal-home";
+      button.dataset.personalHome = "1";
+      button.title = "Personal AI";
+      button.setAttribute("aria-label", "Open Personal AI");
+      button.textContent = "✦";
+      button.addEventListener("click", () => {
+        enterAuthenticatedPersonal().catch(dashboardBootError);
+      });
+      const separator = rail.querySelector(".operly-rail-separator");
+      rail.insertBefore(button, separator || rail.firstChild);
+    }
+
+    const nav = $(".operly-section-nav .operly-nav-scroll");
+    if (nav && !nav.querySelector("[data-personal-home]")) {
+      const button = document.createElement("button");
+      button.className = "operly-nav-item operly-personal-home";
+      button.dataset.personalHome = "1";
+      button.innerHTML = '<span class="operly-nav-icon">✦</span>Personal AI <span class="operly-nav-pill">Private</span>';
+      button.addEventListener("click", () => {
+        enterAuthenticatedPersonal().catch(dashboardBootError);
+      });
+      nav.insertBefore(button, nav.firstChild);
+    }
+  };
+
+  install();
+  if (!accountHomeNavigationObserver && document.body) {
+    accountHomeNavigationObserver = new MutationObserver(install);
+    accountHomeNavigationObserver.observe(document.body, { childList: true, subtree: true });
+  }
+}
+
 function dashboardBootError(error) {
   console.error("OPERLY dashboard boot failed after authentication", error);
   const content = $("#content");
@@ -55,6 +93,7 @@ async function enterAuthenticatedWorkspace() {
   $("#workspace-role").textContent = state.me.role;
   $("#tenant-kicker").textContent = state.me.tenant.name;
   commitAuthenticatedScreen();
+  installPersonalHomeNavigation();
   if (location.pathname !== "/app" && !state.pendingIdentityLink) history.replaceState({}, "", "/app");
 
   setTimeout(() => {
@@ -76,8 +115,9 @@ async function enterAuthenticatedWorkspace() {
 }
 
 async function enterAuthenticatedPersonal() {
-  // Account-scoped endpoint proves the session is valid without manufacturing a
-  // workspace. The Personal AI itself remains private to this account.
+  // Crossing from any workspace back to Personal AI must rotate the authenticated
+  // session into account scope. A workspace is a child scope, never the account.
+  await api("/auth/personal-scope", { method: "POST", body: "{}" });
   await api("/auth/workspaces");
   state.me = null;
   commitPersonalScreen();
@@ -86,21 +126,11 @@ async function enterAuthenticatedPersonal() {
 }
 
 async function enterAuthenticatedScope(preferredScope = null) {
-  if (preferredScope === "personal") return enterAuthenticatedPersonal();
+  // Account-first is the default. Workspace entry is only an explicit navigation
+  // choice (for example direct /app or a workspace switch), never inferred from the
+  // existence/order of memberships.
   if (preferredScope === "workspace") return enterAuthenticatedWorkspace();
-  try {
-    return await enterAuthenticatedWorkspace();
-  } catch (workspaceError) {
-    try {
-      const workspaces = await api("/auth/workspaces");
-      const selected = workspaces.find((item) => item.current);
-      if (selected) throw workspaceError;
-      return await enterAuthenticatedPersonal();
-    } catch (accountError) {
-      if (accountError === workspaceError) throw workspaceError;
-      throw workspaceError;
-    }
-  }
+  return enterAuthenticatedPersonal();
 }
 
 function extractLinkToken() {
@@ -206,11 +236,11 @@ async function handleGoogleCredential(result) {
     });
     state.me = null;
     if (response.new_account) {
-      state.workflow = { scope: response.scope || "personal" };
+      state.workflow = { scope: "personal" };
       history.replaceState({workflow:state.workflow}, "", "/onboarding");
       showRoute("/onboarding");
     } else {
-      await enterAuthenticatedScope(response.scope);
+      await enterAuthenticatedPersonal();
     }
   } catch (error) {
     const code = error.details?.code;
@@ -246,9 +276,12 @@ window.addEventListener("popstate", async () => {
   if (location.pathname === "/personal") {
     try { await enterAuthenticatedPersonal(); return; } catch { state.me = null; }
   }
-  if (state.me && SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
+  if (location.pathname === "/app") {
+    try { await enterAuthenticatedWorkspace(); return; } catch { state.me = null; }
+  }
+  if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
-      await enterAuthenticatedScope();
+      await enterAuthenticatedPersonal();
       return;
     } catch {
       state.me = null;
@@ -274,14 +307,14 @@ $("#login-form").addEventListener("submit", async (event) => {
   setFormMessage("#login-error", "");
   setFormBusy(form, true, "Signing in…");
   try {
-    const response = await api("/auth/login", {
+    await api("/auth/login", {
       method: "POST",
       body: JSON.stringify({
         email: $("#login-email").value,
         password: $("#login-password").value
       })
     });
-    await enterAuthenticatedScope(response.scope);
+    await enterAuthenticatedPersonal();
   } catch (error) {
     if (error.details?.code === "EMAIL_NOT_VERIFIED") {
       openVerificationRecovery(
@@ -341,9 +374,9 @@ $("#verify-form").addEventListener("submit", async (event) => {
           email: state.workflow.email,
           code: $("#verify-code").value
         };
-    const response = await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
+    await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
     state.linkToken = null;
-    state.workflow = {...state.workflow, scope:response.scope||"personal"};
+    state.workflow = {...state.workflow, scope:"personal"};
     history.replaceState({workflow:state.workflow}, "", "/onboarding");
     showRoute("/onboarding");
   } catch (error) {
@@ -417,12 +450,12 @@ $("#reset-form").addEventListener("submit", async (event) => {
     const proof = state.linkToken
       ? { token: state.linkToken }
       : { email: $("#reset-email").value, code: $("#reset-code").value };
-    const response = await api("/auth/reset-password", {
+    await api("/auth/reset-password", {
       method: "POST",
       body: JSON.stringify({ ...proof, password: $("#reset-password-input").value })
     });
     state.linkToken = null;
-    await enterAuthenticatedScope(response.scope);
+    await enterAuthenticatedPersonal();
   } catch (error) {
     setFormMessage("#reset-error", error.message);
   } finally {
@@ -431,7 +464,7 @@ $("#reset-form").addEventListener("submit", async (event) => {
 });
 
 $("#open-workspace").addEventListener("click", async () => {
-  try { await enterAuthenticatedScope(state.workflow.scope || null); }
+  try { await enterAuthenticatedPersonal(); }
   catch (error) { setFormMessage("#login-error", error.message); navigate("/login"); }
 });
 
@@ -451,9 +484,25 @@ async function initializeAuth() {
     }
   }
 
+  if (location.pathname === "/app") {
+    try {
+      await enterAuthenticatedWorkspace();
+      return;
+    } catch {
+      state.me = null;
+      history.replaceState({}, "", "/personal");
+      try {
+        await enterAuthenticatedPersonal();
+        return;
+      } catch {
+        history.replaceState({}, "", "/login");
+      }
+    }
+  }
+
   if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
-      await enterAuthenticatedScope();
+      await enterAuthenticatedPersonal();
       return;
     } catch {
       state.me = null;
@@ -470,7 +519,7 @@ async function initializeAuth() {
   }
 
   try {
-    await enterAuthenticatedScope();
+    await enterAuthenticatedPersonal();
   } catch {
     state.me = null;
     history.replaceState({}, "", "/");
