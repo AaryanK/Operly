@@ -63,9 +63,9 @@
     return body;
   }
 
-  async function requestJson(path, payload) {
+  async function requestJson(path, payload, method = "POST") {
     return request(path, {
-      method: "POST",
+      method,
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload),
     });
@@ -192,7 +192,16 @@
     const submit = form.querySelector('button[type="submit"],button:not([type])');
     if (submit) submit.disabled = true;
     try {
-      const result = await requestJson("/auth/workspaces", {name, timezone});
+      const result = await requestJson("/auth/workspaces", {name});
+      try {
+        await requestJson(
+          `/personal-agent/workspaces/${encodeURIComponent(result.workspace.id)}`,
+          {timezone},
+          "PATCH",
+        );
+      } catch (timezoneError) {
+        console.warn("Workspace created but timezone could not be applied", timezoneError);
+      }
       closeShellModal();
       await window.operlyPersonal?.goWorkspace?.(result.workspace.id);
     } catch (error) {
