@@ -4,7 +4,7 @@ import re
 
 from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS, MODULES
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest
-from packages.model_runtime.registry import model_chat_client_for_role
+from packages.model_runtime.client_context import model_chat_client_for_role
 
 logger = logging.getLogger("operly.application_builder")
 
