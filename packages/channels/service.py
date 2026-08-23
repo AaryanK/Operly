@@ -9,7 +9,7 @@ from packages.channels.envelope import ChannelEnvelope, ChannelResponse
 from packages.channels.guest_chat import get_guest_conversation_service
 from packages.channels.identity import IdentityService
 from packages.database.agent_models import AgentConversation
-from packages.database.models import Tenant
+from packages.database.models import AppUser, Tenant
 from packages.security.principals import PrincipalService
 
 
@@ -165,7 +165,7 @@ class ChannelService:
             if envelope.is_direct and resolved.tenant_id is None and resolved.user_id:
                 # A person is a valid Operly identity even with zero workspaces.
                 # Keep this DM in account scope rather than fabricating a tenant.
-                user = await IdentityService.user(db, resolved.user_id)
+                user = await db.get(AppUser, resolved.user_id)
                 display_name = user.display_name if user else envelope.actor_name
                 await db.commit()
                 result = await get_personal_agent_service().run(
