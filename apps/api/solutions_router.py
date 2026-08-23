@@ -4,7 +4,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from packages.database.product_models import (
     SolutionJob,
 )
 from packages.solutions import SolutionService, SolutionType
+from packages.solutions.composer import create_solution_from_intent
 from packages.solutions.operations import PresenceOperationsService, proposal_json
 from packages.solutions.production import ProductionService, job_json
 from packages.solutions.service import solution_json
@@ -32,6 +33,12 @@ service = SolutionService()
 class CreateSolutionInput(BaseModel):
     solution_type: str = Field(default=SolutionType.DIGITAL_PRESENCE)
     name: str | None = Field(default=None, max_length=200)
+
+
+class ComposeSolutionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    objective: str = Field(min_length=2, max_length=8000)
 
 
 class DomainInput(BaseModel):
@@ -58,10 +65,11 @@ async def create_solution(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    """Legacy Digital Presence endpoint retained for existing clients."""
     if payload.solution_type != SolutionType.DIGITAL_PRESENCE:
         raise HTTPException(
             status_code=422,
-            detail="Only Digital Presence creation is available in the ordinary business experience",
+            detail="Use /api/solutions/compose for intent-driven Solution creation",
         )
     try:
         row = await service.create_presence(
@@ -74,6 +82,31 @@ async def create_solution(
         raise HTTPException(status_code=409, detail=str(error)) from error
     await db.commit()
     return solution_json(row)
+
+
+@router.post("/compose", status_code=201)
+async def compose_solution(
+    payload: ComposeSolutionInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """Classify owner intent before selecting/creating the Solution runtime."""
+    if auth.role != "owner":
+        raise HTTPException(status_code=403, detail="Only owners can create Solutions")
+    try:
+        row, decision = await create_solution_from_intent(
+            db,
+            tenant_id=auth.tenant.id,
+            user_id=auth.user.id,
+            name=payload.name,
+            objective=payload.objective,
+            service=service,
+        )
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await db.commit()
+    return {"solution": solution_json(row), "classification": decision.as_dict()}
 
 
 @router.get("/{solution_id}")
