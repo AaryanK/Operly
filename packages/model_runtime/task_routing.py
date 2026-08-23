@@ -1,8 +1,9 @@
-"""Task-level routing that runs before business-agent model selection.
+"""Task routing plus capability-driven model selection.
 
-The primary router is itself a runtime plugin backed by a small/fast reasoning
-model. Deterministic heuristics remain only as a bounded fallback when the routing
-model/provider is unavailable or cannot produce a valid decision.
+Task labels are retained for workload policy, observability, and compatibility,
+but no longer determine the execution model. Each inference turn derives concrete
+model requirements (tools, coding, reasoning, context) and asks the shared model
+portfolio to satisfy those requirements directly.
 """
 from __future__ import annotations
 
@@ -22,11 +23,8 @@ from packages.model_runtime.contracts import (
     ModelInferenceError,
     ModelTraits,
 )
-from packages.model_runtime.registry import (
-    ModelChatAdapter,
-    model_for_role as _base_model_for_role,
-)
-from packages.model_runtime.routing_policy import role_routing_profile
+from packages.model_runtime.registry import ModelChatAdapter, model_for_role as _base_model_for_role
+from packages.model_runtime.requirements import ModelRequirements, model_for_requirements
 from packages.model_runtime.semantic_router import SemanticRouter, SemanticRoutingError
 
 
@@ -84,46 +82,12 @@ _ROUTE_SPECS: dict[str, tuple[str, str, str]] = {
     ),
 }
 
-# These intents indicate that first-hop specialist routing is useful. Everything
-# else may remain on the primary assistant and answer/use an already-exposed tool
-# directly. This intentionally keeps greetings, explanation, arithmetic, account
-# reads, and ordinary follow-ups out of the orchestration ceremony.
 _SPECIALIST_HINTS = frozenset(
     {
-        "code",
-        "implement",
-        "debug",
-        "fix",
-        "studio",
-        "website",
-        "app",
-        "html",
-        "javascript",
-        "validate",
-        "verify",
-        "audit",
-        "review",
-        "test",
-        "research",
-        "investigate",
-        "compare",
-        "market",
-        "competitor",
-        "evidence",
-        "plan",
-        "strategy",
-        "roadmap",
-        "design",
-        "architect",
-        "proposal",
-        "send",
-        "create",
-        "update",
-        "delete",
-        "schedule",
-        "email",
-        "remind",
-        "approve",
+        "code", "implement", "debug", "fix", "studio", "website", "app", "html", "javascript",
+        "validate", "verify", "audit", "review", "test", "research", "investigate", "compare",
+        "market", "competitor", "evidence", "plan", "strategy", "roadmap", "design", "architect",
+        "proposal", "send", "create", "update", "delete", "schedule", "email", "remind", "approve",
     }
 )
 
@@ -157,55 +121,91 @@ def classify_business_task(objective: str) -> TaskRouteDecision:
 
     if has("code", "implement", "debug", "fix", "studio", "website", "app", "html", "javascript"):
         return TaskRouteDecision(
-            "coding_or_studio",
-            "coding",
-            "workspace_write_with_validation",
-            0.55,
-            "fallback heuristic selected coding/studio work",
+            "coding_or_studio", "coding", "workspace_write_with_validation", 0.55,
+            "fallback heuristic identified a coding/studio workload shape",
         )
     if has("validate", "verify", "audit", "review", "check", "test"):
         return TaskRouteDecision(
-            "validation",
-            "global_validator",
-            "read_first_validation",
-            0.52,
-            "fallback heuristic selected validation work",
+            "validation", "global_validator", "read_first_validation", 0.52,
+            "fallback heuristic identified a validation workload shape",
         )
     if has("research", "investigate", "find", "compare", "market", "competitor", "evidence"):
         return TaskRouteDecision(
-            "research",
-            "requirements_analyst",
-            "read_research_sources",
-            0.50,
-            "fallback heuristic selected research work",
+            "research", "requirements_analyst", "read_research_sources", 0.50,
+            "fallback heuristic identified a research workload shape",
         )
     if has("plan", "strategy", "roadmap", "design", "architect", "proposal"):
         return TaskRouteDecision(
-            "planning",
-            "planner",
-            "read_then_propose",
-            0.48,
-            "fallback heuristic selected planning work",
+            "planning", "planner", "read_then_propose", 0.48,
+            "fallback heuristic identified a planning workload shape",
         )
     if has("send", "create", "update", "delete", "schedule", "email", "remind", "approve"):
         return TaskRouteDecision(
-            "bounded_operation",
-            "bounded_task",
-            "bounded_action_with_approval",
-            0.46,
-            "fallback heuristic selected a bounded operation",
+            "bounded_operation", "bounded_task", "bounded_action_with_approval", 0.46,
+            "fallback heuristic identified a bounded operation",
         )
     return TaskRouteDecision(
-        "business_reasoning",
-        "business_agent",
-        "progressive_capability_access",
-        0.35,
-        "fallback heuristic selected general business reasoning",
+        "business_reasoning", "business_agent", "progressive_capability_access", 0.35,
+        "fallback heuristic identified general business reasoning",
+    )
+
+
+def _context_requirement(request: InferenceRequest) -> int | None:
+    """Estimate the minimum useful context tier without binding to a provider."""
+    chars = sum(len(str(message.get("content") or "")) for message in request.messages)
+    chars += sum(len(str(tool)) for tool in request.tools)
+    estimated_tokens = max(1, chars // 4)
+    if estimated_tokens >= 48_000:
+        return 128_000
+    if estimated_tokens >= 18_000:
+        return 64_000
+    if estimated_tokens >= 7_000:
+        return 32_000
+    return None
+
+
+def requirements_for_task(
+    decision: TaskRouteDecision,
+    request: InferenceRequest,
+) -> ModelRequirements:
+    """Translate a workload shape into model capabilities and preferences.
+
+    Mixed tasks are represented by the union of their actual requirements. In
+    particular, exposed tools add the `tools` requirement regardless of semantic
+    role instead of forcing the request onto `business_agent`.
+    """
+    required = {"text"}
+    preferred = {"reliable"}
+    if request.tools:
+        required.add("tools")
+        preferred.add("tools")
+
+    if decision.task_type == "coding_or_studio":
+        required.add("coding")
+        preferred.update({"coding", "reasoning"})
+    elif decision.task_type in {"validation", "research", "planning"}:
+        required.add("reasoning")
+        preferred.update({"reasoning", "long-context"})
+    elif decision.task_type == "bounded_operation":
+        preferred.update({"fast", "reliable"})
+    else:
+        preferred.update({"reasoning", "fast"})
+
+    minimum = _context_requirement(request)
+    if minimum:
+        preferred.add("long-context")
+
+    return ModelRequirements(
+        requires=frozenset(required),
+        prefer_tags=frozenset(preferred),
+        max_models=max(1, int((request.budget.max_models if request.budget else None) or 3)),
+        min_context_tokens=minimum,
+        reason=f"task={decision.task_type}; tools={bool(request.tools)}",
     )
 
 
 class ModelTaskRouterPlugin:
-    """Application-controlled top-level router backed by the model portfolio."""
+    """Application-controlled workload router backed by the dynamic portfolio."""
 
     id = "model-runtime.task-router"
     kind = "task_router"
@@ -222,7 +222,13 @@ class ModelTaskRouterPlugin:
     ) -> TaskRouteDecision:
         objective = str(payload.get("objective") or "").strip()
         try:
-            router_model = _base_model_for_role("router")
+            router_requirements = ModelRequirements(
+                requires=frozenset({"text", "reasoning"}),
+                prefer_tags=frozenset({"fast", "small", "reliable"}),
+                max_models=2,
+                reason="low-latency task-shape routing",
+            )
+            router_model = model_for_requirements(router_requirements, fallback_role="router")
             router_client = ModelChatAdapter(
                 router_model,
                 budget=InferenceBudget(
@@ -234,7 +240,7 @@ class ModelTaskRouterPlugin:
             )
             semantic = await SemanticRouter(router_client).decide(
                 request=objective,
-                domain="selecting the best Operly specialist role for the current user objective",
+                domain="identifying the current Operly workload shape for policy and budgeting",
                 routes={role: spec[2] for role, spec in _ROUTE_SPECS.items()},
                 context={
                     "channel": context.channel,
@@ -243,16 +249,14 @@ class ModelTaskRouterPlugin:
                     "attachmentCount": int(payload.get("attachment_count") or 0),
                     "availableToolCount": int(payload.get("tool_count") or 0),
                     "hasAvailableCapabilities": bool(payload.get("tool_count")),
-                    "note": "Choose a specialist only by workload meaning. Tool availability does not mean the request needs tools, and routing never executes the task.",
+                    "note": "Choose workload meaning only. This label controls policy/telemetry, not a fixed execution model; model selection happens from concrete requirements afterward.",
                 },
             )
         except (ModelInferenceError, SemanticRoutingError, LookupError, RuntimeError) as error:
             raise RuntimePluginUnavailable(str(error)) from error
 
         if not semantic.domain_match or not semantic.known or not semantic.route_id:
-            raise RuntimePluginUnavailable(
-                "router model did not choose one bounded specialist role"
-            )
+            raise RuntimePluginUnavailable("router model did not choose one bounded workload shape")
         task_type, tool_policy, _ = _ROUTE_SPECS[semantic.route_id]
         return TaskRouteDecision(
             task_type=task_type,
@@ -366,10 +370,7 @@ def _task_budget(
         "planning": (90.0, 3, 8000),
         "business_reasoning": (75.0, 3, 7000),
     }
-    timeout, models, output = defaults.get(
-        decision.task_type,
-        defaults["business_reasoning"],
-    )
+    timeout, models, output = defaults.get(decision.task_type, defaults["business_reasoning"])
     return InferenceBudget(
         timeout_seconds=current.timeout_seconds or timeout,
         attempts_per_model=max(1, current.attempts_per_model),
@@ -379,15 +380,16 @@ def _task_budget(
 
 
 class TaskRoutedBusinessModel:
-    """Lazy model proxy preserving a normal assistant-first tool loop."""
+    """Lazy model proxy with workload routing and requirements-first execution."""
 
     id = "task-router:business-agent"
-    tags = frozenset({"task-routed", "plugin-routed"})
+    tags = frozenset({"task-routed", "requirements-routed"})
     capabilities = frozenset({"text", "tools", "reasoning", "coding"})
     traits = ModelTraits()
 
     def __init__(self) -> None:
         self.last_decision: TaskRouteDecision | None = None
+        self.last_requirements: ModelRequirements | None = None
 
     async def infer(self, request: InferenceRequest) -> InferenceResult:
         decision = _existing_route(request)
@@ -398,26 +400,20 @@ class TaskRoutedBusinessModel:
                 decision = await route_business_task(objective, request=request)
         self.last_decision = decision
 
-        # Top-level AgentRuntime owns the capability loop. If the router selected a
-        # pure reasoning specialist while tools are exposed, keep execution on the
-        # tool-capable primary assistant; those reasoning roles remain available via
-        # bounded model.invoke delegation instead of receiving schemas they were not
-        # selected to support.
-        execution_role = decision.role
-        requested_profile = role_routing_profile(execution_role)
-        if request.tools and "tools" not in requested_profile.requires:
-            execution_role = "business_agent"
-        execution_profile = role_routing_profile(execution_role)
+        requirements = requirements_for_task(decision, request)
+        self.last_requirements = requirements
+        fallback_role = "business_agent" if request.tools else decision.role
+        selected = model_for_requirements(requirements, fallback_role=fallback_role)
 
-        selected = _base_model_for_role(execution_role)
         metadata = dict(request.metadata)
         route_metadata = decision.as_dict()
-        route_metadata["executionRole"] = execution_role
-        route_metadata["toolSchemasForwarded"] = bool(request.tools and "tools" in execution_profile.requires)
+        route_metadata["compatibilityRole"] = decision.role
+        route_metadata["modelRequirements"] = requirements.as_dict()
+        route_metadata["toolSchemasForwarded"] = bool(request.tools and "tools" in requirements.requires)
         metadata["task_route"] = route_metadata
         routed = InferenceRequest(
             messages=request.messages,
-            tools=request.tools if "tools" in execution_profile.requires else (),
+            tools=request.tools if "tools" in requirements.requires else (),
             response_schema=request.response_schema,
             modality_inputs=request.modality_inputs,
             budget=_task_budget(decision, request.budget),
@@ -425,15 +421,12 @@ class TaskRoutedBusinessModel:
         )
         result = await selected.infer(routed)
         message = dict(result.message)
-        # AgentRuntime preserves this field in the in-memory loop so subsequent
-        # inference steps reuse the first-hop route instead of paying for routing
-        # again. Persisted user/assistant history intentionally omits it.
         message["_operly_task_route"] = decision.as_dict()
         return replace(result, message=message)
 
 
 def model_for_role(role: str):
-    """Public role resolver with plugin routing for the primary business agent."""
+    """Public compatibility resolver; primary agent execution is requirements-routed."""
     if str(role).strip().lower() == "business_agent":
         return TaskRoutedBusinessModel()
     return _base_model_for_role(role)
