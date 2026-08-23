@@ -17,6 +17,7 @@ from packages.model_runtime.openai_compatible_client import OpenAICompatibleClie
 
 class _FakeResponse:
     status = 200
+    headers = {}
 
     async def __aenter__(self):
         return self
@@ -47,6 +48,7 @@ class _FakeResponse:
 
 class _RequestTooLargeResponse:
     status = 413
+    headers = {}
 
     async def __aenter__(self):
         return self
