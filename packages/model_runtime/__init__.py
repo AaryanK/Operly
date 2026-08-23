@@ -59,10 +59,13 @@ from .routing_policy import (
 from .semantic_router import SemanticDecision, SemanticRouter, SemanticRoutingError
 from .service import ModelInvocationResult, ModelInvocationService
 from .task_routing import (
+    DeterministicTaskRouterPlugin,
+    ModelTaskRouterPlugin,
     TaskRouteDecision,
     TaskRoutedBusinessModel,
     classify_business_task,
     model_for_role,
+    route_business_task,
 )
 
 __all__ = [
@@ -90,7 +93,10 @@ __all__ = [
     "configured_provider_count",
     "TaskRouteDecision",
     "TaskRoutedBusinessModel",
+    "ModelTaskRouterPlugin",
+    "DeterministicTaskRouterPlugin",
     "classify_business_task",
+    "route_business_task",
     "provider_is_configured",
     # Compatibility exports below this line. New callers should not depend on them.
     "OllamaClient",
