@@ -1,9 +1,9 @@
 """Controlled source contract for the first real full-stack Solution runtime.
 
-The contract deliberately exposes *execution modes*, not arbitrary shell commands.
+The contract deliberately exposes *execution modes*, not arbitrary runner commands.
 The coding model authors application source and a typed manifest; a trusted runner
-owns dependency installation, process commands, ports, networking and resource
-policy.  A source tree can be submitted only when the remote isolated runner
+owns dependency installation, process entrypoints, ports, networking and resource
+policy. A source tree can be submitted only when the remote isolated runner
 advertises the matching ``operly-fullstack-v1`` profile/version.
 """
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import posixpath
 import re
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -39,6 +40,10 @@ _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9*_.+!<>=~^|-]{0,79}$")
 _CAPABILITY = re.compile(r"^[a-z][a-z0-9_.:-]{1,159}$")
 _SEMANTIC_NAME = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
 _HEALTH_PATH = re.compile(r"^/[A-Za-z0-9_./-]*$")
+_PYTHON_LOCK = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,99})==([A-Za-z0-9][A-Za-z0-9_.+!-]{0,79})$"
+)
+_NPM_INTEGRITY = re.compile(r"^(?:sha512|sha384|sha256)-[A-Za-z0-9+/=]+$")
 
 
 class _StrictModel(BaseModel):
@@ -52,6 +57,10 @@ def _safe_relative_path(value: str) -> str:
     if normalized in {".", ".."} or normalized.startswith("../") or "/../" in normalized:
         raise ValueError("Project path traversal is forbidden")
     return normalized.rstrip("/")
+
+
+def _normalized_python_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
 
 
 class FullStackLayout(_StrictModel):
@@ -77,7 +86,7 @@ class FullStackLayout(_StrictModel):
 
 
 class FullStackExecution(_StrictModel):
-    """Runner-owned execution modes; no model-authored commands are accepted."""
+    """Runner-owned execution modes; no model-authored runner commands are accepted."""
 
     frontend: Literal["static", "npm-build"] = "static"
     backend: Literal["python-cli"] = "python-cli"
@@ -207,6 +216,67 @@ def _json_file(files: dict[str, bytes], path: str, errors: list[str]) -> dict | 
     return value
 
 
+def _validate_python_lock(files: dict[str, bytes], manifest: FullStackSolutionManifest, errors: list[str]) -> None:
+    payload = files.get("backend/requirements.lock")
+    if payload is None:
+        return
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        errors.append("backend/requirements.lock must contain UTF-8 text")
+        return
+    locked: set[str] = set()
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _PYTHON_LOCK.fullmatch(line)
+        if not match:
+            errors.append(
+                f"backend/requirements.lock line {number} must be an exact registry pin name==version; URLs, options and editable installs are forbidden"
+            )
+            continue
+        name = _normalized_python_name(match.group(1))
+        if name in locked:
+            errors.append(f"backend/requirements.lock contains duplicate package: {match.group(1)}")
+        locked.add(name)
+    for dependency in (item for item in manifest.dependencies if item.ecosystem == "python"):
+        if _normalized_python_name(dependency.name) not in locked:
+            errors.append(
+                f"Manifest Python dependency is absent from requirements.lock: {dependency.name}"
+            )
+
+
+def _validate_npm_lock(package_lock: dict | None, errors: list[str]) -> None:
+    if package_lock is None:
+        return
+    if package_lock.get("lockfileVersion") not in {2, 3}:
+        errors.append("frontend/package-lock.json must use npm lockfileVersion 2 or 3")
+    packages = package_lock.get("packages")
+    if not isinstance(packages, dict):
+        errors.append("frontend/package-lock.json must contain a packages object")
+        return
+    for path, record in packages.items():
+        if not path:
+            continue
+        if not isinstance(record, dict):
+            errors.append(f"package-lock entry must be an object: {path}")
+            continue
+        if record.get("link"):
+            errors.append(f"Local/link npm dependencies are forbidden: {path}")
+            continue
+        resolved = record.get("resolved")
+        integrity = record.get("integrity")
+        if not isinstance(resolved, str):
+            errors.append(f"npm lock entry requires a registry resolved URL: {path}")
+        else:
+            parsed = urlparse(resolved)
+            if parsed.scheme != "https" or parsed.hostname != "registry.npmjs.org":
+                errors.append(f"npm lock entry must resolve through registry.npmjs.org: {path}")
+        if not isinstance(integrity, str) or not _NPM_INTEGRITY.fullmatch(integrity):
+            errors.append(f"npm lock entry requires sha256/sha384/sha512 integrity: {path}")
+
+
 def validate_fullstack_source(source) -> RuntimeValidation:
     """Validate the complete source-tree boundary before any runner can execute it."""
 
@@ -246,6 +316,7 @@ def validate_fullstack_source(source) -> RuntimeValidation:
     ecosystems = {dependency.ecosystem for dependency in manifest.dependencies}
     if "python" in ecosystems and "backend/requirements.lock" not in files:
         errors.append("Python dependencies require backend/requirements.lock")
+    _validate_python_lock(files, manifest, errors)
 
     package_json = _json_file(files, "frontend/package.json", errors)
     package_lock = _json_file(files, "frontend/package-lock.json", errors)
@@ -269,6 +340,7 @@ def validate_fullstack_source(source) -> RuntimeValidation:
             for dependency in (item for item in manifest.dependencies if item.ecosystem == "npm"):
                 if dependency.name.lower() not in declared:
                     errors.append(f"Manifest npm dependency is absent from package.json: {dependency.name}")
+        _validate_npm_lock(package_lock, errors)
 
     if not manifest.dependencies:
         warnings.append("No third-party dependencies requested")
