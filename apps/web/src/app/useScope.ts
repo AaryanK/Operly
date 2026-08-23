@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
+import { navigate, personalPath, workspacePath } from "./routes";
 import { PersonalProfile, WorkspaceSummary } from "./types";
 
 type ScopeState = {
   loading: boolean;
+  transitioning: boolean;
   error: string | null;
   profile: PersonalProfile | null;
   workspaces: WorkspaceSummary[];
@@ -12,6 +14,7 @@ type ScopeState = {
 
 const initialState: ScopeState = {
   loading: true,
+  transitioning: false,
   error: null,
   profile: null,
   workspaces: [],
@@ -27,19 +30,45 @@ export function useScope() {
         api<PersonalProfile>("/personal-agent/me"),
         api<WorkspaceSummary[]>("/personal-agent/workspaces"),
       ]);
-      setState({ loading: false, error: null, profile, workspaces });
+      setState((current) => ({ ...current, loading: false, error: null, profile, workspaces }));
+      return { profile, workspaces };
     } catch (error) {
-      setState((current) => ({
-        ...current,
-        loading: false,
-        error: error instanceof Error ? error.message : "Could not load account scope",
-      }));
+      const message = error instanceof Error ? error.message : "Could not load account scope";
+      setState((current) => ({ ...current, loading: false, error: message }));
+      throw error;
     }
   }, []);
 
-  useEffect(() => {
-    refresh();
+  const activatePersonal = useCallback(async () => {
+    setState((current) => ({ ...current, transitioning: true, error: null }));
+    try {
+      await api("/auth/personal-scope", { method: "POST", body: "{}" });
+      await refresh();
+      navigate(personalPath());
+    } finally {
+      setState((current) => ({ ...current, transitioning: false }));
+    }
   }, [refresh]);
 
-  return { ...state, refresh };
+  const activateWorkspace = useCallback(async (workspaceId: string) => {
+    setState((current) => ({ ...current, transitioning: true, error: null }));
+    try {
+      if (state.profile?.current_workspace_id !== workspaceId) {
+        await api("/auth/switch-workspace", {
+          method: "POST",
+          body: JSON.stringify({ tenant_id: workspaceId }),
+        });
+      }
+      await refresh();
+      navigate(workspacePath(workspaceId));
+    } finally {
+      setState((current) => ({ ...current, transitioning: false }));
+    }
+  }, [refresh, state.profile?.current_workspace_id]);
+
+  useEffect(() => {
+    refresh().catch(() => undefined);
+  }, [refresh]);
+
+  return { ...state, refresh, activatePersonal, activateWorkspace };
 }
