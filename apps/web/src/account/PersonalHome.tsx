@@ -25,6 +25,10 @@ export function PersonalHome({ profile }: Props) {
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyCollapsed, setHistoryCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("operly.personal-history-collapsed") === "true"; }
+    catch { return false; }
+  });
   const fileInput = useRef<HTMLInputElement>(null);
   const stage = useRef<HTMLDivElement>(null);
 
@@ -55,6 +59,14 @@ export function PersonalHome({ profile }: Props) {
   useEffect(() => {
     stage.current?.scrollTo({ top: stage.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  function toggleHistory() {
+    setHistoryCollapsed((current) => {
+      const next = !current;
+      try { window.localStorage.setItem("operly.personal-history-collapsed", String(next)); } catch { /* optional */ }
+      return next;
+    });
+  }
 
   function addFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = [...(event.target.files || [])].slice(0, 10);
@@ -101,9 +113,9 @@ export function PersonalHome({ profile }: Props) {
   }
 
   return (
-    <div className="personal-layout">
+    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""}`}>
       <aside className="personal-history">
-        <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><button onClick={() => { setConversationId(null); setMessages([]); setError(null); }} aria-label="New conversation">+</button></div>
+        <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><div className="history-head-actions"><button onClick={() => { setConversationId(null); setMessages([]); setError(null); }} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button></div></div>
         <div className="history-list">
           {conversations.length === 0 && <p className="empty-copy">Your private conversations will appear here.</p>}
           {conversations.map((item) => <button key={item.id} className={conversationId === item.id ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
