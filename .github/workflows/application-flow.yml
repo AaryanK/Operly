@@ -26,6 +26,7 @@ on:
       - "tests/test_authentication.py"
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
+      - "tests/test_capability_exposure_reliability.py"
       - "tests/test_channel_context.py"
       - "tests/test_dm_workspace_switch.py"
       - "tests/test_space_binding_transfer.py"
@@ -127,6 +128,7 @@ jobs:
           packages/capabilities/runtime_context.py
           packages/capabilities/personal_provider.py
           packages/capabilities/business_provider.py
+          packages/capabilities/crm_read_provider.py
           packages/capabilities/workspace_provider.py
           packages/capabilities/operations_provider.py
           packages/capabilities/studio_provider.py
@@ -165,6 +167,7 @@ jobs:
           tests/test_authentication.py
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
+          tests/test_capability_exposure_reliability.py
           tests/test_channel_context.py
           tests/test_dm_workspace_switch.py
           tests/test_space_binding_transfer.py
