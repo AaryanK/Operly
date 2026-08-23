@@ -1,0 +1,74 @@
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: apps/runner/Dockerfile
+      target: gateway
+    image: operly-runner-gateway:1
+    restart: unless-stopped
+    environment:
+      OPERLY_RUNNER_TOKEN: ${OPERLY_RUNNER_TOKEN:?set OPERLY_RUNNER_TOKEN}
+      OPERLY_RUNNER_PUBLIC_BASE_URL: https://${RUNNER_DOMAIN:?set RUNNER_DOMAIN}
+      OPERLY_RUNNER_JOB_IMAGE: operly-runner-job:1
+      OPERLY_RUNNER_PROXY_IMAGE: operly-runner-proxy:1
+      OPERLY_RUNNER_CONTROL_NETWORK: operly-runner-control
+      OPERLY_RUNNER_EGRESS_NETWORK: bridge
+      OPERLY_RUNNER_STATE_DIR: /var/lib/operly-runner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-state:/var/lib/operly-runner
+    networks:
+      - edge
+      - control
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      RUNNER_DOMAIN: ${RUNNER_DOMAIN:?set RUNNER_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - edge
+    depends_on:
+      runner:
+        condition: service_healthy
+
+  job-image:
+    profiles: ["images"]
+    build:
+      context: ../..
+      dockerfile: apps/runner/Dockerfile
+      target: job
+    image: operly-runner-job:1
+    command: ["true"]
+
+  proxy-image:
+    profiles: ["images"]
+    build:
+      context: ../..
+      dockerfile: apps/runner/Dockerfile
+      target: proxy
+    image: operly-runner-proxy:1
+
+networks:
+  edge:
+  control:
+    name: operly-runner-control
+    internal: true
+
+volumes:
+  runner-state:
+  caddy-data:
+  caddy-config:
