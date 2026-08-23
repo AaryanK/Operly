@@ -26,6 +26,7 @@ from packages.model_runtime.registry import (
     ModelChatAdapter,
     model_for_role as _base_model_for_role,
 )
+from packages.model_runtime.routing_policy import role_routing_profile
 from packages.model_runtime.semantic_router import SemanticRouter, SemanticRoutingError
 
 
@@ -83,9 +84,67 @@ _ROUTE_SPECS: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+# These intents indicate that first-hop specialist routing is useful. Everything
+# else may remain on the primary assistant and answer/use an already-exposed tool
+# directly. This intentionally keeps greetings, explanation, arithmetic, account
+# reads, and ordinary follow-ups out of the orchestration ceremony.
+_SPECIALIST_HINTS = frozenset(
+    {
+        "code",
+        "implement",
+        "debug",
+        "fix",
+        "studio",
+        "website",
+        "app",
+        "html",
+        "javascript",
+        "validate",
+        "verify",
+        "audit",
+        "review",
+        "test",
+        "research",
+        "investigate",
+        "compare",
+        "market",
+        "competitor",
+        "evidence",
+        "plan",
+        "strategy",
+        "roadmap",
+        "design",
+        "architect",
+        "proposal",
+        "send",
+        "create",
+        "update",
+        "delete",
+        "schedule",
+        "email",
+        "remind",
+        "approve",
+    }
+)
+
 
 def _tokens(text: str) -> set[str]:
     return set(_TOKEN_RE.findall(str(text or "").lower()))
+
+
+def _primary_assistant_decision(objective: str) -> TaskRouteDecision | None:
+    """Return the direct assistant path when no specialist workload is evident."""
+    text = " ".join(str(objective or "").lower().split())
+    tokens = _tokens(text)
+    if not text or not any(hint in tokens for hint in _SPECIALIST_HINTS):
+        return TaskRouteDecision(
+            "business_reasoning",
+            "business_agent",
+            "progressive_capability_access",
+            0.80,
+            "direct primary-assistant path; no specialist workload required",
+        )
+    return None
 
 
 def classify_business_task(objective: str) -> TaskRouteDecision:
@@ -183,8 +242,8 @@ class ModelTaskRouterPlugin:
                     "hasAttachments": bool(payload.get("has_attachments")),
                     "attachmentCount": int(payload.get("attachment_count") or 0),
                     "availableToolCount": int(payload.get("tool_count") or 0),
-                    "needsCapabilities": bool(payload.get("tool_count")),
-                    "note": "Choose the specialist role by meaning, not keywords. Routing never executes the task.",
+                    "hasAvailableCapabilities": bool(payload.get("tool_count")),
+                    "note": "Choose a specialist only by workload meaning. Tool availability does not mean the request needs tools, and routing never executes the task.",
                 },
             )
         except (ModelInferenceError, SemanticRoutingError, LookupError, RuntimeError) as error:
@@ -320,7 +379,7 @@ def _task_budget(
 
 
 class TaskRoutedBusinessModel:
-    """Lazy model proxy selecting a specialist role through runtime plugins."""
+    """Lazy model proxy preserving a normal assistant-first tool loop."""
 
     id = "task-router:business-agent"
     tags = frozenset({"task-routed", "plugin-routed"})
@@ -333,17 +392,32 @@ class TaskRoutedBusinessModel:
     async def infer(self, request: InferenceRequest) -> InferenceResult:
         decision = _existing_route(request)
         if decision is None:
-            decision = await route_business_task(
-                _last_user_objective(request),
-                request=request,
-            )
+            objective = _last_user_objective(request)
+            decision = _primary_assistant_decision(objective)
+            if decision is None:
+                decision = await route_business_task(objective, request=request)
         self.last_decision = decision
-        selected = _base_model_for_role(decision.role)
+
+        # Top-level AgentRuntime owns the capability loop. If the router selected a
+        # pure reasoning specialist while tools are exposed, keep execution on the
+        # tool-capable primary assistant; those reasoning roles remain available via
+        # bounded model.invoke delegation instead of receiving schemas they were not
+        # selected to support.
+        execution_role = decision.role
+        requested_profile = role_routing_profile(execution_role)
+        if request.tools and "tools" not in requested_profile.requires:
+            execution_role = "business_agent"
+        execution_profile = role_routing_profile(execution_role)
+
+        selected = _base_model_for_role(execution_role)
         metadata = dict(request.metadata)
-        metadata["task_route"] = decision.as_dict()
+        route_metadata = decision.as_dict()
+        route_metadata["executionRole"] = execution_role
+        route_metadata["toolSchemasForwarded"] = bool(request.tools and "tools" in execution_profile.requires)
+        metadata["task_route"] = route_metadata
         routed = InferenceRequest(
             messages=request.messages,
-            tools=request.tools,
+            tools=request.tools if "tools" in execution_profile.requires else (),
             response_schema=request.response_schema,
             modality_inputs=request.modality_inputs,
             budget=_task_budget(decision, request.budget),
