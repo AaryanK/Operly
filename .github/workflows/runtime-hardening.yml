@@ -4,13 +4,21 @@ on:
   pull_request:
     paths:
       - "apps/api/agent_router.py"
+      - "apps/api/runtime_trace_router.py"
       - "packages/agents/runtime.py"
       - "packages/database/company_models.py"
+      - "packages/database/model_trace.py"
+      - "packages/database/model_trace_models.py"
+      - "packages/database/schema.py"
       - "packages/model_runtime/**"
       - "alembic/versions/0034_provider_trace_ids.py"
+      - "alembic/versions/0035_conversation_runtime_trace.py"
       - "tests/test_agent_runtime_hardening.py"
       - "tests/test_assistant_first_personal_dm.py"
       - "tests/test_model_requirements.py"
+      - "tests/test_model_request_failover.py"
+      - "tests/test_runtime_trace_contract.py"
+      - "tests/test_runtime_trace_access.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -28,13 +36,22 @@ jobs:
         run: >-
           python -m py_compile
           apps/api/agent_router.py
+          apps/api/runtime_trace_router.py
           packages/agents/runtime.py
           packages/database/company_models.py
+          packages/database/model_trace.py
+          packages/database/model_trace_models.py
+          packages/database/schema.py
           packages/model_runtime/conversation_policy.py
           packages/model_runtime/requirements.py
+          packages/model_runtime/registry.py
           packages/model_runtime/task_routing.py
+          packages/model_runtime/trace_context.py
+          packages/model_runtime/ollama_client.py
+          packages/model_runtime/openrouter_client.py
           packages/model_runtime/openai_compatible_client.py
           alembic/versions/0034_provider_trace_ids.py
+          alembic/versions/0035_conversation_runtime_trace.py
       - name: Run runtime hardening regressions
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -46,6 +63,9 @@ jobs:
           tests/test_agent_runtime_hardening.py
           tests/test_assistant_first_personal_dm.py
           tests/test_model_requirements.py
+          tests/test_model_request_failover.py
+          tests/test_runtime_trace_contract.py
+          tests/test_runtime_trace_access.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db

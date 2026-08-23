@@ -5,9 +5,12 @@ import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
+from packages.database.model_trace import ensure_model_trace_sink
 from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.conversation_policy import is_trivial_conversation
+from packages.model_runtime.trace_context import runtime_trace_scope
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -143,6 +146,7 @@ class AgentRuntime:
         on_observation: ObservationHook | None = None,
         inference_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        ensure_model_trace_sink()
         trace: list[AgentTraceEntry] = []
         budget = self.execution_budget
         allowed_steps = budget.base_steps
@@ -150,68 +154,89 @@ class AgentRuntime:
         tool_calls = 0
         extensions = 0
         last_step_progress = False
+        model_call_index = 0
+        run_metadata = dict(inference_metadata or {})
+        runtime_run_id = str(run_metadata.get("runtime_run_id") or uuid4())
+        run_metadata["runtime_run_id"] = runtime_run_id
 
-        while steps_used < allowed_steps and steps_used < budget.max_steps:
-            tools = list(await _resolve(schemas()) or [])
-            message = await self._infer(model, messages, tools, metadata=inference_metadata)
-            messages.append(message)
-            steps_used += 1
-            calls = message.get("tool_calls") or []
-            if not calls:
-                return {
-                    "message": message.get("content") or "Done.",
-                    "trace": trace,
-                    "messages": messages,
-                    "stopped": False,
-                    "stop_reason": "completed",
-                    "budget": {
-                        "stepsUsed": steps_used,
-                        "stepsAllowed": allowed_steps,
-                        "hardStepLimit": budget.max_steps,
-                        "toolCalls": tool_calls,
-                        "maxToolCalls": budget.max_tool_calls,
-                        "extensions": extensions,
-                    },
+        with runtime_trace_scope(run_metadata):
+            while steps_used < allowed_steps and steps_used < budget.max_steps:
+                tools = list(await _resolve(schemas()) or [])
+                model_call_index += 1
+                model_metadata = {
+                    **run_metadata,
+                    "runtime_component": "agent",
+                    "runtime_step": model_call_index,
                 }
+                with runtime_trace_scope(model_metadata):
+                    message = await self._infer(model, messages, tools, metadata=model_metadata)
+                messages.append(message)
+                steps_used += 1
+                calls = message.get("tool_calls") or []
+                if not calls:
+                    return {
+                        "message": message.get("content") or "Done.",
+                        "trace": trace,
+                        "messages": messages,
+                        "stopped": False,
+                        "stop_reason": "completed",
+                        "runtime_run_id": runtime_run_id,
+                        "budget": {
+                            "stepsUsed": steps_used,
+                            "stepsAllowed": allowed_steps,
+                            "hardStepLimit": budget.max_steps,
+                            "toolCalls": tool_calls,
+                            "maxToolCalls": budget.max_tool_calls,
+                            "extensions": extensions,
+                        },
+                    }
 
-            last_step_progress = False
-            for call in calls:
+                last_step_progress = False
+                for call in calls:
+                    if tool_calls >= budget.max_tool_calls:
+                        break
+                    if not isinstance(call, dict):
+                        continue
+                    name, arguments, call_id = self._arguments(call)
+                    capability_metadata = {
+                        **run_metadata,
+                        "runtime_component": f"capability:{name or 'unknown'}",
+                        "runtime_step": model_call_index,
+                        "capability_id": name or None,
+                        "tool_call_id": call_id,
+                    }
+                    with runtime_trace_scope(capability_metadata):
+                        if not name:
+                            observation = {"ok": False, "error": "Model requested an unnamed capability"}
+                        else:
+                            observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
+                    tool_calls += 1
+                    last_step_progress = last_step_progress or _made_progress(observation)
+                    entry = AgentTraceEntry(
+                        capability_id=name,
+                        arguments=dict(arguments),
+                        observation=observation,
+                        call_id=call_id,
+                    )
+                    trace.append(entry)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_name": name,
+                            "content": json.dumps(observation, ensure_ascii=False, default=str),
+                        }
+                    )
+                    if on_observation is not None:
+                        await _resolve(on_observation(name, arguments, observation))
+
                 if tool_calls >= budget.max_tool_calls:
                     break
-                if not isinstance(call, dict):
-                    continue
-                name, arguments, call_id = self._arguments(call)
-                if not name:
-                    observation = {"ok": False, "error": "Model requested an unnamed capability"}
-                else:
-                    observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
-                tool_calls += 1
-                last_step_progress = last_step_progress or _made_progress(observation)
-                entry = AgentTraceEntry(
-                    capability_id=name,
-                    arguments=dict(arguments),
-                    observation=observation,
-                    call_id=call_id,
-                )
-                trace.append(entry)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_name": name,
-                        "content": json.dumps(observation, ensure_ascii=False, default=str),
-                    }
-                )
-                if on_observation is not None:
-                    await _resolve(on_observation(name, arguments, observation))
 
-            if tool_calls >= budget.max_tool_calls:
-                break
-
-            if steps_used >= allowed_steps and last_step_progress and allowed_steps < budget.max_steps:
-                new_allowed = min(budget.max_steps, allowed_steps + budget.extension_steps)
-                if new_allowed > allowed_steps:
-                    allowed_steps = new_allowed
-                    extensions += 1
+                if steps_used >= allowed_steps and last_step_progress and allowed_steps < budget.max_steps:
+                    new_allowed = min(budget.max_steps, allowed_steps + budget.extension_steps)
+                    if new_allowed > allowed_steps:
+                        allowed_steps = new_allowed
+                        extensions += 1
 
         stop_reason = "tool_call_budget_exhausted" if tool_calls >= budget.max_tool_calls else "execution_budget_exhausted"
         return {
@@ -223,6 +248,7 @@ class AgentRuntime:
             "messages": messages,
             "stopped": True,
             "stop_reason": stop_reason,
+            "runtime_run_id": runtime_run_id,
             "budget": {
                 "stepsUsed": steps_used,
                 "stepsAllowed": allowed_steps,

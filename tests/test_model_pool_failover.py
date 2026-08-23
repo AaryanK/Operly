@@ -59,6 +59,7 @@ class _SuccessModel:
 
 class _FakeResponse:
     status = 200
+    headers = {}
 
     async def __aenter__(self):
         return self

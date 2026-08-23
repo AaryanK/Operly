@@ -33,6 +33,7 @@ from apps.api.personal_agent_router import router as personal_agent_router
 from apps.api.personal_connectors_router import router as personal_connectors_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
+from apps.api.runtime_trace_router import router as runtime_trace_router
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
@@ -195,6 +196,7 @@ for router in (
     integrations_router,
     business_router,
     agent_router,
+    runtime_trace_router,
     company_router,
     connectors_router,
     capability_diagnostics_router,

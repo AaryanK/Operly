@@ -298,6 +298,14 @@ class AgentService:
             schemas=schemas,
             invoke=invoke,
             on_observation=persist_observation,
+            inference_metadata={
+                "conversation_id": conversation.id,
+                "tenant_id": request.tenant_id,
+                "user_id": user_id,
+                "principal_id": request.principal_id,
+                "channel": request.channel,
+                "surface": "private/direct" if is_direct else "shared/workspace",
+            },
         )
         answer = bounded_text(
             run.get("message") or "Done.",
@@ -312,7 +320,12 @@ class AgentService:
                     content=answer,
                 )
             )
-        return {"conversation_id": conversation.id, "message": answer}
+        return {
+            "conversation_id": conversation.id,
+            "message": answer,
+            "stop_reason": run.get("stop_reason"),
+            "runtime_run_id": run.get("runtime_run_id"),
+        }
 
     async def _run_builder_request(
         self,

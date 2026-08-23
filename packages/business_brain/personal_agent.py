@@ -156,11 +156,25 @@ class PersonalAgentService:
                     "changed": bool(verified.changed),
                 }
 
+        channel = (
+            external_conversation_id.split(":", 1)[0]
+            if ":" in external_conversation_id
+            else "web"
+        )
         run = await self.runtime.run(
             model=self.model,
             messages=messages,
             schemas=schemas,
             invoke=invoke,
+            inference_metadata={
+                "conversation_id": external_conversation_id,
+                "tenant_id": selected_workspace_id,
+                "user_id": user_id,
+                "principal_id": principal_id,
+                "channel": channel,
+                "surface": "private/direct",
+                "personal_scope": True,
+            },
         )
         answer = str(run.get("message") or "Done.").strip()[:24_000]
         async with session_scope() as db:
@@ -181,6 +195,7 @@ class PersonalAgentService:
             "scope": "personal",
             "selected_workspace_id": selected_workspace_id,
             "stop_reason": run.get("stop_reason"),
+            "runtime_run_id": run.get("runtime_run_id"),
         }
 
     async def list_conversations(self, *, user_id: str, display_name: str) -> list[dict]:

@@ -51,6 +51,23 @@ class PersonalRuntimeProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             category="account",
         ),
+        CapabilityDefinition(
+            "account.workspace_capabilities",
+            "account_workspace_capabilities",
+            "Inspect the canonical Operly capability registry for one or more workspaces the current human belongs to. Returns the user's resolved permissions plus each authorized workspace capability and its live configured/health availability. Use this instead of inferring abilities from role names.",
+            {
+                "type": "object",
+                "properties": {
+                    "workspace": {"type": "string", "description": "Optional workspace name or slug; omit for every authorized workspace."}
+                },
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            permissions=("workspace:read",),
+            approval_policy=ApprovalPolicy.AUTO,
+            category="account",
+        ),
     )
 
     async def execute(self, context, capability_name, arguments):
@@ -102,6 +119,70 @@ class PersonalRuntimeProvider(BaseProvider):
             or requested in " ".join(tenant.name.lower().split())
             or requested == str(tenant.slug or "").lower()
         ]
+
+        if capability_name == "account.workspace_capabilities":
+            # Reuse the workspace agent's canonical registry/configuration resolver so
+            # this report reflects installed plugins, connector scopes/health, and
+            # the user's real workspace role permissions instead of an LLM guess.
+            from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
+
+            harness = PluginAgentHarness()
+            workspace_reports = []
+            for member, tenant in selected[:20]:
+                permissions = await resolve_workspace_permissions(
+                    context.db,
+                    tenant_id=tenant.id,
+                    role=member.role,
+                )
+                plugin_context = PluginInvocationContext(
+                    tenant_id=tenant.id,
+                    user_id=context.actor_id,
+                    role=member.role,
+                    objective="inspect workspace capabilities",
+                    channel="web",
+                    metadata={"is_direct": False, "shared_surface": True},
+                )
+                registry = await harness.registry_for(plugin_context)
+                capability_ids = [
+                    definition.id
+                    for definition in registry.definitions()
+                    if not definition.id.startswith("account.")
+                ]
+                described = registry.describe(
+                    tenant.id,
+                    capability_ids,
+                    authority=permissions,
+                    include_schema=False,
+                )
+                authorized = [
+                    item
+                    for item in described
+                    if item.get("authorized") is not False
+                ]
+                authorized.sort(key=lambda item: (str(item.get("category") or ""), str(item.get("id") or "")))
+                available_count = sum(
+                    1
+                    for item in authorized
+                    if bool((item.get("availability") or {}).get("available"))
+                )
+                workspace_reports.append(
+                    {
+                        "workspace": tenant.name,
+                        "workspace_id": tenant.id,
+                        "role": member.role,
+                        "permissions": sorted(permissions),
+                        "capability_count": len(authorized),
+                        "available_count": available_count,
+                        "unavailable_count": len(authorized) - available_count,
+                        "capabilities": authorized,
+                    }
+                )
+            return CapabilityResult(
+                True,
+                False,
+                {"workspaces": workspace_reports, "count": len(workspace_reports)},
+            )
+
         from packages.database.business_models import BusinessOrder, Contact, Lead
         from packages.database.models import Task
         from sqlalchemy import func
