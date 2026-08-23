@@ -5,7 +5,8 @@ const AUTH_ROUTES = {
   "/verify-email": "#verify-email",
   "/forgot-password": "#forgot-password",
   "/reset-password": "#reset-password",
-  "/onboarding": "#onboarding"
+  "/onboarding": "#onboarding",
+  "/personal": "#personal"
 };
 
 const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);
@@ -31,6 +32,12 @@ function commitAuthenticatedScreen() {
   document.title = "OPERLY";
 }
 
+function commitPersonalScreen() {
+  $$(".screen").forEach((element) => element.classList.add("hidden"));
+  $("#personal")?.classList.remove("hidden");
+  document.title = "Personal AI · OPERLY";
+}
+
 function dashboardBootError(error) {
   console.error("OPERLY dashboard boot failed after authentication", error);
   const content = $("#content");
@@ -42,9 +49,6 @@ async function enterAuthenticatedWorkspace() {
   const params = new URLSearchParams(location.search);
   state.pendingIdentityLink = params.get("identity_link") || state.pendingIdentityLink;
 
-  // Authentication and workspace rendering are separate boundaries. Once /me
-  // confirms the session, commit the signed-in screen immediately. Slow or broken
-  // legacy renderers must never leave a valid session trapped behind "Signing in…".
   state.me = await api("/me");
   $("#workspace-name").textContent = state.me.tenant.name;
   $("#workspace-avatar").textContent = state.me.tenant.name.slice(0, 1).toUpperCase();
@@ -53,15 +57,11 @@ async function enterAuthenticatedWorkspace() {
   commitAuthenticatedScreen();
   if (location.pathname !== "/app" && !state.pendingIdentityLink) history.replaceState({}, "", "/app");
 
-  // Let the newer dashboard observers mount independently. Keep the legacy
-  // workspace selector hydrated in the background, but never block auth success on it.
   setTimeout(() => {
     Promise.resolve()
       .then(() => typeof loadWorkspaces === "function" ? loadWorkspaces() : null)
       .catch(dashboardBootError);
 
-    // The current simple/workspace shell mounts itself when #dashboard becomes
-    // visible. This fallback only runs if nothing has populated the page yet.
     setTimeout(() => {
       const content = $("#content");
       if (!content || content.childElementCount) return;
@@ -73,6 +73,34 @@ async function enterAuthenticatedWorkspace() {
       if (render) Promise.resolve(render()).catch(dashboardBootError);
     }, 0);
   }, 0);
+}
+
+async function enterAuthenticatedPersonal() {
+  // Account-scoped endpoint proves the session is valid without manufacturing a
+  // workspace. The Personal AI itself remains private to this account.
+  await api("/auth/workspaces");
+  state.me = null;
+  commitPersonalScreen();
+  if (location.pathname !== "/personal") history.replaceState({}, "", "/personal");
+  await window.operlyPersonal?.mount?.();
+}
+
+async function enterAuthenticatedScope(preferredScope = null) {
+  if (preferredScope === "personal") return enterAuthenticatedPersonal();
+  if (preferredScope === "workspace") return enterAuthenticatedWorkspace();
+  try {
+    return await enterAuthenticatedWorkspace();
+  } catch (workspaceError) {
+    try {
+      const workspaces = await api("/auth/workspaces");
+      const selected = workspaces.find((item) => item.current);
+      if (selected) throw workspaceError;
+      return await enterAuthenticatedPersonal();
+    } catch (accountError) {
+      if (accountError === workspaceError) throw workspaceError;
+      throw workspaceError;
+    }
+  }
 }
 
 function extractLinkToken() {
@@ -93,7 +121,7 @@ function showRoute(path = location.pathname) {
   if (target === "#reset-password") $("#reset-code-fields").classList.toggle("hidden", Boolean(state.linkToken));
   document.title = target === "#landing" || target === "#dashboard"
     ? "OPERLY"
-    : `${target.slice(1).replaceAll("-", " ")} · OPERLY`;
+    : target === "#personal" ? "Personal AI · OPERLY" : `${target.slice(1).replaceAll("-", " ")} · OPERLY`;
 }
 
 function navigate(path, workflow = {}) {
@@ -178,10 +206,11 @@ async function handleGoogleCredential(result) {
     });
     state.me = null;
     if (response.new_account) {
-      history.replaceState({}, "", "/onboarding");
+      state.workflow = { scope: response.scope || "personal" };
+      history.replaceState({workflow:state.workflow}, "", "/onboarding");
       showRoute("/onboarding");
     } else {
-      await enterAuthenticatedWorkspace();
+      await enterAuthenticatedScope(response.scope);
     }
   } catch (error) {
     const code = error.details?.code;
@@ -214,9 +243,12 @@ $$("[data-toggle-password]").forEach((button) => button.addEventListener("click"
 window.addEventListener("popstate", async () => {
   state.linkToken = null;
   extractLinkToken();
+  if (location.pathname === "/personal") {
+    try { await enterAuthenticatedPersonal(); return; } catch { state.me = null; }
+  }
   if (state.me && SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
-      await enterAuthenticatedWorkspace();
+      await enterAuthenticatedScope();
       return;
     } catch {
       state.me = null;
@@ -242,14 +274,14 @@ $("#login-form").addEventListener("submit", async (event) => {
   setFormMessage("#login-error", "");
   setFormBusy(form, true, "Signing in…");
   try {
-    await api("/auth/login", {
+    const response = await api("/auth/login", {
       method: "POST",
       body: JSON.stringify({
         email: $("#login-email").value,
         password: $("#login-password").value
       })
     });
-    await enterAuthenticatedWorkspace();
+    await enterAuthenticatedScope(response.scope);
   } catch (error) {
     if (error.details?.code === "EMAIL_NOT_VERIFIED") {
       openVerificationRecovery(
@@ -309,9 +341,10 @@ $("#verify-form").addEventListener("submit", async (event) => {
           email: state.workflow.email,
           code: $("#verify-code").value
         };
-    await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
+    const response = await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
     state.linkToken = null;
-    history.replaceState({}, "", "/onboarding");
+    state.workflow = {...state.workflow, scope:response.scope||"personal"};
+    history.replaceState({workflow:state.workflow}, "", "/onboarding");
     showRoute("/onboarding");
   } catch (error) {
     setFormMessage("#verify-error", error.message);
@@ -384,12 +417,12 @@ $("#reset-form").addEventListener("submit", async (event) => {
     const proof = state.linkToken
       ? { token: state.linkToken }
       : { email: $("#reset-email").value, code: $("#reset-code").value };
-    await api("/auth/reset-password", {
+    const response = await api("/auth/reset-password", {
       method: "POST",
       body: JSON.stringify({ ...proof, password: $("#reset-password-input").value })
     });
     state.linkToken = null;
-    await enterAuthenticatedWorkspace();
+    await enterAuthenticatedScope(response.scope);
   } catch (error) {
     setFormMessage("#reset-error", error.message);
   } finally {
@@ -398,19 +431,29 @@ $("#reset-form").addEventListener("submit", async (event) => {
 });
 
 $("#open-workspace").addEventListener("click", async () => {
-  try { await enterAuthenticatedWorkspace(); }
+  try { await enterAuthenticatedScope(state.workflow.scope || null); }
   catch (error) { setFormMessage("#login-error", error.message); navigate("/login"); }
 });
 
 async function initializeAuth() {
   extractLinkToken();
 
-  // Public entry pages are not a separate authentication state. If a valid session
-  // already exists, /, /login and /signup should enter the workspace immediately.
-  // This check intentionally runs before loading public auth UI or Google buttons.
+  if (location.pathname === "/personal") {
+    try {
+      await enterAuthenticatedPersonal();
+      return;
+    } catch {
+      state.me = null;
+      history.replaceState({}, "", "/login");
+      await refreshAuthBootstrap().catch(() => {});
+      showRoute("/login");
+      return;
+    }
+  }
+
   if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
-      await enterAuthenticatedWorkspace();
+      await enterAuthenticatedScope();
       return;
     } catch {
       state.me = null;
@@ -427,7 +470,7 @@ async function initializeAuth() {
   }
 
   try {
-    await enterAuthenticatedWorkspace();
+    await enterAuthenticatedScope();
   } catch {
     state.me = null;
     history.replaceState({}, "", "/");
