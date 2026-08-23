@@ -1,4 +1,3 @@
-import { navigate, personalPath, workspacePath } from "../app/routes";
 import { PersonalProfile, WorkspaceSummary } from "../app/types";
 
 type Props = {
@@ -6,6 +5,9 @@ type Props = {
   workspaces: WorkspaceSummary[];
   activeWorkspaceId?: string | null;
   personal: boolean;
+  transitioning?: boolean;
+  onPersonal: () => void;
+  onWorkspace: (workspaceId: string) => void;
 };
 
 function initials(value: string): string {
@@ -19,14 +21,23 @@ function initials(value: string): string {
     .toUpperCase() || "O";
 }
 
-export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal }: Props) {
+export function ScopeRail({
+  profile,
+  workspaces,
+  activeWorkspaceId,
+  personal,
+  transitioning = false,
+  onPersonal,
+  onWorkspace,
+}: Props) {
   return (
-    <nav className="scope-rail" aria-label="Operly spaces">
+    <nav className="scope-rail" aria-label="Operly spaces" aria-busy={transitioning}>
       <button
         className={`scope-mark ${personal ? "active" : ""}`}
         aria-label="Personal Operly"
         title="Personal Operly"
-        onClick={() => navigate(personalPath())}
+        disabled={transitioning}
+        onClick={onPersonal}
       >
         ✦
       </button>
@@ -38,7 +49,8 @@ export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal }: 
             className={`scope-mark ${activeWorkspaceId === workspace.id ? "active" : ""}`}
             aria-label={workspace.name}
             title={workspace.name}
-            onClick={() => navigate(workspacePath(workspace.id))}
+            disabled={transitioning}
+            onClick={() => onWorkspace(workspace.id)}
           >
             {workspace.logo_url ? <img src={workspace.logo_url} alt="" /> : initials(workspace.name)}
           </button>
