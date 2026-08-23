@@ -30,6 +30,7 @@ from apps.api.integrations_router import router as integrations_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.operations_router import router as operations_router
 from apps.api.personal_agent_router import router as personal_agent_router
+from apps.api.personal_connectors_router import router as personal_connectors_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
@@ -185,6 +186,7 @@ for router in (
     system_router,
     session_router,
     personal_agent_router,
+    personal_connectors_router,
     workspace_router,
     access_router,
     mcp_router,
