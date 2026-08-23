@@ -72,7 +72,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
-WEB_ASSET_REVISION = "20260823-account-shell-v2"
+WEB_ASSET_REVISION = "20260823-ui-system-v3"
 
 
 async def bootstrap_admin() -> None:
