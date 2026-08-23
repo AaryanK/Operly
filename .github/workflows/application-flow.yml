@@ -55,6 +55,7 @@ on:
       - "tests/test_durable_runtime_state.py"
       - "tests/test_plugin_first_runtime.py"
       - "tests/test_multi_provider_model_portfolio.py"
+      - "tests/test_openai_compatible_tool_arguments.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -102,6 +103,7 @@ jobs:
           alembic/versions/0033_personal_connectors.py
           packages/agents/runtime.py
           packages/harness/plugins.py
+          packages/model_runtime/openai_compatible_client.py
           packages/model_runtime/portfolio.py
           packages/model_runtime/routing_policy.py
           packages/model_runtime/task_routing.py
@@ -232,6 +234,7 @@ jobs:
           tests/test_durable_runtime_state.py
           tests/test_plugin_first_runtime.py
           tests/test_multi_provider_model_portfolio.py
+          tests/test_openai_compatible_tool_arguments.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production
