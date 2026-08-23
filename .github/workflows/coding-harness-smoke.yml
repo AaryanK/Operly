@@ -15,6 +15,7 @@ on:
       - "packages/database/software_project_models.py"
       - "packages/agents/**"
       - "packages/coding_harness/**"
+      - "packages/custom_software/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
       - "packages/plugins/**"
@@ -23,16 +24,6 @@ on:
       - "packages/service_bindings/**"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
-      - "packages/custom_software/model_planning_client.py"
-      - "packages/custom_software/provider_planning.py"
-      - "packages/custom_software/live_projection.py"
-      - "packages/custom_software/plan_service.py"
-      - "packages/custom_software/planning_orchestrator.py"
-      - "packages/custom_software/planning_output_normalizer.py"
-      - "packages/custom_software/runtime_profiles.py"
-      - "packages/custom_software/runner_adapters.py"
-      - "packages/custom_software/scope_convergence.py"
-      - "packages/custom_software/source_bundles.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
@@ -51,6 +42,9 @@ on:
       - "tests/test_multi_provider_model_portfolio.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
+      - "tests/test_general_software_construction.py"
+      - "tests/test_isolated_runner.py"
+      - "tests/test_fullstack_runtime_contract.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
@@ -62,6 +56,7 @@ on:
       - "packages/database/software_project_models.py"
       - "packages/agents/**"
       - "packages/coding_harness/**"
+      - "packages/custom_software/**"
       - "packages/model_runtime/**"
       - "packages/capabilities/**"
       - "packages/plugins/**"
@@ -70,16 +65,6 @@ on:
       - "packages/service_bindings/**"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
-      - "packages/custom_software/model_planning_client.py"
-      - "packages/custom_software/provider_planning.py"
-      - "packages/custom_software/live_projection.py"
-      - "packages/custom_software/plan_service.py"
-      - "packages/custom_software/planning_orchestrator.py"
-      - "packages/custom_software/planning_output_normalizer.py"
-      - "packages/custom_software/runtime_profiles.py"
-      - "packages/custom_software/runner_adapters.py"
-      - "packages/custom_software/scope_convergence.py"
-      - "packages/custom_software/source_bundles.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
@@ -98,6 +83,9 @@ on:
       - "tests/test_multi_provider_model_portfolio.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
+      - "tests/test_general_software_construction.py"
+      - "tests/test_isolated_runner.py"
+      - "tests/test_fullstack_runtime_contract.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -135,3 +123,6 @@ jobs:
           tests/test_multi_provider_model_portfolio.py
           tests/test_target_architecture_contracts.py
           tests/test_software_project_persistence.py
+          tests/test_general_software_construction.py
+          tests/test_isolated_runner.py
+          tests/test_fullstack_runtime_contract.py
