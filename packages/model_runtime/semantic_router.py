@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from packages.model_runtime.portfolio import model_route
-from packages.model_runtime.providers import ModelClient, model_client_for_route
+from packages.model_runtime.providers import ModelClient
+from packages.model_runtime.registry import model_chat_client_for_role
 
 
 class SemanticRoutingError(ValueError):
@@ -104,7 +104,11 @@ class SemanticRouter:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
         ]
-        client = self.client or model_client_for_route(model_route("bounded_task"))
+        # Semantic routing is a bounded model task, but it must still enter the
+        # shared role-based runtime so provider-diverse failover, cooldowns,
+        # sticky success, and attempt telemetry apply here just as they do in
+        # Studio and the main agent harness.
+        client = self.client or model_chat_client_for_role("bounded_task")
         response = await client.chat(messages, [])
 
         first_error: Exception | None = None
