@@ -1,14 +1,14 @@
 """Studio interaction budgets expressed through provider-neutral model policy.
 
-Studio chooses latency/turn budgets because it owns the interactive UX. It never
-inspects or mutates OpenRouter/Ollama/future provider clients. Attempt limits,
-output budgets, and cross-provider failover are enforced below this module by
-``model_runtime``.
+Studio declares the inference capabilities it needs; it does not pick a semantic
+model category or provider. Attempt limits, output budgets, cross-provider
+failover, and owner-only tracing remain enforced by model_runtime/Studio policy.
 """
 from __future__ import annotations
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
-from packages.model_runtime import InferenceBudget, model_chat_client_for_role
+from packages.model_runtime import InferenceBudget
+from packages.model_runtime.requirements import ModelRequirements, model_chat_client_for_requirements
 from packages.studio import agent_runs, runtime_policy, source_agent
 from packages.studio.model_trace import TracingModelChatClient, install_agent_run_trace_context
 
@@ -30,19 +30,26 @@ def studio_budget(operation: str) -> tuple[int, int, int]:
 
 
 def studio_coding_model_client(role: str = "coding"):
-    """Build Studio's provider-neutral coding client with durable model tracing.
+    """Build Studio's traced client from concrete inference requirements.
 
-    ContextBoundCodingClient stays outermost so the trace wrapper observes the
-    compacted messages that are actually forwarded into ModelChatAdapter.
+    `role` is retained only as a compatibility fallback for deployments whose
+    model catalog has not yet been enriched with capability metadata.
     """
-    adapter = model_chat_client_for_role(
-        role,
+    requirements = ModelRequirements(
+        requires=frozenset({"text", "coding", "tools"}),
+        prefer_tags=frozenset({"coding", "reasoning", "reliable", "verified", "fast"}),
+        max_models=_STUDIO_MAX_MODELS,
+        reason="Studio persistent source editing with tool use",
+    )
+    adapter = model_chat_client_for_requirements(
+        requirements,
         budget=InferenceBudget(
             timeout_seconds=_STUDIO_PROVIDER_ATTEMPT_SECONDS,
             attempts_per_model=1,
             max_models=_STUDIO_MAX_MODELS,
             max_output_tokens=_STUDIO_MAX_OUTPUT_TOKENS,
         ),
+        fallback_role=role,
     )
     return ContextBoundCodingClient(TracingModelChatClient(adapter))
 
@@ -58,10 +65,7 @@ class StudioLatencyAwareCodingAgent(runtime_policy.StudioWebsiteCodingAgent):
             progress_callback=progress_callback,
         )
         self.max_seconds = max(self.max_seconds, _STUDIO_GENERATE_MAX_SECONDS)
-        self.model_slice_seconds = max(
-            self.model_slice_seconds,
-            _STUDIO_MODEL_SLICE_SECONDS,
-        )
+        self.model_slice_seconds = max(self.model_slice_seconds, _STUDIO_MODEL_SLICE_SECONDS)
 
 
 def apply_studio_model_latency_policy() -> None:

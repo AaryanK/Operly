@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from packages.model_runtime import InferenceBudget, InferenceRequest
+from packages.model_runtime.conversation_policy import is_trivial_conversation
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -59,6 +60,13 @@ def _made_progress(observation: dict[str, Any]) -> bool:
     return status in {"completed", "success", "verified", "waiting_approval", "awaiting_approval"}
 
 
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if str(message.get("role") or "") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
 class AgentRuntime:
     """Stable orchestration loop over Model + capability callbacks.
 
@@ -90,12 +98,16 @@ class AgentRuntime:
         tools: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # Progressive tool exposure starts at zero for unmistakable conversation.
+        # This is enforced at the final model boundary so a greeting cannot call
+        # capability.search even if the harness has already prepared schemas.
+        effective_tools = [] if is_trivial_conversation(_last_user_text(messages)) else tools
         infer = getattr(model, "infer", None)
         if callable(infer):
             result = await infer(
                 InferenceRequest(
                     messages=tuple(messages),
-                    tools=tuple(tools),
+                    tools=tuple(effective_tools),
                     budget=self.inference_budget,
                     metadata=dict(metadata or {}),
                 )
@@ -104,7 +116,7 @@ class AgentRuntime:
 
         chat = getattr(model, "chat", None)
         if callable(chat):
-            return dict(await chat(messages, tools))
+            return dict(await chat(messages, effective_tools))
         raise TypeError("AgentRuntime requires a Model.infer-compatible object")
 
     @staticmethod
@@ -141,12 +153,7 @@ class AgentRuntime:
 
         while steps_used < allowed_steps and steps_used < budget.max_steps:
             tools = list(await _resolve(schemas()) or [])
-            message = await self._infer(
-                model,
-                messages,
-                tools,
-                metadata=inference_metadata,
-            )
+            message = await self._infer(model, messages, tools, metadata=inference_metadata)
             messages.append(message)
             steps_used += 1
             calls = message.get("tool_calls") or []
@@ -177,9 +184,7 @@ class AgentRuntime:
                 if not name:
                     observation = {"ok": False, "error": "Model requested an unnamed capability"}
                 else:
-                    observation = dict(
-                        await _resolve(invoke(name, dict(arguments), call_id)) or {}
-                    )
+                    observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
                 tool_calls += 1
                 last_step_progress = last_step_progress or _made_progress(observation)
                 entry = AgentTraceEntry(
@@ -202,19 +207,13 @@ class AgentRuntime:
             if tool_calls >= budget.max_tool_calls:
                 break
 
-            # A productive run is allowed to continue, but only inside the hard
-            # ceiling. Repeated failing/no-op turns do not earn more budget.
             if steps_used >= allowed_steps and last_step_progress and allowed_steps < budget.max_steps:
                 new_allowed = min(budget.max_steps, allowed_steps + budget.extension_steps)
                 if new_allowed > allowed_steps:
                     allowed_steps = new_allowed
                     extensions += 1
 
-        stop_reason = (
-            "tool_call_budget_exhausted"
-            if tool_calls >= budget.max_tool_calls
-            else "execution_budget_exhausted"
-        )
+        stop_reason = "tool_call_budget_exhausted" if tool_calls >= budget.max_tool_calls else "execution_budget_exhausted"
         return {
             "message": (
                 "Stopped after exhausting the bounded execution budget. "

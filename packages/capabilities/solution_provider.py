@@ -5,15 +5,16 @@ from packages.capabilities.providers import BaseProvider
 from packages.custom_software.plan_service import create_plan
 from packages.database.custom_software_models import SoftwarePlanRecord
 from packages.database.product_models import SolutionRecord
+from packages.solutions.composer import create_solution_from_intent
 from packages.solutions.service import SolutionService, solution_json
 
 
 class UnifiedSolutionProvider(BaseProvider):
     """Canonical AI surface over Operly's solution lifecycle.
 
-    Studio, managed applications, and generated projects remain runtime
-    implementations. The model sees them through SolutionService rather than
-    selecting a runtime-specific inventory itself.
+    Models describe the desired outcome. Operly decomposes that objective into a
+    Solution capability manifest and keeps runtime selection behind the Solution
+    boundary rather than asking the model to choose Studio/app/generated-project.
     """
 
     name = "operly_solutions"
@@ -26,6 +27,24 @@ class UnifiedSolutionProvider(BaseProvider):
             {"type": "object"},
             risk_level="read_only",
             permissions=("solution:read",),
+            approval_policy=ApprovalPolicy.AUTO,
+        ),
+        CapabilityDefinition(
+            "solution.compose",
+            "solution_compose",
+            "Create a reviewable working Solution from an owner objective. Operly derives the required surfaces, state, auth, workflows, jobs, notifications, and other primitives before choosing a compatibility runtime.",
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "maxLength": 200},
+                    "objective": {"type": "string", "maxLength": 8000},
+                },
+                "required": ["name", "objective"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="medium",
+            permissions=("solution:generate",),
             approval_policy=ApprovalPolicy.AUTO,
         ),
         CapabilityDefinition(
@@ -69,6 +88,31 @@ class UnifiedSolutionProvider(BaseProvider):
                 True,
                 False,
                 {"solutions": [solution_json(row) for row in rows]},
+            )
+
+        if capability_name == "solution.compose":
+            if not context.actor_id:
+                return CapabilityResult(False, False, {"reason": "authenticated_actor_required"})
+            try:
+                row, decision = await create_solution_from_intent(
+                    context.db,
+                    tenant_id=context.tenant_id,
+                    user_id=context.actor_id,
+                    name=str(arguments.get("name") or "").strip(),
+                    objective=str(arguments.get("objective") or "").strip(),
+                    service=self.service,
+                )
+            except ValueError as error:
+                return CapabilityResult(False, False, {"reason": str(error)})
+            return CapabilityResult(
+                True,
+                True,
+                {
+                    "solution": solution_json(row),
+                    "classification": decision.as_dict(),
+                    "architecture_url": f"/api/solutions/{row.id}/architecture",
+                },
+                row.id,
             )
 
         if capability_name == "solution.create_digital_presence":
@@ -118,7 +162,7 @@ class UnifiedSolutionProvider(BaseProvider):
         if not result.external_reference:
             return CapabilityResult(False, result.changed, {"reason": "verification_target_missing"})
 
-        model = SolutionRecord if capability_name == "solution.create_digital_presence" else SoftwarePlanRecord
+        model = SoftwarePlanRecord if capability_name == "solution.generate" else SolutionRecord
         row = await context.db.scalar(
             select(model).where(
                 model.id == result.external_reference,

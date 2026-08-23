@@ -16,6 +16,7 @@ from packages.business_brain.ollama_client import OllamaError
 from packages.business_brain.security import AgentSecurityError
 from packages.database.agent_models import AgentConversation, AgentMessage, AttachmentAudit
 from packages.database.db import session_scope
+from packages.model_runtime import ModelInferenceError
 from packages.model_runtime.semantic_router import SemanticRoutingError
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -35,6 +36,18 @@ async def _run_agent(auth: AuthContext, request: AgentInput):
         raise HTTPException(status_code=429, detail=str(error)) from error
     except SemanticRoutingError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
+    except ModelInferenceError as error:
+        # Inference/provider failures are upstream dependency failures, not an
+        # unhandled application exception. Keep provider/model internals out of the
+        # public response while preserving the normalized classification for clients.
+        raise HTTPException(
+            status_code=503 if error.retryable else 502,
+            detail={
+                "error": "model_inference_failed",
+                "classification": error.classification,
+                "retryable": bool(error.retryable),
+            },
+        ) from error
     except OllamaError as error:
         raise HTTPException(status_code=503, detail=error.public_message) from error
 
@@ -175,7 +188,6 @@ async def conversations(
     db: AsyncSession = Depends(get_db),
 ):
     principal_id = f"web-user:{auth.user.id}"
-
     rows = (
         await db.scalars(
             select(AgentConversation)
@@ -188,13 +200,8 @@ async def conversations(
             .limit(30)
         )
     ).all()
-
     return [
-        {
-            "id": row.id,
-            "title": row.title,
-            "updated_at": row.updated_at.isoformat(),
-        }
+        {"id": row.id, "title": row.title, "updated_at": row.updated_at.isoformat()}
         for row in rows
     ]
 
@@ -206,7 +213,6 @@ async def conversation_messages(
     db: AsyncSession = Depends(get_db),
 ):
     principal_id = f"web-user:{auth.user.id}"
-
     conversation = await db.scalar(
         select(AgentConversation).where(
             AgentConversation.id == conversation_id,
@@ -217,7 +223,6 @@ async def conversation_messages(
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
     rows = (
         await db.scalars(
             select(AgentMessage)
@@ -230,7 +235,6 @@ async def conversation_messages(
             .limit(200)
         )
     ).all()
-
     return [
         {
             "id": row.id,
