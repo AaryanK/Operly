@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from packages.database.model_trace import ensure_model_trace_sink
 from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.conversation_policy import is_trivial_conversation
 from packages.model_runtime.trace_context import runtime_trace_scope
@@ -145,6 +146,7 @@ class AgentRuntime:
         on_observation: ObservationHook | None = None,
         inference_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        ensure_model_trace_sink()
         trace: list[AgentTraceEntry] = []
         budget = self.execution_budget
         allowed_steps = budget.base_steps
