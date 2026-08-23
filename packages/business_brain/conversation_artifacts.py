@@ -1,9 +1,10 @@
 """Durable attachment/derived context for follow-up turns.
 
 Artifacts are scoped to the actual channel conversation. Private/direct artifacts
-also carry the authenticated human Principal and must match that Principal on read.
-The model receives only a bounded application-generated summary, never raw file
-bytes or executable attachment contents.
+carry either the authenticated human Principal or the channel adapter's stable
+external actor id until identity resolution is available. Reads must match that
+same private actor. The model receives only a bounded application-generated
+summary, never raw file bytes or executable attachment contents.
 """
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ async def persist_processed_attachment(
     tenant_id: str,
     user_id: str | None,
     actor_name: str | None,
+    actor_external_id: str | None = None,
     channel: str,
     conversation_id: str,
     external_message_id: str,
@@ -58,7 +60,7 @@ async def persist_processed_attachment(
     output_files: list[dict[str, Any]] | None = None,
     warnings: list[str] | None = None,
 ) -> ConversationArtifact:
-    principal = await principal_for_user(db, user_id, actor_name) if is_direct else None
+    principal = await principal_for_user(db, user_id, actor_name) if is_direct and user_id else None
     content = {
         "objective": str(objective or "").strip()[:8000],
         "attachments": attachments[:20],
@@ -67,6 +69,7 @@ async def persist_processed_attachment(
         "outputs": (output_files or [])[:20],
         "warnings": [str(item)[:500] for item in (warnings or [])[:20]],
         "scope": "private" if is_direct else "shared_workspace_channel",
+        "actorExternalId": str(actor_external_id or "")[:255] if is_direct else None,
     }
     digest = _digest(content)
     existing = await db.scalar(
@@ -79,6 +82,8 @@ async def persist_processed_attachment(
         )
     )
     if existing is not None:
+        if is_direct and principal is not None and existing.principal_id is None:
+            existing.principal_id = principal.id
         return existing
     row = ConversationArtifact(
         principal_id=principal.id if principal else None,
@@ -103,6 +108,7 @@ async def recent_artifacts(
     *,
     tenant_id: str,
     user_id: str | None,
+    actor_external_id: str | None = None,
     channel: str,
     conversation_id: str,
     is_direct: bool,
@@ -115,20 +121,38 @@ async def recent_artifacts(
         ConversationArtifact.tenant_id == tenant_id,
         or_(ConversationArtifact.expires_at.is_(None), ConversationArtifact.expires_at > datetime.utcnow()),
     )
-    if is_direct:
-        if principal is None:
-            return []
-        query = query.where(ConversationArtifact.principal_id == principal.id)
-    else:
-        # Shared-channel retrieval never includes a person's private artifact.
+    if not is_direct:
         query = query.where(ConversationArtifact.principal_id.is_(None))
-    return list(
+    candidates = list(
         (
             await db.scalars(
-                query.order_by(ConversationArtifact.created_at.desc()).limit(max(1, min(limit, 12)))
+                query.order_by(ConversationArtifact.created_at.desc()).limit(max(1, min(limit * 2, 24)))
             )
         ).all()
     )
+    if not is_direct:
+        return candidates[:limit]
+
+    safe: list[ConversationArtifact] = []
+    for row in candidates:
+        if principal is not None and row.principal_id == principal.id:
+            safe.append(row)
+            continue
+        if row.principal_id is not None:
+            continue
+        try:
+            payload = json.loads(row.content_json or "{}")
+        except Exception:
+            continue
+        if actor_external_id and str(payload.get("actorExternalId") or "") == str(actor_external_id):
+            # Upgrade pre-resolution artifacts to the human Principal once the
+            # linked account is known, preserving the audit trail without copying.
+            if principal is not None:
+                row.principal_id = principal.id
+            safe.append(row)
+        if len(safe) >= limit:
+            break
+    return safe
 
 
 def artifact_context(rows: list[ConversationArtifact], *, max_chars: int = 20_000) -> tuple[str, list[str]]:
