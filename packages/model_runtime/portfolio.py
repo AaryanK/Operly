@@ -29,6 +29,7 @@ _DEFAULT_CODING_FALLBACKS = (
 _DEFAULTS = {
     role: ModelRoute(_DEFAULT_PROVIDER, _DEFAULT_MODEL)
     for role in (
+        "router",
         "requirements_analyst",
         "planner",
         "global_validator",
@@ -37,6 +38,8 @@ _DEFAULTS = {
         "capability_placement",
         "business_agent",
         "bounded_task",
+        "attachment_text",
+        "attachment_vision",
     )
 }
 # These are compatibility defaults for the default OpenRouter portfolio only.
