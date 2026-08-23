@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0031_studio_model_trace"
+ALEMBIC_HEAD = "0032_scope_boundaries"
 
 
 def import_all_models() -> None:
@@ -21,6 +21,7 @@ def import_all_models() -> None:
     from packages.database import workspace_security_models  # noqa: F401
     from packages.database import principal_models  # noqa: F401
     from packages.database import software_project_models  # noqa: F401
+    from packages.database import scope_models  # noqa: F401
 
 
 def synchronous_database_url(url: str) -> str:
