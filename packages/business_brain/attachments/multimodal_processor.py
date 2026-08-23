@@ -32,7 +32,10 @@ class MultimodalProcessor:
                         children=await asyncio.to_thread(process_archive,item,limits);parsed.extend(children);accepted.append(item.filename)
                     else:parsed.append(await asyncio.to_thread(parse_attachment,item,limits.max_pdf_pages));accepted.append(item.filename)
                 except (DetectionError,ValueError,RuntimeError) as exc:skipped.append(f"{item.filename} — {str(exc)[:160]}")
-            if not parsed:return GeneratedOutput("No supported attachments could be processed.",accepted=accepted,skipped=skipped,warnings=skipped,operation_summary=operation(bundle.user_request))
+            if not parsed:
+                result=GeneratedOutput("No supported attachments could be processed.",accepted=accepted,skipped=skipped,warnings=skipped,operation_summary=operation(bundle.user_request))
+                await self._persist_continuity(bundle,result)
+                return result
             analyses={}
             for attachment in parsed:
                 if attachment.category=="skipped":continue
@@ -43,7 +46,52 @@ class MultimodalProcessor:
             fmt=bundle.requested_output_format if bundle.requested_output_format!="message" else requested_format(bundle.user_request)
             files=await asyncio.to_thread(generate_output,fmt,parsed,analyses,summary,temp_dir)
             warnings=[f"{p.filename}: {w}" for p in parsed for w in p.warnings]+skipped
-            return GeneratedOutput(summary[:limits.max_output_chars],files,warnings,op,accepted,skipped)
+            result=GeneratedOutput(summary[:limits.max_output_chars],files,warnings,op,accepted,skipped)
+            await self._persist_continuity(bundle,result)
+            return result
+    async def _persist_continuity(self,bundle:AttachmentBundle,result:GeneratedOutput):
+        """Persist only when the bundle carries a Discord conversation identity."""
+        if not bundle.tenant_id or bundle.channel_id is None or bundle.message_id is None or not bundle.actor_id:
+            return
+        try:
+            from packages.business_brain.conversation_artifacts import persist_processed_attachment
+            from packages.database.db import session_scope
+            attachments=[]
+            for item in bundle.attachments:
+                attachments.append({
+                    "index":item.index,
+                    "name":item.filename[:255],
+                    "declaredType":item.declared_content_type,
+                    "detectedType":item.detected_content_type or None,
+                    "size":item.size_bytes,
+                    "sha256":hashlib.sha256(item.content_bytes).hexdigest() if item.content_bytes else None,
+                    "status":"rejected" if item.rejection_reason else "processed",
+                })
+            outputs=[{"name":item.filename,"contentType":item.content_type,"size":item.size_bytes} for item in result.files]
+            async with session_scope() as db:
+                await persist_processed_attachment(
+                    db,
+                    tenant_id=bundle.tenant_id,
+                    user_id=None,
+                    actor_name=None,
+                    actor_external_id=str(bundle.actor_id),
+                    channel="discord",
+                    conversation_id=str(bundle.channel_id),
+                    external_message_id=str(bundle.message_id),
+                    is_direct=bundle.guild_id is None,
+                    objective=bundle.user_request,
+                    attachments=attachments,
+                    analysis=result.message,
+                    operation_summary=result.operation_summary,
+                    output_files=outputs,
+                    warnings=result.warnings,
+                )
+                await db.commit()
+        except Exception:
+            # Continuity must never turn successful attachment analysis into a
+            # failed user request. Auditing/logging around the adapter can surface
+            # persistence faults independently.
+            return
     async def _analyze_one(self,request,p:ParsedAttachment):
         content=p.extracted_text[:30_000]
         table_text=json.dumps(p.tables[:5],ensure_ascii=False)[:15_000] if p.tables else ""
