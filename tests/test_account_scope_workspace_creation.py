@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from apps.api.dependencies import AccountAuthContext
 from apps.api.schemas import WorkspaceCreateInput
 from apps.api.workspace_router import create_workspace
+from packages.assets import service as asset_service
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant, TenantMember
@@ -202,6 +203,35 @@ async def test_personal_ai_delegated_execution_cannot_recurse_into_account_capab
             assert await db.scalar(select(func.count(Tenant.id))) == 1
     finally:
         await engine.dispose()
+
+
+def test_workspace_icons_are_first_party_validated_assets(tmp_path, monkeypatch):
+    monkeypatch.setattr(asset_service, "ASSET_ROOT", tmp_path.resolve())
+    data = b"\x89PNG\r\n\x1a\n" + b"operly-icon"
+
+    stored = asset_service.store_workspace_icon(
+        tenant_id="workspace-123",
+        data=data,
+        declared_content_type="image/png",
+    )
+
+    assert stored.content_type == "image/png"
+    assert stored.path.read_bytes() == data
+    assert asset_service.workspace_icon_path(tenant_id="workspace-123", key=stored.key) == stored.path
+    assert tmp_path.resolve() in stored.path.parents
+
+    asset_service.remove_workspace_icon(tenant_id="workspace-123", key=stored.key)
+    assert not stored.path.exists()
+
+
+def test_workspace_icon_rejects_mismatched_content_type(tmp_path, monkeypatch):
+    monkeypatch.setattr(asset_service, "ASSET_ROOT", tmp_path.resolve())
+    with pytest.raises(TypeError, match="JPEG, PNG, and WebP"):
+        asset_service.store_workspace_icon(
+            tenant_id="workspace-123",
+            data=b"\x89PNG\r\n\x1a\n" + b"not-a-jpeg",
+            declared_content_type="image/jpeg",
+        )
 
 
 def test_personal_connector_router_is_registered_in_application_shell():
