@@ -1,8 +1,8 @@
 """Small durable state store for runner jobs.
 
 The runner is intentionally independent from Operly's business database. A restart
-must not turn a running build into an invented success, so in-flight jobs are
-reconciled as interrupted and their Docker resources are cleaned before reuse.
+must not turn a running build or dead preview into an invented success, so durable
+state is reconciled against the isolation backend before being trusted again.
 """
 from __future__ import annotations
 
@@ -78,6 +78,9 @@ class RunnerStore:
         return self.root / "jobs" / f"{job_id}.json"
 
     def create(self, job_id: str, idempotency_key: str, request_payload: dict) -> JobRecord:
+        existing = self.by_idempotency(idempotency_key)
+        if existing is not None:
+            return existing
         path = self.request_file(job_id)
         temp = path.with_suffix(".tmp")
         temp.write_text(json.dumps(request_payload, sort_keys=True, separators=(",", ":")))
@@ -190,6 +193,13 @@ class RunnerStore:
         with self._lock, self._connect() as db:
             rows = db.execute(
                 "SELECT * FROM jobs WHERE state NOT IN ('preview_ready','failed','cancelled','cleaned')"
+            ).fetchall()
+        return [self._record(row) for row in rows]
+
+    def preview_ready(self) -> list[JobRecord]:
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM jobs WHERE state='preview_ready'"
             ).fetchall()
         return [self._record(row) for row in rows]
 
