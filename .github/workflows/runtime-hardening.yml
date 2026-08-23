@@ -18,6 +18,7 @@ on:
       - "tests/test_model_requirements.py"
       - "tests/test_model_request_failover.py"
       - "tests/test_runtime_trace_contract.py"
+      - "tests/test_runtime_trace_access.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -64,6 +65,7 @@ jobs:
           tests/test_model_requirements.py
           tests/test_model_request_failover.py
           tests/test_runtime_trace_contract.py
+          tests/test_runtime_trace_access.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db
