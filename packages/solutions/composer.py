@@ -13,6 +13,9 @@ from packages.application_builder.schema import BuilderContext, ProposalRequest
 from packages.application_builder.service import ApplicationBuilderService
 from packages.database.application_builder_models import ApplicationVersion
 from packages.database.product_models import SolutionJob
+from packages.solutions.model_trace import begin as begin_model_trace
+from packages.solutions.model_trace import end as end_model_trace
+from packages.solutions.model_trace import snapshot as model_trace_snapshot
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, SolutionType
 from packages.studio.service import StudioService
 
@@ -163,6 +166,7 @@ async def _run_managed_generation(
     row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True)
     await db.flush()
 
+    trace_token=begin_model_trace(job.id)
     try:
         _log(logs,stage,"running","Generating an application change set from the owner objective")
         job.log_json=json.dumps(logs,ensure_ascii=False)
@@ -182,6 +186,11 @@ async def _run_managed_generation(
                 ),
             ),
         )
+        trace=model_trace_snapshot()
+        if trace["aiInvoked"]:
+            _log(logs,"model_boundary","succeeded",f"Captured {len(trace['modelAttempts'])} provider/model attempt events")
+        else:
+            _log(logs,"model_boundary","succeeded","AI was not invoked; a bounded deterministic application capability satisfied the objective")
         _log(logs,stage,"succeeded",f"Change set {change.id} validated")
         stage="apply"
         _log(logs,stage,"running","Applying the generated validated manifest")
@@ -212,12 +221,23 @@ async def _run_managed_generation(
         job.status="succeeded"
         job.ended_at=datetime.utcnow()
         job.log_json=json.dumps(logs,ensure_ascii=False)
-        job.evidence_json=json.dumps({"objective":objective,"bootstrapVersionId":base_version.id,"changeSetId":change.id,"versionId":version.id},ensure_ascii=False)
+        job.evidence_json=json.dumps({
+            "objective":objective,
+            "bootstrapVersionId":base_version.id,
+            "changeSetId":change.id,
+            "versionId":version.id,
+            "modelTrace":trace,
+        },ensure_ascii=False)
         job.failure_classification=None
         await db.flush()
         return row
     except Exception as error:
+        trace=model_trace_snapshot()
         safe_error=" ".join(str(error).split())[:1000] or type(error).__name__
+        if trace["aiInvoked"]:
+            _log(logs,"model_boundary","failed" if stage=="proposal" else "succeeded",f"Captured {len(trace['modelAttempts'])} provider/model attempt events")
+        else:
+            _log(logs,"model_boundary","succeeded","AI was not invoked before the failed prerequisite/stage")
         _log(logs,stage,"failed",safe_error)
         context["initialGeneration"]={
             "status":"retryable",
@@ -236,9 +256,16 @@ async def _run_managed_generation(
         job.ended_at=datetime.utcnow()
         job.log_json=json.dumps(logs,ensure_ascii=False)
         job.failure_classification=type(error).__name__[:80]
-        job.evidence_json=json.dumps({"objective":objective,"bootstrapVersionId":base_version.id,"failedStage":stage},ensure_ascii=False)
+        job.evidence_json=json.dumps({
+            "objective":objective,
+            "bootstrapVersionId":base_version.id,
+            "failedStage":stage,
+            "modelTrace":trace,
+        },ensure_ascii=False)
         await db.flush()
         return row
+    finally:
+        end_model_trace(trace_token)
 
 
 async def retry_solution_initial_generation(
