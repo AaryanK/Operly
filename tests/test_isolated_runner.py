@@ -20,7 +20,6 @@ from packages.custom_software.runner_service import (
     stop_preview,
 )
 from packages.custom_software.source_bundles import BundlePolicyError, SourceFile, build_bundle
-from packages.database import custom_software_models, models
 from packages.database.custom_software_models import (
     GeneratedSourceBundle,
     RunnerBuildRecord,
@@ -141,7 +140,14 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             bundle_digest=bundle.digest,
             manifest_json=json.dumps(bundle.manifest),
             files_json=json.dumps(
-                [{"path": item.path, "content": item.content.decode(), "generatedBy": item.generated_by} for item in bundle.files]
+                [
+                    {
+                        "path": item.path,
+                        "content": item.content.decode(),
+                        "generatedBy": item.generated_by,
+                    }
+                    for item in bundle.files
+                ]
             ),
             provenance_json=json.dumps({"generator": "coding-harness:test"}),
             created_by=self.user.id,
@@ -224,8 +230,15 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as db:
             build, submission, bundle = await self.seed_build(db, key="preview-cleanup")
             runner = FakeRunnerAdapter()
-            build = await apply_runner_response(db, build, await runner.submit(submission, bundle), submission)
-            preview = await db.scalar(select(RunnerPreviewRecord).where(RunnerPreviewRecord.build_id == build.id))
+            build = await apply_runner_response(
+                db,
+                build,
+                await runner.submit(submission, bundle),
+                submission,
+            )
+            preview = await db.scalar(
+                select(RunnerPreviewRecord).where(RunnerPreviewRecord.build_id == build.id)
+            )
             same, _ = await active_preview(db, self.tenant.id, preview.id)
             self.assertEqual(same.id, preview.id)
             with self.assertRaises(LookupError):
@@ -246,7 +259,26 @@ class LegacyRuntimeRetirementTests(unittest.TestCase):
         self.assertNotIn("def request_repair", service)
         self.assertNotIn("points += 2", service)
         self.assertFalse((root / "packages/custom_software/generated_sources.py").exists())
-        self.assertFalse((root / "packages/harness").exists())
+
+    def test_old_agent_harness_is_removed_and_plugin_bridge_has_no_logic(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        harness = root / "packages/harness"
+        for legacy in (
+            "agent.py",
+            "context.py",
+            "permissions.py",
+            "registry.py",
+            "services.py",
+            "tools",
+        ):
+            self.assertFalse((harness / legacy).exists(), legacy)
+        shim = (harness / "plugins.py").read_text()
+        self.assertIn("packages.plugins.extensions", shim)
+        self.assertNotIn("class RuntimePluginRegistry", shim)
+        task_routing = (root / "packages/model_runtime/task_routing.py").read_text()
+        self.assertNotIn("packages.harness", task_routing)
 
 
 @unittest.skipUnless(
