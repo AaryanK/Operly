@@ -114,11 +114,13 @@ class SolutionService:
         for app in apps:
             existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.MANAGED_APP,SolutionRecord.runtime_reference==app.id))
             active=await db.get(ApplicationVersion,app.active_version_id) if app.active_version_id else None
-            # ApplicationBuilderService.create() persists a bootstrap v1 so the
-            # editor has a schema to target. That bootstrap is runtime state, not
-            # evidence that owner-requested generation succeeded. Only a later
-            # applied version is preview-ready.
-            generated_ready=bool(active and active.version_number>1)
+            # ApplicationBuilderService.create() persists a specifically labeled
+            # blank bootstrap v1 so the editor has a schema to target. That
+            # bootstrap is runtime state, not evidence that owner-requested
+            # generation succeeded. Preserve genuinely generated/legacy v1
+            # records that are not the canonical blank bootstrap.
+            bootstrap_only=bool(active and active.version_number==1 and active.summary=="Blank application")
+            generated_ready=bool(active and not bootstrap_only)
             initial=(_context_payload(existing).get("initialGeneration") if existing else None) or {}
             generation_failed=isinstance(initial,dict) and initial.get("status") in {"retryable","failed"}
             lifecycle=LifecycleStatus.PREVIEW_READY if generated_ready else LifecycleStatus.FAILED if generation_failed else LifecycleStatus.DRAFT
