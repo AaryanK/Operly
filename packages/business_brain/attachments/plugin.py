@@ -1,4 +1,4 @@
-"""Attachment ingestion plugin for the Operly harness.
+"""Attachment ingestion plugin for the Operly application extension runtime.
 
 This plugin is a perception/preprocessing boundary only. It may parse and analyze
 untrusted uploaded content into a bounded application-generated artifact, but it
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from packages.harness.plugins import RuntimePluginContext
+from packages.plugins.extensions import ApplicationPluginContext
 
 from .models import AttachmentBundle
 from .multimodal_processor import MultimodalProcessor
@@ -27,14 +27,14 @@ class AttachmentIngestionPlugin:
     def limits(self):
         return self.processor.limits
 
-    def supports(self, payload: dict[str, Any], context: RuntimePluginContext) -> bool:
+    def supports(self, payload: dict[str, Any], context: ApplicationPluginContext) -> bool:
         del context
         return isinstance(payload.get("bundle"), AttachmentBundle)
 
     async def invoke(
         self,
         payload: dict[str, Any],
-        context: RuntimePluginContext,
+        context: ApplicationPluginContext,
     ):
         del context
         bundle = payload.get("bundle")
