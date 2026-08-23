@@ -28,6 +28,24 @@ def test_workspace_assistant_does_not_force_a_solution_picker():
     assert ".ai-application-picker{display:none!important}" in css
 
 
+def test_personal_dm_owns_its_composer_and_infers_scope():
+    behavior = read("authenticated-ui.js")
+    assert "prunePersonalScopePicker" in behavior
+    assert 'compose.querySelector(\'label[for="personal-workspace-select"]\')?.remove()' in behavior
+    assert "compose.querySelector('#personal-workspace-select')?.remove()" in behavior
+    assert "grid-template-rows" in behavior
+    assert "position', 'static'" in behavior
+    assert "calc(100dvh - 64px)" in behavior
+
+
+def test_personal_dm_renders_assistant_markdown():
+    behavior = read("authenticated-ui.js")
+    assert "enhancePersonalMessages" in behavior
+    assert "window.operlyChatEnhancements?.renderMarkdown" in behavior
+    assert "personal-message-markdown ai-markdown" in behavior
+    assert "personalMarkdownRendered" in behavior
+
+
 def test_ui_system_has_tablet_and_phone_navigation_contracts():
     css = read("authenticated-ui.css")
     assert "@media(max-width:1024px)" in css
