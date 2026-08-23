@@ -1,5 +1,12 @@
-"""Plugin manifests and lifecycle runtime."""
+"""Plugin manifests, lifecycle runtime, and trusted application extensions."""
 
+from .extensions import (
+    ApplicationPlugin,
+    ApplicationPluginContext,
+    ApplicationPluginRegistry,
+    ApplicationPluginUnavailable,
+    default_application_plugins,
+)
 from .manifest import (
     EventSpec,
     PermissionSpec,
@@ -17,6 +24,11 @@ from .runtime import (
 )
 
 __all__ = [
+    "ApplicationPlugin",
+    "ApplicationPluginContext",
+    "ApplicationPluginRegistry",
+    "ApplicationPluginUnavailable",
+    "default_application_plugins",
     "EventSpec",
     "PermissionSpec",
     "PluginLifecycleSpec",
