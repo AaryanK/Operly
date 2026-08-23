@@ -126,6 +126,42 @@ async def _check_runner_profile(
         )
 
 
+async def _record_profile_mismatch(db, row, submission: BuildSubmission, error: RunnerProfileUnsupported):
+    await _event(
+        db,
+        row,
+        "failed",
+        event_type="runner_profile_unsupported",
+        message="runner_profile_unsupported",
+        details={
+            "message": str(error),
+            "runtime": submission.stackId,
+            "runtimeVersion": submission.stackVersion,
+            "supportedProfiles": ",".join(error.supported),
+            "advertisedVersion": error.advertised_version,
+        },
+    )
+    # `failed` is the generic durable terminal state; preserve the more precise
+    # infrastructure classification for UI, repair policy and trace consumers.
+    row.failure_classification = "runner_profile_unsupported"
+    row.result_json = json.dumps(
+        {
+            "code": "runner_profile_unsupported",
+            "runtime": submission.stackId,
+            "runtimeVersion": submission.stackVersion,
+            "supportedProfiles": error.supported,
+            "advertisedVersion": error.advertised_version,
+            "failureEvidence": {
+                "classification": "runner_profile_unsupported",
+                "message": str(error),
+            },
+        }
+    )
+    row.completed_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+
+
 async def submit_source_build(
     db,
     tenant_id: str,
@@ -153,8 +189,10 @@ async def submit_source_build(
     bundle = source_bundle_from_record(source)
     submission = _submission_for_source(source, bundle, idempotency_key)
     adapter = adapter or ExternalRunnerAdapter()
-    await _check_runner_profile(adapter, submission.stackId, submission.stackVersion)
 
+    # The build record exists before runner capability negotiation. A missing or
+    # stale runner profile is infrastructure failure evidence, not an exception
+    # that should disappear from Studio/Activity traces.
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
@@ -187,6 +225,12 @@ async def submit_source_build(
     await db.commit()
 
     try:
+        await _check_runner_profile(adapter, submission.stackId, submission.stackVersion)
+    except RunnerProfileUnsupported as error:
+        await _record_profile_mismatch(db, row, submission, error)
+        raise
+
+    try:
         response = await adapter.submit(submission, bundle)
     except Exception as error:
         await _event(
@@ -201,6 +245,7 @@ async def submit_source_build(
                 "runtimeVersion": submission.stackVersion,
             },
         )
+        row.failure_classification = "runner_unavailable"
         row.result_json = json.dumps(
             {
                 "code": "runner_unavailable",
