@@ -16,11 +16,13 @@ on:
       - "packages/connectors/**"
       - "packages/context/**"
       - "packages/coding_harness/**"
+      - "packages/custom_software/**"
       - "packages/database/**"
-      - "packages/harness/**"
       - "packages/mcp/**"
       - "packages/model_runtime/**"
       - "packages/plugins/**"
+      - "packages/runtime_plugins/**"
+      - "packages/service_bindings/**"
       - "packages/security/**"
       - "packages/solutions/**"
       - "packages/studio/**"
@@ -102,7 +104,12 @@ jobs:
           alembic/versions/0032_scope_boundaries.py
           alembic/versions/0033_personal_connectors.py
           packages/agents/runtime.py
-          packages/harness/plugins.py
+          packages/capabilities/registry.py
+          packages/capabilities/firewall.py
+          packages/coding_harness/runtime_resolution.py
+          packages/custom_software/planner.py
+          packages/custom_software/runner_service.py
+          packages/runtime_plugins/fullstack_contract.py
           packages/model_runtime/openai_compatible_client.py
           packages/model_runtime/portfolio.py
           packages/model_runtime/routing_policy.py
