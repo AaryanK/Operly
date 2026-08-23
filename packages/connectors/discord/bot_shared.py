@@ -9,7 +9,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from sqlalchemy import func, select
 
-from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
+from packages.business_brain.attachments import (
+    AttachmentBundle,
+    AttachmentIngestionPlugin,
+    AttachmentInput,
+    MultimodalProcessor,
+)
 from packages.business_brain.attachments.formatter import processing_manifest, requested_format, split_discord_text
 from packages.business_brain.attachments.multimodal_processor import attachment_hashes
 from packages.business_brain.attachments.privacy import redacted_name
@@ -21,6 +26,8 @@ from packages.database.agent_models import AttachmentAudit
 from packages.database.channel_models import ChannelInstallation
 from packages.database.db import init_db, session_scope
 from packages.database.models import Message, ScheduledJob, TenantMember
+from packages.harness.plugins import RuntimePluginContext, RuntimePluginRegistry
+from packages.model_runtime import ModelInferenceError
 
 load_dotenv()
 
@@ -34,6 +41,8 @@ intents.guilds = True
 
 bot = discord.Client(intents=intents)
 scheduler = AsyncIOScheduler()
+# Kept as an injectable compatibility seam for tests/operators. Each ingestion
+# invocation wraps the current processor in the runtime plugin registry.
 attachment_processor = MultimodalProcessor()
 
 
@@ -115,6 +124,8 @@ def envelope_for(message: discord.Message, prompt: str) -> ChannelEnvelope:
             "discord_channel_id": message.channel.id,
             "discord_user_id": message.author.id,
             "external_message_id": str(message.id),
+            "has_attachments": bool(message.attachments),
+            "attachment_count": len(message.attachments),
         },
     )
 
@@ -316,9 +327,32 @@ async def audit_attachments(bundle, result=None, error_category=None) -> None:
         )
 
 
+async def _run_attachment_plugin(bundle, temp_dir, *, channel: str, is_direct: bool):
+    registry = RuntimePluginRegistry()
+    registry.register(AttachmentIngestionPlugin(attachment_processor))
+    return await registry.invoke(
+        "attachment_ingestion",
+        {"bundle": bundle, "temp_dir": temp_dir},
+        RuntimePluginContext(
+            channel=channel,
+            surface="private/direct" if is_direct else "shared/workspace",
+            metadata={
+                "attachment_count": len(bundle.attachments),
+                "perception_only": True,
+            },
+        ),
+    )
+
+
 async def process_discord_attachments(message, tenant_id, prompt, *, shared_message_store: bool):
+    """Ingest attachments, persist derived context, then let caller run the agent.
+
+    This function intentionally does not present the attachment analyst's prose as
+    the final assistant answer. The derived artifact is consumed by ChannelService
+    on the same user turn, where the normal capability/approval harness is present.
+    """
     if await attachment_already_processed(message.id):
-        return
+        return True
     progress = await message.reply(
         f"Processing {len(message.attachments)} attachment(s)…",
         mention_author=False,
@@ -370,18 +404,20 @@ async def process_discord_attachments(message, tenant_id, prompt, *, shared_mess
             message_id=message.id,
         )
         with tempfile.TemporaryDirectory(prefix="operly-discord-") as temp_dir:
-            result = await attachment_processor.process(bundle, temp_dir)
+            result = await _run_attachment_plugin(
+                bundle,
+                temp_dir,
+                channel="discord",
+                is_direct=message.guild is None,
+            )
             manifest = processing_manifest(result.accepted, result.skipped)
-            chunks = split_discord_text(manifest + "\n\n" + result.message)
             await progress.edit(
-                content=chunks[0],
+                content=(
+                    manifest
+                    + "\n\nAttachment ingestion complete. Passing the derived context into Operly's normal capability harness…"
+                )[:1900],
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-            for chunk in chunks[1:]:
-                await message.channel.send(
-                    chunk,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
             if result.warnings:
                 warning_text = "Warnings:\n" + "\n".join(
                     f"• {item}" for item in result.warnings
@@ -412,9 +448,10 @@ async def process_discord_attachments(message, tenant_id, prompt, *, shared_mess
             await store_message(
                 progress,
                 tenant_id,
-                "[attachment processing completed]",
+                "[attachment ingestion completed; continued to agent harness]",
                 is_bot=True,
             )
+        return True
     except Exception as error:
         if inputs:
             bundle = AttachmentBundle(
@@ -435,6 +472,7 @@ async def process_discord_attachments(message, tenant_id, prompt, *, shared_mess
             allowed_mentions=discord.AllowedMentions.none(),
         )
         print(f"OPERLY attachment gateway error category: {type(error).__name__}")
+        return False
 
 
 async def run_scheduled_job(job_id: str) -> None:
@@ -519,6 +557,19 @@ async def on_ready():
     print(f"OPERLY channel adapter connected as {bot.user}")
 
 
+def _log_channel_error(error: Exception) -> None:
+    if isinstance(error, ModelInferenceError):
+        print(
+            "OPERLY channel-agent model error "
+            f"provider={error.provider or 'unknown'} "
+            f"model={error.model_id or 'unknown'} "
+            f"classification={error.classification or 'unknown'} "
+            f"retryable={bool(error.retryable)}"
+        )
+        return
+    print(f"OPERLY channel-agent error category: {type(error).__name__}")
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -557,13 +608,17 @@ async def on_message(message: discord.Message):
                 await send_chunks(message, "Link your Discord identity to an authorized member of this Operly workspace before processing business files.")
                 return
             async with message.channel.typing():
-                await process_discord_attachments(
+                ingested = await process_discord_attachments(
                     message,
                     resolved.tenant_id,
                     prompt,
                     shared_message_store=message.guild is not None,
                 )
-            return
+            if not ingested:
+                return
+            # Do not return here. The ingestion plugin persisted bounded derived
+            # context; the exact same user turn now enters ChannelService and the
+            # normal capability/approval harness.
 
         async with message.channel.typing():
             response = await ChannelService.handle(envelope)
@@ -580,7 +635,7 @@ async def on_message(message: discord.Message):
             await schedule_new_pending_jobs()
 
     except Exception as error:
-        print(f"OPERLY channel-agent error category: {type(error).__name__}")
+        _log_channel_error(error)
         await message.reply(
             "The AI request failed safely. Check the server logs.",
             mention_author=False,
