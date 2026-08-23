@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -14,12 +15,14 @@ from packages.assets.service import (
     store_workspace_icon,
     workspace_icon_path,
 )
+from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
 from packages.business_brain.personal_agent import get_personal_agent_service
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.security.permissions import resolve_workspace_permissions
 
 
 router = APIRouter(prefix="/api/personal-agent", tags=["personal-agent"])
+attachment_processor = MultimodalProcessor()
 
 
 class PersonalChatInput(BaseModel):
@@ -312,6 +315,81 @@ async def chat(
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/chat-with-attachments")
+async def chat_with_attachments(
+    message: str = Form(default="", max_length=12_000),
+    conversation_id: str | None = Form(default=None, max_length=255),
+    files: list[UploadFile] = File(default=[]),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+):
+    limits = attachment_processor.limits
+    if not files:
+        raise HTTPException(422, "Attach at least one supported file")
+    if len(files) > limits.max_attachments:
+        raise HTTPException(413, f"Maximum {limits.max_attachments} attachments")
+
+    inputs: list[AttachmentInput] = []
+    total = 0
+    for index, upload in enumerate(files, 1):
+        raw = await upload.read(limits.max_attachment_bytes + 1)
+        await upload.close()
+        if len(raw) > limits.max_attachment_bytes:
+            raise HTTPException(413, f"{upload.filename or 'Attachment'} is too large")
+        total += len(raw)
+        if total > limits.max_total_bytes:
+            raise HTTPException(413, "Total attachment size limit exceeded")
+        inputs.append(
+            AttachmentInput(
+                index=index,
+                filename=upload.filename or f"attachment-{index}",
+                declared_content_type=upload.content_type,
+                size_bytes=len(raw),
+                content_bytes=raw,
+            )
+        )
+
+    bundle = AttachmentBundle(
+        user_request=message.strip() or "Analyze the supplied attachment(s).",
+        attachments=inputs,
+        requested_output_format="message",
+        tenant_id="",
+        actor_id=auth.user.id,
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="operly-personal-") as temp_dir:
+            processed = await attachment_processor.process(bundle, temp_dir)
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(422, str(error)) from error
+
+    if not processed.accepted:
+        raise HTTPException(
+            422,
+            {
+                "message": "No supported attachments could be processed",
+                "skipped": processed.skipped,
+            },
+        )
+
+    try:
+        result = await get_personal_agent_service().run(
+            user_id=auth.user.id,
+            display_name=auth.user.display_name,
+            message=message.strip() or "Analyze the supplied attachment(s).",
+            conversation_id=conversation_id,
+            selected_workspace_id=None,
+            attachment_context=processed.message,
+            attachment_names=list(processed.accepted),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    result["attachment_processing"] = {
+        "accepted": processed.accepted,
+        "skipped": processed.skipped,
+        "warnings": processed.warnings,
+    }
+    return result
 
 
 @router.get("/conversations")
