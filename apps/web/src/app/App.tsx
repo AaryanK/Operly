@@ -3,16 +3,18 @@ import { useEffect, useState } from "react";
 import { AccountSettings } from "../account/AccountSettings";
 import { PersonalHome } from "../account/PersonalHome";
 import { ScopeRail } from "../account/ScopeRail";
+import { useThemePreference } from "../ui/theme";
 import { WorkspaceShell } from "../workspace/WorkspaceShell";
 import { navigate, personalPath, workspacePath } from "./routes";
 import { useRoute } from "./useRoute";
 import { useScope } from "./useScope";
 
-type AccountSettingsTab = "account" | "connections" | "workspaces";
+type AccountSettingsTab = "account" | "appearance" | "connections" | "security" | "workspaces";
 
 export function App() {
   const route = useRoute();
   const [accountSettingsTab, setAccountSettingsTab] = useState<AccountSettingsTab | null>(null);
+  const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useThemePreference();
   const { loading, transitioning, error, profile, workspaces, refresh, activatePersonal, activateWorkspace } = useScope();
   const workspace = route.kind === "workspace" ? workspaces.find((item) => item.id === route.workspaceId || item.slug === route.workspaceId) : undefined;
 
@@ -28,7 +30,7 @@ export function App() {
   if (route.kind === "unknown") return null;
 
   const rail = (personal: boolean, activeWorkspaceId?: string | null) => <ScopeRail profile={profile} workspaces={workspaces} personal={personal} activeWorkspaceId={activeWorkspaceId} transitioning={transitioning} onPersonal={() => activatePersonal().catch(() => undefined)} onWorkspace={(workspaceId) => activateWorkspace(workspaceId).catch(() => undefined)} onAccount={() => setAccountSettingsTab("account")} onCreateWorkspace={() => setAccountSettingsTab("workspaces")} />;
-  const settings = accountSettingsTab ? <AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} onClose={() => setAccountSettingsTab(null)} onRefresh={refresh} onWorkspace={(workspaceId) => activateWorkspace(workspaceId)} /> : null;
+  const settings = accountSettingsTab ? <AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemePreference={setThemePreference} onClose={() => setAccountSettingsTab(null)} onRefresh={refresh} onWorkspace={(workspaceId) => activateWorkspace(workspaceId)} /> : null;
 
   if (route.kind === "personal") {
     if (profile?.current_workspace_id || transitioning) return <div className="boot-screen"><span>✦</span><p>Switching to your private Operly…</p></div>;
