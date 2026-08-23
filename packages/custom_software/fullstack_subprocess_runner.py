@@ -1,10 +1,9 @@
-"""Reference executor for ``operly-fullstack-v1`` in tests/development only.
+"""Executable reference for ``operly-fullstack-v1`` in tests/development only.
 
-This runner proves the deterministic full-stack lifecycle (install, analyze, build,
-test, start, health, acceptance, cleanup) without weakening production isolation.
-It is intentionally process-isolated only and cannot be selected in production.
-Production must use ``ExternalRunnerAdapter`` backed by a container/microVM runner
-that advertises the same profile/version.
+This proves the deterministic lifecycle without weakening production isolation.
+It is process-isolated only and can never be selected by production code. A real
+production runner must live outside the Operly API and advertise the exact same
+runtime profile/version from a container or microVM isolation boundary.
 """
 from __future__ import annotations
 
@@ -59,7 +58,12 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             raise ValueError("Full-stack runtime profile version mismatch")
         validation = validate_fullstack_source(bundle)
         if not validation.valid:
-            return self._failed("invalid-source", [], "security_policy_violation", "; ".join(validation.errors))
+            return self._failed(
+                "invalid-source",
+                [],
+                "security_policy_violation",
+                "; ".join(validation.errors),
+            )
 
         manifest = parse_fullstack_manifest(bundle)
         root = Path(tempfile.mkdtemp(prefix="operly-fullstack-test-"))
@@ -67,6 +71,10 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
         runtime = root / "runtime"
         for path in (source, runtime, root / "artifacts", root / "logs", root / "tmp"):
             path.mkdir(parents=True, exist_ok=True)
+        # Source bundles cannot represent empty directories, but the runtime
+        # contract does. Materialize the canonical layout before staging files.
+        for directory in ("frontend", "backend", "workers", "tests", "migrations"):
+            (source / directory).mkdir(parents=True, exist_ok=True)
         for item in bundle.files:
             target = source / item.path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -102,18 +110,43 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
                     timeout=min(timeout, submission.maxDurationSeconds),
                 )
             except subprocess.TimeoutExpired:
-                events.append({"state": "timed_out", "exitCode": None, "message": f"{label} exceeded its execution limit"})
+                events.append(
+                    {
+                        "state": "timed_out",
+                        "exitCode": None,
+                        "message": f"{label} exceeded its execution limit",
+                    }
+                )
                 return None
             output = (result.stdout or "") + (result.stderr or "")
             if len(output.encode()) > submission.resources.logBytes:
-                events.append({"state": "resource_exceeded", "exitCode": result.returncode, "message": "Log output exceeded policy"})
+                events.append(
+                    {
+                        "state": "resource_exceeded",
+                        "exitCode": result.returncode,
+                        "message": "Log output exceeded policy",
+                    }
+                )
                 return None
-            events.append({"state": label, "exitCode": result.returncode, "message": output[-4000:]})
+            events.append(
+                {
+                    "state": label,
+                    "exitCode": result.returncode,
+                    "message": output[-4000:],
+                }
+            )
             return result
 
         if submission.dependencies:
             if submission.installNetwork.mode != "dependency_registry_only":
-                return self._failed(root.name, events, "security_policy_violation", "Dependency install network is not registry bounded")
+                return self._failed(
+                    root.name,
+                    events,
+                    "security_policy_violation",
+                    "Dependency install network is not registry bounded",
+                )
+            # Even in test/dev, package installation must be an explicit opt-in;
+            # normal CI acceptance remains network-free and deterministic.
             if os.getenv("OPERLY_TEST_RUNNER_ALLOW_DEPENDENCY_INSTALL") != "1":
                 return self._failed(
                     root.name,
@@ -123,9 +156,18 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
                 )
             if any(item.ecosystem == "python" for item in submission.dependencies):
                 venv = runtime / "venv"
-                created = await asyncio.to_thread(run, "dependency_resolution", [sys.executable, "-m", "venv", str(venv)])
+                created = await asyncio.to_thread(
+                    run,
+                    "dependency_resolution",
+                    [sys.executable, "-m", "venv", str(venv)],
+                )
                 if created is None or created.returncode:
-                    return self._failed(root.name, events, "dependency_failure", "Python virtualenv creation failed")
+                    return self._failed(
+                        root.name,
+                        events,
+                        "dependency_failure",
+                        "Python virtualenv creation failed",
+                    )
                 if os.name == "nt":
                     python_executable = str(venv / "Scripts" / "python.exe")
                     pip_executable = str(venv / "Scripts" / "pip.exe")
@@ -135,12 +177,24 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
                 installed = await asyncio.to_thread(
                     run,
                     "dependency_resolution",
-                    [pip_executable, "install", "--disable-pip-version-check", "--no-input", "-r", "requirements.lock"],
+                    [
+                        pip_executable,
+                        "install",
+                        "--disable-pip-version-check",
+                        "--no-input",
+                        "-r",
+                        "requirements.lock",
+                    ],
                     cwd=source / "backend",
                     timeout=180,
                 )
                 if installed is None or installed.returncode:
-                    return self._failed(root.name, events, "dependency_failure", "Python dependency installation failed")
+                    return self._failed(
+                        root.name,
+                        events,
+                        "dependency_failure",
+                        "Python dependency installation failed",
+                    )
             if any(item.ecosystem == "npm" for item in submission.dependencies):
                 if not shutil.which("npm"):
                     raise SandboxUnavailable("npm is not available in the test runner")
@@ -152,7 +206,12 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
                     timeout=180,
                 )
                 if installed is None or installed.returncode:
-                    return self._failed(root.name, events, "dependency_failure", "npm dependency installation failed")
+                    return self._failed(
+                        root.name,
+                        events,
+                        "dependency_failure",
+                        "npm dependency installation failed",
+                    )
 
         analysis = await asyncio.to_thread(
             run,
@@ -160,31 +219,84 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             [python_executable, "-m", "compileall", "-q", "backend", "workers", "tests"],
         )
         if analysis is None:
-            return self._failed(root.name, events, "resource_violation", "Static analysis exceeded resource policy")
+            return self._failed(
+                root.name,
+                events,
+                "resource_violation",
+                "Static analysis exceeded resource policy",
+            )
         if analysis.returncode:
-            return self._failed(root.name, events, "build_failure", "Python static analysis failed")
+            return self._failed(
+                root.name,
+                events,
+                "build_failure",
+                "Python static analysis failed",
+            )
 
         if manifest.execution.frontend == "npm-build":
             if not shutil.which("npm"):
                 raise SandboxUnavailable("npm is not available in the test runner")
-            lint = await asyncio.to_thread(run, "static_analysis", ["npm", "run", "lint", "--if-present"], cwd=source / "frontend")
+            lint = await asyncio.to_thread(
+                run,
+                "static_analysis",
+                ["npm", "run", "lint", "--if-present"],
+                cwd=source / "frontend",
+            )
             if lint is None or lint.returncode:
-                return self._failed(root.name, events, "build_failure", "Frontend static analysis failed")
-            built = await asyncio.to_thread(run, "building", ["npm", "run", "build"], cwd=source / "frontend", timeout=120)
+                return self._failed(
+                    root.name,
+                    events,
+                    "build_failure",
+                    "Frontend static analysis failed",
+                )
+            built = await asyncio.to_thread(
+                run,
+                "building",
+                ["npm", "run", "build"],
+                cwd=source / "frontend",
+                timeout=120,
+            )
             if built is None:
-                return self._failed(root.name, events, "resource_violation", "Frontend build exceeded resource policy")
+                return self._failed(
+                    root.name,
+                    events,
+                    "resource_violation",
+                    "Frontend build exceeded resource policy",
+                )
             if built.returncode:
                 return self._failed(root.name, events, "build_failure", "Frontend build failed")
         else:
-            events.append({"state": "building", "exitCode": 0, "message": "Static frontend requires no build step"})
+            events.append(
+                {
+                    "state": "building",
+                    "exitCode": 0,
+                    "message": "Static frontend requires no build step",
+                }
+            )
 
-        python_tests = any(item.path.startswith("tests/") and item.path.endswith(".py") for item in bundle.files)
-        js_tests = any(item.path.startswith("tests/") and item.path.endswith((".js", ".mjs", ".cjs")) for item in bundle.files)
+        python_tests = any(
+            item.path.startswith("tests/") and item.path.endswith(".py")
+            for item in bundle.files
+        )
+        js_tests = any(
+            item.path.startswith("tests/") and item.path.endswith((".js", ".mjs", ".cjs"))
+            for item in bundle.files
+        )
         if python_tests:
             tested = await asyncio.to_thread(
                 run,
                 "testing",
-                [python_executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test*.py", "-v"],
+                [
+                    python_executable,
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "tests",
+                    "-p",
+                    "test*.py",
+                    "-v",
+                ],
             )
             if tested is None or tested.returncode:
                 return self._failed(root.name, events, "test_failure", "Python tests failed")
@@ -197,7 +309,14 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
 
         port = self._free_port()
         backend = subprocess.Popen(
-            [python_executable, "backend/app.py", "--host", "127.0.0.1", "--port", str(port)],
+            [
+                python_executable,
+                "backend/app.py",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
             cwd=source,
             env=env,
             stdout=subprocess.PIPE,
@@ -218,7 +337,12 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             await asyncio.sleep(0.1)
             if worker.poll() is not None:
                 self._terminate(processes)
-                return self._failed(root.name, events, "runtime_crash", "Worker process exited during startup")
+                return self._failed(
+                    root.name,
+                    events,
+                    "runtime_crash",
+                    "Worker process exited during startup",
+                )
 
         url = f"http://127.0.0.1:{port}"
         healthy = False
@@ -226,7 +350,10 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             if backend.poll() is not None:
                 break
             try:
-                with urllib.request.urlopen(url + submission.healthCheck.path, timeout=1) as response:
+                with urllib.request.urlopen(
+                    url + submission.healthCheck.path,
+                    timeout=1,
+                ) as response:
                     body = response.read().decode(errors="replace")
                     healthy = response.status == submission.healthCheck.expectedStatus and (
                         not submission.healthCheck.bodyMarker
@@ -238,7 +365,12 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
                 break
         if not healthy:
             self._terminate(processes)
-            return self._failed(root.name, events, "health_check_failure", "Configured backend health check did not pass")
+            return self._failed(
+                root.name,
+                events,
+                "health_check_failure",
+                "Configured backend health check did not pass",
+            )
 
         try:
             with urllib.request.urlopen(url + "/", timeout=2) as response:
@@ -247,7 +379,12 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             acceptance_ok = False
         if not acceptance_ok:
             self._terminate(processes)
-            return self._failed(root.name, events, "acceptance_test_failure", "Full-stack preview root did not return HTTP 200")
+            return self._failed(
+                root.name,
+                events,
+                "acceptance_test_failure",
+                "Full-stack preview root did not return HTTP 200",
+            )
 
         preview_id = "preview-" + root.name
         self.jobs[root.name] = {"root": root, "processes": processes}
@@ -262,21 +399,35 @@ class FullStackSubprocessTestRunner(RunnerAdapter):
             testReport={"unit": "passed", "acceptance": {"rootHttp200": True}},
             staticAnalysisReport={"profile": submission.stackId, "passed": True},
             dependencyReport={
-                "dependencies": [item.model_dump(mode="json") for item in submission.dependencies],
+                "dependencies": [
+                    item.model_dump(mode="json") for item in submission.dependencies
+                ],
                 "installNetwork": submission.installNetwork.model_dump(mode="json"),
             },
-            resourceUsage={"profile": self.isolation_profile, "limitsEnforced": "timeouts and bounded output only"},
+            resourceUsage={
+                "profile": self.isolation_profile,
+                "limitsEnforced": "timeouts and bounded output only",
+            },
         )
         return {
             "jobId": root.name,
             "state": "preview_ready",
             "result": result.model_dump(),
-            "events": events + [{"state": "preview_ready", "message": "Full-stack reference execution passed"}],
+            "events": events
+            + [
+                {
+                    "state": "preview_ready",
+                    "message": "Full-stack reference execution passed",
+                }
+            ],
             "preview": {"id": preview_id, "targetUrl": url},
         }
 
     async def status(self, job_id: str):
-        return {"jobId": job_id, "state": "preview_ready" if job_id in self.jobs else "cleaned"}
+        return {
+            "jobId": job_id,
+            "state": "preview_ready" if job_id in self.jobs else "cleaned",
+        }
 
     async def cancel(self, job_id: str):
         return await self.cleanup(job_id)
