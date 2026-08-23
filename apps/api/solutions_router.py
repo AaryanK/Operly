@@ -9,6 +9,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.solution_generation_http import generation_failure_response
 from packages.actions.service import ActionService
 from packages.business.service import BusinessService
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
@@ -24,7 +25,7 @@ from packages.solutions import SolutionService, SolutionType
 from packages.solutions.composer import create_solution_from_intent
 from packages.solutions.operations import PresenceOperationsService, proposal_json
 from packages.solutions.production import ProductionService, job_json
-from packages.solutions.service import solution_json
+from packages.solutions.service import LifecycleStatus, solution_json
 
 router = APIRouter(prefix="/api/solutions", tags=["solutions"])
 service = SolutionService()
@@ -90,7 +91,7 @@ async def compose_solution(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Classify owner intent before selecting/creating the Solution runtime."""
+    """Classify intent and report managed-app generation failures truthfully."""
     if auth.role != "owner":
         raise HTTPException(status_code=403, detail="Only owners can create Solutions")
     try:
@@ -105,6 +106,13 @@ async def compose_solution(
     except ValueError as error:
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if row.lifecycle_status == LifecycleStatus.FAILED:
+        # The durable failed runtime/job must survive the non-success HTTP result so
+        # the owner can inspect its trace and retry from the stored objective.
+        await db.commit()
+        return generation_failure_response(row)
+
     await db.commit()
     return {"solution": solution_json(row), "classification": decision.as_dict()}
 
