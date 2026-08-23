@@ -51,6 +51,23 @@ def _source(manifest=None, extra=()):
     return files
 
 
+def _npm_lock(*, resolved="https://registry.npmjs.org/react/-/react-19.0.0.tgz"):
+    return {
+        "name": "operly-generated",
+        "version": "1.0.0",
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {"dependencies": {"react": "19.0.0"}},
+            "node_modules/react": {
+                "version": "19.0.0",
+                "resolved": resolved,
+                "integrity": "sha512-YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZw==",
+            },
+        },
+    }
+
+
 class FullStackManifestTests(unittest.TestCase):
     def test_valid_contract_uses_canonical_layout_and_capability_bindings(self):
         parsed = parse_fullstack_manifest(_source())
@@ -137,12 +154,54 @@ class FullStackManifestTests(unittest.TestCase):
             manifest,
             [
                 SourceFile("frontend/package.json", json.dumps(package).encode(), "test"),
-                SourceFile("frontend/package-lock.json", b"{}", "test"),
+                SourceFile("frontend/package-lock.json", json.dumps(_npm_lock()).encode(), "test"),
                 SourceFile("frontend/build.js", b"console.log('build')\n", "test"),
                 SourceFile("backend/requirements.lock", b"fastapi==0.116.1\n", "test"),
             ],
         )
-        self.assertTrue(validate_fullstack_source(locked).valid)
+        validation = validate_fullstack_source(locked)
+        self.assertTrue(validation.valid, validation.errors)
+
+    def test_dependency_lockfiles_cannot_escape_approved_registries(self):
+        python_manifest = _manifest(
+            dependencies=[{"ecosystem": "python", "name": "fastapi", "version": "0.116.1"}]
+        )
+        python_escape = validate_fullstack_source(
+            _source(
+                python_manifest,
+                [
+                    SourceFile(
+                        "backend/requirements.lock",
+                        b"fastapi @ git+https://evil.example/fastapi.git\n",
+                        "test",
+                    )
+                ],
+            )
+        )
+        self.assertFalse(python_escape.valid)
+        self.assertTrue(any("URLs, options and editable installs are forbidden" in item for item in python_escape.errors))
+
+        npm_manifest = _manifest(
+            execution={"frontend": "npm-build", "backend": "python-cli", "worker": "none", "healthPath": "/health"},
+            dependencies=[{"ecosystem": "npm", "name": "react", "version": "19.0.0"}],
+        )
+        package = {"scripts": {"build": "node build.js"}, "dependencies": {"react": "19.0.0"}}
+        npm_escape = validate_fullstack_source(
+            _source(
+                npm_manifest,
+                [
+                    SourceFile("frontend/package.json", json.dumps(package).encode(), "test"),
+                    SourceFile(
+                        "frontend/package-lock.json",
+                        json.dumps(_npm_lock(resolved="https://evil.example/react.tgz")).encode(),
+                        "test",
+                    ),
+                    SourceFile("frontend/build.js", b"console.log('build')\n", "test"),
+                ],
+            )
+        )
+        self.assertFalse(npm_escape.valid)
+        self.assertTrue(any("registry.npmjs.org" in item for item in npm_escape.errors))
 
     def test_worker_entrypoint_and_backend_entrypoint_are_fixed_contracts(self):
         missing_backend = [item for item in _source() if item.path != "backend/app.py"]
