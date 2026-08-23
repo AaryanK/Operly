@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import random
@@ -12,6 +13,7 @@ from packages.model_runtime.ollama_client import OllamaError
 
 
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_TRACE_RESPONSE_HEADERS = ("x-request-id", "x-reference-id", "x-correlation-id", "retry-after")
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -130,6 +132,10 @@ class OpenRouterClient:
         ]
         self.fallback_model = self.fallback_models[0] if self.fallback_models else ""
         self.last_model = self.model
+        self.last_request_payload: dict[str, Any] | None = None
+        self.last_response_payload: Any = None
+        self.last_response_status: int | None = None
+        self.last_response_metadata: dict[str, str] = {}
         self.timeout_seconds = _bounded_int("OPEN_ROUTER_TIMEOUT_SECONDS", 180, 15, 600)
         self.max_attempts = _bounded_int("OPEN_ROUTER_MAX_ATTEMPTS", 3, 1, 5)
         # A coding agent should make a bounded decision/tool call and iterate rather
@@ -231,6 +237,15 @@ class OpenRouterClient:
         }
         if tools:
             payload["tools"] = tools
+        # Runtime tracing may inspect this body after the call. Never retain request
+        # headers here because they contain provider credentials.
+        self.last_request_payload = {
+            "url": self.url,
+            "body": copy.deepcopy(payload),
+        }
+        self.last_response_payload = None
+        self.last_response_status = None
+        self.last_response_metadata = {}
 
         async with session.post(self.url, headers=headers, json=payload) as response:
             response_text = await response.text()
@@ -238,6 +253,17 @@ class OpenRouterClient:
                 body = json.loads(response_text) if response_text else {}
             except json.JSONDecodeError:
                 body = None
+            self.last_response_status = int(response.status)
+            self.last_response_metadata = {
+                key: str(response.headers.get(key))
+                for key in _TRACE_RESPONSE_HEADERS
+                if response.headers.get(key)
+            }
+            self.last_response_payload = (
+                copy.deepcopy(body)
+                if isinstance(body, (dict, list))
+                else str(response_text or "")[:20_000]
+            )
 
             if response.status != 200:
                 upstream = None
