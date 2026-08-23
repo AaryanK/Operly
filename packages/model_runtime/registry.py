@@ -27,6 +27,10 @@ from packages.model_runtime.contracts import (
 from packages.model_runtime.ollama_client import OllamaError
 from packages.model_runtime.portfolio import ModelRoute, model_route
 from packages.model_runtime.providers import model_client_for_route
+from packages.model_runtime.routing_policy import (
+    auto_portfolio_enabled,
+    role_routing_profile,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +62,6 @@ async def _emit(event: ModelAttemptEvent) -> None:
             if asyncio.iscoroutine(result):
                 await result
         except Exception:
-            # Telemetry must never become inference authority.
             continue
 
 
@@ -76,13 +79,19 @@ def _failure(error: BaseException, *, provider: str, model_id: str) -> ModelInfe
     if isinstance(error, OllamaError):
         status = getattr(error, "status", None)
         classification = (
-            "quota_or_credits" if status == 402 else
-            "rate_limited" if status == 429 else
-            "auth" if status in {401, 403} else
-            "model_unavailable" if status == 404 else
-            "provider_5xx" if status and status >= 500 else
-            "invalid_request" if status and 400 <= status < 500 else
-            "provider_error"
+            "quota_or_credits"
+            if status == 402
+            else "rate_limited"
+            if status == 429
+            else "auth"
+            if status in {401, 403}
+            else "model_unavailable"
+            if status == 404
+            else "provider_5xx"
+            if status and status >= 500
+            else "invalid_request"
+            if status and 400 <= status < 500
+            else "provider_error"
         )
         return ModelInferenceError(
             str(error),
@@ -123,6 +132,9 @@ class ConfiguredModel:
         tags: Iterable[str] = (),
         capabilities: Iterable[str] = ("text",),
         traits: ModelTraits | None = None,
+        priority: int = 100,
+        verified_latency_ms: int | None = None,
+        canonical_id: str | None = None,
     ) -> None:
         self.id = str(resource_id).strip()
         self.provider = str(provider).strip().lower()
@@ -132,6 +144,11 @@ class ConfiguredModel:
             str(x).strip().lower() for x in capabilities if str(x).strip()
         )
         self.traits = traits or ModelTraits()
+        self.priority = int(priority)
+        self.verified_latency_ms = (
+            int(verified_latency_ms) if verified_latency_ms is not None else None
+        )
+        self.canonical_id = str(canonical_id or self.provider_model_id).strip()
         if not self.id or not self.provider or not self.provider_model_id:
             raise ValueError("Configured model requires resource, provider, and model ids")
 
@@ -139,19 +156,17 @@ class ConfiguredModel:
         client = model_client_for_route(
             ModelRoute(provider=self.provider, primary=self.provider_model_id)
         )
-        # Retry orchestration belongs here. Provider adapters keep their transport
-        # retry implementation for legacy callers, but a Model object performs one
-        # provider attempt at a time so failover is observable and cross-provider.
         if hasattr(client, "max_attempts"):
             client.max_attempts = 1
         if hasattr(client, "fallback_models"):
             client.fallback_models = []
         if hasattr(client, "fallback_model"):
             client.fallback_model = ""
-        # Output-token policy is expressed by the provider-neutral InferenceBudget.
-        # Adapters expose their translated field below this boundary; callers never
-        # need to know whether a vendor calls it max_tokens, num_predict, etc.
-        if budget and budget.max_output_tokens is not None and hasattr(client, "max_tokens"):
+        if (
+            budget
+            and budget.max_output_tokens is not None
+            and hasattr(client, "max_tokens")
+        ):
             client.max_tokens = max(1, int(budget.max_output_tokens))
         return client
 
@@ -240,8 +255,23 @@ class ConfiguredModel:
         raise last_error or ModelInferenceError("Model inference failed")
 
 
+def _cooldown_seconds() -> float:
+    try:
+        value = float(os.getenv("OPERLY_MODEL_POOL_COOLDOWN_SECONDS", "45"))
+    except ValueError:
+        value = 45.0
+    return max(5.0, min(value, 600.0))
+
+
 class ModelPool:
-    """Ordered model candidates with provider-independent failover."""
+    """Ordered model candidates with sticky success and circuit-breaker failover."""
+
+    _PROVIDER_WIDE_FAILURES = {
+        "rate_limited",
+        "quota_or_credits",
+        "provider_5xx",
+        "provider_error",
+    }
 
     def __init__(self, models: Iterable[Model], *, id: str = "model-pool") -> None:
         self.models = tuple(models)
@@ -253,21 +283,66 @@ class ModelPool:
             *(frozenset(model.capabilities) for model in self.models)
         )
         self.traits = self.models[0].traits
+        self._preferred_model_id: str | None = None
+        self._model_cooldown_until: dict[str, float] = {}
+        self._provider_cooldown_until: dict[str, float] = {}
+
+    def _ordered_candidates(self) -> list[Model]:
+        now = time.monotonic()
+
+        def available(model: Model) -> bool:
+            provider = str(getattr(model, "provider", "") or "")
+            return (
+                self._model_cooldown_until.get(model.id, 0.0) <= now
+                and self._provider_cooldown_until.get(provider, 0.0) <= now
+            )
+
+        healthy = [model for model in self.models if available(model)]
+        cooling = [model for model in self.models if not available(model)]
+        if self._preferred_model_id:
+            healthy.sort(
+                key=lambda model: 0 if model.id == self._preferred_model_id else 1
+            )
+        return healthy + cooling
+
+    def _mark_failure(self, model: Model, error: ModelInferenceError) -> None:
+        until = time.monotonic() + _cooldown_seconds()
+        self._model_cooldown_until[model.id] = until
+        provider = str(
+            error.provider or getattr(model, "provider", "") or ""
+        ).strip().lower()
+        if provider and error.classification in self._PROVIDER_WIDE_FAILURES:
+            self._provider_cooldown_until[provider] = until
+        if self._preferred_model_id == model.id:
+            self._preferred_model_id = None
+
+    def _mark_success(self, model: Model) -> None:
+        self._preferred_model_id = model.id
+        self._model_cooldown_until.pop(model.id, None)
+        provider = str(getattr(model, "provider", "") or "").strip().lower()
+        if provider:
+            self._provider_cooldown_until.pop(provider, None)
 
     async def infer(self, request: InferenceRequest) -> InferenceResult:
         budget = request.budget or InferenceBudget()
-        candidates = self.models
+        candidates = self._ordered_candidates()
         if budget.max_models is not None:
             candidates = candidates[: max(1, int(budget.max_models))]
         last_error: ModelInferenceError | None = None
         for model in candidates:
+            provider = str(getattr(model, "provider", "") or "").strip().lower()
+            now = time.monotonic()
+            if self._model_cooldown_until.get(model.id, 0.0) > now:
+                continue
+            if provider and self._provider_cooldown_until.get(provider, 0.0) > now:
+                continue
             try:
-                return await model.infer(request)
+                result = await model.infer(request)
+                self._mark_success(model)
+                return result
             except ModelInferenceError as error:
                 last_error = error
-                # Failover is allowed for model/provider availability and quota
-                # failures. A malformed request or bad credential fails closed
-                # rather than being sprayed at other vendors.
+                self._mark_failure(model, error)
                 if error.classification in {"invalid_request", "auth"}:
                     break
                 continue
@@ -277,6 +352,7 @@ class ModelPool:
 class ModelRegistry:
     def __init__(self) -> None:
         self._models: dict[str, ConfiguredModel] = {}
+        self._catalog_ids: set[str] = set()
 
     def configure(
         self,
@@ -288,10 +364,11 @@ class ModelRegistry:
         tags: Iterable[str] = (),
         capabilities: Iterable[str] = ("text",),
         traits: ModelTraits | None = None,
+        priority: int = 100,
+        verified_latency_ms: int | None = None,
+        canonical_id: str | None = None,
         replace: bool = False,
     ) -> ConfiguredModel:
-        # credential_ref is part of the stable contract. Current provider adapters
-        # resolve environment/secret configuration themselves during migration.
         del credential_ref
         configured = ConfiguredModel(
             resource_id=id,
@@ -300,19 +377,27 @@ class ModelRegistry:
             tags=tags,
             capabilities=capabilities,
             traits=traits,
+            priority=priority,
+            verified_latency_ms=verified_latency_ms,
+            canonical_id=canonical_id,
         )
         if configured.id in self._models and not replace:
             raise ValueError(f"Model already configured: {configured.id}")
         self._models[configured.id] = configured
         return configured
 
-    def register_resource(self, resource: ModelResource, *, replace: bool = True) -> ConfiguredModel:
+    def register_resource(
+        self, resource: ModelResource, *, replace: bool = True
+    ) -> ConfiguredModel:
         tags = set(getattr(resource, "tags", frozenset()))
         if resource.free:
             tags.add("free")
         traits = ModelTraits(
             context_tokens=resource.context_length,
-            cost_class="free" if resource.free else None,
+            latency_class=resource.latency_class,
+            cost_class=resource.cost_class or ("free" if resource.free else None),
+            quality_class=resource.quality_class,
+            locality=resource.locality,
         )
         return self.configure(
             id=f"{resource.provider}:{resource.id}",
@@ -321,12 +406,19 @@ class ModelRegistry:
             tags=tags,
             capabilities=resource.capabilities,
             traits=traits,
+            priority=resource.priority,
+            verified_latency_ms=resource.verified_latency_ms,
+            canonical_id=resource.canonical_id or resource.id,
             replace=replace,
         )
 
     def refresh_catalog(self) -> None:
+        for resource_id in self._catalog_ids:
+            self._models.pop(resource_id, None)
+        self._catalog_ids.clear()
         for resource in model_resources():
-            self.register_resource(resource, replace=True)
+            configured = self.register_resource(resource, replace=True)
+            self._catalog_ids.add(configured.id)
 
     def get(self, resource_id: str) -> ConfiguredModel:
         try:
@@ -351,6 +443,8 @@ class ModelRegistry:
             key=lambda model: (
                 -len(preferred & model.tags),
                 0 if (selector.prefer_free and "free" in model.tags) else 1,
+                model.priority,
+                model.verified_latency_ms or 10**9,
                 model.id,
             )
         )
@@ -390,32 +484,97 @@ def _role_env_key(role: str) -> str:
 
 
 def _configured_role_candidates(role: str) -> list[dict[str, Any]]:
-    """Optional cross-provider candidate chain for one role.
-
-    Example:
-    OPERLY_MODEL_CODING_CANDIDATES_JSON='[
-      {"provider":"ollama","model":"gemma4:31b","tags":["fast","local"]},
-      {"provider":"openrouter","model":"qwen/qwen3-coder-flash","tags":["coding"]}
-    ]'
-    """
     raw = os.getenv(_role_env_key(role) + "_CANDIDATES_JSON", "").strip()
     if not raw:
         return []
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise RuntimeError(f"{_role_env_key(role)}_CANDIDATES_JSON must be valid JSON") from error
+        raise RuntimeError(
+            f"{_role_env_key(role)}_CANDIDATES_JSON must be valid JSON"
+        ) from error
     if not isinstance(value, list):
         raise RuntimeError(f"{_role_env_key(role)}_CANDIDATES_JSON must be an array")
     return [item for item in value if isinstance(item, dict)]
 
 
-def model_for_role(role: str) -> Model:
-    """Resolve a compatibility role into one or more configured Model objects.
+def _provider_diverse(
+    candidates: Iterable[ConfiguredModel],
+    *,
+    limit: int,
+) -> list[ConfiguredModel]:
+    rows = list(candidates)
+    selected: list[ConfiguredModel] = []
+    seen_providers: set[str] = set()
 
-    Existing role environment variables keep working, but callers no longer see a
-    provider route. New deployments may supply a cross-provider candidate array.
-    """
+    for model in rows:
+        if model.provider in seen_providers:
+            continue
+        selected.append(model)
+        seen_providers.add(model.provider)
+        if len(selected) >= limit:
+            return selected
+
+    for model in rows:
+        if model in selected:
+            continue
+        selected.append(model)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _legacy_role_models(
+    registry: ModelRegistry,
+    role: str,
+) -> list[ConfiguredModel]:
+    route = model_route(role)
+    resources = model_resources()
+    models: list[ConfiguredModel] = []
+    for index, model_id in enumerate((route.primary, *route.fallbacks)):
+        resource_id = f"role:{role}:{index}:{route.provider}:{model_id}"
+        resource = next(
+            (
+                item
+                for item in resources
+                if item.provider == route.provider and item.id == model_id
+            ),
+            None,
+        )
+        capabilities = resource.capabilities if resource else frozenset(
+            {"text", "tools", "reasoning", "coding"}
+        )
+        tags = set(getattr(resource, "tags", frozenset())) if resource else set()
+        if resource and resource.free:
+            tags.add("free")
+        models.append(
+            registry.configure(
+                id=resource_id,
+                provider=route.provider,
+                model=model_id,
+                tags=tags,
+                capabilities=capabilities,
+                traits=ModelTraits(
+                    context_tokens=resource.context_length if resource else None,
+                    latency_class=resource.latency_class if resource else None,
+                    cost_class=(resource.cost_class if resource else None)
+                    or ("free" if resource and resource.free else None),
+                    quality_class=resource.quality_class if resource else None,
+                    locality=resource.locality if resource else None,
+                ),
+                priority=resource.priority if resource else 100,
+                verified_latency_ms=(
+                    resource.verified_latency_ms if resource else None
+                ),
+                canonical_id=(resource.canonical_id if resource else model_id),
+                replace=True,
+            )
+        )
+    return models
+
+
+def model_for_role(role: str) -> Model:
+    """Resolve a role into an explicit chain or an automatic provider-diverse pool."""
     registry = default_model_registry()
     configured = _configured_role_candidates(role)
     models: list[ConfiguredModel] = []
@@ -427,8 +586,16 @@ def model_for_role(role: str) -> Model:
             if not provider or not model_id:
                 continue
             tags = item.get("tags") or []
-            capabilities = item.get("capabilities") or ["text", "tools", "reasoning", "coding"]
-            resource_id = str(item.get("resource_id") or f"role:{role}:{index}:{provider}:{model_id}")
+            capabilities = item.get("capabilities") or [
+                "text",
+                "tools",
+                "reasoning",
+                "coding",
+            ]
+            resource_id = str(
+                item.get("resource_id")
+                or f"role:{role}:{index}:{provider}:{model_id}"
+            )
             models.append(
                 registry.configure(
                     id=resource_id,
@@ -436,42 +603,26 @@ def model_for_role(role: str) -> Model:
                     model=model_id,
                     tags=tags,
                     capabilities=capabilities,
+                    priority=int(item.get("priority", 100)),
+                    canonical_id=str(item.get("canonical_id") or model_id),
                     replace=True,
                 )
             )
-    else:
-        route = model_route(role)
-        for index, model_id in enumerate((route.primary, *route.fallbacks)):
-            resource_id = f"role:{role}:{index}:{route.provider}:{model_id}"
-            # Reuse catalog metadata when it exists.
-            resource = next(
-                (
-                    item
-                    for item in model_resources()
-                    if item.provider == route.provider and item.id == model_id
-                ),
-                None,
+    elif auto_portfolio_enabled():
+        profile = role_routing_profile(role)
+        candidates = [
+            model
+            for model in registry.candidates(profile.selector())
+            if not model.id.startswith("role:")
+        ]
+        if candidates:
+            models = _provider_diverse(
+                candidates,
+                limit=max(1, profile.max_models),
             )
-            capabilities = resource.capabilities if resource else frozenset(
-                {"text", "tools", "reasoning", "coding"}
-            )
-            tags = set(getattr(resource, "tags", frozenset())) if resource else set()
-            if resource and resource.free:
-                tags.add("free")
-            models.append(
-                registry.configure(
-                    id=resource_id,
-                    provider=route.provider,
-                    model=model_id,
-                    tags=tags,
-                    capabilities=capabilities,
-                    traits=ModelTraits(
-                        context_tokens=resource.context_length if resource else None,
-                        cost_class="free" if resource and resource.free else None,
-                    ),
-                    replace=True,
-                )
-            )
+
+    if not models:
+        models = _legacy_role_models(registry, role)
 
     if not models:
         raise LookupError(f"No model configured for role: {role}")
@@ -479,11 +630,7 @@ def model_for_role(role: str) -> Model:
 
 
 class ModelChatAdapter:
-    """Temporary adapter for legacy loops that still call ``chat``.
-
-    New orchestration code should call ``Model.infer`` directly. This adapter lets
-    existing loops migrate without exposing provider clients again.
-    """
+    """Temporary adapter for legacy loops that still call ``chat``."""
 
     def __init__(self, model: Model, *, budget: InferenceBudget | None = None) -> None:
         self.model = model
@@ -494,7 +641,11 @@ class ModelChatAdapter:
     def last_model(self) -> str:
         return self.last_result.provider_model_id if self.last_result else self.model.id
 
-    async def chat(self, messages: list[dict[str, Any]], tools=None) -> dict[str, Any]:
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools=None,
+    ) -> dict[str, Any]:
         self.last_result = await self.model.infer(
             InferenceRequest(
                 messages=tuple(messages),

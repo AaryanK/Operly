@@ -48,6 +48,7 @@ on:
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
       - "tests/test_model_pool_failover.py"
+      - "tests/test_multi_provider_model_portfolio.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -94,6 +95,7 @@ on:
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
       - "tests/test_model_pool_failover.py"
+      - "tests/test_multi_provider_model_portfolio.py"
       - "tests/test_target_architecture_contracts.py"
       - "tests/test_software_project_persistence.py"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -130,5 +132,6 @@ jobs:
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
           tests/test_model_pool_failover.py
+          tests/test_multi_provider_model_portfolio.py
           tests/test_target_architecture_contracts.py
           tests/test_software_project_persistence.py

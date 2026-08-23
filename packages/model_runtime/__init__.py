@@ -9,6 +9,7 @@ from .catalog import (
     ModelResource,
     has_delegate_models,
     model_resources,
+    provider_is_configured,
     register_model_resource,
     replace_discovered_resources,
     select_model_resource,
@@ -29,6 +30,7 @@ from .discovery import (
     register_model_discoverer,
 )
 from .ollama_client import OllamaClient, OllamaError
+from .openai_compatible_client import OpenAICompatibleClient
 from .openrouter_client import OpenRouterClient
 from .portfolio import ModelRoute, configured_portfolio, model_route
 from .providers import (
@@ -47,6 +49,13 @@ from .registry import (
     model_chat_client_for_role,
     model_for_role,
     register_model_telemetry_sink,
+)
+from .routing_policy import (
+    RoleRoutingProfile,
+    auto_portfolio_enabled,
+    configured_provider_count,
+    role_routing_profile,
+    role_routing_profiles,
 )
 from .semantic_router import SemanticDecision, SemanticRouter, SemanticRoutingError
 from .service import ModelInvocationResult, ModelInvocationService
@@ -69,10 +78,17 @@ __all__ = [
     "model_for_role",
     "model_chat_client_for_role",
     "register_model_telemetry_sink",
+    "RoleRoutingProfile",
+    "role_routing_profile",
+    "role_routing_profiles",
+    "auto_portfolio_enabled",
+    "configured_provider_count",
+    "provider_is_configured",
     # Compatibility exports below this line. New callers should not depend on them.
     "OllamaClient",
     "OllamaError",
     "OpenRouterClient",
+    "OpenAICompatibleClient",
     "ModelClient",
     "ModelRoute",
     "ModelResource",
