@@ -3,6 +3,7 @@ import unittest
 
 from pydantic import ValidationError
 
+from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_source_files
 from packages.custom_software.source_bundles import SourceFile
 from packages.runtime_plugins.fullstack_contract import (
     FULLSTACK_EXECUTION_ENABLED,
@@ -52,10 +53,25 @@ class FullStackManifestTests(unittest.TestCase):
         validation = validate_fullstack_source(_source())
         self.assertTrue(validation.valid, validation.errors)
 
+    def test_runtime_resolver_recognizes_contract_but_does_not_fake_execution(self):
+        with self.assertRaises(RuntimeResolutionError) as context:
+            validate_source_files(_source())
+        message = str(context.exception)
+        self.assertIn("operly-fullstack-v1 project contract is valid", message)
+        self.assertIn("preview/deploy remain unavailable", message)
+
     def test_contract_rejects_noncanonical_or_traversing_layout(self):
         with self.assertRaises(ValidationError):
             FullStackSolutionManifest.model_validate(
-                _manifest(layout={"frontend": "ui", "backend": "../api", "workers": "workers", "tests": "tests", "migrations": "migrations"})
+                _manifest(
+                    layout={
+                        "frontend": "ui",
+                        "backend": "../api",
+                        "workers": "workers",
+                        "tests": "tests",
+                        "migrations": "migrations",
+                    }
+                )
             )
 
     def test_contract_rejects_provider_credentials_and_duplicate_bindings(self):
