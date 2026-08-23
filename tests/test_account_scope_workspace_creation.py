@@ -168,6 +168,7 @@ async def test_personal_ai_workspace_settings_follow_real_member_authority():
 @pytest.mark.asyncio
 async def test_personal_ai_can_read_registered_workspace_capability_through_bridge(monkeypatch):
     from contextlib import asynccontextmanager
+    from packages.capabilities import agent_harness as agent_harness_module
     from packages.capabilities import firewall as firewall_module
 
     import_all_models()
@@ -194,6 +195,7 @@ async def test_personal_ai_can_read_registered_workspace_capability_through_brid
             async def local_session_scope():
                 yield db
 
+            monkeypatch.setattr(agent_harness_module, "session_scope", local_session_scope)
             monkeypatch.setattr(firewall_module, "session_scope", local_session_scope)
             provider = PersonalRuntimeProvider()
             context = SimpleNamespace(
