@@ -39,18 +39,20 @@ export function useScope() {
     }
   }, []);
 
-  const activatePersonal = useCallback(async () => {
+  const activatePersonal = useCallback(async (destination = personalPath()) => {
     setState((current) => ({ ...current, transitioning: true, error: null }));
     try {
-      await api("/auth/personal-scope", { method: "POST", body: "{}" });
+      if (state.profile?.current_workspace_id) {
+        await api("/auth/personal-scope", { method: "POST", body: "{}" });
+      }
       await refresh();
-      navigate(personalPath());
+      navigate(destination, { replace: window.location.pathname === destination });
     } finally {
       setState((current) => ({ ...current, transitioning: false }));
     }
-  }, [refresh]);
+  }, [refresh, state.profile?.current_workspace_id]);
 
-  const activateWorkspace = useCallback(async (workspaceId: string) => {
+  const activateWorkspace = useCallback(async (workspaceId: string, destination = workspacePath(workspaceId)) => {
     setState((current) => ({ ...current, transitioning: true, error: null }));
     try {
       if (state.profile?.current_workspace_id !== workspaceId) {
@@ -60,7 +62,7 @@ export function useScope() {
         });
       }
       await refresh();
-      navigate(workspacePath(workspaceId));
+      navigate(destination, { replace: window.location.pathname === destination });
     } finally {
       setState((current) => ({ ...current, transitioning: false }));
     }
