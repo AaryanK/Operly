@@ -4,7 +4,7 @@ import re
 
 from packages.application_builder.catalog import ALLOWED_ACTIONS, ALLOWED_FIELDS, COMPONENTS, MODULES
 from packages.application_builder.schema import ApplicationManifest, ProposalRequest
-from packages.business_brain.ollama_client import OllamaClient
+from packages.model_runtime.registry import model_chat_client_for_role
 
 logger = logging.getLogger("operly.application_builder")
 
@@ -226,7 +226,7 @@ class ApplicationBuilderAI:
             "ownerRequest": request.message,
             "outputSchema": ApplicationManifest.model_json_schema(),
         }
-        client = self.client or OllamaClient()
+        client = self.client or model_chat_client_for_role("planner")
         messages = [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": json.dumps(payload, separators=(",", ":"))},
@@ -241,20 +241,21 @@ class ApplicationBuilderAI:
             except Exception as exc:
                 first_error = exc
                 if attempt:
-                    logger.warning("builder_model_repair %s", json.dumps({"planner":"ollama","schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
+                    logger.warning("builder_model_repair %s", json.dumps({"planner":"shared_model_runtime","schema_validation_errors":str(exc),"repair_attempt_result":"failed"}))
                     details=_validation_details(exc,"repair",repair_attempted=True);details["initial"] = initial_details
                     raise ManifestGenerationError(details) from exc
                 initial_details=_validation_details(exc,"initial",repair_attempted=True)
-                logger.warning("builder_model_validation %s", json.dumps({"planner":"ollama","schema_validation_errors":str(exc),"repair_attempt_result":"started"}))
+                logger.warning("builder_model_validation %s", json.dumps({"planner":"shared_model_runtime","schema_validation_errors":str(exc),"repair_attempt_result":"started"}))
                 repair = {
                     "instruction": "Repair the previous output. Return the complete corrected manifest as JSON only.",
                     "validationErrors": str(exc)[:12000],
                     "outputSchema": ApplicationManifest.model_json_schema(),
                 }
                 messages.extend([{"role": "assistant", "content": str(response.get("content", ""))[:80000]}, {"role": "user", "content": json.dumps(repair, separators=(",", ":"))}])
-                response = await client.chat(messages, [])
+                repair_client = self.client or model_chat_client_for_role("repair")
+                response = await repair_client.chat(messages, [])
         if first_error is not None:
-            logger.info("builder_model_repair %s", json.dumps({"planner":"ollama","schema_validation_errors":str(first_error),"repair_attempt_result":"succeeded"}))
+            logger.info("builder_model_repair %s", json.dumps({"planner":"shared_model_runtime","schema_validation_errors":str(first_error),"repair_attempt_result":"succeeded"}))
         before = current.model_dump(mode="json")
         after = manifest.model_dump(mode="json")
         if after == before:
