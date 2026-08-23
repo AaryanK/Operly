@@ -37,6 +37,7 @@ from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
 from apps.api.software_projects_router import router as software_projects_router
+from apps.api.solution_generation_router import router as solution_generation_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_debug_router import router as studio_debug_router
@@ -210,6 +211,7 @@ for router in (
     coding_harness_router,
     software_projects_router,
     solutions_router,
+    solution_generation_router,
     solutions_public_router,
 ):
     app.include_router(router)
