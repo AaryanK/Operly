@@ -1,0 +1,24 @@
+name: account-first-home
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/static/auth.js"
+      - "tests/test_account_first_home.py"
+      - ".github/workflows/account-first-home.yml"
+  workflow_dispatch:
+
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install pytest
+      - name: Check authentication JavaScript syntax
+        run: node --check apps/web/static/auth.js
+      - name: Run account-first navigation regression
+        run: python -m pytest -q tests/test_account_first_home.py
