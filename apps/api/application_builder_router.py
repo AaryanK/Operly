@@ -17,6 +17,9 @@ from packages.model_runtime.semantic_router import SemanticRoutingError
 router=APIRouter(tags=["application-builder"]);service=ApplicationBuilderService()
 def failure(error):return HTTPException(403 if isinstance(error,PermissionError) else 404 if isinstance(error,LookupError) else 422,str(error))
 def change(row):return {"id":row.id,"applicationId":row.application_id,"baseVersionId":row.base_version_id,"scope":row.scope,"operations":json.loads(row.operations_json),"before":json.loads(row.before_json),"after":json.loads(row.after_json),"validation":json.loads(row.validation_json),"risk":row.risk,"status":row.status,"appliedVersionId":row.applied_version_id}
+def _assert_previewable_version(version):
+    if version.version_number==1 and version.summary=="Blank application":
+        raise HTTPException(status_code=409,detail={"code":"generation_not_ready","message":"Application generation has not produced a preview-ready version yet."})
 
 @router.get("/api/application-builder/catalog/modules")
 async def modules(auth:AuthContext=Depends(get_auth_context)):return module_catalog()
@@ -70,6 +73,7 @@ async def preview_app(application_id:str,changeSetId:str|None=None,route:str="/"
             row=await service.change_set(db,auth.tenant.id,changeSetId)
             if row.application_id!=app.id:raise LookupError("Change set not found")
             manifest=ApplicationManifest.model_validate_json(row.after_json)
+        else:_assert_previewable_version(version)
         base=f"/apps/{app.id}/preview"+(f"?changeSetId={changeSetId}" if changeSetId else "")
         return render_application(manifest,application_id=app.id,version_id=version.id,studio=True,base_path=base,route=route,role=auth.role)
     except (BuilderError,LookupError) as e:raise failure(e)
