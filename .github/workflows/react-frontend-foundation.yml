@@ -3,20 +3,22 @@ name: react-frontend-foundation
 on:
   pull_request:
     paths:
+      - "Dockerfile"
+      - "apps/api/main.py"
+      - "apps/api/personal_agent_router.py"
+      - "packages/business_brain/personal_agent.py"
       - "apps/web/index.html"
       - "apps/web/package.json"
       - "apps/web/package-lock.json"
       - "apps/web/vite.config.ts"
       - "apps/web/src/**"
+      - "apps/web/FRONTEND_MIGRATION.md"
       - ".github/workflows/react-frontend-foundation.yml"
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,5 +26,27 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - run: npm ci
-      - run: npm run build
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Build canonical React frontend
+        working-directory: apps/web
+        run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile changed Python serving and Personal AI modules
+        run: python -m py_compile apps/api/main.py apps/api/personal_agent_router.py packages/business_brain/personal_agent.py
+      - name: Assert production image includes the frontend build stage
+        run: |
+          grep -q 'FROM node:22-alpine AS web-build' Dockerfile
+          grep -q 'COPY --from=web-build /web/dist /app/apps/web/dist' Dockerfile
+          grep -q 'path.startswith("channels/")' apps/api/main.py
+      - name: Verify canonical route ownership has no migration placeholders
+        run: |
+          ! grep -R 'PendingMigration' apps/web/src
+          ! grep -R 'hiddenClick' apps/web/src
+          ! grep -R 'MutationObserver' apps/web/src
+          grep -q 'WorkspaceOperly' apps/web/src/workspace/WorkspaceShell.tsx
+          grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
+          grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
