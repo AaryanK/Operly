@@ -1,0 +1,257 @@
+/* Operly authenticated product system.
+   This is the single visual contract for Personal + workspace surfaces.
+   Legacy stylesheets may provide structure, but they do not own colors, spacing,
+   responsive behavior, or component appearance once a session is active. */
+
+body.operly-authenticated-shell{
+  --ui-rail:#101217;
+  --ui-nav:#171a22;
+  --ui-nav-hover:#242833;
+  --ui-nav-active:#2c3140;
+  --ui-canvas:#f4f6f9;
+  --ui-panel:#fff;
+  --ui-panel-soft:#f8f9fb;
+  --ui-text:#171a22;
+  --ui-text-2:#515a69;
+  --ui-text-3:#7a8392;
+  --ui-line:#dfe3ea;
+  --ui-line-strong:#cbd1db;
+  --ui-accent:#5d68f6;
+  --ui-accent-hover:#4d58e8;
+  --ui-accent-soft:#eef0ff;
+  --ui-success:#247a5c;
+  --ui-success-soft:#eaf7f1;
+  --ui-danger:#bf424c;
+  --ui-danger-soft:#fff0f2;
+  --ui-warning:#9a651e;
+  --ui-shadow:0 14px 42px rgba(24,29,42,.08);
+  --ui-shadow-lg:0 28px 80px rgba(18,22,33,.16);
+  --ui-radius:18px;
+  --op-accent:var(--ui-accent);
+  --op-accent-hover:var(--ui-accent-hover);
+  --op-text:var(--ui-text);
+  --op-text-2:var(--ui-text-2);
+  --op-text-3:var(--ui-text-3);
+  --op-line:var(--ui-line);
+  --op-canvas:var(--ui-canvas);
+  --op-panel:var(--ui-panel);
+  --ink:var(--ui-text);
+  --muted:var(--ui-text-2);
+  --green:var(--ui-accent);
+  --lime:#aeb4ff;
+  --line:var(--ui-line);
+  --paper:#fff;
+  --bg:var(--ui-canvas);
+  color-scheme:light;
+  margin:0;
+  background:var(--ui-canvas)!important;
+  color:var(--ui-text)!important;
+  overflow-x:hidden;
+}
+body.operly-authenticated-shell *,body.operly-authenticated-shell *::before,body.operly-authenticated-shell *::after{box-sizing:border-box}
+body.operly-authenticated-shell :focus-visible{outline:3px solid rgba(93,104,246,.28);outline-offset:2px}
+body.operly-authenticated-shell button,body.operly-authenticated-shell input,body.operly-authenticated-shell textarea,body.operly-authenticated-shell select{font:inherit}
+#dashboard.workspace-shell-ready.hidden,#personal.personal-home.hidden{display:none!important}
+
+/* Global account/workspace rail */
+.operly-scope-rail{position:fixed!important;inset:0 auto 0 0!important;width:72px!important;z-index:10050!important;background:var(--ui-rail)!important;border-right:1px solid #090b0f!important}
+.scope-button{background:#292d35!important;color:#f5f7fb!important}
+.scope-button:hover,.scope-button:focus-visible,.scope-button.active{background:var(--ui-accent)!important}
+.scope-home{background:#f7f8fb!important}.scope-home:hover,.scope-home.active{background:#fff!important}
+.scope-add{background:#20252a!important;color:#8ed9b8!important}.scope-add:hover{background:#277a5d!important;color:#fff!important}
+.scope-account{background:#343a45!important}.scope-divider{background:#343944!important}
+
+/* Workspace shell: one sidebar, one content column. */
+#dashboard.workspace-shell-ready{
+  display:grid!important;
+  grid-template-columns:248px minmax(0,1fr)!important;
+  margin-left:72px!important;
+  width:calc(100% - 72px)!important;
+  min-height:100vh!important;
+  background:var(--ui-canvas)!important;
+  color:var(--ui-text)!important;
+}
+#dashboard.workspace-shell-ready>.operly-workspace-rail{display:none!important}
+#dashboard.workspace-shell-ready>.operly-section-nav{
+  grid-column:1!important;
+  min-width:0!important;
+  background:linear-gradient(180deg,#191c24,#14171e)!important;
+  border-right:1px solid #292e38!important;
+  color:#f5f7fb!important;
+}
+#dashboard.workspace-shell-ready>.app-main{
+  grid-column:2!important;
+  min-width:0!important;
+  margin:0!important;
+  background:var(--ui-canvas)!important;
+  color:var(--ui-text)!important;
+}
+.operly-workspace-head,.operly-nav-footer{border-color:#2e333e!important}
+.operly-workspace-head strong,.operly-user-meta strong{color:#f7f8fb!important}
+.operly-workspace-head small,.operly-head-caret,.operly-user-meta small,.operly-user-menu{color:#9fa7b5!important}
+.operly-nav-group{color:#727b8a!important}
+.operly-nav-item{color:#bac1cc!important}
+.operly-nav-item:hover{background:var(--ui-nav-hover)!important;color:#fff!important}
+.operly-nav-item.active{background:linear-gradient(90deg,rgba(93,104,246,.24),rgba(93,104,246,.07))!important;color:#fff!important;font-weight:700}
+.operly-nav-item.active .operly-nav-icon{color:#aab0ff!important}.operly-nav-pill{color:#bfc4ff!important}
+.operly-nav-footer{background:#11141a!important}.operly-user-avatar{background:#292e39!important;color:#fff!important;border-color:#3a404d!important}
+
+#dashboard.workspace-shell-ready .topbar{
+  height:68px!important;
+  padding:0 clamp(18px,2.5vw,34px)!important;
+  background:rgba(255,255,255,.94)!important;
+  color:var(--ui-text)!important;
+  border-bottom:1px solid var(--ui-line)!important;
+  box-shadow:none!important;
+  backdrop-filter:blur(16px);
+}
+#dashboard.workspace-shell-ready .topbar h1{color:var(--ui-text)!important;font-size:18px!important}
+#dashboard.workspace-shell-ready .topbar small{color:var(--ui-text-3)!important}
+#dashboard.workspace-shell-ready .content{width:100%!important;max-width:1480px!important;margin:0 auto!important;padding:clamp(20px,2.8vw,38px)!important;color:var(--ui-text)!important;background:var(--ui-canvas)!important;min-width:0!important}
+#dashboard.workspace-shell-ready :is(h1,h2,h3,h4,h5,h6,strong){color:var(--ui-text)!important}
+#dashboard.workspace-shell-ready :is(p,small,time){color:var(--ui-text-2)!important}
+#dashboard.workspace-shell-ready :is(.simple-eyebrow,.operly-shell-eyebrow,.operly-settings-kicker){color:#5964db!important}
+#dashboard.workspace-shell-ready a,.simple-link{color:#4f5ed7!important}
+
+/* Reusable surface language */
+#dashboard.workspace-shell-ready :is(.simple-attention-card,.simple-project-card,.simple-empty-projects,.simple-activity-section,.simple-follow-up,.presence-grid section,.presence-existing,.connector-card,.operly-shell-card,.operly-shell-row,.op-metric,.op-brief-card,.op-plugin-card,.panel,.card,.stat,.settings,.operly-setting-card,.operly-scope-banner){
+  background:var(--ui-panel)!important;
+  color:var(--ui-text)!important;
+  border:1px solid var(--ui-line)!important;
+  box-shadow:var(--ui-shadow)!important;
+}
+#dashboard.workspace-shell-ready :is(.operly-shell-card,.panel,.card,.settings,.operly-setting-card){border-radius:var(--ui-radius)!important}
+#dashboard.workspace-shell-ready :is(.simple-attention-card,.simple-project-card,.operly-shell-row,.op-metric){border-radius:14px!important}
+#dashboard.workspace-shell-ready :is(.operly-shell-row,.simple-list-row,.simple-message-row,.row,.operly-setting-row){min-width:0!important}
+#dashboard.workspace-shell-ready :is(.operly-shell-row,.simple-list-row,.simple-message-row,.row) :is(strong,p,small){overflow-wrap:anywhere}
+
+/* High-emphasis onboarding/learning stays dark but readable. */
+#dashboard.workspace-shell-ready :is(.company-learning,.welcome,.op-setup-banner){
+  background:linear-gradient(135deg,#26305f,#1a2147)!important;
+  color:#fff!important;
+  border:1px solid rgba(108,119,255,.28)!important;
+  box-shadow:0 18px 48px rgba(31,38,86,.15)!important;
+}
+#dashboard.workspace-shell-ready :is(.company-learning,.welcome,.op-setup-banner) :is(h1,h2,h3,h4,strong){color:#fff!important}
+#dashboard.workspace-shell-ready :is(.company-learning,.welcome,.op-setup-banner) :is(p,small){color:#d9def2!important}
+
+/* Controls */
+#dashboard.workspace-shell-ready :is(input,textarea,select,.operly-shell-input,.operly-shell-select){background:#fff!important;color:var(--ui-text)!important;border:1px solid #d4d9e2!important;box-shadow:none!important;border-radius:10px!important;max-width:100%}
+#dashboard.workspace-shell-ready :is(input,textarea)::placeholder{color:#929baa!important}
+#dashboard.workspace-shell-ready :is(input,textarea,select):focus{border-color:#929af7!important;box-shadow:0 0 0 3px rgba(93,104,246,.11)!important}
+#dashboard.workspace-shell-ready :is(.button.primary,.button.lime,.operly-shell-button.primary,.operly-shell-button.accent,.operly-setting-button.primary,.simple-topbar-ask,.ai-send-button){background:var(--ui-accent)!important;border-color:var(--ui-accent)!important;color:#fff!important;box-shadow:none!important}
+#dashboard.workspace-shell-ready :is(.button.primary,.operly-shell-button.primary,.operly-shell-button.accent,.operly-setting-button.primary):hover{background:var(--ui-accent-hover)!important}
+#dashboard.workspace-shell-ready :is(.pill,.simple-status,.operly-status,.operly-permission,.operly-badge){background:#f0f2f7!important;color:#5d6675!important;border-color:#dfe3ea!important}
+#dashboard.workspace-shell-ready :is(.status.connected,.operly-badge:not(.muted)){background:var(--ui-success-soft)!important;color:var(--ui-success)!important}
+
+/* Activity / approvals: never dark rows inside a light page. */
+#dashboard.workspace-shell-ready .card.approval{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto!important;
+  align-items:center!important;
+  gap:18px!important;
+  padding:18px 20px!important;
+  margin:10px 0!important;
+  background:#fff!important;
+  border:1px solid var(--ui-line)!important;
+  color:var(--ui-text)!important;
+  box-shadow:none!important;
+}
+#dashboard.workspace-shell-ready .card.approval h3{margin:7px 0 5px!important;font-size:15px!important;color:var(--ui-text)!important;overflow-wrap:anywhere}
+#dashboard.workspace-shell-ready .card.approval p{margin:0!important;color:var(--ui-text-2)!important;font-size:12px!important;line-height:1.5!important;overflow-wrap:anywhere}
+#dashboard.workspace-shell-ready .card.approval small{display:block;margin-top:6px;color:var(--ui-text-3)!important}
+#dashboard.workspace-shell-ready .approval-actions{display:flex!important;gap:8px!important;flex-wrap:wrap!important;justify-content:flex-end!important}
+
+/* Channels, connectors and settings are part of the same light product. */
+.operly-settings-page{
+  --settings-panel:#fff;
+  --settings-panel-2:#f8f9fb;
+  --settings-line:var(--ui-line);
+  --settings-text:var(--ui-text);
+  --settings-muted:var(--ui-text-2);
+  --settings-accent:#5964db;
+  width:min(100%,1200px)!important;
+  margin:0 auto!important;
+  padding:clamp(20px,3vw,40px)!important;
+  color:var(--ui-text)!important;
+}
+.operly-settings-hero{margin-bottom:22px!important;align-items:flex-end!important}.operly-settings-hero h2{color:var(--ui-text)!important;font-size:clamp(28px,4vw,40px)!important}.operly-settings-hero p{color:var(--ui-text-2)!important}
+.operly-scope-banner{display:flex!important;align-items:center!important;gap:14px!important;padding:14px 16px!important;background:#fff!important;border-color:var(--ui-line)!important;box-shadow:none!important;color:var(--ui-text)!important}
+.operly-scope-banner strong{color:var(--ui-text)!important}.operly-scope-banner small{color:var(--ui-text-2)!important}
+.operly-settings-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:16px!important;min-width:0!important}
+.operly-setting-card{padding:20px!important;background:#fff!important;border-color:var(--ui-line)!important;color:var(--ui-text)!important;box-shadow:var(--ui-shadow)!important;min-width:0!important}
+.operly-setting-card.wide{grid-column:1/-1!important}.operly-setting-head{gap:14px!important}.operly-setting-head h3{color:var(--ui-text)!important}.operly-setting-head p{color:var(--ui-text-2)!important}
+.operly-setting-row{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:14px!important;padding:13px 14px!important;background:var(--ui-panel-soft)!important;border:1px solid var(--ui-line)!important;border-radius:12px!important;color:var(--ui-text)!important}
+.operly-setting-row strong{color:var(--ui-text)!important}.operly-setting-row small{color:var(--ui-text-2)!important}
+.operly-settings-empty{background:#fafbfc!important;border:1px dashed #d6dbe4!important;color:var(--ui-text-3)!important}
+.operly-bind-guide{margin-top:14px!important;padding:14px 15px!important;background:#f3f4ff!important;border:1px solid #dfe1ff!important;color:#3f4875!important;border-radius:13px!important}
+.operly-bind-guide small{color:#70799a!important}.operly-bind-guide code{color:#3948c7!important;font-weight:700!important;overflow-wrap:anywhere!important}
+.operly-setting-button{background:#fff!important;color:var(--ui-text)!important;border:1px solid var(--ui-line)!important}.operly-setting-button:hover{background:#f6f7fb!important;border-color:#c8ced9!important}.operly-setting-button.danger{color:var(--ui-danger)!important}.operly-inline-code,.operly-code-box{background:#f7f8fb!important;color:var(--ui-text)!important;border-color:var(--ui-line)!important}
+
+/* Workspace AI: one conversation surface. Context is inferred by the harness. */
+#dashboard.workspace-shell-ready:has(.ai-layout) .content{max-width:none!important;padding:0!important;height:calc(100vh - 68px)!important;overflow:hidden!important}
+.ai-layout{display:grid!important;grid-template-columns:240px minmax(0,1fr)!important;gap:0!important;height:100%!important;min-height:0!important;max-height:none!important;background:#fff!important}
+.ai-layout.ai-no-history{grid-template-columns:1fr!important}.ai-history{border:0!important;border-right:1px solid var(--ui-line)!important;border-radius:0!important;background:#f6f7f9!important;box-shadow:none!important}.ai-chat{border:0!important;border-radius:0!important;box-shadow:none!important;min-width:0!important;background:#fff!important}.ai-chat-head{min-height:62px!important;background:#fff!important;border-color:var(--ui-line)!important}.ai-chat-head h3{color:var(--ui-text)!important}.ai-chat-head small,.ai-context-pill{color:var(--ui-text-3)!important}.ai-messages{background:#fff!important;padding:24px clamp(16px,5vw,64px)!important}.ai-composer-shell{background:linear-gradient(to bottom,rgba(255,255,255,0),#fff 24%)!important;border:0!important;padding:12px clamp(12px,4vw,46px) 16px!important}.ai-application-picker{display:none!important}.ai-composer{border:1px solid #cfd5df!important;border-radius:18px!important;background:#fff!important;box-shadow:0 8px 26px rgba(28,34,48,.09)!important}.ai-composer:focus-within{border-color:#929af7!important;box-shadow:0 0 0 3px rgba(93,104,246,.1),0 10px 30px rgba(28,34,48,.08)!important}.ai-icon-button{color:#657080!important}.ai-icon-button:hover{background:#f0f2f6!important}.ai-send-button{background:var(--ui-accent)!important;color:#fff!important}.ai-composer textarea{color:var(--ui-text)!important}.ai-composer-hint{color:var(--ui-text-3)!important}.ai-pulse-card,.ai-command-grid button,.ai-recent-context{background:#fff!important;color:var(--ui-text)!important;border-color:var(--ui-line)!important;box-shadow:none!important}.ai-pulse-card:hover,.ai-command-grid button:hover{background:#f7f8fb!important;border-color:#cbd1db!important}
+
+/* Personal @me */
+#personal.personal-home{background:#fff!important;color:var(--ui-text)!important;overflow:hidden!important}
+#personal.personal-home .personal-grid{background:#fff!important}.personal-side{background:var(--ui-nav)!important}.personal-panel:not(.personal-side){background:#fff!important}.personal-messages{background:#fff!important}.personal-compose{background:linear-gradient(to bottom,rgba(255,255,255,0),#fff 28%,#fff)!important}.personal-message:hover{background:#f7f8fa!important}.personal-compose :is(select,textarea){background:#f7f8fa!important;color:var(--ui-text)!important;border-color:#d8dde5!important}.personal-compose button{background:var(--ui-accent)!important;color:#fff!important}
+.personal-mobile-nav-toggle{display:none;width:36px;height:36px;border:1px solid var(--ui-line);border-radius:10px;background:#fff;color:var(--ui-text);font-size:18px;place-items:center;cursor:pointer;flex:0 0 auto}.personal-mobile-backdrop{display:none}
+
+/* User/workspace settings: desktop-app layout, not a tiny floating form. */
+.operly-shell-modal{position:fixed!important;inset:0!important;z-index:12000!important;display:grid!important;place-items:center!important;padding:24px!important;background:transparent!important}.operly-shell-modal.hidden{display:none!important}.shell-modal-backdrop{position:absolute!important;inset:0!important;background:rgba(10,12,18,.58)!important;backdrop-filter:blur(6px)!important}
+.shell-modal-card{position:relative!important;width:min(1120px,calc(100vw - 48px))!important;height:min(820px,calc(100dvh - 48px))!important;max-height:none!important;border:1px solid rgba(255,255,255,.18)!important;border-radius:20px!important;background:#fff!important;color:var(--ui-text)!important;box-shadow:var(--ui-shadow-lg)!important;overflow:hidden!important}
+#shell-modal-content{height:100%!important;min-width:0!important;overflow:hidden!important}.settings-shell{height:100%!important;display:grid!important;grid-template-columns:238px minmax(0,1fr)!important;min-width:0!important}.settings-shell>aside{min-width:0!important;background:linear-gradient(180deg,#1a1d25,#15181f)!important;padding:24px 14px!important;color:#fff!important;overflow:auto!important}.settings-shell>main{min-width:0!important;background:#fff!important;overflow:auto!important;overscroll-behavior:contain}.settings-brand{padding:0 10px 20px!important}.settings-tabs{gap:3px!important}.settings-tabs button,.back-to-account{min-height:40px!important;padding:10px 11px!important;color:#b7bec9!important;border-radius:9px!important}.settings-tabs button:hover,.back-to-account:hover{background:#272b35!important;color:#fff!important}.settings-tabs button.active{background:#303541!important;color:#fff!important}.settings-tabs .danger-tab{color:#e5949b!important}.settings-tabs .danger-tab.active{background:#4c292e!important;color:#ffc1c6!important}.shell-modal-head.compact{position:sticky!important;top:0!important;z-index:3!important;padding:24px clamp(20px,3vw,36px) 17px!important;background:rgba(255,255,255,.95)!important;border-bottom:1px solid #eceff3!important;backdrop-filter:blur(14px)!important}.shell-modal-head h2{color:var(--ui-text)!important}.shell-modal-head>button{background:#f0f2f5!important;color:#59616d!important}.settings-section{max-width:760px!important;padding:24px clamp(20px,3vw,36px) 40px!important}.section-heading h3{color:var(--ui-text)!important}.section-heading p{color:var(--ui-text-2)!important}.profile-hero{background:linear-gradient(135deg,#f0f2ff,#faf9ff)!important;border-color:#dfe2ff!important}.settings-card,.workspace-settings-list>button,.member-list>div,.danger-card{background:#fff!important;color:var(--ui-text)!important;border-color:var(--ui-line)!important}.settings-card{box-shadow:none!important}.shell-form{max-width:700px!important;padding:10px clamp(20px,3vw,36px) 34px!important}.shell-form.narrow{padding:0!important}.shell-form :is(input,select){background:#fff!important;color:var(--ui-text)!important;border-color:#d4d9e2!important}.shell-button.primary{background:var(--ui-accent)!important;color:#fff!important}.shell-button.secondary{background:#fff!important;color:var(--ui-text)!important;border-color:var(--ui-line)!important}.workspace-settings-list>button:hover{background:#f8f9fc!important;border-color:#cdd2ff!important}
+
+/* Solutions library + composition page should feel first-party in the workspace. */
+body:not(.operly-studio-open) #dashboard .ss-list{
+  --ss-text:var(--ui-text);--ss-muted:var(--ui-text-2);--ss-dim:var(--ui-text-3);--ss-line:var(--ui-line);--ss-line-strong:#cbd1db;
+  width:min(100%,1240px)!important;color:var(--ui-text)!important;padding:4px 0 44px!important
+}
+body:not(.operly-studio-open) #dashboard .ss-list>header{border-color:var(--ui-line)!important;align-items:flex-end!important}body:not(.operly-studio-open) #dashboard .ss-list>header h2{color:var(--ui-text)!important}body:not(.operly-studio-open) #dashboard .ss-list>header p{color:var(--ui-text-2)!important}
+body:not(.operly-studio-open) #dashboard .ss-card{background:#fff!important;border-color:var(--ui-line)!important;box-shadow:var(--ui-shadow)!important}body:not(.operly-studio-open) #dashboard .ss-cardbody h3{color:var(--ui-text)!important}body:not(.operly-studio-open) #dashboard .ss-cardbody p{color:var(--ui-text-2)!important}
+body:not(.operly-studio-open) #dashboard .ss-list .ss-cardbody:has(#ss-compose-name){width:min(860px,100%)!important;max-width:none!important;margin:24px auto!important;padding:clamp(22px,4vw,38px)!important;background:#fff!important;border:1px solid var(--ui-line)!important;border-radius:20px!important;box-shadow:var(--ui-shadow)!important}
+body:not(.operly-studio-open) #dashboard #ss-compose-name,body:not(.operly-studio-open) #dashboard #ss-compose-objective{display:block!important;width:100%!important;max-width:none!important;background:#fff!important;color:var(--ui-text)!important;border:1px solid #d4d9e2!important;border-radius:12px!important;padding:13px 14px!important;box-shadow:none!important;font-size:15px!important;line-height:1.5!important}
+body:not(.operly-studio-open) #dashboard #ss-compose-objective{min-height:190px!important;resize:vertical!important}body:not(.operly-studio-open) #dashboard #ss-compose-name:focus,body:not(.operly-studio-open) #dashboard #ss-compose-objective:focus{border-color:#929af7!important;outline:0!important;box-shadow:0 0 0 3px rgba(93,104,246,.1)!important}
+body:not(.operly-studio-open) #dashboard .ss-list button{background:#fff!important;color:var(--ui-text)!important;border-color:var(--ui-line)!important}body:not(.operly-studio-open) #dashboard .ss-list button.primary{background:var(--ui-accent)!important;color:#fff!important;border-color:var(--ui-accent)!important}
+
+/* Tablet: keep the account rail, turn workspace/DM navigation into drawers. */
+@media(max-width:1024px){
+  #dashboard.workspace-shell-ready{display:block!important;margin-left:72px!important;width:calc(100% - 72px)!important}
+  #dashboard.workspace-shell-ready>.app-main{display:block!important;width:100%!important}
+  #dashboard.workspace-shell-ready>.operly-section-nav{display:flex!important;position:fixed!important;left:72px!important;top:0!important;bottom:0!important;width:min(292px,72vw)!important;height:100dvh!important;z-index:10020!important;transform:translateX(-105%)!important;transition:transform .2s ease!important;box-shadow:22px 0 64px rgba(0,0,0,.24)!important}
+  #dashboard.workspace-shell-ready.operly-mobile-nav-open>.operly-section-nav{transform:translateX(0)!important}
+  #dashboard.workspace-shell-ready #mobile-nav-toggle{display:grid!important;place-items:center!important;width:40px!important;height:40px!important;flex:0 0 40px!important;border:1px solid var(--ui-line)!important;border-radius:11px!important;background:#fff!important;color:var(--ui-text)!important}
+  #dashboard.workspace-shell-ready .mobile-nav-backdrop{display:block!important;position:fixed!important;left:72px!important;right:0!important;top:0!important;bottom:0!important;z-index:10010!important;background:rgba(12,14,20,.45)!important;opacity:0!important;pointer-events:none!important;transition:opacity .18s ease!important}
+  #dashboard.workspace-shell-ready.operly-mobile-nav-open .mobile-nav-backdrop{opacity:1!important;pointer-events:auto!important}
+  .operly-settings-grid{grid-template-columns:1fr!important}.operly-setting-card.wide{grid-column:auto!important}
+  .op-two-column,.op-admin-grid{grid-template-columns:1fr!important}.op-metric-grid,.op-metric-grid-four{grid-template-columns:repeat(2,minmax(0,1fr))!important}.op-plugin-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .ai-layout{grid-template-columns:1fr!important}.ai-history{display:none!important}
+  .personal-grid{grid-template-columns:220px minmax(0,1fr)!important}.personal-compose{left:220px!important}
+}
+
+@media(max-width:860px){
+  .personal-grid{margin-left:72px!important;grid-template-columns:1fr!important}.personal-panel:not(.personal-side){grid-column:1!important}.personal-side{position:fixed!important;left:72px!important;top:0!important;bottom:0!important;width:min(290px,78vw)!important;z-index:10030!important;transform:translateX(-105%)!important;transition:transform .2s ease!important;display:flex!important;box-shadow:22px 0 64px rgba(0,0,0,.26)!important}.personal-home.personal-mobile-nav-open .personal-side{transform:translateX(0)!important}.personal-compose{left:0!important}.personal-mobile-nav-toggle{display:grid!important}.personal-mobile-backdrop{display:block!important;position:fixed!important;left:72px!important;inset-block:0!important;right:0!important;z-index:10025!important;background:rgba(12,14,20,.45)!important;opacity:0!important;pointer-events:none!important;transition:opacity .18s ease!important}.personal-home.personal-mobile-nav-open .personal-mobile-backdrop{opacity:1!important;pointer-events:auto!important}
+  .settings-shell{grid-template-columns:200px minmax(0,1fr)!important}.shell-modal-card{width:calc(100vw - 24px)!important;height:calc(100dvh - 24px)!important}
+}
+
+/* Phones: account rail moves to bottom and settings become a full-screen flow. */
+@media(max-width:700px){
+  body.operly-authenticated-shell{padding-bottom:64px!important}
+  .operly-scope-rail{inset:auto 0 0 0!important;width:100%!important;height:64px!important;border-right:0!important;border-top:1px solid #090b0f!important}
+  #dashboard.workspace-shell-ready{margin-left:0!important;width:100%!important;padding-bottom:0!important}
+  #dashboard.workspace-shell-ready>.operly-section-nav{left:0!important;bottom:64px!important;height:calc(100dvh - 64px)!important;width:min(310px,88vw)!important}
+  #dashboard.workspace-shell-ready .mobile-nav-backdrop{left:0!important;bottom:64px!important}
+  #dashboard.workspace-shell-ready .topbar{height:62px!important;padding:0 12px!important}.simple-topbar-ask{padding:8px 10px!important;font-size:11px!important}
+  #dashboard.workspace-shell-ready .content{padding:16px 12px 28px!important}.operly-shell-hero{align-items:flex-start!important;flex-direction:column!important}.op-hero-actions{width:100%!important;justify-content:flex-start!important;flex-wrap:wrap!important}
+  .op-metric-grid,.op-metric-grid-four,.op-plugin-grid{grid-template-columns:1fr!important}.card.approval{grid-template-columns:1fr!important}.approval-actions{justify-content:flex-start!important}
+  .operly-settings-page{padding:18px 12px 28px!important}.operly-settings-hero{align-items:flex-start!important;flex-direction:column!important}.operly-setting-row{align-items:flex-start!important;flex-direction:column!important}
+  #dashboard.workspace-shell-ready:has(.ai-layout) .content{height:calc(100dvh - 126px)!important}.ai-chat-head{padding:10px 12px!important}.ai-messages{padding:16px 10px!important}.ai-composer-shell{padding:8px 8px 10px!important}.ai-composer-hint span:last-child{display:none!important}.ai-message.user{max-width:90%!important}
+  .personal-grid{margin:0!important;padding-bottom:0!important;min-height:calc(100dvh - 64px)!important}.personal-panel:not(.personal-side){min-height:calc(100dvh - 64px)!important}.personal-side{left:0!important;bottom:64px!important;height:calc(100dvh - 64px)!important;width:min(310px,88vw)!important}.personal-mobile-backdrop{left:0!important;bottom:64px!important}.personal-panel>header{padding:10px 12px!important}.personal-messages{padding:12px 6px 132px!important}.personal-compose{position:fixed!important;left:0!important;right:0!important;bottom:64px!important;padding:8px!important}.personal-compose select{display:none!important}.personal-compose>label{display:none!important}.personal-message{grid-template-columns:34px minmax(0,1fr)!important;gap:8px!important}.personal-message-avatar{width:32px!important;height:32px!important}.personal-message p{font-size:13px!important}.personal-channel-title p{display:none!important}
+  .operly-shell-modal{padding:0!important}.shell-modal-card{width:100%!important;height:calc(100dvh - 64px)!important;border:0!important;border-radius:0!important;margin-bottom:64px!important}.settings-shell{display:flex!important;flex-direction:column!important}.settings-shell>aside{padding:10px 10px 8px!important;overflow:visible!important;flex:0 0 auto!important}.settings-brand{display:none!important}.settings-tabs{display:flex!important;gap:4px!important;overflow-x:auto!important;scrollbar-width:none!important}.settings-tabs::-webkit-scrollbar{display:none}.settings-tabs button{flex:0 0 auto!important;white-space:nowrap!important;min-height:36px!important;padding:8px 10px!important}.back-to-account{display:none!important}.settings-shell>main{flex:1!important;min-height:0!important}.shell-modal-head.compact{padding:14px 14px 10px!important}.shell-modal-head h2{font-size:20px!important}.settings-section{padding:18px 14px 28px!important}.shell-form{padding:8px 14px 22px!important}.section-heading.split{display:grid!important}.settings-card{align-items:flex-start!important;flex-wrap:wrap!important}.connector-actions{width:100%!important;justify-content:flex-start!important}.workspace-settings-list>button{grid-template-columns:38px minmax(0,1fr)!important}.workspace-settings-list>button>.shell-button{grid-column:2!important;justify-self:start!important}
+  body:not(.operly-studio-open) #dashboard .ss-list>header{align-items:flex-start!important;flex-direction:column!important;padding-top:8px!important}body:not(.operly-studio-open) #dashboard .ss-list>header h2{font-size:34px!important}body:not(.operly-studio-open) #dashboard .ss-list .ss-cardbody:has(#ss-compose-name){margin:10px 0!important;padding:18px 14px!important;border-radius:14px!important}body:not(.operly-studio-open) #dashboard #ss-compose-objective{min-height:160px!important}
+}
+
+@media(max-width:430px){
+  .scope-home{display:flex!important}.scope-button{width:41px!important;height:41px!important;min-height:41px!important;flex-basis:41px!important}.private-badge{display:none!important}.personal-channel-title{gap:8px!important}.personal-mobile-nav-toggle{width:34px;height:34px}.shell-modal-head small{display:none!important}.connector-actions{display:grid!important;grid-template-columns:1fr!important}.connector-actions .shell-button{width:100%!important}.shell-form-actions{display:grid!important;grid-template-columns:1fr 1fr!important}.shell-form-actions .shell-button{width:100%!important}
+}
