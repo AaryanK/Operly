@@ -12,6 +12,7 @@ from typing import Any
 
 from packages.coding_harness.build_service import RunnerProfileUnsupported, submit_source_build
 from packages.coding_harness.source_service import generate_source_for_plan, latest_source, repair_source_for_plan
+from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
 
 
 REPAIRABLE_FAILURES = {"build_failure", "test_failure", "runtime_crash", "health_check_failure", "acceptance_test_failure"}
@@ -89,6 +90,11 @@ async def build_with_repair(
                 attempt=used_repairs + 1,
             )
         except RunnerProfileUnsupported as error:
+            # Missing full-stack executor support is infrastructure truth, not a
+            # source defect. Never ask the coding model to silently collapse a
+            # full-stack application into the old dependency-free profiles.
+            if error.profile_id == FULLSTACK_RUNTIME_ID:
+                raise
             if used_repairs >= budget:
                 raise
             used_repairs += 1
