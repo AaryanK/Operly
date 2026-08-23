@@ -37,7 +37,6 @@ from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
 from apps.api.software_projects_router import router as software_projects_router
-from apps.api.solution_generation_router import retire_legacy_compose_route
 from apps.api.solution_generation_router import router as solution_generation_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
@@ -183,11 +182,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
-
-# The generation lifecycle router now owns the intent-driven compose endpoint so
-# initial-generation failures can persist their run and return a truthful HTTP
-# failure. Keep the rest of the canonical Solution API unchanged.
-retire_legacy_compose_route(solutions_router)
 
 for router in (
     system_router,
