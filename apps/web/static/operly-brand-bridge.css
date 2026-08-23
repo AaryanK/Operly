@@ -1,0 +1,96 @@
+/* Temporary public/auth brand bridge until those routes move into the React shell. */
+#landing,
+.auth-screen {
+  --public-violet: #6f5cff;
+  --public-violet-strong: #5141e9;
+  --public-blue: #48bff0;
+  --public-gold: #ffbe63;
+  --public-navy: #080b16;
+  --public-ink: #151925;
+}
+
+#landing {
+  color: var(--public-ink);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(111,92,255,.08), transparent 28%),
+    radial-gradient(circle at 92% 18%, rgba(72,191,240,.08), transparent 30%),
+    #f7f8fc;
+}
+#landing .hero {
+  background:
+    radial-gradient(circle at 84% 18%, rgba(255,190,99,.16), transparent 20%),
+    radial-gradient(circle at 72% 74%, rgba(72,191,240,.13), transparent 28%),
+    linear-gradient(135deg, #090d1b 0%, #111737 48%, #17194b 100%);
+  box-shadow: 0 30px 90px rgba(15,20,45,.22), inset 0 0 0 1px rgba(255,255,255,.055);
+}
+#landing .kicker,
+.auth-screen .kicker.green {
+  color: #a99cff;
+}
+#landing .hero h1 em {
+  color: transparent;
+  background: linear-gradient(90deg, #9b8cff 0%, #59c9f0 52%, #ffbf68 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+#landing .hero p { color: #bdc7dc; }
+#landing .button.lime,
+#landing .button.primary,
+.auth-screen .button.primary {
+  color: #fff;
+  background: linear-gradient(135deg, #7b68ff 0%, #6079ff 48%, #4fc4ed 100%);
+  box-shadow: 0 10px 30px rgba(84,94,226,.24), inset 0 1px 0 rgba(255,255,255,.22);
+}
+#landing .button.lime:hover,
+#landing .button.primary:hover,
+.auth-screen .button.primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
+#landing .button.secondary { color: #353a4b; border-color: #dce0eb; background: rgba(255,255,255,.88); }
+#landing .preview-sidebar { background: linear-gradient(180deg, #0c1020, #131834); }
+#landing .preview-sidebar i:first-of-type { background: linear-gradient(90deg, #8a78ff, #54c8ef); }
+#landing .product-preview { background: #f9faff; color: #171b29; box-shadow: 0 38px 90px rgba(5,9,25,.42); }
+#landing .features article { border-top-color: #d9deea; }
+#landing .features span,
+#landing .public-footer strong { color: var(--public-violet-strong); }
+#landing .public-footer { border-top-color: #d9deea; }
+
+.auth-screen,
+#login.auth-screen {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(111,92,255,.12), transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(72,191,240,.08), transparent 26%),
+    linear-gradient(145deg, #f0f2fb, #fafbfe);
+}
+.auth-screen .auth-card {
+  border-color: #dfe3ee;
+  box-shadow: 0 26px 80px rgba(20,25,55,.13), 0 0 0 1px rgba(111,92,255,.035);
+}
+.auth-screen .auth-shell > .back,
+.auth-screen .text-link { color: var(--public-violet-strong); }
+.auth-screen .auth-card label { color: #40475a; }
+.auth-screen .auth-card input:focus-visible,
+.auth-screen .auth-card button:focus-visible,
+#landing .landing-actions button:focus-visible {
+  outline-color: rgba(111,92,255,.32);
+}
+.auth-screen input:focus,
+.auth-screen textarea:focus {
+  border-color: #9d91ff;
+  box-shadow: 0 0 0 4px rgba(111,92,255,.09);
+}
+
+@media (prefers-color-scheme: dark) {
+  #landing {
+    color: #f2f4fb;
+    background:
+      radial-gradient(circle at 10% 0%, rgba(111,92,255,.12), transparent 28%),
+      radial-gradient(circle at 92% 18%, rgba(72,191,240,.08), transparent 30%),
+      #090d16;
+  }
+  #landing .landing-header .brand.dark { color: #f4f6fb; }
+  #landing .features article { border-top-color: #262f42; }
+  #landing .features p,
+  #landing .public-footer { color: #97a3b8; }
+  #landing .features h2 { color: #eef1f8; }
+  #landing .public-footer { border-top-color: #262f42; }
+  #landing .button.secondary { color: #e8ecf5; border-color: #30394b; background: #151b27; }
+}
