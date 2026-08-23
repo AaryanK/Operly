@@ -1,7 +1,9 @@
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
-import { AccessPage, MembersPage, PluginsPage } from "./AdminPages";
+import { AccessPage } from "./AccessPage";
 import { ActivityPage, ConnectionsPage, CRMPage, OperationsPage, PresencePage } from "./DataPages";
+import { MembersPage } from "./MembersPage";
+import { PluginsPage } from "./PluginsPage";
 import { SolutionsPage } from "./SolutionsPage";
 import { WorkspaceHome } from "./WorkspaceHome";
 import { WorkspaceOperly } from "./WorkspaceOperly";
