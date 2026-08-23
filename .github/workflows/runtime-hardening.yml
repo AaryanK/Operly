@@ -46,6 +46,8 @@ jobs:
           packages/model_runtime/registry.py
           packages/model_runtime/task_routing.py
           packages/model_runtime/trace_context.py
+          packages/model_runtime/ollama_client.py
+          packages/model_runtime/openrouter_client.py
           packages/model_runtime/openai_compatible_client.py
           alembic/versions/0034_provider_trace_ids.py
           alembic/versions/0035_conversation_runtime_trace.py
