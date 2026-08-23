@@ -10,7 +10,7 @@ from apps.api.workspace_router import create_workspace
 from packages.assets import service as asset_service
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.database.db import Base
-from packages.database.models import AppUser, Tenant, TenantMember
+from packages.database.models import AppUser, Task, Tenant, TenantMember
 from packages.database.schema import import_all_models
 
 
@@ -161,6 +161,65 @@ async def test_personal_ai_workspace_settings_follow_real_member_authority():
             assert allowed.changed is True
             assert workspace.name == "Owner Rename"
             assert workspace.timezone == "Asia/Kathmandu"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_personal_ai_can_read_registered_workspace_capability_through_bridge():
+    import_all_models()
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    try:
+        async with sessions() as db:
+            user = AppUser(email="bridge@example.com", display_name="Bridge Owner", password_hash="x", active=True)
+            workspace = Tenant(name="Bridge Workspace", slug="bridge-workspace", timezone="UTC")
+            db.add_all([user, workspace])
+            await db.flush()
+            db.add_all(
+                [
+                    TenantMember(tenant_id=workspace.id, user_id=user.id, role="owner"),
+                    Task(tenant_id=workspace.id, title="Cross-scope read", status="open"),
+                ]
+            )
+            await db.flush()
+            provider = PersonalRuntimeProvider()
+            context = SimpleNamespace(
+                actor_id=user.id,
+                tenant_id=None,
+                db=db,
+                invocation={
+                    "channel": "web",
+                    "metadata": {
+                        "is_direct": True,
+                        "shared_surface": False,
+                        "personal_scope": True,
+                        "conversation_id": "personal-test",
+                        "objective": "list my workspace tasks",
+                    },
+                },
+            )
+
+            result = await provider.execute(
+                context,
+                "account.workspace_execute",
+                {
+                    "workspace": workspace.id,
+                    "capability_id": "tasks.list",
+                    "arguments": {},
+                },
+            )
+
+            assert result.success is True
+            assert result.changed is False
+            payload = result.evidence["result"]
+            assert payload["ok"] is True
+            assert payload["status"] == "VERIFIED"
+            assert payload["observation"]["tasks"][0]["title"] == "Cross-scope read"
+            assert context.tenant_id is None
     finally:
         await engine.dispose()
 
