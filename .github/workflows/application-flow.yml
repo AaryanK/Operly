@@ -7,6 +7,7 @@ on:
       - "apps/web/static/**"
       - "alembic/versions/**"
       - "packages/actions/**"
+      - "packages/agents/**"
       - "packages/business/**"
       - "packages/business_brain/**"
       - "packages/capabilities/**"
@@ -15,7 +16,9 @@ on:
       - "packages/context/**"
       - "packages/coding_harness/**"
       - "packages/database/**"
+      - "packages/harness/**"
       - "packages/mcp/**"
+      - "packages/model_runtime/**"
       - "packages/plugins/**"
       - "packages/security/**"
       - "packages/solutions/**"
@@ -48,6 +51,8 @@ on:
       - "tests/test_principal_access_architecture.py"
       - "tests/test_unified_runtime_context.py"
       - "tests/test_durable_runtime_state.py"
+      - "tests/test_plugin_first_runtime.py"
+      - "tests/test_multi_provider_model_portfolio.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -93,6 +98,11 @@ jobs:
           alembic/versions/0029_studio_agent_runs.py
           alembic/versions/0032_scope_boundaries.py
           alembic/versions/0033_personal_connectors.py
+          packages/agents/runtime.py
+          packages/harness/plugins.py
+          packages/model_runtime/portfolio.py
+          packages/model_runtime/routing_policy.py
+          packages/model_runtime/task_routing.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
@@ -109,6 +119,8 @@ jobs:
           packages/business_brain/context_loader.py
           packages/business_brain/conversation_artifacts.py
           packages/business_brain/personal_agent.py
+          packages/business_brain/attachments/plugin.py
+          packages/business_brain/attachments/multimodal_processor.py
           packages/actions/service.py
           packages/channels/envelope.py
           packages/channels/identity.py
@@ -213,6 +225,8 @@ jobs:
           tests/test_principal_access_architecture.py
           tests/test_unified_runtime_context.py
           tests/test_durable_runtime_state.py
+          tests/test_plugin_first_runtime.py
+          tests/test_multi_provider_model_portfolio.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production

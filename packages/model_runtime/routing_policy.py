@@ -37,6 +37,12 @@ class RoleRoutingProfile:
 
 
 _PROFILES: dict[str, RoleRoutingProfile] = {
+    "router": RoleRoutingProfile(
+        "router",
+        frozenset({"text", "reasoning"}),
+        frozenset({"fast", "small", "verified", "reliable", "free"}),
+        max_models=2,
+    ),
     "business_agent": RoleRoutingProfile(
         "business_agent",
         frozenset({"text", "tools"}),
@@ -74,8 +80,21 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
     ),
     "bounded_task": RoleRoutingProfile(
         "bounded_task",
-        frozenset({"text"}),
-        frozenset({"fast", "small", "verified", "free"}),
+        frozenset({"text", "tools"}),
+        frozenset({"fast", "small", "verified", "free", "reliable"}),
+        max_models=3,
+    ),
+    "attachment_text": RoleRoutingProfile(
+        "attachment_text",
+        frozenset({"text", "reasoning"}),
+        frozenset({"fast", "verified", "reliable", "free"}),
+        max_models=3,
+    ),
+    "attachment_vision": RoleRoutingProfile(
+        "attachment_vision",
+        frozenset({"text", "reasoning", "vision"}),
+        frozenset({"fast", "verified", "reliable", "free"}),
+        max_models=3,
     ),
 }
 

@@ -243,16 +243,16 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed.input_cost_per_million, 0.0)
         self.assertEqual(routed.output_cost_per_million, 0.0)
 
-    def test_automatic_bounded_task_pool_is_provider_diverse(self):
+    def test_automatic_bounded_task_pool_only_uses_verified_tool_capable_providers(self):
         with patch.dict(os.environ, self.provider_env, clear=True):
             model = model_for_role("bounded_task")
 
         self.assertIsInstance(model, ModelPool)
-        self.assertEqual(len(model.models), 5)
-        self.assertEqual(
-            {candidate.provider for candidate in model.models},
-            {"openrouter", "ollama", "groq", "gemini", "nvidia"},
-        )
+        self.assertEqual(len(model.models), 3)
+        providers = {candidate.provider for candidate in model.models}
+        self.assertTrue(providers.issubset({"openrouter", "ollama", "groq", "gemini"}))
+        self.assertNotIn("nvidia", providers)
+        self.assertTrue(all("tools" in candidate.capabilities for candidate in model.models))
 
     async def test_successful_fallback_becomes_sticky_across_agent_turns(self):
         primary = _FailingModel("slow-primary")
