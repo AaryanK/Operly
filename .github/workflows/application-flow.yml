@@ -23,10 +23,12 @@ on:
       - "packages/workspace/**"
       - "requirements.txt"
       - "Dockerfile"
+      - "tests/test_account_scope_workspace_creation.py"
       - "tests/test_authentication.py"
       - "tests/test_railway_auth_origin.py"
       - "tests/test_capability_harness_journey.py"
       - "tests/test_capability_exposure_reliability.py"
+      - "tests/test_capability_surface_parity.py"
       - "tests/test_channel_context.py"
       - "tests/test_dm_workspace_switch.py"
       - "tests/test_space_binding_transfer.py"
@@ -65,13 +67,17 @@ jobs:
           apps/api/main.py
           apps/api/access_router.py
           apps/api/agent_router.py
+          apps/api/capability_diagnostics_router.py
           apps/api/csrf.py
           apps/api/business.py
           apps/api/channel_identity_router.py
           apps/api/company_router.py
           apps/api/connectors_router.py
+          apps/api/personal_agent_router.py
+          apps/api/personal_connectors_router.py
           apps/api/solutions_router.py
           apps/api/studio_router.py
+          apps/api/studio_run_history_router.py
           apps/api/studio_source_router.py
           apps/api/workspace_router.py
           apps/api/approvals_router.py
@@ -85,18 +91,24 @@ jobs:
           alembic/versions/0027_global_human_memory.py
           alembic/versions/0028_studio_source_agent.py
           alembic/versions/0029_studio_agent_runs.py
+          alembic/versions/0032_scope_boundaries.py
+          alembic/versions/0033_personal_connectors.py
           packages/business/service.py
           packages/workspace/service.py
           packages/database/db.py
+          packages/database/account_connector_models.py
           packages/database/channel_models.py
           packages/database/workspace_security_models.py
           packages/database/principal_models.py
           packages/database/company_models.py
+          packages/database/scope_models.py
           packages/database/studio_source_models.py
           packages/database/schema.py
           packages/business_brain/types.py
           packages/business_brain/agent.py
           packages/business_brain/context_loader.py
+          packages/business_brain/conversation_artifacts.py
+          packages/business_brain/personal_agent.py
           packages/actions/service.py
           packages/channels/envelope.py
           packages/channels/identity.py
@@ -105,13 +117,17 @@ jobs:
           packages/channels/space_bindings.py
           packages/channels/service.py
           packages/context/service.py
+          packages/security/delegation_context.py
           packages/security/execution_context.py
           packages/security/permissions.py
+          packages/security/personal_delegation.py
           packages/security/principals.py
           packages/security/temporal_context.py
           packages/plugins/manifest.py
           packages/mcp/policy.py
           packages/mcp/gateway.py
+          packages/connectors/account_google.py
+          packages/connectors/account_secrets.py
           packages/connectors/runtime.py
           packages/connectors/google_provider.py
           packages/connectors/discord/runtime.py
@@ -134,7 +150,9 @@ jobs:
           packages/capabilities/studio_provider.py
           packages/capabilities/reminder_provider.py
           packages/capabilities/solution_provider.py
+          packages/capabilities/surface_contract.py
           packages/capabilities/website_provider.py
+          packages/solutions/composer.py
           packages/solutions/service.py
           packages/solutions/production.py
           packages/studio/schema.py
@@ -143,7 +161,12 @@ jobs:
           packages/studio/ai.py
           packages/studio/source_agent.py
           packages/studio/agent_runs.py
+          packages/studio/context_hardening.py
+          packages/studio/hardening_policy.py
+          packages/studio/hardening_policy_v2.py
           packages/studio/model_latency_policy.py
+          packages/studio/model_provenance.py
+          packages/studio/tool_hardening.py
       - name: Check browser JavaScript syntax
         run: |
           node --check apps/web/static/app.js
@@ -153,6 +176,7 @@ jobs:
           node --check apps/web/static/workspace-shell.js
           node --check apps/web/static/operly-modern.js
           node --check apps/web/static/operly-cosmic.js
+          node --check apps/web/static/personal.js
           node --check apps/web/static/unified-solution-studio.js
           node --check apps/web/static/settings-scopes.js
           node --check apps/web/static/time-sync.js
@@ -164,10 +188,12 @@ jobs:
           OPERLY_ENV: test
         run: >-
           python -m pytest -q
+          tests/test_account_scope_workspace_creation.py
           tests/test_authentication.py
           tests/test_railway_auth_origin.py
           tests/test_capability_harness_journey.py
           tests/test_capability_exposure_reliability.py
+          tests/test_capability_surface_parity.py
           tests/test_channel_context.py
           tests/test_dm_workspace_switch.py
           tests/test_space_binding_transfer.py
