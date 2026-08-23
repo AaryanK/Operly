@@ -218,7 +218,9 @@ for router in (
 ):
     app.include_router(router)
 
-WEB_STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
+WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+WEB_STATIC = WEB_ROOT / "static"
+WEB_DIST = WEB_ROOT / "dist"
 app.mount("/static", StaticFiles(directory=WEB_STATIC), name="static")
 
 
@@ -249,8 +251,34 @@ def frontend_shell() -> HTMLResponse:
     )
 
 
+def canonical_frontend_shell() -> HTMLResponse:
+    index = WEB_DIST / "index.html"
+    if not index.is_file():
+        # Local Python-only development can keep using the legacy shell until
+        # `npm run build` creates the canonical bundle. Production Docker builds
+        # always include dist via the web-build stage.
+        return frontend_shell()
+    return HTMLResponse(
+        index.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
+    # Authenticated account/workspace routes have one renderer: the canonical
+    # React application. Public/auth flows remain on the legacy shell while their
+    # separate in-flight account-home PR settles, which keeps this PR merge-safe.
+    if path == "channels" or path.startswith("channels/"):
+        return canonical_frontend_shell()
+
+    built_asset = WEB_DIST / path
+    if path and built_asset.is_file():
+        return FileResponse(built_asset)
+
     requested = WEB_STATIC / path
     if path and requested.is_file():
         return FileResponse(requested)
