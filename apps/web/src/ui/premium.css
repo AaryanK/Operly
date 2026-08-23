@@ -1,0 +1,259 @@
+/* Canonical React visual polish. This file only styles the React-owned UI; it
+   does not participate in the retired static frontend cascade. */
+body {
+  background:
+    radial-gradient(circle at 78% -10%, rgba(111, 92, 255, .10), transparent 30%),
+    radial-gradient(circle at 25% 110%, rgba(91, 199, 234, .08), transparent 28%),
+    var(--ui-canvas);
+}
+
+.authenticated-shell {
+  background:
+    radial-gradient(circle at 90% 0%, rgba(111, 92, 255, .055), transparent 26%),
+    var(--ui-canvas);
+}
+
+.scope-rail {
+  background: linear-gradient(180deg, #0d111c 0%, #101522 58%, #0d111b 100%);
+  border-right: 1px solid rgba(255,255,255,.055);
+  box-shadow: 12px 0 34px rgba(10, 14, 24, .13);
+}
+.scope-mark, .scope-account {
+  background: linear-gradient(145deg, #272d3e, #202634);
+  border-color: rgba(255,255,255,.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
+}
+.scope-mark:hover {
+  border-color: rgba(163, 153, 255, .58);
+  background: linear-gradient(145deg, #343b50, #292f42);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.scope-mark.active {
+  border-color: rgba(255,255,255,.34);
+  background: var(--ui-accent-gradient);
+  box-shadow: 0 10px 28px rgba(102, 87, 245, .35), inset 0 1px 0 rgba(255,255,255,.28);
+}
+
+.workspace-nav {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(111,92,255,.12), transparent 24%),
+    linear-gradient(180deg, #181d2a 0%, #171b27 100%);
+  border-right: 1px solid rgba(255,255,255,.05);
+}
+.workspace-identity { border-bottom-color: rgba(255,255,255,.075); }
+.workspace-identity > span {
+  background: linear-gradient(145deg, #31394e, #252b3c);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+}
+.nav-group button { position: relative; transition: background .16s ease, color .16s ease, transform .16s ease; }
+.nav-group button:hover { background: rgba(255,255,255,.065); transform: translateX(1px); }
+.nav-group button.active {
+  background: linear-gradient(90deg, rgba(111,92,255,.22), rgba(111,92,255,.08));
+  box-shadow: inset 0 0 0 1px rgba(142,130,255,.08);
+}
+.nav-group button.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 3px;
+  background: linear-gradient(#8c7cff, #5bc7ea);
+  box-shadow: 0 0 14px rgba(111,92,255,.65);
+}
+
+.surface-header {
+  background:
+    radial-gradient(circle at 90% -30%, rgba(111,92,255,.08), transparent 34%),
+    rgba(255,255,255,.88);
+  backdrop-filter: blur(18px) saturate(125%);
+}
+.eyebrow { background: linear-gradient(90deg, var(--ui-accent-strong), #4ba8cf); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.privacy-pill, .workspace-context-pill {
+  border: 1px solid rgba(109,93,252,.13);
+  background: linear-gradient(135deg, rgba(239,237,255,.95), rgba(235,247,252,.95));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+}
+
+.primary-button, .composer-actions > button {
+  background: var(--ui-accent-gradient);
+  box-shadow: 0 7px 20px rgba(92, 87, 224, .20), inset 0 1px 0 rgba(255,255,255,.20);
+  transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
+}
+.primary-button:hover, .composer-actions > button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(92, 87, 224, .27), inset 0 1px 0 rgba(255,255,255,.24);
+}
+.secondary-button, .data-card, .presence-card, .solution-compose-card, .solutions-library, .info-banner,
+.metric-card, .destination-card, .plugin-card {
+  border-color: rgba(206, 212, 226, .82);
+  box-shadow: var(--ui-shadow-soft);
+}
+.metric-card, .destination-card, .data-card, .plugin-card, .solution-card, .connector-card, .role-card {
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(250,251,254,.98));
+}
+.destination-card, .plugin-card, .solution-card, .connector-card {
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.destination-card:hover, .plugin-card:hover, .solution-card:hover, .connector-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(129,116,255,.36);
+  box-shadow: 0 18px 45px rgba(35,40,64,.10);
+}
+.destination-card > span, .icon-action {
+  background: linear-gradient(135deg, #eeebff, #e8f7fc);
+}
+
+/* Chat surfaces are viewport applications: only the transcript scrolls. */
+.personal-layout, .ai-page, .ai-layout-react {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.personal-surface, .ai-chat-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: rgba(255,255,255,.94);
+}
+.personal-history, .conversation-list-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(111,92,255,.055), transparent 30%),
+    linear-gradient(180deg, #f2f4f9, #eef1f6);
+}
+.conversation-list-panel { grid-template-rows: auto minmax(0, 1fr); }
+.history-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0 10px;
+  scrollbar-width: thin;
+  scrollbar-color: #c9ceda transparent;
+}
+.history-list > button.active {
+  border: 1px solid rgba(109,93,252,.10);
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 8px 24px rgba(29,35,55,.07);
+}
+.personal-surface .surface-header, .ai-chat-panel .surface-header {
+  position: relative;
+  z-index: 4;
+  padding: 19px 28px;
+  box-shadow: 0 1px 0 rgba(205,211,224,.55), 0 10px 30px rgba(26,31,49,.025);
+}
+.personal-surface .surface-header h1, .ai-chat-panel .surface-header h1 { margin-top: 2px; margin-bottom: 5px; }
+.personal-surface .surface-header p, .ai-chat-panel .surface-header p { font-size: 13px; }
+
+.conversation-stage {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scroll-padding-bottom: 170px;
+  padding: 26px clamp(24px, 4vw, 58px) 34px;
+  background:
+    radial-gradient(circle at 76% 4%, rgba(111,92,255,.045), transparent 25%),
+    radial-gradient(circle at 20% 82%, rgba(91,199,234,.035), transparent 22%),
+    linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  scrollbar-width: thin;
+  scrollbar-color: #cbd0dc transparent;
+}
+.assistant-message, .chat-message { max-width: 920px; margin-left: auto; margin-right: auto; margin-bottom: 22px; }
+.assistant-avatar {
+  background: var(--ui-accent-gradient);
+  border: 1px solid rgba(255,255,255,.55);
+  box-shadow: 0 7px 20px rgba(92,87,224,.22), inset 0 1px 0 rgba(255,255,255,.28);
+}
+.chat-message.user .assistant-avatar {
+  background: linear-gradient(145deg, #555e70, #424a5b);
+  box-shadow: 0 6px 18px rgba(29,35,49,.15), inset 0 1px 0 rgba(255,255,255,.18);
+}
+.chat-message > div:last-child, .assistant-message > div:last-child { min-width: 0; }
+.chat-message.assistant > div:last-child {
+  padding: 1px 0 2px;
+}
+.chat-message.user > div:last-child {
+  width: fit-content;
+  max-width: min(760px, 100%);
+  padding: 10px 13px;
+  border: 1px solid rgba(216,220,230,.85);
+  border-radius: 4px 14px 14px 14px;
+  background: rgba(247,248,251,.92);
+}
+.chat-message.user > div:last-child > strong { font-size: 12px; color: #555d70; }
+
+.composer {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 auto;
+  margin: 10px auto 16px;
+  width: min(940px, calc(100% - 48px));
+  border-color: rgba(172,178,200,.58);
+  border-radius: 20px;
+  background: rgba(255,255,255,.88);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--ui-shadow-float), 0 0 0 1px rgba(109,93,252,.035);
+}
+.composer::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgba(111,92,255,.20), transparent 30%, transparent 70%, rgba(91,199,234,.16));
+  padding: 1px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.composer:focus-within {
+  border-color: rgba(109,93,252,.45);
+  box-shadow: 0 24px 72px rgba(39,44,73,.16), 0 0 0 3px rgba(109,93,252,.07);
+}
+.composer textarea { min-height: 64px; max-height: 180px; padding: 16px 18px 8px; line-height: 1.5; }
+.attach-button {
+  background: linear-gradient(135deg, #f0edff, #edf8fc) !important;
+  box-shadow: inset 0 0 0 1px rgba(109,93,252,.055);
+}
+.working-state { max-width: 920px; margin: 0 auto; padding: 4px 0 18px 50px; }
+
+.suggestion-grid { max-width: 920px; gap: 14px; }
+.suggestion-grid button {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(205,211,224,.9);
+  background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(247,248,253,.98));
+  box-shadow: var(--ui-shadow-soft);
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.suggestion-grid button::after {
+  content: "";
+  position: absolute;
+  width: 90px;
+  height: 90px;
+  right: -35px;
+  bottom: -50px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(111,92,255,.13), transparent 66%);
+}
+.suggestion-grid button:hover { transform: translateY(-2px); border-color: rgba(109,93,252,.30); box-shadow: 0 18px 40px rgba(35,40,64,.10); }
+
+@media (max-width: 680px) {
+  .personal-layout, .ai-page, .ai-layout-react { height: 100dvh; }
+  .personal-surface .surface-header, .ai-chat-panel .surface-header { padding: 14px 16px; }
+  .personal-surface .surface-header p, .ai-chat-panel .surface-header p { display: none; }
+  .conversation-stage { padding: 20px 16px 28px; scroll-padding-bottom: 150px; }
+  .assistant-message, .chat-message { grid-template-columns: 34px minmax(0,1fr); gap: 10px; }
+  .assistant-avatar { width: 34px; height: 34px; border-radius: 11px; }
+  .composer { width: calc(100% - 20px); margin-bottom: 10px; border-radius: 17px; }
+  .composer textarea { min-height: 54px; }
+}
