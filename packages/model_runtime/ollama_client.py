@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import random
@@ -17,6 +18,7 @@ _REFERENCE_PATTERN = re.compile(
     r"\bref(?:erence)?(?:\s*id)?\s*[:=]\s*([A-Za-z0-9-]{8,})",
     re.IGNORECASE,
 )
+_TRACE_RESPONSE_HEADERS = ("x-request-id", "x-reference-id", "x-correlation-id", "retry-after")
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -120,6 +122,10 @@ class OllamaClient:
         ]
         self.fallback_model = self.fallback_models[0] if self.fallback_models else ""
         self.last_model = self.model
+        self.last_request_payload: dict[str, Any] | None = None
+        self.last_response_payload: Any = None
+        self.last_response_status: int | None = None
+        self.last_response_metadata: dict[str, str] = {}
         self.timeout_seconds = _bounded_int(
             "OLLAMA_TIMEOUT_SECONDS", default=180, minimum=15, maximum=600
         )
@@ -239,6 +245,13 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        self.last_request_payload = {
+            "url": self.url,
+            "body": copy.deepcopy(payload),
+        }
+        self.last_response_payload = None
+        self.last_response_status = None
+        self.last_response_metadata = {}
 
         async with session.post(
             self.url,
@@ -252,6 +265,19 @@ class OllamaClient:
                 body = json.loads(response_text) if response_text else {}
             except json.JSONDecodeError:
                 body = None
+            self.last_response_status = int(response.status)
+            self.last_response_metadata = {
+                key: str(response.headers.get(key))
+                for key in _TRACE_RESPONSE_HEADERS
+                if response.headers.get(key)
+            }
+            if reference:
+                self.last_response_metadata.setdefault("reference", reference)
+            self.last_response_payload = (
+                copy.deepcopy(body)
+                if isinstance(body, (dict, list))
+                else str(response_text or "")[:20_000]
+            )
 
             if response.status != 200:
                 upstream_message = None
