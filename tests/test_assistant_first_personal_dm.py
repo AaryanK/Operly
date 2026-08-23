@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from packages.channels.envelope import ChannelEnvelope
@@ -41,7 +42,7 @@ async def _linked_user_with_two_workspaces(sessions):
         return user.id, first.id, second.id
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def dm_database(tmp_path):
     import_all_models()
     engine = create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'personal-dm.db').as_posix()}")
