@@ -1,9 +1,9 @@
 """Durable conversation-scoped model-runtime tracing.
 
-The sink records the provider-neutral packet seen by the runtime, never transport
-credentials or hidden provider reasoning. Credential-shaped values are redacted in
-the durable payload while a SHA-256 digest preserves the identity of the exact
-unredacted packet observed at runtime.
+The sink records runtime-visible request/response evidence and provider diagnostics,
+never transport credentials or hidden provider reasoning. Credential-shaped and
+reasoning-only values are redacted in the durable payload while a SHA-256 digest
+preserves the identity of the exact unredacted packet observed at runtime.
 """
 from __future__ import annotations
 
@@ -36,6 +36,17 @@ _SECRET_KEY_PARTS = (
     "private_key",
     "session_token",
 )
+_HIDDEN_REASONING_KEYS = frozenset(
+    {
+        "reasoning",
+        "reasoning_details",
+        "reasoning_content",
+        "thinking",
+        "thinking_content",
+        "chain_of_thought",
+        "chain-of-thought",
+    }
+)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]{8,}")
 _SK_RE = re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b")
 
@@ -53,12 +64,18 @@ def _secret_key(key: str) -> bool:
     return any(part in lowered for part in _SECRET_KEY_PARTS)
 
 
+def _hidden_reasoning_key(key: str) -> bool:
+    return str(key or "").strip().lower() in _HIDDEN_REASONING_KEYS
+
+
 def _redact_string(value: str) -> str:
     text = _BEARER_RE.sub("Bearer [REDACTED]", value)
     return _SK_RE.sub("[REDACTED_API_KEY]", text)
 
 
 def redact_trace_value(value: Any, *, key: str = "") -> Any:
+    if key and _hidden_reasoning_key(key):
+        return "[REDACTED_HIDDEN_REASONING]"
     if key and _secret_key(key):
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -81,6 +98,7 @@ def _encoded_envelope(payload: dict[str, Any]) -> str:
         "traceVersion": 2,
         "exactPayloadDigest": exact_digest,
         "redactionApplied": True,
+        "hiddenReasoningRedacted": True,
         "payload": redact_trace_value(payload),
     }
     encoded = _canonical(envelope)
@@ -91,6 +109,7 @@ def _encoded_envelope(payload: dict[str, Any]) -> str:
             "traceVersion": 2,
             "exactPayloadDigest": exact_digest,
             "redactionApplied": True,
+            "hiddenReasoningRedacted": True,
             "truncated": True,
             "originalJsonChars": len(_canonical(payload)),
             "payload": {
@@ -170,7 +189,12 @@ def _trace_json(row: ModelRuntimeTrace) -> dict[str, Any]:
     try:
         trace = json.loads(row.payload_json or "{}")
     except Exception:
-        trace = {"traceVersion": 2, "redactionApplied": True, "payload": {}}
+        trace = {
+            "traceVersion": 2,
+            "redactionApplied": True,
+            "hiddenReasoningRedacted": True,
+            "payload": {},
+        }
     return {
         "id": row.id,
         "runId": row.run_id,
@@ -242,6 +266,7 @@ async def conversation_trace_report(
         "conversationId": conversation_id,
         "traceVersion": 2,
         "redactionApplied": True,
+        "hiddenReasoningRedacted": True,
         "entryCount": len(rows),
         "runCount": len(runs),
         "runs": runs,
