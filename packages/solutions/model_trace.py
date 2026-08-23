@@ -8,10 +8,16 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any
 
 from packages.model_runtime import register_model_telemetry_sink
+from packages.model_runtime.client_context import (
+    begin_client_decorator,
+    end_client_decorator,
+)
 from packages.model_runtime.registry import ModelAttemptEvent
 from packages.studio.model_trace import redact_trace_value
 
-_MAX_TRACE_JSON_CHARS = 500_000
+_MAX_TRACE_ITEM_CHARS = 120_000
+_MAX_CALL_RECORDS = 12
+_MAX_ATTEMPT_RECORDS = 200
 
 
 @dataclass
@@ -20,6 +26,8 @@ class SolutionModelTraceScope:
     call_index: int = 0
     calls: list[dict[str, Any]] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
+    calls_truncated: bool = False
+    attempts_truncated: bool = False
 
 
 _SCOPE: ContextVar[SolutionModelTraceScope | None] = ContextVar(
@@ -27,7 +35,6 @@ _SCOPE: ContextVar[SolutionModelTraceScope | None] = ContextVar(
     default=None,
 )
 _TELEMETRY_INSTALLED = False
-_BUILDER_HOOK_INSTALLED = False
 
 
 def _canonical(value: Any) -> str:
@@ -41,13 +48,13 @@ def _digest(value: Any) -> str:
 def _bounded(value: Any) -> Any:
     redacted = redact_trace_value(value)
     encoded = _canonical(redacted)
-    if len(encoded) <= _MAX_TRACE_JSON_CHARS:
+    if len(encoded) <= _MAX_TRACE_ITEM_CHARS:
         return redacted
     return {
         "truncated": True,
         "originalJsonChars": len(encoded),
         "digest": _digest(value),
-        "notice": "Trace exceeded the durable Solution-job payload limit.",
+        "notice": "Trace item exceeded the durable Solution-job payload limit.",
     }
 
 
@@ -71,9 +78,19 @@ def _model_candidates(model: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _append_call(scope: SolutionModelTraceScope, payload: dict[str, Any]) -> None:
+    if len(scope.calls) >= _MAX_CALL_RECORDS:
+        scope.calls_truncated = True
+        return
+    scope.calls.append(_bounded(payload))
+
+
 async def telemetry_sink(event: ModelAttemptEvent) -> None:
     scope = _SCOPE.get()
     if scope is None:
+        return
+    if len(scope.attempts) >= _MAX_ATTEMPT_RECORDS:
+        scope.attempts_truncated = True
         return
     scope.attempts.append(
         {
@@ -98,34 +115,12 @@ def install_telemetry() -> None:
     _TELEMETRY_INSTALLED = True
 
 
-def install_application_builder_trace() -> None:
-    """Install one context-aware wrapper at the managed-app model factory seam.
-
-    The wrapper is permanent but inert outside a Solution trace ContextVar, so
-    concurrent non-creation requests keep their normal clients and semantics.
-    """
-    global _BUILDER_HOOK_INSTALLED
-    if _BUILDER_HOOK_INSTALLED:
-        return
-    from packages.application_builder import ai as builder_ai
-
-    original = builder_ai.model_chat_client_for_role
-    if getattr(original, "_operly_solution_trace_wrapped", False):
-        _BUILDER_HOOK_INSTALLED = True
-        return
-
-    def traced_factory(*args, **kwargs):
-        return trace_client(original(*args, **kwargs))
-
-    traced_factory._operly_solution_trace_wrapped = True  # type: ignore[attr-defined]
-    builder_ai.model_chat_client_for_role = traced_factory
-    _BUILDER_HOOK_INSTALLED = True
-
-
 def begin(job_id: str):
+    """Begin one trace without changing any global model/provider factory."""
     install_telemetry()
-    install_application_builder_trace()
-    return _SCOPE.set(SolutionModelTraceScope(job_id=job_id))
+    scope_token = _SCOPE.set(SolutionModelTraceScope(job_id=job_id))
+    client_token = begin_client_decorator(trace_client)
+    return scope_token, client_token
 
 
 def snapshot() -> dict[str, Any]:
@@ -136,12 +131,16 @@ def snapshot() -> dict[str, Any]:
         "aiInvoked": bool(scope.calls or scope.attempts),
         "modelCalls": list(scope.calls),
         "modelAttempts": list(scope.attempts),
+        "callsTruncated": scope.calls_truncated,
+        "attemptsTruncated": scope.attempts_truncated,
     }
 
 
 def end(token) -> dict[str, Any]:
     data = snapshot()
-    _SCOPE.reset(token)
+    scope_token, client_token = token
+    end_client_decorator(client_token)
+    _SCOPE.reset(scope_token)
     return data
 
 
@@ -175,53 +174,53 @@ class TracingModelChatClient:
         tool_list = list(tools or ())
         model = getattr(self.inner, "model", None)
         budget = getattr(self.inner, "budget", None)
-        request_payload = {
-            "callIndex": call_index,
-            "phase": "request",
-            "exactPayloadDigest": _digest({"messages": messages, "tools": tool_list}),
-            "candidateModels": _model_candidates(model) if model is not None else [],
-            "budget": asdict(budget) if budget is not None and is_dataclass(budget) else None,
-            "messages": messages,
-            "tools": tool_list,
-        }
-        scope.calls.append(_bounded(request_payload))
+        _append_call(
+            scope,
+            {
+                "callIndex": call_index,
+                "phase": "request",
+                "exactPayloadDigest": _digest({"messages": messages, "tools": tool_list}),
+                "candidateModels": _model_candidates(model) if model is not None else [],
+                "budget": asdict(budget) if budget is not None and is_dataclass(budget) else None,
+                "messages": messages,
+                "tools": tool_list,
+            },
+        )
 
         try:
             message = await self.inner.chat(messages, tool_list)
         except BaseException as error:
-            scope.calls.append(
-                _bounded(
-                    {
-                        "callIndex": call_index,
-                        "phase": "error",
-                        "type": type(error).__name__,
-                        "message": str(error),
-                        "classification": getattr(error, "classification", None),
-                        "retryable": getattr(error, "retryable", None),
-                        "provider": getattr(error, "provider", None),
-                        "modelId": getattr(error, "model_id", None),
-                    }
-                )
+            _append_call(
+                scope,
+                {
+                    "callIndex": call_index,
+                    "phase": "error",
+                    "type": type(error).__name__,
+                    "message": str(error),
+                    "classification": getattr(error, "classification", None),
+                    "retryable": getattr(error, "retryable", None),
+                    "provider": getattr(error, "provider", None),
+                    "modelId": getattr(error, "model_id", None),
+                },
             )
             raise
 
         result = getattr(self.inner, "last_result", None)
         usage = getattr(result, "usage", None)
-        scope.calls.append(
-            _bounded(
-                {
-                    "callIndex": call_index,
-                    "phase": "response",
-                    "message": message,
-                    "modelResourceId": getattr(result, "model_resource_id", None),
-                    "provider": getattr(result, "provider", None),
-                    "providerModelId": getattr(result, "provider_model_id", None),
-                    "latencyMs": getattr(result, "latency_ms", None),
-                    "finishReason": getattr(result, "finish_reason", None),
-                    "attempt": getattr(result, "attempt", None),
-                    "usage": asdict(usage) if usage is not None and is_dataclass(usage) else None,
-                }
-            )
+        _append_call(
+            scope,
+            {
+                "callIndex": call_index,
+                "phase": "response",
+                "message": message,
+                "modelResourceId": getattr(result, "model_resource_id", None),
+                "provider": getattr(result, "provider", None),
+                "providerModelId": getattr(result, "provider_model_id", None),
+                "latencyMs": getattr(result, "latency_ms", None),
+                "finishReason": getattr(result, "finish_reason", None),
+                "attempt": getattr(result, "attempt", None),
+                "usage": asdict(usage) if usage is not None and is_dataclass(usage) else None,
+            },
         )
         return message
 
