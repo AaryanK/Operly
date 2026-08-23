@@ -1,6 +1,7 @@
 """Typed contracts shared by the OPERLY control plane and isolated runners."""
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime
 from typing import Literal
@@ -15,6 +16,10 @@ _NPM_PACKAGE = re.compile(
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9*_.+!<>=~^|-]{0,79}$")
 _CAPABILITY = re.compile(r"^[a-z][a-z0-9_.:-]{1,159}$")
 _SEMANTIC_NAME = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
+_HOSTNAME = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+)
 
 
 class Strict(BaseModel):
@@ -94,18 +99,36 @@ class NetworkPolicy(Strict):
     @field_validator("approvedHosts")
     @classmethod
     def safe_hosts(cls, hosts):
-        forbidden = (
-            "169.254.169.254",
-            "metadata.google.internal",
-            "localhost",
-            "127.",
-            "10.",
-            "192.168.",
-            "172.16.",
-        )
-        if any(any(host.lower().startswith(prefix) for prefix in forbidden) for host in hosts):
-            raise ValueError("Private and metadata hosts are forbidden")
-        return hosts
+        normalized: list[str] = []
+        for raw in hosts:
+            host = str(raw or "").strip().lower().rstrip(".")
+            if not host:
+                raise ValueError("Approved network hosts cannot be empty")
+            if any(token in host for token in ("/", "@", "?", "#", " ", "\t", "\n")):
+                raise ValueError("Approved network entries must be hostnames or IP addresses, not URLs")
+            if host in {"localhost", "metadata.google.internal"} or host.endswith(".localhost"):
+                raise ValueError("Private and metadata hosts are forbidden")
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                if not _HOSTNAME.fullmatch(host):
+                    raise ValueError("Approved network host is not a valid hostname or IP address")
+            else:
+                if any(
+                    (
+                        address.is_private,
+                        address.is_loopback,
+                        address.is_link_local,
+                        address.is_reserved,
+                        address.is_multicast,
+                        address.is_unspecified,
+                    )
+                ):
+                    raise ValueError("Private, local, reserved, and metadata addresses are forbidden")
+            normalized.append(host)
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Approved network hosts must be unique")
+        return normalized
 
 
 class HealthCheck(Strict):
