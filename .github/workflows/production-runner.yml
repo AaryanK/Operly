@@ -1,0 +1,45 @@
+name: production-runner
+
+on:
+  pull_request:
+    paths:
+      - "apps/runner/**"
+      - "packages/custom_software/runner_contracts.py"
+      - "packages/custom_software/source_bundles.py"
+      - "packages/runtime_plugins/**"
+      - "tests/test_production_runner_service.py"
+      - ".github/workflows/production-runner.yml"
+
+jobs:
+  docker-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runner test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/runner/requirements.txt
+      - name: Build trusted job image
+        run: docker build -f apps/runner/Dockerfile --target job -t operly-runner-job:test .
+      - name: Build trusted proxy image
+        run: docker build -f apps/runner/Dockerfile --target proxy -t operly-runner-proxy:test .
+      - name: Run production isolation acceptance
+        env:
+          OPERLY_REAL_ISOLATION_RUNNER: "1"
+          OPERLY_RUNNER_JOB_IMAGE: operly-runner-job:test
+          OPERLY_RUNNER_PROXY_IMAGE: operly-runner-proxy:test
+        run: python -m unittest -v tests.test_production_runner_service
+      - name: Assert no managed test containers leaked
+        if: always()
+        run: |
+          leaked="$(docker ps -aq --filter label=operly.runner.managed=true)"
+          if [ -n "$leaked" ]; then
+            docker ps -a --filter label=operly.runner.managed=true
+            docker rm -f $leaked || true
+            echo "Runner test leaked managed containers" >&2
+            exit 1
+          fi
