@@ -18,8 +18,9 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "discord:read", "discord:write",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
-        "workspace:read", "workspace:members:manage", "workspace:roles:manage",
-        "workspace:channels:manage", "workspace:clients:manage", "workspace:tools:expose",
+        "workspace:read", "workspace:settings:manage", "workspace:members:manage",
+        "workspace:roles:manage", "workspace:channels:manage", "workspace:clients:manage",
+        "workspace:tools:expose",
     },
     "manager": {
         "company:read", "research:read", "analytics:read", "crm:read", "crm:write",

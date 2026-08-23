@@ -6,6 +6,15 @@
   let retryTimer = null;
   let inFlight = false;
 
+  function loadWorkspaceIconUI() {
+    if (document.querySelector('script[data-operly-workspace-icons]')) return;
+    const script = document.createElement("script");
+    script.src = "/static/workspace-icons.js?v=20260823-account-shell";
+    script.defer = true;
+    script.dataset.operlyWorkspaceIcons = "1";
+    document.head.appendChild(script);
+  }
+
   function cookie(name) {
     return document.cookie
       .split(";")
@@ -119,6 +128,7 @@
     }
   }
 
+  loadWorkspaceIconUI();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", syncTimezone, { once: true });
   } else {
