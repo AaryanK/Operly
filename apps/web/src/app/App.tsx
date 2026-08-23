@@ -8,9 +8,11 @@ import { navigate, personalPath, workspacePath } from "./routes";
 import { useRoute } from "./useRoute";
 import { useScope } from "./useScope";
 
+type AccountSettingsTab = "account" | "connections" | "workspaces";
+
 export function App() {
   const route = useRoute();
-  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [accountSettingsTab, setAccountSettingsTab] = useState<AccountSettingsTab | null>(null);
   const { loading, transitioning, error, profile, workspaces, refresh, activatePersonal, activateWorkspace } = useScope();
   const workspace = route.kind === "workspace" ? workspaces.find((item) => item.id === route.workspaceId || item.slug === route.workspaceId) : undefined;
 
@@ -25,8 +27,8 @@ export function App() {
   if (error && !profile) return <div className="boot-screen error-state"><span>!</span><h1>Operly could not open this account.</h1><p>{error}</p><a href="/login">Sign in</a></div>;
   if (route.kind === "unknown") return null;
 
-  const rail = (personal: boolean, activeWorkspaceId?: string | null) => <ScopeRail profile={profile} workspaces={workspaces} personal={personal} activeWorkspaceId={activeWorkspaceId} transitioning={transitioning} onPersonal={() => activatePersonal().catch(() => undefined)} onWorkspace={(workspaceId) => activateWorkspace(workspaceId).catch(() => undefined)} onAccount={() => setAccountSettingsOpen(true)} onCreateWorkspace={() => setAccountSettingsOpen(true)} />;
-  const settings = accountSettingsOpen ? <AccountSettings profile={profile} workspaces={workspaces} onClose={() => setAccountSettingsOpen(false)} onRefresh={refresh} onWorkspace={(workspaceId) => activateWorkspace(workspaceId)} /> : null;
+  const rail = (personal: boolean, activeWorkspaceId?: string | null) => <ScopeRail profile={profile} workspaces={workspaces} personal={personal} activeWorkspaceId={activeWorkspaceId} transitioning={transitioning} onPersonal={() => activatePersonal().catch(() => undefined)} onWorkspace={(workspaceId) => activateWorkspace(workspaceId).catch(() => undefined)} onAccount={() => setAccountSettingsTab("account")} onCreateWorkspace={() => setAccountSettingsTab("workspaces")} />;
+  const settings = accountSettingsTab ? <AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} onClose={() => setAccountSettingsTab(null)} onRefresh={refresh} onWorkspace={(workspaceId) => activateWorkspace(workspaceId)} /> : null;
 
   if (route.kind === "personal") {
     if (profile?.current_workspace_id || transitioning) return <div className="boot-screen"><span>✦</span><p>Switching to your private Operly…</p></div>;
