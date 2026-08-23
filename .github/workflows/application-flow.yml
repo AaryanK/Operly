@@ -12,6 +12,7 @@ on:
       - "packages/business_brain/**"
       - "packages/capabilities/**"
       - "packages/channels/**"
+      - "packages/company/**"
       - "packages/connectors/**"
       - "packages/context/**"
       - "packages/coding_harness/**"
@@ -38,8 +39,14 @@ on:
       - "tests/test_connector_runtime.py"
       - "tests/test_company_intelligence.py"
       - "tests/test_company_operating_system.py"
+      - "tests/test_company_evidence_provenance_resolution.py"
       - "tests/test_google_workspace_capabilities.py"
       - "tests/test_solutions.py"
+      - "tests/test_solution_initial_generation_lifecycle.py"
+      - "tests/test_solution_generation_observability.py"
+      - "tests/test_application_builder_preview_readiness.py"
+      - "tests/test_model_runtime_callsite_boundary.py"
+      - "tests/test_shared_model_runtime_callsites.py"
       - "tests/test_studio.py"
       - "tests/test_studio_design_quality.py"
       - "tests/test_studio_source_agent.py"
@@ -80,6 +87,8 @@ jobs:
           apps/api/connectors_router.py
           apps/api/personal_agent_router.py
           apps/api/personal_connectors_router.py
+          apps/api/solution_generation_http.py
+          apps/api/solution_generation_router.py
           apps/api/solutions_router.py
           apps/api/studio_router.py
           apps/api/studio_run_history_router.py
@@ -100,10 +109,13 @@ jobs:
           alembic/versions/0033_personal_connectors.py
           packages/agents/runtime.py
           packages/harness/plugins.py
+          packages/model_runtime/client_context.py
           packages/model_runtime/portfolio.py
           packages/model_runtime/routing_policy.py
           packages/model_runtime/task_routing.py
           packages/business/service.py
+          packages/company/intelligence.py
+          packages/company/provenance.py
           packages/workspace/service.py
           packages/database/db.py
           packages/database/account_connector_models.py
@@ -165,6 +177,7 @@ jobs:
           packages/capabilities/surface_contract.py
           packages/capabilities/website_provider.py
           packages/solutions/composer.py
+          packages/solutions/model_trace.py
           packages/solutions/service.py
           packages/solutions/production.py
           packages/studio/schema.py
@@ -214,6 +227,11 @@ jobs:
           tests/test_company_operating_system.py
           tests/test_google_workspace_capabilities.py
           tests/test_solutions.py
+          tests/test_solution_initial_generation_lifecycle.py
+          tests/test_solution_generation_observability.py
+          tests/test_application_builder_preview_readiness.py
+          tests/test_model_runtime_callsite_boundary.py
+          tests/test_shared_model_runtime_callsites.py
           tests/test_studio.py
           tests/test_studio_design_quality.py
           tests/test_studio_source_agent.py
