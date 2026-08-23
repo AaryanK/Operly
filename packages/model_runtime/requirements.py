@@ -154,9 +154,19 @@ def model_for_requirements(
     Known models that cannot meet the requested context window are excluded.
     Models with unknown context metadata remain eligible after known-good models;
     this avoids turning incomplete catalog metadata into a hard outage.
+
+    Compatibility `role:*` resources are deliberately excluded from the dynamic
+    candidate scan. They are mutable process-local projections of role/env state
+    and can remain in the registry after a prior lookup. Mixing those stale rows
+    into capability selection caused duplicate/stale Studio fallbacks. The current
+    role chain is consulted only by `_compatible_fallbacks` after dynamic selection.
     """
     registry = default_model_registry()
-    candidates = list(registry.candidates(requirements.selector()))
+    candidates = [
+        model
+        for model in registry.candidates(requirements.selector())
+        if not model.id.startswith("role:")
+    ]
     minimum = requirements.min_context_tokens
     if minimum:
         candidates = [
