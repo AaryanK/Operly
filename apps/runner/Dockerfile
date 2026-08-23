@@ -9,9 +9,10 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && groupadd --gid 10001 operly \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin operly \
-    && mkdir -p /workspace \
+    && mkdir -p /workspace/frontend /workspace/backend /workspace/workers /workspace/tests /workspace/migrations \
     && chown -R 10001:10001 /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPYCACHEPREFIX=/tmp/pycache \
     PYTHONUNBUFFERED=1 \
     HOME=/home/operly \
     PATH=/workspace/.venv/bin:/usr/local/bin:/usr/bin:/bin
