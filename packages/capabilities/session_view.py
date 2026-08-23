@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-from packages.capabilities.contracts import ApprovalPolicy
-
 
 DEFAULT_KERNEL_IDS = frozenset(
     {
@@ -48,20 +46,17 @@ class SessionCapabilityView:
     def _seamless_default(definition) -> bool:
         """Return whether an authorized capability should be visible immediately.
 
-        Read operations should never require a search/describe round trip. Connected
-        integrations are also surfaced directly because their provider and OAuth
-        scope checks have already happened before this view is built. Low-risk AUTO
-        operations are cheap enough to expose while the firewall remains the final
-        execution/approval authority.
+        Normal observations and low-risk operations should not depend on a model
+        remembering a search/describe ceremony. Connected integrations are also
+        surfaced directly after their provider/scope gate succeeds. Medium/high-risk
+        or uncommon capabilities remain progressively discoverable, and every call
+        still crosses the canonical firewall/approval boundary.
         """
-        if definition.risk_level == "read_only":
+        if definition.risk_level in {"read_only", "low"}:
             return True
         if definition.integration_provider:
             return True
-        return (
-            definition.risk_level == "low"
-            and definition.approval_policy == ApprovalPolicy.AUTO
-        )
+        return False
 
     def expose_seamless_defaults(self) -> None:
         for definition in self.registry.definitions():
@@ -89,9 +84,9 @@ class SessionCapabilityView:
     def observe(self, capability_id: str, invocation_result: dict[str, Any]) -> None:
         """Expand exact schemas after capability.describe.
 
-        Search/describe remains useful for uncommon capabilities, but ordinary read,
-        connector, and low-risk AUTO tools are already available without spending
-        model turns on discovery.
+        Search/describe remains useful for uncommon medium/high-risk capabilities,
+        but ordinary reads, low-risk operations, and connector tools are already
+        available without spending model turns on discovery.
         """
         if capability_id != "capability.describe":
             return
