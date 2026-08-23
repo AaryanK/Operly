@@ -10,8 +10,9 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, Iterable
+from uuid import uuid4
 
 from packages.model_runtime.catalog import ModelResource, model_resources
 from packages.model_runtime.contracts import (
@@ -31,6 +32,7 @@ from packages.model_runtime.routing_policy import (
     auto_portfolio_enabled,
     role_routing_profile,
 )
+from packages.model_runtime.trace_context import current_trace_metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,10 @@ class ModelAttemptEvent:
     classification: str | None = None
     retryable: bool | None = None
     detail: str | None = None
+    attempt_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    input_payload: dict[str, Any] | None = None
+    output_payload: dict[str, Any] | None = None
 
 
 TelemetrySink = Callable[[ModelAttemptEvent], Awaitable[None] | None]
@@ -174,9 +180,19 @@ class ConfiguredModel:
         budget = request.budget or InferenceBudget()
         attempts = max(1, min(int(budget.attempts_per_model or 1), 5))
         last_error: ModelInferenceError | None = None
+        trace_metadata = current_trace_metadata()
+        trace_metadata.update(dict(request.metadata))
+        request_payload = {
+            "messages": [dict(item) for item in request.messages],
+            "tools": [dict(item) for item in request.tools],
+            "responseSchema": request.response_schema,
+            "modalityInputs": [dict(item) for item in request.modality_inputs],
+            "budget": asdict(budget),
+        }
 
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
+            attempt_id = str(uuid4())
             await _emit(
                 ModelAttemptEvent(
                     phase="start",
@@ -184,6 +200,9 @@ class ConfiguredModel:
                     provider=self.provider,
                     provider_model_id=self.provider_model_id,
                     attempt=attempt,
+                    attempt_id=attempt_id,
+                    metadata=trace_metadata,
+                    input_payload=request_payload,
                 )
             )
             try:
@@ -208,6 +227,7 @@ class ConfiguredModel:
                 actual_model = str(
                     getattr(client, "last_model", None) or self.provider_model_id
                 )
+                usage = _usage(message)
                 await _emit(
                     ModelAttemptEvent(
                         phase="success",
@@ -216,6 +236,13 @@ class ConfiguredModel:
                         provider_model_id=actual_model,
                         attempt=attempt,
                         latency_ms=latency,
+                        attempt_id=attempt_id,
+                        metadata=trace_metadata,
+                        output_payload={
+                            "message": dict(message),
+                            "finishReason": message.get("finish_reason"),
+                            "usage": asdict(usage) if usage is not None else None,
+                        },
                     )
                 )
                 return InferenceResult(
@@ -224,7 +251,7 @@ class ConfiguredModel:
                     provider=self.provider,
                     provider_model_id=actual_model,
                     latency_ms=latency,
-                    usage=_usage(message),
+                    usage=usage,
                     finish_reason=message.get("finish_reason"),
                     attempt=attempt,
                 )
@@ -246,7 +273,15 @@ class ConfiguredModel:
                         latency_ms=latency,
                         classification=error.classification,
                         retryable=error.retryable,
-                        detail=str(error)[:500],
+                        detail=str(error)[:2000],
+                        attempt_id=attempt_id,
+                        metadata=trace_metadata,
+                        output_payload={
+                            "errorType": type(raw).__name__,
+                            "message": str(error),
+                            "classification": error.classification,
+                            "retryable": error.retryable,
+                        },
                     )
                 )
                 if not error.retryable or attempt >= attempts:
@@ -271,6 +306,7 @@ class ModelPool:
         "quota_or_credits",
         "provider_5xx",
         "provider_error",
+        "auth",
     }
 
     def __init__(self, models: Iterable[Model], *, id: str = "model-pool") -> None:
@@ -343,8 +379,9 @@ class ModelPool:
             except ModelInferenceError as error:
                 last_error = error
                 self._mark_failure(model, error)
-                if error.classification in {"invalid_request", "auth"}:
-                    break
+                # A 4xx/auth failure can be specific to one model or provider. The
+                # portfolio is the recovery boundary, so continue to another eligible
+                # candidate instead of requiring the user to repeat the chat turn.
                 continue
         raise last_error or ModelInferenceError("All configured models failed")
 
