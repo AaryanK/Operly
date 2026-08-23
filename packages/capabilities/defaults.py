@@ -108,12 +108,12 @@ def bootstrap_builtin_plugins() -> None:
         )
 
 
-def default_registry(enabled_plugins=None) -> CapabilityRegistry:
+def default_registry(enabled_plugins=None, *, config_resolver=None) -> CapabilityRegistry:
     """Build the canonical capability registry from PluginRuntime contributions.
 
-    First-party capabilities and externally installed capabilities now take the
-    same registration path. The discovery kernel remains session-bound because it
-    must point at this tenant-specific completed registry.
+    ``enabled_plugins`` remains a compatibility filter. New runtime code should
+    prefer ``config_resolver`` so an unavailable connector capability stays
+    discoverable and can explain *why* it is unavailable instead of disappearing.
     """
 
     def enabled(tenant_id, definition):
@@ -125,7 +125,10 @@ def default_registry(enabled_plugins=None) -> CapabilityRegistry:
         )
 
     bootstrap_builtin_plugins()
-    registry = CapabilityRegistry(enabled_resolver=enabled)
+    registry = CapabilityRegistry(
+        enabled_resolver=enabled,
+        config_resolver=config_resolver,
+    )
     for provider in default_plugin_runtime().capability_providers():
         registry.register(provider)
 

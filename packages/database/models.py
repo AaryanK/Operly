@@ -83,9 +83,9 @@ class AuthSession(Base):
         nullable=False,
         index=True,
     )
-    tenant_id: Mapped[str] = mapped_column(
+    tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

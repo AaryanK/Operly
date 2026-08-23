@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -19,7 +20,13 @@ from apps.api.auth_cookies import (
     set_preauth_csrf_cookie,
     set_session_cookies,
 )
-from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.dependencies import (
+    AccountAuthContext,
+    AuthContext,
+    get_account_auth_context,
+    get_auth_context,
+    get_db,
+)
 from apps.api.google_auth import GoogleAuthenticationError, verify_google_credential
 from apps.api.schemas import (
     ChallengeInput,
@@ -84,6 +91,18 @@ def _safe_name(value: str) -> str:
     if not name:
         raise auth_error(422, "INVALID_NAME", "Enter your name")
     return name[:200]
+
+
+def _workspace_name(value: str) -> str:
+    name = " ".join(str(value or "").replace("\x00", "").split()).strip()
+    if not name:
+        raise auth_error(422, "INVALID_WORKSPACE_NAME", "Enter a workspace name")
+    return name[:200]
+
+
+def _workspace_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:80]
+    return slug or "workspace"
 
 
 def _normalized_email(value: str) -> str:
@@ -291,13 +310,13 @@ async def _deliver_reset_by_id(
         await db.commit()
 
 
-async def _send_welcome(db: AsyncSession, user: AppUser, request: Request, tenant_id: str) -> None:
+async def _send_welcome(db: AsyncSession, user: AppUser, request: Request, tenant_id: str | None) -> None:
     base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     try:
         await get_email_service().send_welcome(
             to_email=user.email,
             display_name=user.display_name,
-            app_url=f"{base_url}/onboarding",
+            app_url=base_url,
         )
     except Exception as error:
         logger.warning("Welcome email was not delivered (provider_error=%s)", type(error).__name__)
@@ -305,7 +324,7 @@ async def _send_welcome(db: AsyncSession, user: AppUser, request: Request, tenan
         await db.commit()
 
 
-async def _send_password_changed(db: AsyncSession, user: AppUser, request: Request, tenant_id: str) -> None:
+async def _send_password_changed(db: AsyncSession, user: AppUser, request: Request, tenant_id: str | None) -> None:
     base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     try:
         await get_email_service().send_password_changed(
@@ -323,7 +342,7 @@ async def _create_session(
     db: AsyncSession,
     request: Request,
     user_id: str,
-    tenant_id: str,
+    tenant_id: str | None,
 ) -> tuple[AuthSession, str, str]:
     now = datetime.utcnow()
     secret = random_token()
@@ -451,18 +470,12 @@ async def signup(payload: SignupInput, request: Request, db: AsyncSession = Depe
         password_hash=hash_password(payload.password),
         active=True,
     )
-    tenant = Tenant(name="My workspace", slug=None)
-    db.add_all([user, tenant])
+    db.add(user)
     try:
         await db.flush()
-        db.add_all(
-            [
-                AuthIdentity(user_id=user.id, provider="password", provider_subject=email, provider_email=email),
-                TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner"),
-            ]
-        )
+        db.add(AuthIdentity(user_id=user.id, provider="password", provider_subject=email, provider_email=email))
         challenge, token, code = await _new_challenge(db, user, "email_verification", VERIFY_MINUTES)
-        _audit(db, "signup_requested", "succeeded", request, user_id=user.id, tenant_id=tenant.id)
+        _audit(db, "signup_requested", "succeeded", request, user_id=user.id)
         await db.commit()
     except IntegrityError as error:
         await db.rollback()
@@ -509,9 +522,7 @@ async def verify_email(payload: ChallengeInput, request: Request, response: Resp
         await db.rollback()
         raise auth_error(400, "INVALID_CHALLENGE", "That code or link is not valid")
     membership = await _first_membership(db, user.id)
-    if not membership:
-        await db.rollback()
-        raise auth_error(403, "WORKSPACE_UNAVAILABLE", "Your workspace is not available")
+    tenant_id = membership.tenant_id if membership else None
     now = datetime.utcnow()
     user.email_verified_at = user.email_verified_at or now
     user.updated_at = now
@@ -524,13 +535,13 @@ async def verify_email(payload: ChallengeInput, request: Request, response: Resp
         )
         .values(consumed_at=now)
     )
-    _, session_secret, csrf_secret = await _create_session(db, request, user.id, membership.tenant_id)
-    _audit(db, "email_verified", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id)
-    _audit(db, "signup_completed", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id)
+    _, session_secret, csrf_secret = await _create_session(db, request, user.id, tenant_id)
+    _audit(db, "email_verified", "succeeded", request, user_id=user.id, tenant_id=tenant_id)
+    _audit(db, "signup_completed", "succeeded", request, user_id=user.id, tenant_id=tenant_id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
-    await _send_welcome(db, user, request, membership.tenant_id)
-    return {"ok": True, "next": "/onboarding"}
+    await _send_welcome(db, user, request, tenant_id)
+    return {"ok": True, "next": "/", "scope": "workspace" if tenant_id else "personal"}
 
 
 @router.post("/api/auth/login")
@@ -549,16 +560,15 @@ async def login(payload: LoginInput, request: Request, response: Response, db: A
         await db.commit()
         raise auth_error(403, "EMAIL_NOT_VERIFIED", "Verify your email before signing in")
     membership = await _first_membership(db, user.id)
-    if not membership:
-        raise auth_error(403, "WORKSPACE_UNAVAILABLE", "Your workspace is not available")
+    tenant_id = membership.tenant_id if membership else None
     if verification.upgraded_hash:
         user.password_hash = verification.upgraded_hash
         user.updated_at = datetime.utcnow()
-    _, session_secret, csrf_secret = await _create_session(db, request, user.id, membership.tenant_id)
-    _audit(db, "login_success", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id, metadata={"provider": "password"})
+    _, session_secret, csrf_secret = await _create_session(db, request, user.id, tenant_id)
+    _audit(db, "login_success", "succeeded", request, user_id=user.id, tenant_id=tenant_id, metadata={"provider": "password", "scope": "workspace" if tenant_id else "personal"})
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
-    return {"ok": True}
+    return {"ok": True, "scope": "workspace" if tenant_id else "personal"}
 
 
 @router.post("/api/auth/google")
@@ -611,25 +621,20 @@ async def google_login(payload: GoogleCredentialInput, request: Request, respons
                 email_verified_at=datetime.utcnow(),
                 active=True,
             )
-            tenant = Tenant(name="My workspace", slug=None)
-            db.add_all([user, tenant])
+            db.add(user)
             await db.flush()
-            db.add_all(
-                [
-                    AuthIdentity(
-                        user_id=user.id,
-                        provider="google",
-                        provider_subject=claims.subject,
-                        provider_email=claims.email,
-                    ),
-                    TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner"),
-                ]
+            db.add(
+                AuthIdentity(
+                    user_id=user.id,
+                    provider="google",
+                    provider_subject=claims.subject,
+                    provider_email=claims.email,
+                )
             )
     if not user or not user.active:
         raise auth_error(401, "GOOGLE_AUTHENTICATION_FAILED", "Google could not confirm this sign-in")
     membership = await _first_membership(db, user.id)
-    if not membership:
-        raise auth_error(403, "WORKSPACE_UNAVAILABLE", "Your workspace is not available")
+    tenant_id = membership.tenant_id if membership else None
     db.add(
         AuthChallenge(
             purpose="google_replay",
@@ -644,10 +649,10 @@ async def google_login(payload: GoogleCredentialInput, request: Request, respons
             delivery_status="not_applicable",
         )
     )
-    _, session_secret, csrf_secret = await _create_session(db, request, user.id, membership.tenant_id)
-    _audit(db, "google_authentication_success", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id, metadata={"new_account": new_account})
+    _, session_secret, csrf_secret = await _create_session(db, request, user.id, tenant_id)
+    _audit(db, "google_authentication_success", "succeeded", request, user_id=user.id, tenant_id=tenant_id, metadata={"new_account": new_account, "scope": "workspace" if tenant_id else "personal"})
     if new_account:
-        _audit(db, "signup_completed", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id, metadata={"provider": "google"})
+        _audit(db, "signup_completed", "succeeded", request, user_id=user.id, metadata={"provider": "google", "scope": "personal"})
     try:
         await db.commit()
     except IntegrityError as error:
@@ -655,8 +660,8 @@ async def google_login(payload: GoogleCredentialInput, request: Request, respons
         raise auth_error(409, "GOOGLE_SIGN_IN_CONFLICT", "This Google sign-in is already being completed. Please try again.") from error
     set_session_cookies(response, session_secret, csrf_secret)
     if new_account:
-        await _send_welcome(db, user, request, membership.tenant_id)
-    return {"ok": True, "new_account": new_account, "next": "/onboarding" if new_account else "/"}
+        await _send_welcome(db, user, request, None)
+    return {"ok": True, "new_account": new_account, "next": "/", "scope": "workspace" if tenant_id else "personal"}
 
 
 @router.post("/api/auth/forgot-password", status_code=202)
@@ -700,9 +705,7 @@ async def reset_password(payload: ResetPasswordInput, request: Request, response
         await db.rollback()
         raise auth_error(422, "WEAK_PASSWORD", str(error)) from error
     membership = await _first_membership(db, user.id)
-    if not membership:
-        await db.rollback()
-        raise auth_error(403, "WORKSPACE_UNAVAILABLE", "Your workspace is not available")
+    tenant_id = membership.tenant_id if membership else None
     now = datetime.utcnow()
     user.password_hash = hash_password(payload.password)
     user.updated_at = now
@@ -716,16 +719,22 @@ async def reset_password(payload: ResetPasswordInput, request: Request, response
         .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    _, session_secret, csrf_secret = await _create_session(db, request, user.id, membership.tenant_id)
-    _audit(db, "password_reset_completed", "succeeded", request, user_id=user.id, tenant_id=membership.tenant_id)
+    _, session_secret, csrf_secret = await _create_session(db, request, user.id, tenant_id)
+    _audit(db, "password_reset_completed", "succeeded", request, user_id=user.id, tenant_id=tenant_id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
-    await _send_password_changed(db, user, request, membership.tenant_id)
-    return {"ok": True}
+    await _send_password_changed(db, user, request, tenant_id)
+    return {"ok": True, "scope": "workspace" if tenant_id else "personal"}
 
 
 @router.post("/api/auth/change-password")
-async def change_password(payload: ChangePasswordInput, request: Request, response: Response, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+async def change_password(
+    payload: ChangePasswordInput,
+    request: Request,
+    response: Response,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
     await _rate_limit(db, "change_password", request, account=auth.user.id, combined_limit=6, ip_limit=30, account_limit=12, window_seconds=600)
     user = await db.get(AppUser, auth.user.id)
     if not user:
@@ -733,10 +742,10 @@ async def change_password(payload: ChangePasswordInput, request: Request, respon
     if user.password_hash:
         verification = verify_and_update_password(payload.current_password or "", user.password_hash)
         if not verification.valid:
-            _audit(db, "password_change_failed", "failed", request, user_id=user.id, tenant_id=auth.tenant.id)
+            _audit(db, "password_change_failed", "failed", request, user_id=user.id, tenant_id=auth.session.tenant_id)
             await db.commit()
             raise auth_error(401, "CURRENT_PASSWORD_INCORRECT", "Current password is incorrect")
-    elif auth.session is None or auth.session.authenticated_at < datetime.utcnow() - timedelta(minutes=10):
+    elif auth.session.authenticated_at < datetime.utcnow() - timedelta(minutes=10):
         raise auth_error(401, "RECENT_SIGN_IN_REQUIRED", "Sign in again before setting a password")
     try:
         validate_password(payload.new_password, email=user.email)
@@ -748,17 +757,27 @@ async def change_password(payload: ChangePasswordInput, request: Request, respon
     identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id, AuthIdentity.provider == "password"))
     if not identity:
         db.add(AuthIdentity(user_id=user.id, provider="password", provider_subject=user.email, provider_email=user.email))
+    current_tenant_id = auth.session.tenant_id
+    if current_tenant_id:
+        membership = await db.scalar(
+            select(TenantMember).where(
+                TenantMember.user_id == user.id,
+                TenantMember.tenant_id == current_tenant_id,
+            )
+        )
+        if membership is None:
+            current_tenant_id = None
     await db.execute(update(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).values(revoked_at=now))
-    _, session_secret, csrf_secret = await _create_session(db, request, user.id, auth.tenant.id)
-    _audit(db, "password_changed", "succeeded", request, user_id=user.id, tenant_id=auth.tenant.id)
+    _, session_secret, csrf_secret = await _create_session(db, request, user.id, current_tenant_id)
+    _audit(db, "password_changed", "succeeded", request, user_id=user.id, tenant_id=current_tenant_id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
-    await _send_password_changed(db, user, request, auth.tenant.id)
+    await _send_password_changed(db, user, request, current_tenant_id)
     return {"ok": True}
 
 
 @router.get("/api/auth/sessions")
-async def sessions(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+async def sessions(auth: AccountAuthContext = Depends(get_account_auth_context), db: AsyncSession = Depends(get_db)):
     now = datetime.utcnow()
     rows = (
         await db.scalars(
@@ -774,7 +793,9 @@ async def sessions(auth: AuthContext = Depends(get_auth_context), db: AsyncSessi
     return [
         {
             "id": row.id,
-            "current": auth.session is not None and row.id == auth.session.id,
+            "current": row.id == auth.session.id,
+            "scope": "workspace" if row.tenant_id else "personal",
+            "tenant_id": row.tenant_id,
             "created_at": row.created_at,
             "last_activity_at": row.last_activity_at,
             "expires_at": row.expires_at,
@@ -786,28 +807,36 @@ async def sessions(auth: AuthContext = Depends(get_auth_context), db: AsyncSessi
 
 @router.post("/api/auth/logout")
 @router.post("/api/session/logout", include_in_schema=False)
-async def logout(response: Response, request: Request, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
-    if auth.session is None:
-        raise auth_error(401, "AUTH_REQUIRED", "Authentication required")
+async def logout(
+    response: Response,
+    request: Request,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
     auth_session = await db.get(AuthSession, auth.session.id)
     if not auth_session or auth_session.revoked_at is not None:
         raise auth_error(409, "SESSION_ALREADY_REVOKED", "This session is already signed out")
     auth_session.revoked_at = datetime.utcnow()
-    _audit(db, "logout", "succeeded", request, user_id=auth.user.id, tenant_id=auth.tenant.id)
+    _audit(db, "logout", "succeeded", request, user_id=auth.user.id, tenant_id=auth.session.tenant_id)
     await db.commit()
     clear_auth_cookies(response)
     return {"ok": True}
 
 
 @router.post("/api/auth/logout-all")
-async def logout_all(response: Response, request: Request, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+async def logout_all(
+    response: Response,
+    request: Request,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
     now = datetime.utcnow()
     result = await db.execute(
         update(AuthSession)
         .where(AuthSession.user_id == auth.user.id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    _audit(db, "logout_all", "succeeded", request, user_id=auth.user.id, tenant_id=auth.tenant.id, metadata={"revoked_count": result.rowcount})
+    _audit(db, "logout_all", "succeeded", request, user_id=auth.user.id, tenant_id=auth.session.tenant_id, metadata={"revoked_count": result.rowcount})
     await db.commit()
     clear_auth_cookies(response)
     return {"ok": True, "revoked": result.rowcount}
@@ -815,7 +844,10 @@ async def logout_all(response: Response, request: Request, auth: AuthContext = D
 
 @router.get("/api/auth/workspaces")
 @router.get("/api/session/workspaces", include_in_schema=False)
-async def workspaces(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+async def workspaces(
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
     rows = (
         await db.execute(
             select(Tenant, TenantMember.role)
@@ -829,17 +861,67 @@ async def workspaces(auth: AuthContext = Depends(get_auth_context), db: AsyncSes
             "id": tenant.id,
             "name": tenant.name,
             "role": role,
-            "current": tenant.id == auth.tenant.id,
+            "current": tenant.id == auth.session.tenant_id,
         }
         for tenant, role in rows
     ]
 
 
+@router.post("/api/auth/workspaces", status_code=201)
+async def create_workspace(
+    payload: dict,
+    request: Request,
+    response: Response,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    name = _workspace_name(str(payload.get("name") or ""))
+    base_slug = _workspace_slug(name)
+    slug = base_slug
+    suffix = 2
+    while await db.scalar(select(Tenant.id).where(Tenant.slug == slug)):
+        slug = f"{base_slug[:72]}-{suffix}"
+        suffix += 1
+    tenant = Tenant(name=name, slug=slug)
+    db.add(tenant)
+    await db.flush()
+    db.add(TenantMember(tenant_id=tenant.id, user_id=auth.user.id, role="owner"))
+    current = await db.get(AuthSession, auth.session.id)
+    if current:
+        current.revoked_at = datetime.utcnow()
+    _, session_secret, csrf_secret = await _create_session(db, request, auth.user.id, tenant.id)
+    _audit(db, "workspace_created", "succeeded", request, user_id=auth.user.id, tenant_id=tenant.id)
+    await db.commit()
+    set_session_cookies(response, session_secret, csrf_secret)
+    return {"ok": True, "workspace": {"id": tenant.id, "name": tenant.name, "slug": tenant.slug, "role": "owner"}}
+
+
+@router.post("/api/auth/personal-scope")
+async def switch_to_personal_scope(
+    request: Request,
+    response: Response,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    current = await db.get(AuthSession, auth.session.id)
+    if current:
+        current.revoked_at = datetime.utcnow()
+    _, session_secret, csrf_secret = await _create_session(db, request, auth.user.id, None)
+    _audit(db, "personal_scope_selected", "succeeded", request, user_id=auth.user.id)
+    await db.commit()
+    set_session_cookies(response, session_secret, csrf_secret)
+    return {"ok": True, "scope": "personal"}
+
+
 @router.post("/api/auth/switch-workspace")
 @router.post("/api/session/switch-workspace", include_in_schema=False)
-async def switch_workspace(payload: WorkspaceSwitchInput, request: Request, response: Response, auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
-    if auth.session is None:
-        raise auth_error(401, "AUTH_REQUIRED", "Authentication required")
+async def switch_workspace(
+    payload: WorkspaceSwitchInput,
+    request: Request,
+    response: Response,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
     membership = await db.scalar(
         select(TenantMember).where(
             TenantMember.user_id == auth.user.id,

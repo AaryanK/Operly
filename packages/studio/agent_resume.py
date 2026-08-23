@@ -6,6 +6,7 @@ from sqlalchemy import select
 from packages.database.db import SessionFactory
 from packages.database.studio_source_models import StudioAgentRun
 from packages.studio.agent_runs import ACTIVE_STATES, launch_run, record_event
+from packages.studio.hardening_policy import apply_studio_hardening_policy
 from packages.studio.model_latency_policy import apply_studio_model_latency_policy
 from packages.studio.runtime_policy import apply_studio_runtime_policy
 from packages.studio.terminal_recovery import apply_studio_terminal_recovery
@@ -13,12 +14,11 @@ from packages.studio.terminal_recovery import apply_studio_terminal_recovery
 
 async def resume_interrupted_studio_runs() -> int:
     """Install Studio policy, then requeue persisted active runs after restart."""
-    # The shared coding harness remains strict for arbitrary software. Studio gets a
-    # website-specific runtime/grounding/edit policy once all shared modules are fully
-    # imported, before any new or resumed Studio run can launch. The latency policy is
-    # applied after it so Studio's outer model deadline remains longer than the
-    # provider request deadline instead of cancelling slow reasoning mid-response.
+    # Apply the base website policy first, then the Solution-scoped hardening layer.
+    # Terminal recovery is installed last so recovery paths observe the same stronger
+    # validator and source tools as ordinary new runs.
     apply_studio_runtime_policy()
+    apply_studio_hardening_policy()
     apply_studio_model_latency_policy()
     apply_studio_terminal_recovery()
 

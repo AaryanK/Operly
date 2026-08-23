@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from packages.agents import AgentRuntime
 from packages.capabilities.defaults import default_registry
 from packages.capabilities.firewall import (
     ActionBackedCapabilityFirewall,
@@ -41,9 +42,6 @@ _DISCORD_CURRENT_CONTEXT = {
     "discord.create_thread",
 }
 
-# Migration-safe starter set. Everything else is discoverable through the permanent
-# capability kernel instead of being injected into every model turn. These are
-# general observation/context operations, not vendor-specific tools.
 _DEFAULT_INITIAL_CAPABILITIES = frozenset(
     {
         "company.read_state",
@@ -71,19 +69,18 @@ class PluginInvocationContext:
 class PluginAgentHarness:
     """Agent-facing capability view over one canonical invocation boundary.
 
-    Authorization details intentionally remain compatible with the current system.
-    Consequential execution is delegated to CapabilityFirewall so future auth work
-    does not require rewriting every agent/transport surface again.
-
-    Capability visibility is session-scoped and progressive. The model starts with
-    a small kernel plus general observation tools, then uses capability.search and
-    capability.describe to expose exact schemas as needed. Discovery never grants
-    permission; execution still crosses the firewall.
+    Capability visibility is session-scoped and progressive. The harness performs
+    one bounded semantic preflight for each new objective so useful capabilities do
+    not depend on the model remembering a discovery ceremony. Preflight only exposes
+    schemas the caller is already authorized to see; execution still crosses the
+    canonical firewall and approval boundary.
     """
 
     def __init__(self, registry=None):
         self.registry = registry
         self._session_views: dict[str, SessionCapabilityView] = {}
+        self._preflight_objectives: dict[str, str] = {}
+        self._preflight_diagnostics: dict[str, list[dict[str, Any]]] = {}
 
     async def registry_for(self, context: PluginInvocationContext):
         if self.registry:
@@ -91,59 +88,102 @@ class PluginAgentHarness:
 
         from sqlalchemy import select
         from packages.connectors.google_provider import (
-            CALENDAR,
-            CALENDAR_FREEBUSY,
-            CALENDAR_LIST_READONLY,
             GMAIL_MODIFY,
             GMAIL_READONLY,
             GMAIL_SEND,
         )
         from packages.database.connector_models import TenantConnector
 
-        enabled_external: set[str] = set()
         async with session_scope() as db:
-            rows = (
-                await db.scalars(
-                    select(TenantConnector).where(
-                        TenantConnector.tenant_id == context.tenant_id,
-                        TenantConnector.enabled.is_(True),
-                        TenantConnector.status == "connected",
+            rows = list(
+                (
+                    await db.scalars(
+                        select(TenantConnector).where(
+                            TenantConnector.tenant_id == context.tenant_id,
+                        )
                     )
-                )
-            ).all()
-            for row in rows:
-                scopes = set(json.loads(row.granted_scopes_json or "[]"))
-                if scopes & {GMAIL_SEND, GMAIL_MODIFY}:
-                    enabled_external.update({"messaging.send", "gmail.send_email"})
-                if scopes & {GMAIL_READONLY, GMAIL_MODIFY}:
-                    enabled_external.update({"gmail.search", "gmail.read_message"})
-                if GMAIL_MODIFY in scopes:
-                    enabled_external.update(
-                        {
-                            "gmail.modify_labels",
-                            "gmail.create_draft",
-                            "gmail.list_drafts",
-                            "gmail.get_draft",
-                            "gmail.update_draft",
-                            "gmail.send_draft",
-                            "gmail.delete_draft",
-                        }
-                    )
-                if CALENDAR in scopes:
-                    enabled_external.update(
-                        {
-                            "calendar.create_event",
-                            "calendar.list_events",
-                            "calendar.update_event",
-                            "calendar.delete_event",
-                        }
-                    )
-                if CALENDAR_FREEBUSY in scopes:
-                    enabled_external.add("calendar.freebusy")
-                if CALENDAR_LIST_READONLY in scopes:
-                    enabled_external.add("calendar.list_calendars")
+                ).all()
+            )
 
-        return default_registry(enabled_external)
+        by_provider: dict[str, list] = {}
+        for row in rows:
+            by_provider.setdefault(str(row.provider or "").lower(), []).append(row)
+
+        def config_resolver(_tenant_id, definition):
+            provider = str(definition.integration_provider or "").lower()
+            if not provider:
+                return {"configured": True, "healthy": None}
+            candidates = by_provider.get(provider, [])
+            if provider == "discord":
+                return {"configured": True, "healthy": None}
+            if not candidates:
+                return {
+                    "configured": False,
+                    "healthy": None,
+                    "missing_connector": provider,
+                    "reason": "connector_missing",
+                    "next_action": f"Connect {provider.title()} to this workspace.",
+                    "retryable": False,
+                }
+
+            connected = [row for row in candidates if row.enabled and row.status == "connected"]
+            if not connected:
+                disabled = any(not row.enabled for row in candidates)
+                reason = "connector_disabled" if disabled else "connector_disconnected"
+                return {
+                    "configured": False,
+                    "healthy": False if any(row.status == "error" for row in candidates) else None,
+                    "missing_connector": provider,
+                    "reason": reason,
+                    "next_action": "Enable or reconnect the integration for this workspace.",
+                    "retryable": reason == "connector_disconnected",
+                }
+
+            union_scopes: set[str] = set()
+            for row in connected:
+                try:
+                    union_scopes.update(json.loads(row.granted_scopes_json or "[]"))
+                except (TypeError, json.JSONDecodeError):
+                    pass
+
+            required = set(definition.credential_scopes or ())
+            satisfied = not required or required.issubset(union_scopes)
+            if definition.id in {"messaging.send", "gmail.send_email"}:
+                satisfied = bool(union_scopes & {GMAIL_SEND, GMAIL_MODIFY})
+                required = {GMAIL_SEND}
+            elif definition.id in {"gmail.search", "gmail.read_message"}:
+                satisfied = bool(union_scopes & {GMAIL_READONLY, GMAIL_MODIFY})
+                required = {GMAIL_READONLY}
+            missing_scopes = [] if satisfied else sorted(required - union_scopes or required)
+
+            health_values = {str(row.health_status or "unknown").lower() for row in connected}
+            healthy = False if health_values & {"error", "failed", "unhealthy"} else True if health_values & {"healthy", "ok"} else None
+            last_error = next((str(row.last_error)[:300] for row in connected if row.last_error), None)
+            if healthy is False:
+                return {
+                    "configured": True,
+                    "healthy": False,
+                    "missing_scopes": missing_scopes,
+                    "reason": "provider_unhealthy",
+                    "next_action": "Retry after the provider recovers or reconnect the integration.",
+                    "retryable": True,
+                    "provider_error": last_error,
+                }
+            if missing_scopes:
+                return {
+                    "configured": False,
+                    "healthy": healthy,
+                    "missing_scopes": missing_scopes,
+                    "reason": "oauth_scope_missing",
+                    "next_action": "Reconnect the integration and grant the required OAuth scope.",
+                    "retryable": False,
+                }
+            return {"configured": True, "healthy": healthy, "retryable": False}
+
+        # Keep known capabilities registered even when their connector is missing.
+        # Availability explains connector/scope/health state; progressive exposure
+        # still prevents unusable capabilities from cluttering the model surface.
+        return default_registry(None, config_resolver=config_resolver)
 
     def authority(self, role: str) -> set[str]:
         return default_permissions(role)
@@ -200,8 +240,6 @@ class PluginAgentHarness:
     def _session_key(context: PluginInvocationContext) -> str:
         conversation = str(context.metadata.get("_conversation_id") or "").strip()
         principal = str(context.user_id or "anonymous")
-        # A real conversation ID is preferred. The fallback still scopes transient
-        # exposure to one principal/workspace/channel tuple instead of global state.
         return ":".join(
             (
                 context.tenant_id,
@@ -224,11 +262,6 @@ class PluginAgentHarness:
         existing = self._session_views.get(key)
 
         if existing is not None and existing.tenant_id == context.tenant_id:
-            # Registry snapshots are intentionally refreshed so connector/plugin
-            # availability can change during a conversation. Preserve the session's
-            # discovered IDs while swapping in the fresh registry and authority.
-            # schemas() re-validates every exposed ID, so a revoked permission or
-            # disconnected plugin immediately disappears without broadening access.
             existing.registry = registry
             existing.authority = authority
             existing.visible_predicate = lambda capability_id: self.capability_authorized(
@@ -252,6 +285,46 @@ class PluginAgentHarness:
         self._session_views[key] = view
         return view
 
+    async def preflight(
+        self,
+        context: PluginInvocationContext,
+        *,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        """Bounded discovery owned by the harness, never by model initiative."""
+        authority = await self.authority_for(context)
+        if not authority:
+            return []
+        registry = await self.registry_for(context)
+        view = await self.session_view_for(context, authority=authority, registry=registry)
+        key = self._session_key(context)
+        objective = str(context.objective or "").strip()
+        if self._preflight_objectives.get(key) == objective:
+            return list(self._preflight_diagnostics.get(key, ()))
+
+        rows = registry.search(
+            context.tenant_id,
+            objective,
+            authority=authority,
+            limit=max(1, min(int(limit), 10)),
+        )
+        expose_ids = []
+        diagnostics = []
+        for row in rows:
+            availability = row.get("availability") or {}
+            diagnostics.append(
+                {
+                    "id": row.get("id"),
+                    "availability": availability,
+                }
+            )
+            if availability.get("available") is True and row.get("authorized") is not False:
+                expose_ids.append(str(row.get("id") or ""))
+        view.expose(expose_ids)
+        self._preflight_objectives[key] = objective
+        self._preflight_diagnostics[key] = diagnostics
+        return list(diagnostics)
+
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         authority = await self.authority_for(context)
         if not authority:
@@ -262,7 +335,49 @@ class PluginAgentHarness:
             authority=authority,
             registry=registry,
         )
+        await self.preflight(context)
         return view.schemas()
+
+    async def availability(
+        self,
+        name: str,
+        context: PluginInvocationContext,
+    ) -> dict[str, Any]:
+        registry = await self.registry_for(context)
+        authority = await self.authority_for(context)
+        try:
+            definition = registry.definition(name)
+        except LookupError:
+            return {
+                "available": False,
+                "configured": False,
+                "healthy": None,
+                "missingScopes": [],
+                "missingConnector": None,
+                "permissionDenied": False,
+                "surfaceHidden": False,
+                "exposed": False,
+                "retryable": False,
+                "nextAction": "Use capability.search to discover an installed operation.",
+                "reason": "not_registered",
+            }
+        payload = registry.availability(
+            context.tenant_id,
+            definition.id,
+            authority=authority,
+        ).as_dict()
+        surface_allowed = self.capability_authorized(definition.id, authority, context)
+        payload["surfaceHidden"] = not surface_allowed and not payload.get("permissionDenied")
+        if payload["surfaceHidden"]:
+            payload["available"] = False
+            payload["reason"] = "surface_hidden"
+            payload["nextAction"] = "Use this capability from an allowed private/workspace surface."
+        try:
+            view = await self.session_view_for(context, authority=authority, registry=registry)
+            payload["exposed"] = definition.id in view.exposed_ids and view._visible(definition.id)
+        except Exception:
+            payload["exposed"] = False
+        return payload
 
     def handles(self, name: str) -> bool:
         if self.registry:
@@ -279,10 +394,30 @@ class PluginAgentHarness:
     ) -> dict[str, Any]:
         execution = await self.execution_context_for(context)
         if execution is None:
-            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+            return {
+                "ok": False,
+                "error": "Unknown or unauthorized plugin",
+                "availability": {
+                    "available": False,
+                    "configured": True,
+                    "healthy": None,
+                    "missingScopes": [],
+                    "missingConnector": None,
+                    "permissionDenied": True,
+                    "surfaceHidden": False,
+                    "exposed": False,
+                    "retryable": False,
+                    "nextAction": "Use an authenticated workspace context with sufficient permission.",
+                    "reason": "permission_denied",
+                },
+            }
         authority = set(execution.permissions)
         if not authority or not self.capability_authorized(name, authority, context):
-            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+            return {
+                "ok": False,
+                "error": "Unknown or unauthorized plugin",
+                "availability": await self.availability(name, context),
+            }
 
         registry = await self.registry_for(context)
         view = await self.session_view_for(
@@ -291,15 +426,26 @@ class PluginAgentHarness:
             registry=registry,
         )
         if name not in view.exposed_ids or not view._visible(name):
+            payload = await self.availability(name, context)
+            payload["available"] = False
+            payload["exposed"] = False
+            if payload.get("reason") in {None, "available"}:
+                payload["reason"] = "not_exposed"
+            payload["nextAction"] = payload.get("nextAction") or "Discover/describe this capability in the current agent session."
             return {
                 "ok": False,
                 "error": "Capability is not exposed in this model session; discover and describe it first",
+                "availability": payload,
             }
 
         try:
             definition = registry.definition(name)
         except LookupError:
-            return {"ok": False, "error": "Unknown or unauthorized plugin"}
+            return {
+                "ok": False,
+                "error": "Unknown or unauthorized plugin",
+                "availability": await self.availability(name, context),
+            }
 
         clean_arguments = dict(arguments)
         rationale = str(
@@ -310,8 +456,6 @@ class PluginAgentHarness:
             clean_arguments.pop("_expected_outcome", "") or definition.description
         )[:2000]
 
-        # Discovery metadata needs the current authority set but cannot derive it
-        # from model-visible arguments. Pass it only in runtime invocation metadata.
         runtime_metadata = dict(context.metadata)
         if name in {"capability.search", "capability.describe"}:
             runtime_metadata["authority"] = sorted(authority)
@@ -331,6 +475,7 @@ class PluginAgentHarness:
             execution,
         )
         payload = result.as_dict()
+        payload.setdefault("availability", await self.availability(name, context))
         view.observe(name, payload)
         return payload
 
@@ -341,45 +486,15 @@ class PluginAgentHarness:
         context: PluginInvocationContext,
         max_steps: int = 8,
     ):
-        trace = []
-        for _ in range(max_steps):
-            message = await client.chat(messages, await self.schemas(context))
-            messages.append(message)
-            calls = message.get("tool_calls") or []
-            if not calls:
-                return {
-                    "message": message.get("content") or "Done.",
-                    "trace": trace,
-                    "messages": messages,
-                }
+        async def schemas():
+            return await self.schemas(context)
 
-            for call in calls:
-                function = call.get("function") or {}
-                arguments = function.get("arguments") or {}
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        arguments = {}
-                if not isinstance(arguments, dict):
-                    arguments = {}
-                result = await self.invoke(
-                    str(function.get("name") or ""),
-                    arguments,
-                    context,
-                    call_id=str(call.get("id") or "") or None,
-                )
-                trace.append({"plugin": function.get("name"), "observation": result})
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_name": function.get("name"),
-                        "content": json.dumps(result, default=str),
-                    }
-                )
+        async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
+            return await self.invoke(name, arguments, context, call_id=call_id)
 
-        return {
-            "message": "Stopped at the safe plugin-call limit.",
-            "trace": trace,
-            "messages": messages,
-        }
+        return await AgentRuntime(max_steps=max_steps).run(
+            model=client,
+            messages=messages,
+            schemas=schemas,
+            invoke=invoke,
+        )

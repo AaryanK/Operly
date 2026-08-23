@@ -81,7 +81,10 @@ class RailwayAuthOriginTests(unittest.TestCase):
         signed_in_check = source.index("if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname))", initialize)
         public_route = source.index("if (AUTH_ROUTES[location.pathname])", signed_in_check)
         self.assertLess(signed_in_check, public_route)
-        self.assertIn("await enterAuthenticatedWorkspace();", source[signed_in_check:public_route])
+        # Account-first auth probes the selected workspace and falls back to the
+        # private Personal AI scope when the account has no workspace.
+        self.assertIn("await enterAuthenticatedScope();", source[signed_in_check:public_route])
+        self.assertIn("return await enterAuthenticatedPersonal();", source)
 
 
 if __name__ == "__main__":

@@ -148,6 +148,24 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verified.status_code, 200, verified.text)
         return response
 
+    async def established_workspace(self, email="owner@example.com", password="correct horse battery staple", *, client=None):
+        await self.established_account(email, password, client=client)
+        async with self.sessions() as db:
+            user = await db.scalar(select(AppUser).where(AppUser.email == email.strip().lower()))
+            tenant = Tenant(name="Explicit test workspace")
+            db.add(tenant)
+            await db.flush()
+            db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner"))
+            await db.commit()
+            tenant_id = tenant.id
+        switched = await self.post(
+            "/api/auth/switch-workspace",
+            {"tenant_id": tenant_id},
+            client=client,
+        )
+        self.assertEqual(switched.status_code, 200, switched.text)
+        return tenant_id
+
     async def test_signup_is_atomic_normalized_and_owner_scoped(self):
         response = await self.signup("  Owner@Example.COM  ", name="  Alice   Owner ")
         self.assertEqual(response.status_code, 201, response.text)
@@ -157,9 +175,8 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(user.email_verified_at)
             self.assertTrue(user.password_hash.startswith("$argon2id$"))
             memberships = (await db.scalars(select(TenantMember).where(TenantMember.user_id == user.id))).all()
-            self.assertEqual(len(memberships), 1)
-            self.assertEqual(memberships[0].role, "owner")
-            self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 1)
+            self.assertEqual(len(memberships), 0)
+            self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 0)
             identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id))
             self.assertEqual(identity.provider, "password")
 
@@ -168,7 +185,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(duplicate.json()["detail"]["code"], "ACCOUNT_PENDING_VERIFICATION")
         async with self.sessions() as db:
             self.assertEqual(await db.scalar(select(func.count(AppUser.id))), 1)
-            self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 1)
+            self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 0)
 
     async def test_concurrent_case_variant_signup_creates_one_account(self):
         other = await self.new_client()
@@ -180,7 +197,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sorted([first.status_code, second.status_code]), [201, 409])
             async with self.sessions() as db:
                 self.assertEqual(await db.scalar(select(func.count(AppUser.id))), 1)
-                self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 1)
+                self.assertEqual(await db.scalar(select(func.count(Tenant.id))), 0)
         finally:
             await other.aclose()
 
@@ -206,7 +223,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
             user = await db.scalar(select(AppUser).where(AppUser.email == "delivery@example.com"))
             challenge = await db.scalar(select(AuthChallenge).where(AuthChallenge.user_id == user.id))
             self.assertEqual(challenge.delivery_status, "failed")
-            self.assertEqual(await db.scalar(select(func.count(TenantMember.id))), 1)
+            self.assertEqual(await db.scalar(select(func.count(TenantMember.id))), 0)
 
     async def test_auth_request_contract_rejects_malformed_duplicate_extra_and_method_confusion(self):
         csrf = self.csrf()
@@ -553,7 +570,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("x" * 20, event.metadata_json)
 
     async def test_other_tenant_cannot_be_selected(self):
-        await self.established_account()
+        current_id = await self.established_workspace()
         async with self.sessions() as db:
             other = Tenant(name="Other tenant")
             db.add(other)
@@ -562,6 +579,8 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         blocked = await self.post("/api/auth/switch-workspace", {"tenant_id": other_id})
         self.assertEqual(blocked.status_code, 404)
         protected = await self.client.get("/api/protected")
+        self.assertEqual(protected.status_code, 200, protected.text)
+        self.assertEqual(protected.json()["tenant_id"], current_id)
         self.assertNotEqual(protected.json()["tenant_id"], other_id)
 
     async def test_authenticated_tenant_cannot_read_other_domain_resources(self):
@@ -596,7 +615,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await connection.run_sync(lambda bind, current=table: current.create(bind, checkfirst=True))
 
-        await self.established_account()
+        await self.established_workspace()
         current = (await self.client.get("/api/protected")).json()
         async with self.sessions() as db:
             other = Tenant(name="Other protected tenant")

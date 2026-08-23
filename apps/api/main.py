@@ -18,6 +18,7 @@ from apps.api.application_builder_router import router as application_builder_ro
 from apps.api.approvals_router import router as approvals_router
 from apps.api.architecture_pack_router import router as architecture_pack_router
 from apps.api.business import router as business_router
+from apps.api.capability_diagnostics_router import router as capability_diagnostics_router
 from apps.api.channel_identity_router import router as channel_identity_router
 from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
@@ -28,6 +29,8 @@ from apps.api.dashboard_studio_router import router as dashboard_studio_router
 from apps.api.integrations_router import router as integrations_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.operations_router import router as operations_router
+from apps.api.personal_agent_router import router as personal_agent_router
+from apps.api.personal_connectors_router import router as personal_connectors_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
@@ -38,6 +41,7 @@ from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
 from apps.api.studio_debug_router import router as studio_debug_router
 from apps.api.studio_router import router as studio_router
+from apps.api.studio_run_history_router import router as studio_run_history_router
 from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_router import router as workspace_router
@@ -66,7 +70,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
-WEB_ASSET_REVISION = "20260822-auth-v6"
+WEB_ASSET_REVISION = "20260823-pending-fixes-v1"
 
 
 async def bootstrap_admin() -> None:
@@ -181,6 +185,8 @@ app.add_middleware(
 for router in (
     system_router,
     session_router,
+    personal_agent_router,
+    personal_connectors_router,
     workspace_router,
     access_router,
     mcp_router,
@@ -190,10 +196,12 @@ for router in (
     agent_router,
     company_router,
     connectors_router,
+    capability_diagnostics_router,
     channel_identity_router,
     operations_router,
     studio_router,
     studio_source_router,
+    studio_run_history_router,
     studio_debug_router,
     dashboard_studio_router,
     application_builder_router,
@@ -221,6 +229,12 @@ def frontend_shell() -> HTMLResponse:
     ).replace(
         "/static/ai-assistant-bridge.js",
         f"/static/ai-assistant-bridge.js?v={WEB_ASSET_REVISION}",
+    ).replace(
+        "/static/unified-solution-studio.js",
+        f"/static/unified-solution-studio.js?v={WEB_ASSET_REVISION}",
+    ).replace(
+        "/static/time-sync.js",
+        f"/static/time-sync.js?v={WEB_ASSET_REVISION}",
     )
     return HTMLResponse(
         html,

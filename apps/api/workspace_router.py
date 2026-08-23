@@ -3,7 +3,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.dependencies import AccountAuthContext, AuthContext, get_account_auth_context, get_auth_context, get_db
 from apps.api.schemas import (
     MemoryCreate,
     TaskCreate,
@@ -60,7 +60,7 @@ async def _role_exists(db: AsyncSession, tenant_id: str, role_key: str) -> bool:
 @router.post("/workspaces", status_code=201)
 async def create_workspace(
     payload: WorkspaceCreateInput,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     name = " ".join(payload.name.replace("\x00", "").split()).strip()

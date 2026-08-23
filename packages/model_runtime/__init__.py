@@ -47,7 +47,6 @@ from .registry import (
     ModelRegistry,
     default_model_registry,
     model_chat_client_for_role,
-    model_for_role,
     register_model_telemetry_sink,
 )
 from .routing_policy import (
@@ -59,6 +58,12 @@ from .routing_policy import (
 )
 from .semantic_router import SemanticDecision, SemanticRouter, SemanticRoutingError
 from .service import ModelInvocationResult, ModelInvocationService
+from .task_routing import (
+    TaskRouteDecision,
+    TaskRoutedBusinessModel,
+    classify_business_task,
+    model_for_role,
+)
 
 __all__ = [
     "InferenceBudget",
@@ -83,6 +88,9 @@ __all__ = [
     "role_routing_profiles",
     "auto_portfolio_enabled",
     "configured_provider_count",
+    "TaskRouteDecision",
+    "TaskRoutedBusinessModel",
+    "classify_business_task",
     "provider_is_configured",
     # Compatibility exports below this line. New callers should not depend on them.
     "OllamaClient",

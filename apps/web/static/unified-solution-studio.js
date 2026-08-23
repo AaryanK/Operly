@@ -28,6 +28,27 @@
     return raw.replace(/^Error:\s*/i, "").slice(0,1200);
   }
 
+  function detailText(value, limit=700) {
+    if (value == null || value === "") return "";
+    if (["string","number","boolean"].includes(typeof value)) return compact(value,limit);
+    if (Array.isArray(value)) {
+      try { return JSON.stringify(value).slice(0,limit); }
+      catch { return "Structured detail unavailable"; }
+    }
+    if (typeof value === "object") {
+      const preferred=["code","reason","message","state","mode","tool","path","model","operation","workspaceFileCount","specificationChars","remainingSeconds"];
+      const parts=[];
+      for(const key of preferred){
+        if(value[key]==null || typeof value[key]==="object") continue;
+        parts.push(`${key}: ${compact(value[key],180)}`);
+      }
+      if(parts.length) return parts.join(" · ").slice(0,limit);
+      try { return JSON.stringify(value).slice(0,limit); }
+      catch { return "Structured detail unavailable"; }
+    }
+    return compact(value,limit);
+  }
+
   function setImmersive(on) {
     document.body.classList.toggle("operly-studio-open", !!on);
   }
@@ -180,8 +201,9 @@
     const stateLabel={queued:"Queued",running:"Working",succeeded:"Complete",failed:"Stopped",needs_input:"Needs input"}[run.state]||run.state;
     const rows=events.slice(-12).map(event=>{
       const detail=eventMeta(event);
+      const nested=detailText(event.detail?.detail,700);
       const failed=event.phase==="error"||event.detail?.ok===false;
-      return `<div class="ss-run-event ${failed?"bad":""}"><i></i><div><strong>${esc(event.summary)}</strong>${detail?`<small>${esc(detail)}</small>`:""}${event.detail?.detail?`<em>${esc(compact(event.detail.detail,700))}</em>`:""}</div></div>`;
+      return `<div class="ss-run-event ${failed?"bad":""}"><i></i><div><strong>${esc(event.summary)}</strong>${detail?`<small>${esc(detail)}</small>`:""}${nested?`<em>${esc(nested)}</em>`:""}</div></div>`;
     }).join("");
     host.innerHTML=`
       <div class="ss-run-head"><div><span class="ss-run-dot ${esc(run.state)}"></span><strong>${esc(stateLabel)}</strong><small>${esc(run.modelId||"authorizing model")}${elapsed?` · ${esc(elapsed)}`:""}</small></div><span>${esc(run.operation||"edit")}</span></div>
@@ -301,8 +323,9 @@
 
   async function generateInitialSource(rt) {
     if(rt.kind!=="studio" || S.source) return;
-    msg("ai","I’m creating the first real source version from the business context. The live trace below shows what the harness is doing.","Source agent");
-    try { await startWebsiteRun(rt,"generate","",{announce:true}); }
+    const objective=compact(S.active?.description||`Create ${S.active?.name||"this Solution"}`,8000);
+    msg("ai","I’m creating the first real source version from your Solution objective. The live trace below shows what the harness is doing.","Source agent");
+    try { await startWebsiteRun(rt,"generate",objective,{announce:true}); }
     catch(error){msg("ai",friendly(error),"The legacy preview is still untouched");S.source=null;await loadPreview(`/api/studio/projects/${rt.id}/preview`)}
   }
 
@@ -400,7 +423,13 @@
     const host=$("#ss-history"); if(!host||!S.active) return;
     try{
       const rows=await api(`/solutions/${S.active.id}/versions`);
-      host.innerHTML=rows.slice(0,14).map((v,i)=>`<article class="${i===0?"active":""}"><span>${esc(v.version)}</span><div><strong>${esc(v.summary||v.status||"Version")}</strong><small>${esc(v.kind==="legacy_schema"?"Legacy · "+v.status:v.status||"")}</small></div></article>`).join("")||'<p class="ss-history-empty">No versions yet.</p>';
+      let runRows=[];
+      if(S.runtime?.kind==="studio"){
+        try{runRows=await api(`/studio/projects/${S.runtime.id}/source/runs?limit=8`)}catch{}
+      }
+      const versions=rows.slice(0,10).map((v,i)=>`<article class="${i===0?"active":""}"><span>${esc(v.version)}</span><div><strong>${esc(v.summary||v.status||"Version")}</strong><small>${esc(v.kind==="legacy_schema"?"Legacy · "+v.status:v.status||"")}</small></div></article>`).join("");
+      const runs=(Array.isArray(runRows)?runRows:runRows.items||[]).slice(0,8).map(run=>`<article><span>↻</span><div><strong>${esc(run.operation||"run")} · ${esc(run.state||"")}</strong><small>${esc(run.modelId||"")}${run.createdAt?` · ${esc(new Date(run.createdAt).toLocaleString())}`:""}</small></div></article>`).join("");
+      host.innerHTML=(versions+runs)||'<p class="ss-history-empty">No history yet.</p>';
     }catch(error){host.innerHTML=`<p class="ss-history-empty">${esc(friendly(error))}</p>`}
   }
 
@@ -462,42 +491,54 @@
           </div>
         </header>
         <div class="ss-work">
-          <aside class="ss-left"><header><span>PROJECT</span><button title="Collapse project" onclick="document.querySelector('#ss-project-toggle')?.click()">‹</button></header><nav><button class="active"><b>Canvas</b><small>Live website</small></button></nav><section><span class="ss-side-label">HISTORY</span><div id="ss-history"></div></section></aside>
+          <aside class="ss-left"><header><span>PROJECT</span><button title="Collapse project" onclick="document.querySelector('#ss-project-toggle')?.click()">‹</button></header><nav><button class="active"><b>Canvas</b><small>Live Solution</small></button></nav><section><span class="ss-side-label">HISTORY</span><div id="ss-history"></div></section></aside>
           <main class="ss-main">
             <div class="ss-toolbar"><div><button class="active">⌖ Select</button><span id="ss-selected">Whole page</span></div><div id="ss-preview-state" class="ss-preview-state loading"><i></i><span>Loading preview…</span></div></div>
             <div class="ss-canvas" id="ss-canvas" data-view="desktop"><div class="ss-device"><iframe id="ss-frame" title="Solution preview"></iframe><div class="ss-preview-error" id="ss-preview-error" hidden><strong>Preview unavailable</strong><p></p><button id="ss-retry">Retry</button></div></div></div>
             <div id="ss-change" class="ss-change hidden"></div>
-            <section class="ss-chat"><section id="ss-run-trace" class="ss-run-trace" hidden></section><div id="ss-thread"></div><div class="ss-command"><div class="ss-command-head"><span>✦ Ask Operly</span><small id="ss-command-context">Loading context…</small></div><div class="ss-compose"><textarea id="ss-input" rows="2" placeholder="Tell Operly what you want to change…"></textarea><button id="ss-send" class="primary">Send</button></div><footer>Live agent activity appears above · project, business context, selection and recent Studio conversation are attached automatically</footer></div></section>
+            <section class="ss-chat"><section id="ss-run-trace" class="ss-run-trace" hidden></section><div id="ss-thread"></div><div class="ss-command"><div class="ss-command-head"><span>✦ Ask Operly</span><small id="ss-command-context">Loading context…</small></div><div class="ss-compose"><textarea id="ss-input" rows="2" placeholder="Tell Operly what you want to change…"></textarea><button id="ss-send" class="primary">Send</button></div><footer>Live agent activity appears above · Solution context, selection and recent Studio conversation are attached automatically</footer></div></section>
           </main>
           <aside class="ss-right"><header><span>INSPECTOR</span><button title="Collapse inspector" onclick="document.querySelector('#ss-inspector-toggle')?.click()">›</button></header><div id="ss-inspector"></div></aside>
         </div>
       </section>`;
-    wireEditor();renderInspector();history();
+    wireEditor();renderInspector();
     try{
-      const rt=await runtime();await refreshSourceState(rt);await loadPreview();
+      const rt=await runtime();await refreshSourceState(rt);await loadPreview();await history();
       const latest=await resumeLatestRun(rt);
       if(generate && rt.kind==="studio" && !S.source && !activeRun(latest)) generateInitialSource(rt);
     }catch(error){previewState("error","Preview unavailable");msg("ai",friendly(error),"No changes applied")}
   }
 
-  async function createWebsite(button=null) {
-    const existing=S.solutions.find(solution=>solution.solution_type==="digital_presence");
-    if(existing){editor(existing);return;}
-    const priorLabel=button?.textContent||"Create website";
-    if(button){button.disabled=true;button.textContent="Creating…";}
-    const error=$("#ss-create-error");if(error){error.hidden=true;error.textContent="";}
+  async function submitComposition() {
+    const name=$("#ss-compose-name")?.value.trim();
+    const objective=$("#ss-compose-objective")?.value.trim();
+    const button=$("#ss-compose-create");
+    const error=$("#ss-compose-error");
+    if(error){error.hidden=true;error.textContent="";}
+    if(!name||!objective){if(error){error.hidden=false;error.textContent="Give the Solution a name and describe what it should do.";}return;}
+    if(button){button.disabled=true;button.textContent="Classifying & creating…";}
     try{
-      // Digital Presence is workspace-scoped today. The server derives its identity
-      // from the active tenant's CompanyProfile, falling back to the workspace name.
-      const solution=await api("/solutions",{method:"POST",body:JSON.stringify({solution_type:"digital_presence"})});
+      const result=await api("/solutions/compose",{method:"POST",body:JSON.stringify({name,objective})});
+      const solution=result.solution;
+      if(!solution) throw new Error("Solution creation returned no Solution");
       const index=S.solutions.findIndex(item=>item.id===solution.id);
       if(index>=0)S.solutions[index]=solution;else S.solutions.unshift(solution);
-      editor(solution,{generate:true});
+      await editor(solution,{generate:solution.runtime?.kind==="studio"});
+      if(solution.runtime?.kind!=="studio") msg("ai",`Created as ${kind(solution)} from your objective.`,result.classification?.reason||"Intent classified before runtime creation");
     }catch(ex){
-      if(error){error.textContent=friendly(ex);error.hidden=false;}
-      else alert(friendly(ex));
-      if(button){button.disabled=false;button.textContent=priorLabel;}
+      if(error){error.hidden=false;error.textContent=friendly(ex);}
+      if(button){button.disabled=false;button.textContent="Create Solution";}
     }
+  }
+
+  function compose() {
+    S.runPollToken++;setImmersive(false);title("New Solution");
+    const host=root();if(!host)return;
+    host.innerHTML=`<section class="ss-list"><header><div><small>INTENT FIRST</small><h2>Create a Solution</h2><p>Describe the outcome first. Operly chooses the supported website or application runtime before anything is created.</p></div><button id="ss-compose-cancel">Cancel</button></header><div class="ss-cardbody" style="max-width:760px;margin:28px auto"><label for="ss-compose-name"><strong>Solution name</strong></label><input id="ss-compose-name" maxlength="200" autocomplete="off" placeholder="Student Attendance Logger" style="width:100%;margin:8px 0 20px"><label for="ss-compose-objective"><strong>What should it do?</strong></label><textarea id="ss-compose-objective" maxlength="8000" rows="7" placeholder="Log each student's arrival and departure time, keep the records, and let staff review attendance." style="width:100%;margin:8px 0 16px"></textarea><div id="ss-compose-error" class="ss-modal-error" hidden></div><footer style="display:flex;justify-content:flex-end;gap:10px"><button id="ss-compose-back">Back</button><button class="primary" id="ss-compose-create">Create Solution</button></footer></div></section>`;
+    $("#ss-compose-cancel")?.addEventListener("click",list);
+    $("#ss-compose-back")?.addEventListener("click",list);
+    $("#ss-compose-create")?.addEventListener("click",submitComposition);
+    $("#ss-compose-name")?.focus();
   }
 
   function card(solution) {
@@ -510,18 +551,23 @@
     const host=root();if(!host)return;host.innerHTML='<div class="ss-list-loading"><span></span><p>Loading Solutions…</p></div>';
     try{
       S.solutions=await api("/solutions");
-      const website=S.solutions.find(solution=>solution.solution_type==="digital_presence");
-      const websiteAction=website
-        ? '<button class="primary" id="ss-open-website">Open website</button>'
-        : '<button class="primary" id="ss-new">Create website</button>';
-      host.innerHTML=`<section class="ss-list"><header><div><small>BUILD & RUN</small><h2>Solutions</h2><p>Websites, business apps and custom software in one workspace.</p></div>${websiteAction}</header><div id="ss-create-error" class="ss-modal-error" hidden></div>${S.solutions.length?`<div class="ss-cards">${S.solutions.map(card).join("")}</div>`:`<div class="ss-list-empty"><span>✦</span><h3>Build your first Solution</h3><p>Create the workspace website directly from the business context Operly already knows.</p><button class="primary" id="ss-empty-new">Create website</button></div>`}</section>`;
-      $("#ss-open-website")?.addEventListener("click",()=>editor(website));
-      $("#ss-new")?.addEventListener("click",event=>createWebsite(event.currentTarget));
-      $("#ss-empty-new")?.addEventListener("click",event=>createWebsite(event.currentTarget));
+      host.innerHTML=`<section class="ss-list"><header><div><small>BUILD & RUN</small><h2>Solutions</h2><p>Websites, business apps and custom software in one workspace.</p></div><button class="primary" id="ss-new">+ New Solution</button></header><div id="ss-create-error" class="ss-modal-error" hidden></div>${S.solutions.length?`<div class="ss-cards">${S.solutions.map(card).join("")}</div>`:`<div class="ss-list-empty"><span>✦</span><h3>Build your first Solution</h3><p>Start with what you want to accomplish. Operly will choose the correct supported runtime.</p><button class="primary" id="ss-empty-new">+ New Solution</button></div>`}</section>`;
+      $("#ss-new")?.addEventListener("click",compose);
+      $("#ss-empty-new")?.addEventListener("click",compose);
       $$('[data-open-solution]').forEach(button=>button.addEventListener("click",()=>{const solution=S.solutions.find(x=>x.id===button.dataset.openSolution);if(solution)editor(solution)}));
     }catch(error){host.innerHTML=`<div class="ss-list-error"><strong>Solutions could not load</strong><p>${esc(friendly(error))}</p><button id="ss-list-retry">Retry</button></div>`;$("#ss-list-retry")?.addEventListener("click",list)}
   }
 
-  window.operlyStudio=list;
-  window.operlyUnifiedSolutionStudio={state:S,open:editor,list};
+  const publicApi={state:S,open:editor,list,compose};
+  window.operlyUnifiedSolutionStudio=publicApi;
+  try {
+    Object.defineProperty(window,"operlyStudio",{
+      configurable:false,
+      enumerable:true,
+      get:()=>compose,
+      set:value=>{ if(typeof value==="function" && value!==compose) window.operlyLegacyStudio=value; },
+    });
+  } catch {
+    window.operlyStudio=compose;
+  }
 })();
