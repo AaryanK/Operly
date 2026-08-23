@@ -10,12 +10,12 @@ def _tool_ids(view: SessionCapabilityView) -> set[str]:
     }
 
 
-def test_crm_reads_are_available_without_search_describe_roundtrip():
+def test_common_crm_reads_and_low_risk_writes_need_no_discovery_roundtrip():
     registry = default_registry(set())
     view = SessionCapabilityView(
         registry,
         "tenant-test",
-        {"crm:read"},
+        {"crm:read", "crm:write", "orders:write"},
     )
 
     tools = _tool_ids(view)
@@ -23,11 +23,13 @@ def test_crm_reads_are_available_without_search_describe_roundtrip():
     assert "crm.search_contacts" in tools
     assert "crm.get_contact" in tools
     assert "crm.search_leads" in tools
+    assert "crm.create_contact" in tools
+    assert "crm.create_lead" in tools
 
-    # Consequential CRM writes remain progressive/firewall-controlled rather than
-    # being injected just because a related read capability exists.
-    assert "crm.create_contact" not in tools
-    assert "crm.create_lead" not in tools
+    # Medium/high-risk operations remain progressive even when the principal has
+    # authority. They can still be found through capability.search/describe and
+    # every execution remains firewall-controlled.
+    assert "orders.create" not in tools
 
 
 def test_connected_google_capabilities_are_immediately_visible_when_authorized():
