@@ -94,6 +94,34 @@ class CapabilityDescriptor:
     authorized: bool | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityAvailability:
+    """Machine-readable explanation of whether a capability can be used now."""
+
+    available: bool
+    configured: bool
+    healthy: bool | None
+    missing_scopes: tuple[str, ...] = ()
+    missing_connector: str | None = None
+    permission_denied: bool = False
+    retryable: bool = False
+    next_action: str | None = None
+    reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "configured": self.configured,
+            "healthy": self.healthy,
+            "missingScopes": list(self.missing_scopes),
+            "missingConnector": self.missing_connector,
+            "permissionDenied": self.permission_denied,
+            "retryable": self.retryable,
+            "nextAction": self.next_action,
+            "reason": self.reason,
+        }
+
+
 @dataclass(slots=True)
 class CapabilityResult:
     success: bool
