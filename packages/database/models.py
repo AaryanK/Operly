@@ -27,6 +27,7 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(200))
     slug: Mapped[str | None] = mapped_column(String(100), nullable=True)
     timezone: Mapped[str] = mapped_column(String(100), default="UTC")
+    logo_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -321,15 +322,7 @@ class Integration(Base):
         index=True,
     )
     provider: Mapped[str] = mapped_column(String(50))
+    label: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(30), default="disconnected")
-    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     config_json: Mapped[str] = mapped_column(Text, default="{}")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-    )
-
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "provider", name="uq_tenant_provider"),
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
