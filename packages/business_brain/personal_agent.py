@@ -7,7 +7,6 @@ workspace connectors, or another user's private state from this service.
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -165,7 +164,6 @@ class PersonalAgentService:
         )
         answer = str(run.get("message") or "Done.").strip()[:24_000]
         async with session_scope() as db:
-            db.add(PrincipalMessage(conversation_id=external_conversation_id if False else "", role="assistant", content=""))
             conversation = await db.scalar(
                 select(PrincipalConversation).where(
                     PrincipalConversation.principal_id == principal_id,
