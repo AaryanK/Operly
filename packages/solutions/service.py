@@ -36,7 +36,10 @@ class SolutionService:
         if not row:
             row=SolutionRecord(tenant_id=tenant_id,runtime_type=runtime_type,runtime_reference=runtime_reference,**values);db.add(row);await db.flush()
         else:
-            for key,value in values.items():setattr(row,key,value)
+            for key,value in values.items():
+                if key=="context_json" and value=="{}" and str(row.context_json or "{}").strip() not in {"", "{}"}:
+                    continue
+                setattr(row,key,value)
         return row
 
     async def active_generated_preview(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
