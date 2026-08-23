@@ -4,29 +4,26 @@ document.addEventListener("click", async (event) => {
 
   event.stopImmediatePropagation();
   document.querySelector("#operly-chat-dock")?.classList.add("page-suppressed");
-
   document.querySelectorAll("#nav button").forEach((item) => {
     item.classList.toggle("active", item.dataset.page === "assistant");
   });
-
   document.querySelector("#page-title").textContent = "Operly";
 
   try {
     await window.renderOperlyAssistant();
   } catch (error) {
-    document.querySelector("#content").innerHTML =
-      `<div class="error">${String(error.message || error)}</div>`;
+    document.querySelector("#content").innerHTML = `<div class="error">${String(error.message || error)}</div>`;
   }
 }, true);
 
 /* Authenticated frontend bootstrap.
- *
  * Structural legacy CSS is kept only where current HTML still depends on it.
  * authenticated-ui.css is the sole runtime owner of product colors, surfaces,
  * component appearance, settings layout and responsive behavior.
  */
 function ensureStyle(href, marker, extraMarkers = []) {
-  if (document.querySelector(`link[${marker}]`)) return document.querySelector(`link[${marker}]`);
+  const existing = document.querySelector(`link[${marker}]`);
+  if (existing) return existing;
   const link = document.createElement("link");
   link.rel = "stylesheet";
   link.href = href;
@@ -45,17 +42,24 @@ function ensureScript(src, marker) {
   document.head.append(script);
 }
 
-// workspace-shell.css still provides structural selectors for the current static
-// shell. It does not own the final visual system.
+// Structural styles that current static HTML still needs.
 ensureStyle(
   "/static/workspace-shell.css?v=20260823-ui-system-v3",
   "data-operly-workspace-shell-style",
   ["data-operly-workspace-shell"],
 );
+ensureStyle(
+  "/static/chat-enhancements.css?v=20260823-ui-system-v3",
+  "data-operly-chat-enhancements-style",
+);
+ensureStyle(
+  "/static/unified-solution-studio.css?v=20260823-ui-system-v3",
+  "data-operly-unified-solution-studio",
+);
 
-// One final authenticated visual contract. Compatibility markers intentionally
-// prevent workspace-shell.js and settings-scopes.js from re-injecting the old
-// frontend-overhaul/settings-scopes cosmetic stylesheets.
+// One final authenticated visual contract, deliberately appended after all
+// structural/feature CSS. Compatibility markers prevent older visual systems
+// from being injected again by legacy feature bootstraps.
 ensureStyle(
   "/static/authenticated-ui.css?v=20260823-ui-system-v3",
   "data-operly-authenticated-ui",
@@ -74,17 +78,9 @@ ensureScript(
   "/static/operations-semantic-fix.js?v=20260823-ui-system-v3",
   "data-operly-operations-semantic-fix",
 );
-ensureStyle(
-  "/static/chat-enhancements.css?v=20260823-ui-system-v3",
-  "data-operly-chat-enhancements-style",
-);
 ensureScript(
   "/static/chat-enhancements.js?v=20260823-ui-system-v3",
   "data-operly-chat-enhancements",
-);
-ensureStyle(
-  "/static/unified-solution-studio.css?v=20260823-ui-system-v3",
-  "data-operly-unified-solution-studio",
 );
 ensureScript(
   "/static/authenticated-ui.js?v=20260823-ui-system-v3",
