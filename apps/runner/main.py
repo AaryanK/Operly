@@ -39,7 +39,7 @@ class RunnerConfig:
         self.public_base_url = os.getenv("OPERLY_RUNNER_PUBLIC_BASE_URL", "").rstrip("/")
         self.errors: list[str] = []
         if len(self.token) < 32:
-            self.errors.append("OPERLY_RUNNER_TOKEN must contain at least 32 characters")
+            self.errors.append("runner_token_invalid")
         parsed = urlparse(self.public_base_url)
         if (
             parsed.scheme != "https"
@@ -49,7 +49,7 @@ class RunnerConfig:
             or parsed.query
             or parsed.fragment
         ):
-            self.errors.append("OPERLY_RUNNER_PUBLIC_BASE_URL must be an HTTPS origin")
+            self.errors.append("public_base_url_invalid")
 
 
 config = RunnerConfig()
@@ -68,6 +68,30 @@ def _signed_json(payload: dict, status_code: int = 200) -> JSONResponse:
         ).hexdigest()
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _failure_response(job_id: str, classification: str, message: str) -> dict:
+    return {
+        "jobId": job_id,
+        "state": "failed",
+        "result": {
+            "buildSuccess": False,
+            "testSuccess": False,
+            "processStartSuccess": False,
+            "healthCheckSuccess": False,
+            "acceptanceCheckSuccess": False,
+            "previewAvailable": False,
+            "artifacts": [],
+            "testReport": {},
+            "staticAnalysisReport": {},
+            "dependencyReport": {},
+            "resourceUsage": {},
+            "failureEvidence": {
+                "classification": classification,
+                "message": message[:1000],
+            },
+        },
+    }
 
 
 async def _authenticate(request: Request) -> bytes:
@@ -173,6 +197,13 @@ def _append_event(job_id: str, event: dict) -> None:
 
 def _execute_job(job_id: str) -> None:
     if backend is None:
+        response = _failure_response(
+            job_id,
+            "runner_unavailable",
+            "Isolation backend became unavailable before execution",
+        )
+        store.update(job_id, state="failed", response=response)
+        store.remove_request(job_id)
         return
     job = store.get(job_id)
     try:
@@ -213,27 +244,11 @@ def _execute_job(job_id: str) -> None:
             store.update(job_id, state=response.get("state", "failed"), response=response)
             store.remove_request(job_id)
     except Exception as error:
-        response = {
-            "jobId": job_id,
-            "state": "failed",
-            "result": {
-                "buildSuccess": False,
-                "testSuccess": False,
-                "processStartSuccess": False,
-                "healthCheckSuccess": False,
-                "acceptanceCheckSuccess": False,
-                "previewAvailable": False,
-                "artifacts": [],
-                "testReport": {},
-                "staticAnalysisReport": {},
-                "dependencyReport": {},
-                "resourceUsage": {},
-                "failureEvidence": {
-                    "classification": "runner_infrastructure_failure",
-                    "message": str(error)[:1000],
-                },
-            },
-        }
+        response = _failure_response(
+            job_id,
+            "runner_infrastructure_failure",
+            str(error),
+        )
         store.update(job_id, state="failed", response=response)
         store.remove_request(job_id)
 
@@ -257,34 +272,40 @@ async def lifespan(_app: FastAPI):
         try:
             backend = await asyncio.to_thread(DockerIsolationBackend)
         except Exception as error:
-            backend_error = str(error)
-    if backend is not None:
-        for job in store.in_flight():
+            backend_error = type(error).__name__
+
+    # A queued/building job can never be declared successful after a gateway
+    # restart. Mark it durably failed even if Docker itself is temporarily down.
+    for job in store.in_flight():
+        if backend is not None:
             try:
                 await asyncio.to_thread(backend.cleanup_job_id, job.id)
             except Exception:
                 pass
-            response = {
-                "jobId": job.id,
-                "state": "failed",
-                "result": {
-                    "buildSuccess": False,
-                    "testSuccess": False,
-                    "processStartSuccess": False,
-                    "healthCheckSuccess": False,
-                    "acceptanceCheckSuccess": False,
-                    "previewAvailable": False,
-                    "artifacts": [],
-                    "testReport": {},
-                    "staticAnalysisReport": {},
-                    "dependencyReport": {},
-                    "resourceUsage": {},
-                    "failureEvidence": {
-                        "classification": "runner_restart",
-                        "message": "Runner restarted while the job was in flight",
-                    },
-                },
-            }
+        response = _failure_response(
+            job.id,
+            "runner_restart",
+            "Runner restarted while the job was in flight",
+        )
+        store.update(job.id, state="failed", response=response)
+        store.remove_request(job.id)
+
+    # Preview-ready is also evidence-based. Preserve it across a normal gateway
+    # restart only when the read-only runtime container still exists and is running.
+    if backend is not None:
+        for job in store.preview_ready():
+            inspection = await asyncio.to_thread(backend.inspect_runtime, job.resources)
+            if inspection.get("status") == "running" and inspection.get("readOnlyRootfs"):
+                continue
+            try:
+                await asyncio.to_thread(backend.cleanup_job_id, job.id)
+            except Exception:
+                pass
+            response = _failure_response(
+                job.id,
+                "preview_lost_after_restart",
+                "Persisted preview runtime was not alive after runner restart",
+            )
             store.update(job.id, state="failed", response=response)
             store.remove_request(job.id)
     yield
@@ -293,15 +314,28 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Operly Isolated Runner", version="1", lifespan=lifespan)
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, error: HTTPException):
+    payload = {"detail": error.detail}
+    if request.url.path.startswith("/v1/"):
+        return _signed_json(payload, error.status_code)
+    return JSONResponse(payload, status_code=error.status_code, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/health")
 async def health():
     ready = not config.errors and backend is not None
-    payload = {
-        "status": "ready" if ready else "not_ready",
-        "isolation": backend.isolation_profile if backend is not None else None,
-        "errors": config.errors + ([backend_error] if backend_error else []),
-    }
-    return JSONResponse(payload, status_code=200 if ready else 503)
+    if ready:
+        payload = {
+            "status": "ready",
+            "isolation": backend.isolation_profile,
+        }
+    else:
+        payload = {
+            "status": "not_ready",
+            "reason": "configuration_invalid" if config.errors else "isolation_backend_unavailable",
+        }
+    return JSONResponse(payload, status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/v1/capabilities")
@@ -310,8 +344,8 @@ async def capabilities(request: Request):
     assert backend is not None
     try:
         payload = await asyncio.to_thread(backend.capabilities)
-    except IsolationUnavailable as error:
-        return _signed_json({"error": str(error)}, 503)
+    except IsolationUnavailable:
+        return _signed_json({"error": "isolation_backend_unavailable"}, 503)
     return _signed_json(payload)
 
 
@@ -358,6 +392,7 @@ async def cancel_build(job_id: str, request: Request):
     store.request_cancel(job_id)
     if job.state == "preview_ready" and backend is not None:
         await asyncio.to_thread(backend.cleanup, job.resources)
+        await asyncio.to_thread(backend.cleanup_job_id, job_id)
         store.update(job_id, state="cancelled", response={"jobId": job_id, "state": "cancelled"})
         store.remove_request(job_id)
     return _signed_json({"state": "cancel_requested"})
@@ -446,5 +481,4 @@ async def preview(token: str, path: str, request: Request):
         content=upstream.content,
         status_code=upstream.status_code,
         headers=response_headers,
-        media_type=upstream.headers.get("content-type"),
     )
