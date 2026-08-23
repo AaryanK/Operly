@@ -7,10 +7,12 @@ import { PluginsPage } from "./PluginsPage";
 import { SolutionsPage } from "./SolutionsPage";
 import { WorkspaceHome } from "./WorkspaceHome";
 import { WorkspaceOperly } from "./WorkspaceOperly";
+import { WorkspaceSettings } from "./WorkspaceSettings";
 
 type Props = {
   workspace: WorkspaceSummary;
   section: WorkspaceSection;
+  onScopeRefresh: () => Promise<unknown>;
 };
 
 const groupLabels: Record<(typeof workspaceSections)[number]["group"], string> = {
@@ -21,7 +23,7 @@ const groupLabels: Record<(typeof workspaceSections)[number]["group"], string> =
   admin: "Administration",
 };
 
-function WorkspaceContent({ workspace, section }: Props) {
+function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
   switch (section) {
     case "home": return <WorkspaceHome workspace={workspace} />;
     case "operly": return <WorkspaceOperly workspace={workspace} />;
@@ -34,10 +36,11 @@ function WorkspaceContent({ workspace, section }: Props) {
     case "plugins": return <PluginsPage workspace={workspace} />;
     case "members": return <MembersPage workspace={workspace} />;
     case "access": return <AccessPage workspace={workspace} />;
+    case "settings": return <WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} />;
   }
 }
 
-export function WorkspaceShell({ workspace, section }: Props) {
+export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
   const grouped = workspaceSections.reduce<Record<string, typeof workspaceSections>>((result, item) => {
     (result[item.group] ||= []).push(item);
     return result;
@@ -46,7 +49,7 @@ export function WorkspaceShell({ workspace, section }: Props) {
   return (
     <div className="workspace-shell">
       <aside className="workspace-nav">
-        <header className="workspace-identity">
+        <header className="workspace-identity" onClick={() => navigate(workspacePath(workspace.id, "settings"))} title="Open workspace settings">
           <span>{workspace.logo_url ? <img src={workspace.logo_url} alt="" /> : workspace.name.slice(0, 2).toUpperCase()}</span>
           <div><strong>{workspace.name}</strong><small>{workspace.role}</small></div>
         </header>
@@ -55,19 +58,13 @@ export function WorkspaceShell({ workspace, section }: Props) {
             <section className="nav-group" key={group}>
               <small>{groupLabels[group as keyof typeof groupLabels]}</small>
               {items.map((item) => (
-                <button
-                  key={item.id}
-                  className={section === item.id ? "active" : ""}
-                  onClick={() => navigate(workspacePath(workspace.id, item.id))}
-                >
-                  {item.label}
-                </button>
+                <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => navigate(workspacePath(workspace.id, item.id))}>{item.label}</button>
               ))}
             </section>
           ))}
         </nav>
       </aside>
-      <WorkspaceContent workspace={workspace} section={section} />
+      <WorkspaceContent workspace={workspace} section={section} onScopeRefresh={onScopeRefresh} />
     </div>
   );
 }
