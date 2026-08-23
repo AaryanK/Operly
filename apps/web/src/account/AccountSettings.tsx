@@ -14,17 +14,18 @@ type Connector = {
   healthStatus?: string | null;
   lastError?: string | null;
 };
-
+type SettingsTab = "account" | "connections" | "workspaces";
 type Props = {
   profile: PersonalProfile | null;
   workspaces: WorkspaceSummary[];
+  initialTab?: SettingsTab;
   onClose: () => void;
   onRefresh: () => Promise<unknown>;
   onWorkspace: (workspaceId: string) => Promise<unknown>;
 };
 
-export function AccountSettings({ profile, workspaces, onClose, onRefresh, onWorkspace }: Props) {
-  const [tab, setTab] = useState<"account" | "connections" | "workspaces">("account");
+export function AccountSettings({ profile, workspaces, initialTab = "account", onClose, onRefresh, onWorkspace }: Props) {
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export function AccountSettings({ profile, workspaces, onClose, onRefresh, onWor
     <section className="account-settings-card" role="dialog" aria-modal="true" aria-label="Account settings">
       <aside className="account-settings-nav"><div><span className="eyebrow">Personal</span><strong>User settings</strong></div><button className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}>My account</button><button className={tab === "connections" ? "active" : ""} onClick={() => setTab("connections")}>Connections</button><button className={tab === "workspaces" ? "active" : ""} onClick={() => setTab("workspaces")}>Workspaces</button></aside>
       <main className="account-settings-main"><header><div><span className="eyebrow">Private account</span><h2>{tab === "account" ? "My account" : tab === "connections" ? "Personal connections" : "Your workspaces"}</h2></div><button onClick={onClose} aria-label="Close">×</button></header>{error && <div className="inline-error">{error}</div>}{message && <div className="success-banner">{message}</div>}
-        {tab === "account" && <form className="form-stack account-form" onSubmit={saveProfile}><div className="account-identity"><span>{(profile?.display_name || profile?.email || "Me").slice(0,1).toUpperCase()}</span><div><strong>{profile?.display_name || "Operly user"}</strong><small>{profile?.email}</small></div></div><label>Display name<input name="display_name" defaultValue={profile?.display_name || ""} required maxLength={200} /></label><label>Email<input value={profile?.email || ""} disabled /><small>Email changes require a verified identity flow.</small></label><button className="primary-button" disabled={busy}>{busy ? "Saving…" : "Save profile"}</button></form>}
+        {tab === "account" && <form className="form-stack account-form" onSubmit={saveProfile}><div className="account-identity"><span>{(profile?.display_name || profile?.email || "Me").slice(0,1).toUpperCase()}</span><div><strong>{profile?.display_name || "Operly user"}</strong><small>{profile?.email}</small></div></div><label>Display name<input name="display_name" defaultValue={profile?.display_name || ""} required maxLength={200} /></label><label>Email<input value={profile?.email || ""} disabled readOnly /><small>Email changes require a verified identity flow.</small></label><button className="primary-button" disabled={busy}>{busy ? "Saving…" : "Save profile"}</button></form>}
         {tab === "connections" && <div className="settings-section-stack"><div className="settings-callout"><div><strong>Your tools, wherever you go</strong><p>Personal connectors belong to you, not a workspace. Workspace members cannot see these credentials or this private transcript.</p></div><button className="primary-button" disabled={busy} onClick={connectGoogle}>Connect Google</button></div>{connectors.length ? connectors.map((connector) => <article className="personal-connector-card" key={connector.id}><span className="connector-logo">{connector.provider.slice(0,1).toUpperCase()}</span><div><strong>{connector.displayName}</strong><p>{connector.account || connector.provider}</p><small>{(connector.capabilities || []).slice(0,5).join(" · ") || "No exposed capabilities"}</small>{connector.lastError && <span className="form-error">{connector.lastError}</span>}</div><span className={`status-chip status-${connector.healthStatus || connector.status}`}>{connector.healthStatus || connector.status}</span><div className="row-actions"><button className="secondary-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}/test`, { method: "POST", body: "{}" }))}>Test</button><button className="danger-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}`, { method: "DELETE" }))}>Disconnect</button></div></article>) : <div className="empty-panel">No personal connectors yet.</div>}</div>}
         {tab === "workspaces" && <div className="settings-section-stack"><form className="form-stack create-workspace-card" onSubmit={createWorkspace}><div><strong>Create a workspace</strong><p>A workspace is a shared boundary for a business, team, project, or community. Personal Operly remains above it.</p></div><label>Name<input name="name" required maxLength={200} placeholder="ORB Eats" /></label><label>Timezone<input name="timezone" required maxLength={100} defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"} /></label><button className="primary-button" disabled={busy}>Create workspace</button></form><div className="workspace-settings-list">{workspaces.map((workspace) => <button key={workspace.id} onClick={async () => { onClose(); await onWorkspace(workspace.id); }}><span>{workspace.logo_url ? <img src={workspace.logo_url} alt="" /> : workspace.name.slice(0,2).toUpperCase()}</span><div><strong>{workspace.name}</strong><small>{workspace.role} · {workspace.timezone || "UTC"}</small></div><b>›</b></button>)}</div></div>}
       </main>
