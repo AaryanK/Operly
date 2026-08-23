@@ -1,6 +1,10 @@
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
+import { AccessPage, MembersPage, PluginsPage } from "./AdminPages";
+import { ActivityPage, ConnectionsPage, CRMPage, OperationsPage, PresencePage } from "./DataPages";
+import { SolutionsPage } from "./SolutionsPage";
 import { WorkspaceHome } from "./WorkspaceHome";
+import { WorkspaceOperly } from "./WorkspaceOperly";
 
 type Props = {
   workspace: WorkspaceSummary;
@@ -15,28 +19,20 @@ const groupLabels: Record<(typeof workspaceSections)[number]["group"], string> =
   admin: "Administration",
 };
 
-function PendingMigration({ section }: { section: WorkspaceSection }) {
-  const item = workspaceSections.find((candidate) => candidate.id === section);
-  return (
-    <main className="workspace-page">
-      <header className="surface-header">
-        <div>
-          <span className="eyebrow">Canonical frontend</span>
-          <h1>{item?.label || section}</h1>
-          <p>This route now has one React owner. Its legacy data surface will be ported here before the old static renderer is deleted.</p>
-        </div>
-      </header>
-      <section className="migration-card">
-        <strong>Migration boundary</strong>
-        <p>No hidden click, bridge script, DOM repair observer, or alternate renderer is invoked from this route.</p>
-      </section>
-    </main>
-  );
-}
-
 function WorkspaceContent({ workspace, section }: Props) {
-  if (section === "home") return <WorkspaceHome workspace={workspace} />;
-  return <PendingMigration section={section} />;
+  switch (section) {
+    case "home": return <WorkspaceHome workspace={workspace} />;
+    case "operly": return <WorkspaceOperly workspace={workspace} />;
+    case "crm": return <CRMPage workspace={workspace} />;
+    case "operations": return <OperationsPage workspace={workspace} />;
+    case "activity": return <ActivityPage workspace={workspace} />;
+    case "presence": return <PresencePage workspace={workspace} />;
+    case "solutions": return <SolutionsPage workspace={workspace} />;
+    case "connections": return <ConnectionsPage workspace={workspace} />;
+    case "plugins": return <PluginsPage workspace={workspace} />;
+    case "members": return <MembersPage workspace={workspace} />;
+    case "access": return <AccessPage workspace={workspace} />;
+  }
 }
 
 export function WorkspaceShell({ workspace, section }: Props) {
