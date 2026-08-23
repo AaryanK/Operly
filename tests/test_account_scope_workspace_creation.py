@@ -166,7 +166,10 @@ async def test_personal_ai_workspace_settings_follow_real_member_authority():
 
 
 @pytest.mark.asyncio
-async def test_personal_ai_can_read_registered_workspace_capability_through_bridge():
+async def test_personal_ai_can_read_registered_workspace_capability_through_bridge(monkeypatch):
+    from contextlib import asynccontextmanager
+    from packages.capabilities import firewall as firewall_module
+
     import_all_models()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -186,6 +189,12 @@ async def test_personal_ai_can_read_registered_workspace_capability_through_brid
                 ]
             )
             await db.flush()
+
+            @asynccontextmanager
+            async def local_session_scope():
+                yield db
+
+            monkeypatch.setattr(firewall_module, "session_scope", local_session_scope)
             provider = PersonalRuntimeProvider()
             context = SimpleNamespace(
                 actor_id=user.id,
