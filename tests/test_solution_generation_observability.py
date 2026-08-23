@@ -1,13 +1,20 @@
 import unittest
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter
-
-from apps.api.solution_generation_router import retire_legacy_compose_route
+from apps.api.main import app
+from packages.model_runtime import client_context
 from packages.model_runtime.contracts import ModelUsage
 from packages.model_runtime.registry import ModelAttemptEvent
-from packages.solutions.model_trace import begin, end, snapshot, telemetry_sink, trace_client
+from packages.solutions.model_trace import (
+    TracingModelChatClient,
+    begin,
+    end,
+    snapshot,
+    telemetry_sink,
+    trace_client,
+)
 
 
 @dataclass
@@ -82,26 +89,48 @@ class SolutionGenerationObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace["modelCalls"][-1]["usage"]["total_tokens"], 14)
         self.assertEqual(trace["modelCalls"][-1]["providerModelId"], "test-model")
 
-    def test_retire_legacy_compose_keeps_one_generation_authority(self):
-        canonical = APIRouter(prefix="/api/solutions")
+    async def test_model_client_decoration_is_context_local_not_a_global_monkeypatch(self):
+        original = client_context._base_client_for_role
+        client_context._base_client_for_role = lambda role, **kwargs: FakeModelClient()
+        try:
+            outside = client_context.model_chat_client_for_role("planner")
+            self.assertNotIsInstance(outside, TracingModelChatClient)
 
-        @canonical.post("/compose")
-        async def old_compose():
-            return {}
+            token = begin("job-2")
+            try:
+                inside = client_context.model_chat_client_for_role("planner")
+                self.assertIsInstance(inside, TracingModelChatClient)
+            finally:
+                end(token)
 
-        @canonical.get("/{solution_id}")
-        async def get_solution(solution_id: str):
-            return {"id": solution_id}
+            outside_again = client_context.model_chat_client_for_role("planner")
+            self.assertNotIsInstance(outside_again, TracingModelChatClient)
+        finally:
+            client_context._base_client_for_role = original
 
-        retire_legacy_compose_route(canonical)
-        post_compose = [
+    def test_exactly_one_canonical_compose_route_is_registered(self):
+        routes = [
             route
-            for route in canonical.routes
-            if route.path == "/api/solutions/compose" and "POST" in (route.methods or set())
+            for route in app.routes
+            if getattr(route, "path", "") == "/api/solutions/compose"
+            and "POST" in (getattr(route, "methods", set()) or set())
         ]
-        get_routes = [route for route in canonical.routes if route.path == "/api/solutions/{solution_id}"]
-        self.assertEqual(post_compose, [])
-        self.assertEqual(len(get_routes), 1)
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0].endpoint.__module__, "apps.api.solutions_router")
+
+    def test_browser_exposes_failed_generation_trace_and_retry(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "apps"
+            / "web"
+            / "static"
+            / "unified-solution-studio.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("initial_generation_failed", source)
+        self.assertIn("/generation-trace", source)
+        self.assertIn("Retry generation", source)
+        self.assertIn("renderManagedGenerationTrace", source)
+        self.assertIn("retryManagedGeneration", source)
 
 
 if __name__ == "__main__":
