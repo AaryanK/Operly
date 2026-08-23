@@ -204,6 +204,7 @@ class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
                 return _Typing()
 
         message = SimpleNamespace(
+            id=12345,
             author=SimpleNamespace(bot=False, id=7, display_name="User"),
             content="Use this file and email the result",
             attachments=[SimpleNamespace(filename="input.pdf")],
