@@ -1,0 +1,1 @@
+Working-memory policy: persist raw observations, compact them into structured run state, and re-retrieve evidence by reference only when needed. Do not replay unbounded tool transcripts into every model turn.
