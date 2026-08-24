@@ -19,8 +19,8 @@ from packages.database.custom_software_models import GeneratedSourceBundle
 from packages.relational_data.tokens import BindingGrantError, verify_capability_grant
 from packages.workspace_entities.store import WorkspaceEntityError, WorkspaceEntityStore
 
-runtime_router = APIRouter(prefix="/runtime/app-identity", tags=["runtime-app-identity"])
-admin_router = APIRouter(prefix="/app-identities", tags=["app-identities"])
+runtime_router = APIRouter(prefix="/api/runtime/app-identity", tags=["runtime-app-identity"])
+admin_router = APIRouter(prefix="/api/app-identities", tags=["app-identities"])
 _store: AppIdentityStore | None = None
 _entities: WorkspaceEntityStore | None = None
 
