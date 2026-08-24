@@ -1,4 +1,4 @@
-"""Durable conversation-scoped model-runtime tracing.
+"""Durable conversation/run-scoped model and trusted-runtime tracing.
 
 The sink records runtime-visible request/response evidence and provider diagnostics,
 never transport credentials or hidden provider reasoning. Credential-shaped and
@@ -17,6 +17,7 @@ import re
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -25,7 +26,9 @@ from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.model_runtime.registry import ModelAttemptEvent, register_model_telemetry_sink
 from packages.model_runtime.trace_context import (
     ProviderWireEvent,
+    RuntimeTraceEvent,
     register_provider_wire_telemetry_sink,
+    register_runtime_trace_telemetry_sink,
 )
 
 _INSTALLED = False
@@ -35,6 +38,10 @@ _SECRET_KEY_PARTS = (
     "authorization",
     "access_token",
     "refresh_token",
+    "runtime_token",
+    "migration_token",
+    "runtimetoken",
+    "migrationtoken",
     "password",
     "passwd",
     "secret",
@@ -100,7 +107,7 @@ def redact_trace_value(value: Any, *, key: str = "") -> Any:
 
 
 def encode_trace_envelope(payload: dict[str, Any]) -> str:
-    """Encode the complete redacted model-visible packet plus exact-packet digest."""
+    """Encode the complete redacted runtime packet plus exact-packet digest."""
     envelope = {
         "traceVersion": 2,
         "exactPayloadDigest": _digest(payload),
@@ -230,12 +237,47 @@ async def persist_provider_wire_event(event: ProviderWireEvent) -> None:
         await db.commit()
 
 
+async def persist_runtime_trace_event(event: RuntimeTraceEvent) -> None:
+    metadata = dict(event.metadata or {})
+    conversation_id = str(metadata.get("conversation_id") or "").strip()
+    run_id = str(metadata.get("runtime_run_id") or "").strip()
+    if not conversation_id or not run_id:
+        return
+    attempt = int(metadata.get("generation_attempt") or metadata.get("attempt") or 1)
+    payload = {
+        "phase": event.phase,
+        "eventType": event.event_type,
+        "classification": event.classification,
+        "retryable": event.retryable,
+        "metadata": metadata,
+        "event": event.payload,
+    }
+    row = _trace_row(
+        metadata=metadata,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        attempt_id=str(uuid4()),
+        phase=str(event.phase or "event"),
+        resource_id=str(event.resource_id or "operly.runtime"),
+        provider="operly",
+        provider_model_id="trusted-runtime",
+        payload=payload,
+        attempt=attempt,
+        classification=event.classification,
+        retryable=event.retryable,
+    )
+    async with SessionFactory() as db:
+        db.add(row)
+        await db.commit()
+
+
 def ensure_model_trace_sink() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     register_model_telemetry_sink(persist_model_attempt)
     register_provider_wire_telemetry_sink(persist_provider_wire_event)
+    register_runtime_trace_telemetry_sink(persist_runtime_trace_event)
     _INSTALLED = True
 
 
