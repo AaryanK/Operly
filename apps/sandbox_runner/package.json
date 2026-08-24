@@ -7,8 +7,8 @@
   },
   "packageManager": "npm@10.9.8",
   "scripts": {
-    "start": "node server.mjs",
-    "test": "node --test core.test.mjs"
+    "start": "node startup-smoke.mjs && node server.mjs",
+    "test": "node --test core.test.mjs && node startup-smoke.mjs"
   },
   "dependencies": {
     "pg": "8.16.3",
