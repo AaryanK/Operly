@@ -52,15 +52,50 @@ class AgentExecutionBudget:
         )
 
 
+class _DuplicateProperty(ValueError):
+    def __init__(self, key: str):
+        super().__init__(key)
+        self.key = key
+
+
 async def _resolve(value):
     return await value if inspect.isawaitable(value) else value
+
+
+def _strict_json_object(raw: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Parse model-authored JSON without silently accepting duplicate keys."""
+
+    def pairs_hook(pairs):
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise _DuplicateProperty(str(key))
+            value[str(key)] = item
+        return value
+
+    try:
+        parsed = json.loads(raw, object_pairs_hook=pairs_hook)
+    except _DuplicateProperty as error:
+        return {}, [{"path": error.key, "reason": "duplicate property"}]
+    except json.JSONDecodeError as error:
+        return {}, [{"path": "$", "reason": f"invalid JSON: {error.msg}"}]
+    if not isinstance(parsed, dict):
+        return {}, [{"path": "$", "reason": "arguments must be a JSON object"}]
+    return parsed, []
 
 
 def _made_progress(observation: dict[str, Any]) -> bool:
     if observation.get("ok") is True or observation.get("success") is True:
         return True
     status = str(observation.get("status") or "").lower()
-    return status in {"completed", "success", "verified", "waiting_approval", "awaiting_approval"}
+    return status in {
+        "completed",
+        "success",
+        "verified",
+        "waiting_approval",
+        "awaiting_approval",
+        "running",
+    }
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -142,17 +177,29 @@ class AgentRuntime:
         raise TypeError("AgentRuntime requires a Model.infer-compatible object")
 
     @staticmethod
-    def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+    def _arguments_checked(
+        call: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], str | None, list[dict[str, str]]]:
         function = call.get("function") or {}
         name = str(function.get("name") or "").strip()
-        raw = function.get("arguments") or {}
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except json.JSONDecodeError:
-                raw = {}
-        arguments = raw if isinstance(raw, dict) else {}
+        raw = function.get("arguments")
+        errors: list[dict[str, str]] = []
+        if raw is None:
+            arguments: dict[str, Any] = {}
+        elif isinstance(raw, str):
+            arguments, errors = _strict_json_object(raw)
+        elif isinstance(raw, dict):
+            arguments = dict(raw)
+        else:
+            arguments = {}
+            errors = [{"path": "$", "reason": "arguments must be a JSON object"}]
         call_id = str(call.get("id") or "").strip() or None
+        return name, arguments, call_id, errors
+
+    @staticmethod
+    def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+        """Compatibility accessor retained for callers/tests outside the loop."""
+        name, arguments, call_id, _ = AgentRuntime._arguments_checked(call)
         return name, arguments, call_id
 
     async def run(
@@ -217,7 +264,7 @@ class AgentRuntime:
                         break
                     if not isinstance(call, dict):
                         continue
-                    name, arguments, call_id = self._arguments(call)
+                    name, arguments, call_id, argument_errors = self._arguments_checked(call)
                     capability_metadata = {
                         **run_metadata,
                         "runtime_component": f"capability:{name or 'unknown'}",
@@ -227,7 +274,21 @@ class AgentRuntime:
                     }
                     with runtime_trace_scope(capability_metadata):
                         if not name:
-                            observation = {"ok": False, "error": "Model requested an unnamed capability"}
+                            observation = {
+                                "ok": False,
+                                "status": "INVALID_ARGUMENTS",
+                                "error": "Model requested an unnamed capability",
+                                "errors": [{"path": "function.name", "reason": "required"}],
+                                "retryable": True,
+                            }
+                        elif argument_errors:
+                            observation = {
+                                "ok": False,
+                                "status": "INVALID_ARGUMENTS",
+                                "error": "Capability arguments are not valid JSON",
+                                "errors": argument_errors,
+                                "retryable": True,
+                            }
                         else:
                             observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
                     tool_calls += 1
