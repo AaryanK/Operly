@@ -29,6 +29,7 @@ from packages.tasks.workflow import WorkflowExecutionError
 
 POLL_SECONDS = 2.0
 DELIVERY_RETRY_SECONDS = 60
+RUN_LEASE_SECONDS = 1800
 _MAX_BATCH = 20
 
 
@@ -46,6 +47,14 @@ def _scheduled_for(payload: dict, fallback: datetime) -> datetime:
     return fallback
 
 
+def _preserve_live_event_queue(job: ScheduledJob, payload: dict) -> None:
+    """Keep plugin events appended concurrently while the active run was executing."""
+    live = load_task_payload(job.content)
+    queue = live.get("event_queue") if isinstance(live.get("event_queue"), list) else None
+    if queue is not None:
+        payload["event_queue"] = list(queue)
+
+
 def _execution_prompt(row: dict, payload: dict) -> str:
     prompt = scheduled_task_prompt(_task_obj(row), payload)
     event_context = payload.get("event_context") if isinstance(payload.get("event_context"), dict) else None
@@ -56,7 +65,7 @@ def _execution_prompt(row: dict, payload: dict) -> str:
         )
     prompt += (
         "\n\nDELIVERY CONTRACT:\nReturn the final user-facing result as the assistant output. "
-        "The Task delivery layer will deliver it exactly once to the configured target. "
+        "The Task delivery layer owns delivery to the configured target. "
         "Do not call a messaging capability merely to deliver this final result."
     )
     return prompt
@@ -192,6 +201,7 @@ async def _persist_pending_output(job_id: str, payload: dict, output: str) -> No
         job = await db.get(ScheduledJob, job_id)
         if job is None:
             return
+        _preserve_live_event_queue(job, payload)
         payload["pending_output"] = output
         payload.pop("last_delivery_error", None)
         job.content = dump_task_payload(payload)
@@ -212,6 +222,7 @@ async def _delivery_failed(job_id: str, payload: dict, error: Exception) -> None
         job = await db.get(ScheduledJob, job_id)
         if job is None:
             return
+        _preserve_live_event_queue(job, payload)
         payload["last_delivery_error"] = type(error).__name__
         job.content = dump_task_payload(payload)
         job.status = "pending_delivery"
@@ -228,6 +239,7 @@ async def _finish_run(row: dict, payload: dict) -> None:
             job.status = "paused" if task.status == "paused" else "cancelled"
             return
 
+        _preserve_live_event_queue(job, payload)
         payload.pop("pending_output", None)
         payload.pop("waiting_approval", None)
         payload.pop("run_started_at", None)
@@ -267,6 +279,7 @@ async def _mark_waiting_approval(job_id: str, payload: dict, approval_id: str) -
         job = await db.get(ScheduledJob, job_id)
         if job is None:
             return
+        _preserve_live_event_queue(job, payload)
         payload["waiting_approval"] = approval_id
         job.content = dump_task_payload(payload)
         job.status = "waiting_approval"
@@ -277,6 +290,7 @@ async def _mark_failed(job_id: str, payload: dict, error: Exception) -> None:
         job = await db.get(ScheduledJob, job_id)
         if job is None:
             return
+        _preserve_live_event_queue(job, payload)
         payload["last_error"] = f"{type(error).__name__}:{str(error)[:500]}"
         payload.pop("run_started_at", None)
         job.content = dump_task_payload(payload)
@@ -401,9 +415,40 @@ async def resume_task_after_approval(
     return changed
 
 
+async def _recover_stale_running(db, now: datetime) -> int:
+    rows = (
+        await db.scalars(
+            select(ScheduledJob).where(
+                ScheduledJob.job_type == "task",
+                ScheduledJob.status == "running",
+            )
+        )
+    ).all()
+    recovered = 0
+    for job in rows:
+        payload = load_task_payload(job.content)
+        raw_started = str(payload.get("run_started_at") or "").strip().removesuffix("Z")
+        if not raw_started:
+            continue
+        try:
+            started = datetime.fromisoformat(raw_started)
+        except ValueError:
+            continue
+        if now - started < timedelta(seconds=RUN_LEASE_SECONDS):
+            continue
+        payload["last_recovery_at"] = now.isoformat() + "Z"
+        payload.pop("run_started_at", None)
+        job.content = dump_task_payload(payload)
+        job.status = "pending_delivery" if payload.get("pending_output") else "pending"
+        job.run_at = now
+        recovered += 1
+    return recovered
+
+
 async def _due_job_ids() -> list[str]:
     now = datetime.utcnow()
     async with session_scope() as db:
+        await _recover_stale_running(db, now)
         rows = (
             await db.scalars(
                 select(ScheduledJob.id)
