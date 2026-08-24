@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.security.permissions import resolve_workspace_permissions
+from packages.security.surfaces import SurfaceKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class ExecutionContext:
     role: str
     permissions: frozenset[str]
     channel: str
+    surface: SurfaceKind = SurfaceKind.UNKNOWN
     conversation_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -39,6 +41,7 @@ async def resolve_execution_context(
     workspace_id: str,
     user_id: str | None,
     channel: str,
+    surface: SurfaceKind | str | None = None,
     conversation_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     require_membership: bool = True,
@@ -46,8 +49,10 @@ async def resolve_execution_context(
     """Resolve workspace membership and permissions from trusted database state.
 
     Role and permission values are never accepted from the model or request payload.
-    The caller may identify the already-authenticated Operly user, but membership in
-    the selected workspace is revalidated here on every execution boundary.
+    Surface is a first-class application value; missing or invalid surface values are
+    UNKNOWN and therefore fail closed for personal/private capability and context
+    access. Membership in the selected workspace is revalidated on every execution
+    boundary.
     """
     workspace = await db.get(Tenant, workspace_id)
     if workspace is None:
@@ -87,6 +92,7 @@ async def resolve_execution_context(
         role=role,
         permissions=frozenset(permissions),
         channel=str(channel or "unknown"),
+        surface=SurfaceKind.coerce(surface),
         conversation_id=conversation_id,
         metadata=dict(metadata or {}),
     )
