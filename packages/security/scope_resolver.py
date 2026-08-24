@@ -129,7 +129,8 @@ async def resolve_authorized_scope(
 
     if not scopes:
         return ScopeResolution("missing", needle, ())
-    if needle in _PERSONAL_ALIASES or needle.startswith("personal:"):
+    personal_id = _normalize(personal[0].id) if personal else ""
+    if needle in _PERSONAL_ALIASES or (personal_id and needle == personal_id):
         return ScopeResolution("resolved", needle, personal)
 
     exact = tuple(
@@ -151,7 +152,11 @@ async def resolve_authorized_scope(
         focused = tuple(item for item in workspaces if item.id == focus_workspace_id)
         if len(focused) == 1:
             return ScopeResolution("resolved", needle, focused)
-        return ScopeResolution("ambiguous" if len(workspaces) > 1 else "resolved" if len(workspaces) == 1 else "missing", needle, workspaces)
+        return ScopeResolution(
+            "ambiguous" if len(workspaces) > 1 else "resolved" if len(workspaces) == 1 else "missing",
+            needle,
+            workspaces,
+        )
 
     contains = tuple(
         item for item in workspaces if needle and needle in _normalize(item.name)
