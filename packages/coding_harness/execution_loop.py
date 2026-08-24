@@ -44,13 +44,19 @@ SETTLED_BUILD_STATES = {
 
 def _failure_evidence(build) -> dict[str, Any]:
     try:
-        result = json.loads(build.result_json or "{}")
+        result = json.loads(getattr(build, "result_json", "") or "{}")
     except Exception:
         result = {}
     evidence = result.get("failureEvidence") if isinstance(result, dict) else {}
     if not isinstance(evidence, dict):
         evidence = {"message": str(evidence)}
-    return {**evidence, "classification": build.failure_classification or evidence.get("classification") or "unknown_failure", "buildState": build.state, "buildId": build.id, "attempt": build.attempt}
+    return {
+        **evidence,
+        "classification": getattr(build, "failure_classification", None) or evidence.get("classification") or "unknown_failure",
+        "buildState": getattr(build, "state", None),
+        "buildId": getattr(build, "id", None),
+        "attempt": getattr(build, "attempt", None),
+    }
 
 
 def _repair_budget(value: int | None = None) -> int:
@@ -84,8 +90,9 @@ def _trace_metadata(tenant_id: str, user_id: str, plan_row, idempotency_key: str
             attempt = max(1, int(raw_attempt))
         except ValueError:
             attempt = 1
-    conversation_id = f"solution:{solution_id}" if solution_id else f"software-plan:{plan_row.id}"
-    run_id = f"solution:{solution_id}:attempt:{attempt}" if solution_id else f"software-plan:{plan_row.id}"
+    plan_id = str(getattr(plan_row, "id", "unknown"))
+    conversation_id = f"solution:{solution_id}" if solution_id else f"software-plan:{plan_id}"
+    run_id = f"solution:{solution_id}:attempt:{attempt}" if solution_id else f"software-plan:{plan_id}"
     return {
         "conversation_id": conversation_id,
         "runtime_run_id": run_id,
@@ -96,7 +103,7 @@ def _trace_metadata(tenant_id: str, user_id: str, plan_row, idempotency_key: str
         "surface": "solution_generation",
         "runtime_component": "coding_harness",
         "solution_id": solution_id or None,
-        "software_plan_id": str(plan_row.id),
+        "software_plan_id": plan_id,
         "generation_attempt": attempt,
     }
 
@@ -116,18 +123,33 @@ async def _trace(event_type: str, payload: Any = None, *, phase: str = "event", 
 
 def _source_trace_payload(source, result=None) -> dict[str, Any]:
     try:
-        manifest = json.loads(source.manifest_json or "{}")
+        manifest = json.loads(getattr(source, "manifest_json", "") or "{}")
     except Exception:
         manifest = {}
+    try:
+        provenance = json.loads(getattr(source, "provenance_json", "") or "{}")
+    except Exception:
+        provenance = {}
     payload = {
-        "sourceBundleId": source.id,
-        "sourceVersion": source.source_version,
-        "bundleDigest": source.bundle_digest,
-        "planId": source.plan_id,
-        "planVersion": source.plan_version,
-        "files": manifest.get("files", []),
-        "totalBytes": manifest.get("totalBytes", 0),
+        "sourceBundleId": getattr(source, "id", None),
+        "sourceVersion": getattr(source, "source_version", None),
+        "bundleDigest": getattr(source, "bundle_digest", None),
+        "planId": getattr(source, "plan_id", None),
+        "planVersion": getattr(source, "plan_version", None),
+        "files": manifest.get("files", []) if isinstance(manifest, dict) else [],
+        "totalBytes": manifest.get("totalBytes", 0) if isinstance(manifest, dict) else 0,
     }
+    if isinstance(provenance, dict) and provenance:
+        payload.update(
+            {
+                "modelProvider": provenance.get("modelProvider"),
+                "modelId": provenance.get("modelId"),
+                "summary": provenance.get("summary"),
+                "changedPaths": provenance.get("changedPaths") or [],
+                "verification": provenance.get("verificationIntent") or [],
+                "toolTrace": (provenance.get("toolTrace") or [])[-400:],
+            }
+        )
     if result is not None:
         payload.update(
             {
@@ -149,26 +171,26 @@ async def _await_runner_build(db, build, adapter):
         return build
     deadline = time.monotonic() + _runner_poll_timeout()
     previous_state = build.state
-    await _trace("runner.build.polling", {"buildId": build.id, "state": build.state}, resource_id="sandbox_runner")
+    await _trace("runner.build.polling", {"buildId": getattr(build, "id", None), "state": build.state}, resource_id="sandbox_runner")
     while build.state not in SETTLED_BUILD_STATES:
         if time.monotonic() >= deadline:
             await _trace(
                 "runner.build.timeout",
-                {"buildId": build.id, "state": build.state},
+                {"buildId": getattr(build, "id", None), "state": build.state},
                 phase="error",
                 classification="runner_poll_timeout",
                 retryable=True,
                 resource_id="sandbox_runner",
             )
             raise TimeoutError(
-                f"Isolated runner build {build.id} did not settle before the orchestration deadline"
+                f"Isolated runner build {getattr(build, 'id', 'unknown')} did not settle before the orchestration deadline"
             )
         await asyncio.sleep(_runner_poll_interval())
         build = await refresh_build(db, build, adapter=adapter)
         if build.state != previous_state:
             await _trace(
                 "runner.build.state_changed",
-                {"buildId": build.id, "from": previous_state, "to": build.state, "runnerJobId": build.runner_job_id},
+                {"buildId": getattr(build, "id", None), "from": previous_state, "to": build.state, "runnerJobId": getattr(build, "runner_job_id", None)},
                 resource_id="sandbox_runner",
             )
             previous_state = build.state
@@ -190,8 +212,8 @@ async def _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, clie
         "repairNumber": repair_number,
         "classification": evidence.get("classification", "unknown_failure"),
         "failedBuildId": failed_build_id,
-        "fromSourceVersion": previous_source.source_version,
-        "toSourceVersion": source.source_version,
+        "fromSourceVersion": getattr(previous_source, "source_version", None),
+        "toSourceVersion": getattr(source, "source_version", None),
         "changedPaths": result.changed_paths,
         "summary": result.summary,
     })
@@ -217,12 +239,16 @@ async def build_with_repair(
     with runtime_trace_scope(metadata):
         await _trace(
             "coding_harness.started",
-            {"idempotencyKey": idempotency_key, "planId": plan_row.id, "planVersion": plan_row.approved_version},
+            {
+                "idempotencyKey": idempotency_key,
+                "planId": getattr(plan_row, "id", None),
+                "planVersion": getattr(plan_row, "approved_version", None),
+            },
         )
         try:
-            source = await latest_source(db, tenant_id, plan_row.id, plan_row.approved_version)
+            source = await latest_source(db, tenant_id, getattr(plan_row, "id", None), getattr(plan_row, "approved_version", None))
             if source is None:
-                await _trace("coding_agent.source_generation.started", {"planId": plan_row.id}, resource_id="coding_agent")
+                await _trace("coding_agent.source_generation.started", {"planId": getattr(plan_row, "id", None)}, resource_id="coding_agent")
                 source, result = await generate_source_for_plan(db, tenant_id, user_id, plan_row, plan, client=client)
                 await db.commit()
                 await db.refresh(source)
@@ -242,9 +268,9 @@ async def build_with_repair(
                         "runner.submit.started",
                         {
                             "idempotencyKey": attempt_key,
-                            "sourceBundleId": source.id,
-                            "sourceVersion": source.source_version,
-                            "bundleDigest": source.bundle_digest,
+                            "sourceBundleId": getattr(source, "id", None),
+                            "sourceVersion": getattr(source, "source_version", None),
+                            "bundleDigest": getattr(source, "bundle_digest", None),
                             "repairNumber": used_repairs,
                         },
                         resource_id="sandbox_runner",
@@ -262,7 +288,12 @@ async def build_with_repair(
                     )
                     await _trace(
                         "runner.submit.persisted",
-                        {"buildId": build.id, "state": build.state, "runnerJobId": build.runner_job_id, "classification": build.failure_classification},
+                        {
+                            "buildId": getattr(build, "id", None),
+                            "state": getattr(build, "state", None),
+                            "runnerJobId": getattr(build, "runner_job_id", None),
+                            "classification": getattr(build, "failure_classification", None),
+                        },
                         resource_id="sandbox_runner",
                     )
                     build = await _await_runner_build(db, build, adapter)
@@ -293,7 +324,7 @@ async def build_with_repair(
                 if build.state == "preview_ready":
                     await _trace(
                         "coding_harness.completed",
-                        {"buildId": build.id, "state": build.state, "sourceBundleId": source.id, "repairs": repairs},
+                        {"buildId": getattr(build, "id", None), "state": build.state, "sourceBundleId": getattr(source, "id", None), "repairs": repairs},
                         phase="success",
                     )
                     return build, source, repairs
@@ -311,7 +342,7 @@ async def build_with_repair(
                     return build, source, repairs
 
                 used_repairs += 1
-                source = await _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, client, repairs, used_repairs, failed_build_id=build.id)
+                source = await _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, client, repairs, used_repairs, failed_build_id=getattr(build, "id", None))
         except Exception as error:
             await _trace(
                 "coding_harness.exception",
