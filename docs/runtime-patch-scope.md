@@ -1,0 +1,1 @@
+Scope: security boundary + progressive capability exposure + semantic capability retrieval + context-ref foundation. AgentRunController, full multi-agent orchestration, and sandbox generalization remain follow-on layers after these foundations are safe.
