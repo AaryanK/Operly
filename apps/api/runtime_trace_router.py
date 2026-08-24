@@ -39,6 +39,7 @@ _WORKSPACE_TRACE_SURFACES = frozenset(
         SurfaceKind.WORKSPACE_SHARED.value,
         SurfaceKind.DISCORD_GUILD.value,
         SurfaceKind.SYSTEM_TASK.value,
+        "solution_generation",
     }
 )
 
