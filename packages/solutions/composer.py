@@ -2,8 +2,8 @@
 
 Owner intent is decomposed into a runtime-neutral SolutionManifest before an
 implementation target is selected. Studio and managed-app are fast declarative
-compiler targets; requests outside their finite envelope fall through to the
-isolated generated full-stack runtime and must earn preview readiness through a
+compiler targets; requests outside their finite envelope are queued for the
+durable generated full-stack worker and must earn preview readiness through a
 real build/test/health/acceptance path.
 """
 from __future__ import annotations
@@ -17,12 +17,13 @@ from sqlalchemy import desc, select
 
 from packages.application_builder.schema import BuilderContext, ProposalRequest
 from packages.application_builder.service import ApplicationBuilderService
-from packages.coding_harness.execution_loop import build_with_repair
-from packages.custom_software.plan_service import approve, create_plan, owned_plan, plan_version
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter
-from packages.custom_software.service import create_project_from_plan
 from packages.database.application_builder_models import ApplicationVersion
 from packages.database.product_models import SolutionJob
+from packages.solutions.generation_worker import (
+    GENERATED_JOB_TYPE,
+    create_generated_placeholder,
+    queue_generated_generation,
+)
 from packages.solutions.implementation import resolve_solution_implementation
 from packages.solutions.manifest import SolutionManifest, derive_solution_manifest
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, SolutionType
@@ -102,7 +103,7 @@ async def _next_generation_attempt(db, tenant_id: str, solution_id: str) -> int:
         .where(
             SolutionJob.tenant_id == tenant_id,
             SolutionJob.solution_id == solution_id,
-            SolutionJob.job_type == "initial_generation",
+            SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
         )
         .order_by(desc(SolutionJob.attempt))
         .limit(1)
@@ -123,29 +124,6 @@ def _builder_message(objective: str, context: dict[str, Any]) -> str:
         + "\n\nOPERLY SOLUTION ARCHITECTURE CONTRACT (minimum required behavior):\n"
         + json.dumps(contract, ensure_ascii=False, sort_keys=True)
     )[:12000]
-
-
-def _planning_prompt(name: str, objective: str, context: dict[str, Any]) -> str:
-    """Give the general software planner semantic truth without runtime micromanagement."""
-    implementation = context.get("implementationResolution")
-    architecture = context.get("solutionManifest")
-    payload = {
-        "name": name,
-        "objective": objective,
-        "solutionManifest": architecture if isinstance(architecture, dict) else {},
-        "implementationResolution": implementation if isinstance(implementation, dict) else {},
-        "constraints": [
-            "Implement every mandatory behavior as executable software, not a mock or brochure.",
-            "Use Operly capability bindings for trusted data, identity, secrets, permissions and external services.",
-            "Generate acceptance tests for critical state transitions and user interactions.",
-            "The first preview must remain private; creation does not authorize publishing or external side effects.",
-        ],
-    }
-    return (
-        f"Build the Solution named {name!r}.\n\nOwner objective:\n{objective}\n\n"
-        "OPERLY SOLUTION CONTRACT:\n"
-        + json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    )[:20000]
 
 
 async def _run_managed_generation(
@@ -181,6 +159,7 @@ async def _run_managed_generation(
         job_type="initial_generation",
         status="running",
         attempt=attempt,
+        created_by=user_id,
         started_at=datetime.utcnow(),
         log_json=json.dumps(logs, ensure_ascii=False),
         evidence_json=json.dumps(evidence, ensure_ascii=False),
@@ -296,155 +275,6 @@ async def _run_managed_generation(
         return row
 
 
-async def _run_generated_generation(
-    db,
-    *,
-    tenant_id: str,
-    user_id: str,
-    row,
-    project,
-    software_plan_row,
-    software_plan,
-):
-    """Generate, execute and verify arbitrary source before claiming preview readiness."""
-    context = _context(row)
-    owner = context.get("ownerIntent") if isinstance(context.get("ownerIntent"), dict) else {}
-    objective = " ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000]
-    attempt = await _next_generation_attempt(db, tenant_id, row.id)
-    logs: list[dict[str, Any]] = []
-    _log(logs, "objective", "succeeded", "Validated SoftwarePlan and owner objective loaded")
-    _log(logs, "capability_resolution", "succeeded", "Uncovered capabilities assigned to generated full-stack source")
-    job = SolutionJob(
-        tenant_id=tenant_id,
-        solution_id=row.id,
-        source_version_reference=f"software-plan:{software_plan_row.id}:{software_plan_row.approved_version}",
-        job_type="initial_generation",
-        status="running",
-        attempt=attempt,
-        started_at=datetime.utcnow(),
-        log_json=json.dumps(logs, ensure_ascii=False),
-        evidence_json=json.dumps(
-            {
-                "objective": objective,
-                "softwarePlanId": software_plan_row.id,
-                "softwarePlanVersion": software_plan_row.approved_version,
-                "implementationResolution": context.get("implementationResolution", {}),
-            },
-            ensure_ascii=False,
-        ),
-        idempotency_key=f"solution:{row.id}:generated-build:{attempt}",
-    )
-    db.add(job)
-    await db.flush()
-    stage = "source_generation"
-    context["initialGeneration"] = {
-        "status": "running",
-        "stage": stage,
-        "jobId": job.id,
-        "attempt": attempt,
-        "softwarePlanId": software_plan_row.id,
-        "softwarePlanVersion": software_plan_row.approved_version,
-    }
-    row.lifecycle_status = LifecycleStatus.BUILDING
-    row.current_version_reference = None
-    row.preview_state = "unavailable"
-    row.preview_url = None
-    row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
-    await db.flush()
-
-    try:
-        _log(logs, stage, "running", "Generating executable source from the validated requirement ledger")
-        job.log_json = json.dumps(logs, ensure_ascii=False)
-        build, source, repairs = await build_with_repair(
-            db,
-            tenant_id,
-            user_id,
-            software_plan_row,
-            software_plan,
-            job.idempotency_key,
-            adapter=ExternalRunnerAdapter(),
-        )
-        job.source_version_reference = str(source.source_version)
-        stage = "acceptance_test"
-        if build.state != "preview_ready":
-            classification = build.failure_classification or build.state or "generated_build_failed"
-            raise RuntimeError(f"Generated build did not reach preview_ready: {classification}")
-
-        _log(logs, "build", "succeeded", f"Isolated build {build.id} completed")
-        _log(logs, "acceptance_test", "succeeded", "Runner build, tests, health checks and acceptance checks passed")
-        _log(logs, "preview_readiness", "succeeded", "Verified isolated runner preview is active")
-        context["initialGeneration"] = {
-            "status": "applied",
-            "stage": "preview_readiness",
-            "jobId": job.id,
-            "attempt": attempt,
-            "softwarePlanId": software_plan_row.id,
-            "softwarePlanVersion": software_plan_row.approved_version,
-            "sourceBundleId": source.id,
-            "sourceVersion": source.source_version,
-            "buildId": build.id,
-            "repairCount": len(repairs),
-        }
-        row.lifecycle_status = LifecycleStatus.PREVIEW_READY
-        row.current_version_reference = str(source.source_version)
-        row.preview_state = "ready"
-        row.preview_url = "/api/solutions/{solution_id}/preview"
-        row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
-        job.status = "succeeded"
-        job.ended_at = datetime.utcnow()
-        job.log_json = json.dumps(logs, ensure_ascii=False)
-        job.failure_classification = None
-        job.evidence_json = json.dumps(
-            {
-                "objective": objective,
-                "softwarePlanId": software_plan_row.id,
-                "softwarePlanVersion": software_plan_row.approved_version,
-                "sourceBundleId": source.id,
-                "sourceVersion": source.source_version,
-                "buildId": build.id,
-                "buildState": build.state,
-                "repairs": repairs,
-                "implementationResolution": context.get("implementationResolution", {}),
-            },
-            ensure_ascii=False,
-        )
-        await db.flush()
-        return row
-    except Exception as error:
-        safe_error = " ".join(str(error).split())[:1000] or type(error).__name__
-        _log(logs, stage, "failed", safe_error)
-        context["initialGeneration"] = {
-            "status": "retryable",
-            "stage": stage,
-            "error": safe_error,
-            "jobId": job.id,
-            "attempt": attempt,
-            "softwarePlanId": software_plan_row.id,
-            "softwarePlanVersion": software_plan_row.approved_version,
-        }
-        row.lifecycle_status = LifecycleStatus.FAILED
-        row.current_version_reference = None
-        row.preview_state = "unavailable"
-        row.preview_url = None
-        row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
-        job.status = "failed"
-        job.ended_at = datetime.utcnow()
-        job.log_json = json.dumps(logs, ensure_ascii=False)
-        job.failure_classification = type(error).__name__[:80]
-        job.evidence_json = json.dumps(
-            {
-                "objective": objective,
-                "softwarePlanId": software_plan_row.id,
-                "softwarePlanVersion": software_plan_row.approved_version,
-                "failedStage": stage,
-                "implementationResolution": context.get("implementationResolution", {}),
-            },
-            ensure_ascii=False,
-        )
-        await db.flush()
-        return row
-
-
 async def retry_solution_initial_generation(
     db,
     *,
@@ -474,19 +304,8 @@ async def retry_solution_initial_generation(
         )
 
     if row.runtime_type == RuntimeType.GENERATED_PROJECT:
-        if not runtime.plan_id or not runtime.approved_plan_version:
-            raise ValueError("The generated Solution is not bound to an approved SoftwarePlan")
-        software_plan_row = await owned_plan(db, tenant_id, runtime.plan_id)
-        _, software_plan = await plan_version(db, software_plan_row, runtime.approved_plan_version)
-        return await _run_generated_generation(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            row=row,
-            project=runtime,
-            software_plan_row=software_plan_row,
-            software_plan=software_plan,
-        )
+        row, _ = await queue_generated_generation(db, row=row, user_id=user_id)
+        return row
 
     raise ValueError("This Solution runtime does not have an initial generation retry lifecycle")
 
@@ -500,7 +319,7 @@ async def create_solution_from_intent(
     objective: str,
     service: SolutionService | None = None,
 ):
-    """Create a Solution from capability truth, using generation when required."""
+    """Create a Solution from capability truth, queueing arbitrary generation durably."""
     service = service or SolutionService()
     manifest = derive_solution_manifest(name, objective)
     decision = _implementation_intent(manifest, name=name, objective=objective)
@@ -557,35 +376,16 @@ async def create_solution_from_intent(
         return row, decision
 
     if decision.runtime_type == RuntimeType.GENERATED_PROJECT:
-        try:
-            software_plan_row, software_plan_version, software_plan = await create_plan(
-                db,
-                tenant_id,
-                user_id,
-                _planning_prompt(clean_name, clean_objective, context),
-            )
-            await approve(db, software_plan_row, software_plan_version.version)
-            project = await create_project_from_plan(
-                db,
-                tenant_id,
-                user_id,
-                software_plan_row,
-                software_plan,
-            )
-        except Exception as error:
-            safe_error = " ".join(str(error).split())[:1000] or type(error).__name__
-            raise ValueError(f"Generated Solution planning failed: {safe_error}") from error
-
-        context["softwarePlan"] = {
-            "id": software_plan_row.id,
-            "version": software_plan_row.approved_version,
-            "status": software_plan_row.status,
-        }
+        project = await create_generated_placeholder(
+            db,
+            tenant_id,
+            user_id,
+            clean_name,
+            clean_objective,
+        )
         context["initialGeneration"] = {
             "status": "pending",
-            "stage": "source_generation",
-            "softwarePlanId": software_plan_row.id,
-            "softwarePlanVersion": software_plan_row.approved_version,
+            "stage": "queue",
         }
         row = await service._record(
             db,
@@ -604,15 +404,7 @@ async def create_solution_from_intent(
             visibility="private",
             context_json=json.dumps(context, ensure_ascii=False, sort_keys=True),
         )
-        await _run_generated_generation(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            row=row,
-            project=project,
-            software_plan_row=software_plan_row,
-            software_plan=software_plan,
-        )
+        row, _ = await queue_generated_generation(db, row=row, user_id=user_id)
         return row, decision
 
     app, version = await ApplicationBuilderService.create(
