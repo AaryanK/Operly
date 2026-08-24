@@ -83,8 +83,8 @@ export function rebuildBundle(submission, rawBundle) {
     });
     clean.push({ path, content, generatedBy });
   }
-  rows.sort((a, b) => a.path.localeCompare(b.path));
-  clean.sort((a, b) => a.path.localeCompare(b.path));
+  rows.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  clean.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   const source = rawBundle.manifest;
   const required = ["workspaceId", "applicationId", "planId", "planVersion", "sourceVersion", "promptDigest"];
