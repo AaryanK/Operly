@@ -14,6 +14,7 @@ DEFAULT_KERNEL_IDS = frozenset(
         "context.search",
         "context.get",
         "model.invoke",
+        "model.deep_reason",
     }
 )
 
