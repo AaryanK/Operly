@@ -19,7 +19,7 @@ import argparse
 import asyncio
 import json
 import os
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from packages.model_runtime.catalog import model_resources, provider_is_configured
 from packages.model_runtime.discovery import refresh_model_discovery
@@ -35,8 +35,22 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--refresh-discovery", action="store_true", help="Refresh dynamic catalogs such as OpenRouter")
     parser.add_argument("--free-only", action="store_true", help="Skip routes whose catalog metadata is not free")
     parser.add_argument("--max-per-provider", type=int, default=0, help="Optional cap after priority sort; 0 means no cap")
-    parser.add_argument("--delay", type=float, default=float(os.getenv("OPERLY_MODEL_BENCH_DELAY", "0.35")))
+    parser.add_argument("--delay", type=float, default=float(os.getenv("OPERLY_MODEL_BENCH_DELAY", "0.75")))
     return parser.parse_args()
+
+
+def _round_robin_provider_order(rows):
+    """Avoid burning one provider's TPM quota before touching the next provider."""
+    buckets: dict[str, deque] = defaultdict(deque)
+    for resource in rows:
+        buckets[resource.provider].append(resource)
+    ordered = []
+    names = sorted(buckets)
+    while any(buckets.values()):
+        for name in names:
+            if buckets[name]:
+                ordered.append(buckets[name].popleft())
+    return ordered
 
 
 def _selected_resources(args: argparse.Namespace):
@@ -69,7 +83,7 @@ def _selected_resources(args: argparse.Namespace):
             counts[resource.provider] += 1
             limited.append(resource)
         rows = limited
-    return rows
+    return _round_robin_provider_order(rows)
 
 
 async def main() -> int:
@@ -92,6 +106,7 @@ async def main() -> int:
                     "model": args.model,
                     "maxPerProvider": args.max_per_provider,
                 },
+                "scheduling": "provider_round_robin",
             },
             sort_keys=True,
         ),
