@@ -10,6 +10,7 @@ export type WorkspaceSection =
   | "plugins"
   | "members"
   | "access"
+  | "ai-debug"
   | "settings";
 
 export type OperlyRoute =
@@ -20,7 +21,7 @@ export type OperlyRoute =
 export const workspaceSections: Array<{
   id: WorkspaceSection;
   label: string;
-  group: "workspace" | "business" | "digital" | "extend" | "admin";
+  group: "workspace" | "business" | "digital" | "extend" | "debug" | "admin";
 }> = [
   { id: "home", label: "Home", group: "workspace" },
   { id: "operly", label: "Operly", group: "workspace" },
@@ -31,6 +32,7 @@ export const workspaceSections: Array<{
   { id: "solutions", label: "Solutions", group: "digital" },
   { id: "connections", label: "Connections", group: "extend" },
   { id: "plugins", label: "Plugins", group: "extend" },
+  { id: "ai-debug", label: "AI Debug", group: "debug" },
   { id: "members", label: "Members & roles", group: "admin" },
   { id: "access", label: "AI & MCP access", group: "admin" },
   { id: "settings", label: "Settings", group: "admin" },
