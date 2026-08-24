@@ -8,6 +8,8 @@ on:
       - "packages/solutions/**"
       - "tests/test_solution_manifest.py"
       - "tests/test_solution_initial_generation_lifecycle.py"
+      - "tests/test_solution_implementation_resolution.py"
+      - "tests/test_generated_solution_lifecycle_truth.py"
       - "tests/test_solutions.py"
       - ".github/workflows/solution-architecture.yml"
   workflow_dispatch:
@@ -28,6 +30,7 @@ jobs:
           apps/api/solution_generation_router.py
           packages/capabilities/solution_provider.py
           packages/solutions/manifest.py
+          packages/solutions/implementation.py
           packages/solutions/composer.py
           packages/solutions/service.py
       - name: Run Solution architecture regressions
@@ -40,4 +43,6 @@ jobs:
           python -m pytest -q
           tests/test_solution_manifest.py
           tests/test_solution_initial_generation_lifecycle.py
+          tests/test_solution_implementation_resolution.py
+          tests/test_generated_solution_lifecycle_truth.py
           tests/test_solutions.py
