@@ -31,6 +31,14 @@ _READ_METHOD_MARKERS = (
 
 @dataclass(slots=True)
 class SessionCapabilityView:
+    """The exact model-visible capability surface for one authorized session.
+
+    Authorization and relevance are deliberately separate. A capability can be
+    executable by the principal without being exposed to the model. The view starts
+    with a tiny permanent kernel plus explicitly supplied initial IDs, then expands
+    only after discovery/describe observations.
+    """
+
     registry: Any
     tenant_id: str
     authority: set[str]
@@ -41,7 +49,6 @@ class SessionCapabilityView:
     def __post_init__(self) -> None:
         self.exposed_ids.update(DEFAULT_KERNEL_IDS)
         self.exposed_ids.update(str(item) for item in self.initial_ids if str(item))
-        self.expose_seamless_defaults()
 
     def _visible(self, capability_id: str) -> bool:
         if self.visible_predicate and not self.visible_predicate(capability_id):
@@ -58,29 +65,8 @@ class SessionCapabilityView:
         return True
 
     @staticmethod
-    def _seamless_default(definition) -> bool:
-        """Return whether an authorized capability should be visible immediately.
-
-        Normal observations and low-risk operations should not depend on a model
-        remembering a search/describe ceremony. Connected integrations are also
-        surfaced directly after their provider/scope gate succeeds. Medium/high-risk
-        or uncommon capabilities remain progressively discoverable, and every call
-        still crosses the canonical firewall/approval boundary.
-        """
-        if definition.risk_level in {"read_only", "low"}:
-            return True
-        if definition.integration_provider:
-            return True
-        return False
-
-    @staticmethod
     def _stage_allows(definition, stage: str) -> bool:
-        """Reduce model-visible authority without ever granting new authority.
-
-        ``adaptive`` preserves current behavior. Durable workflows can set
-        ``capability_stage`` in runtime trace metadata to constrain each model turn.
-        The firewall remains authoritative even if a caller supplies a bad stage.
-        """
+        """Reduce model-visible authority without ever granting new authority."""
         normalized = str(stage or "adaptive").strip().lower()
         if normalized in {"", "adaptive", "execution", "execute"}:
             return True
@@ -99,15 +85,7 @@ class SessionCapabilityView:
         # observation/discovery so the model can recover rather than execute.
         return definition.risk_level == "read_only"
 
-    def expose_seamless_defaults(self) -> None:
-        for definition in self.registry.definitions():
-            if self._seamless_default(definition) and self._visible(definition.id):
-                self.exposed_ids.add(definition.id)
-
     def schemas(self, *, stage: str | None = None) -> list[dict[str, Any]]:
-        # Registry/connector availability can change during a conversation. Refresh
-        # the seamless set every turn while _visible() removes anything revoked.
-        self.expose_seamless_defaults()
         metadata = current_trace_metadata()
         effective_stage = str(stage or metadata.get("capability_stage") or "adaptive")
         schemas = []
@@ -127,11 +105,11 @@ class SessionCapabilityView:
                 self.exposed_ids.add(clean)
 
     def observe(self, capability_id: str, invocation_result: dict[str, Any]) -> None:
-        """Expand exact schemas after capability.describe.
+        """Expand exact schemas only after capability.describe.
 
-        Search/describe remains useful for uncommon medium/high-risk capabilities,
-        but ordinary reads, low-risk operations, and connector tools are already
-        available without spending model turns on discovery.
+        capability.search intentionally returns metadata only. describe is the
+        transition from "discoverable" to "model-visible schema" and still cannot
+        grant authority because expose() rechecks the session visibility predicate.
         """
         if capability_id != "capability.describe":
             return
