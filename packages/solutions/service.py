@@ -117,11 +117,6 @@ class SolutionService:
         for app in apps:
             existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.MANAGED_APP,SolutionRecord.runtime_reference==app.id))
             active=await db.get(ApplicationVersion,app.active_version_id) if app.active_version_id else None
-            # ApplicationBuilderService.create() persists a specifically labeled
-            # blank bootstrap v1 so the editor has a schema to target. That
-            # bootstrap is runtime state, not evidence that owner-requested
-            # generation succeeded. Preserve genuinely generated/legacy v1
-            # records that are not the canonical blank bootstrap.
             bootstrap_only=bool(active and active.version_number==1 and active.summary=="Blank application")
             generated_ready=bool(active and not bootstrap_only)
             initial=(_context_payload(existing).get("initialGeneration") if existing else None) or {}
@@ -137,7 +132,7 @@ class SolutionService:
             context=_context_payload(existing) if existing else {}
             initial=context.get("initialGeneration") if isinstance(context.get("initialGeneration"),dict) else None
             generation_failed=bool(initial and initial.get("status") in {"retryable","failed"})
-            generation_building=bool(initial and initial.get("status") in {"pending","running"})
+            generation_building=bool(initial and initial.get("status") in {"pending","queued","running"})
             generation_verified=bool(initial and initial.get("status")=="applied")
 
             if preview:
@@ -156,16 +151,11 @@ class SolutionService:
                 preview_state="unavailable"
                 preview_url=None
             elif generation_verified:
-                # The build was previously verified, but its isolated preview has
-                # expired/stopped. Preserve the accepted source version without
-                # pretending an unrelated compatibility renderer is a preview.
                 lifecycle=LifecycleStatus.APPROVED
                 current=str(source.source_version) if source else None
                 preview_state="unavailable"
                 preview_url=None
             else:
-                # Legacy generated projects predate the runner-backed Solution
-                # lifecycle and retain their compatibility preview behavior.
                 lifecycle=LifecycleStatus.APPROVED
                 current=str(source.source_version) if source else str(p.version)
                 preview_state="available"
@@ -200,14 +190,7 @@ class SolutionService:
             return f"/apps/{runtime.id}/preview"
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
         if preview:
-            # Runner responses are authenticated and HMAC-signed before this URL
-            # is persisted. Redirect the browser to the runner's random-token
-            # HTTPS origin so generated JavaScript never executes with Operly's
-            # host-only session cookies or same-origin API authority.
             return preview.target_url
-        # New generated Solutions are runner-backed: no active verified runner
-        # preview means there is no truthful preview target. Legacy generated
-        # projects retain the historical project renderer for compatibility.
         initial=_context_payload(row).get("initialGeneration")
         if isinstance(initial,dict):raise LookupError("Solution preview is not ready")
         return f"/api/custom-software/projects/{runtime.id}/preview"
@@ -221,7 +204,7 @@ class SolutionService:
             output.extend({"id":x.id,"version":x.version_number,"kind":"legacy_schema","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in legacy)
             return output
         if row.runtime_type==RuntimeType.MANAGED_APP:
-            items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)).order_by(desc(ApplicationVersion.version_number))).all()
+            items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all()
             return [{"id":x.id,"version":x.version_number,"status":"active" if x.active else "superseded","summary":x.summary,"created_at":x.created_at.isoformat()} for x in items]
         if runtime.plan_id and runtime.approved_plan_version:
             sources=(await db.scalars(select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id==tenant_id,GeneratedSourceBundle.plan_id==runtime.plan_id,GeneratedSourceBundle.plan_version==runtime.approved_plan_version).order_by(desc(GeneratedSourceBundle.source_version)))).all()
@@ -242,8 +225,6 @@ class SolutionService:
         workspace_name=(tenant.name if tenant else "").strip()
         business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or workspace_name or "Untitled Website").strip()[:200]
         description=str(profile.get("description") or "")[:500]
-        # Preserve one tiny legacy compatibility snapshot so old routes and
-        # rollback remain safe. The source agent becomes primary immediately.
         p=await StudioService.create_project(db,tenant_id,user_id,business,description)
         context={"company_profile":profile,"source_engine":"studio_source_agent_v1","planning_request":{"objective":"Create the business website","business_identity":business,"description":description,"products_services":profile.get("products_services"),"contact":profile.get("contact"),"brand":profile.get("brand",{}),"target_customers":profile.get("target_customers"),"service_areas":profile.get("service_areas")}}
         row=await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=business,description=description,solution_type=SolutionType.DIGITAL_PRESENCE,lifecycle_status=LifecycleStatus.PREVIEW_READY,current_version_reference=p.active_draft_version_id,preview_state="ready",preview_url="/api/solutions/{solution_id}/preview",production_state="offline",production_url=None,visibility="private",context_json=json.dumps(context,sort_keys=True,default=str))
