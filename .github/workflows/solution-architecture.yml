@@ -3,15 +3,21 @@ name: solution-architecture
 on:
   pull_request:
     paths:
+      - "alembic/versions/0038_durable_solution_generation_jobs.py"
       - "apps/api/security_headers.py"
       - "apps/api/solution_generation_router.py"
       - "packages/capabilities/solution_provider.py"
+      - "packages/coding_harness/execution_loop.py"
+      - "packages/database/product_models.py"
+      - "packages/database/schema.py"
       - "packages/solutions/**"
       - "tests/test_solution_manifest.py"
       - "tests/test_solution_initial_generation_lifecycle.py"
       - "tests/test_solution_implementation_resolution.py"
       - "tests/test_generated_solution_lifecycle_truth.py"
       - "tests/test_generated_preview_permissions.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_runner_async_polling.py"
       - "tests/test_solutions.py"
       - ".github/workflows/solution-architecture.yml"
   workflow_dispatch:
@@ -29,12 +35,17 @@ jobs:
       - name: Compile capability-first Solution path
         run: >-
           python -m py_compile
+          alembic/versions/0038_durable_solution_generation_jobs.py
           apps/api/security_headers.py
           apps/api/solution_generation_router.py
           packages/capabilities/solution_provider.py
+          packages/coding_harness/execution_loop.py
+          packages/database/product_models.py
+          packages/database/schema.py
           packages/solutions/manifest.py
           packages/solutions/implementation.py
           packages/solutions/composer.py
+          packages/solutions/generation_worker.py
           packages/solutions/service.py
       - name: Run Solution architecture regressions
         env:
@@ -49,4 +60,6 @@ jobs:
           tests/test_solution_implementation_resolution.py
           tests/test_generated_solution_lifecycle_truth.py
           tests/test_generated_preview_permissions.py
+          tests/test_generated_solution_worker.py
+          tests/test_runner_async_polling.py
           tests/test_solutions.py
