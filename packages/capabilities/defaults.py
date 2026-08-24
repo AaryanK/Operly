@@ -21,6 +21,8 @@ from packages.capabilities.reminder_provider import ReminderProvider
 from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
+from packages.capabilities.task_provider import TaskProvider
+from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.lifecycle import discord_plugin_lifecycle
@@ -52,6 +54,8 @@ def _builtin_providers():
         StudioProvider(),
         SoftwareProjectProvider(),
         ReminderProvider(),
+        TaskProvider(),
+        PublicWebReadProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
