@@ -139,7 +139,6 @@ class SolutionService:
             generation_failed=bool(initial and initial.get("status") in {"retryable","failed"})
             generation_building=bool(initial and initial.get("status") in {"pending","running"})
             generation_verified=bool(initial and initial.get("status")=="applied")
-            legacy_generated=initial is None
 
             if preview:
                 lifecycle=LifecycleStatus.PREVIEW_READY
@@ -200,7 +199,12 @@ class SolutionService:
             if row.preview_state!="ready":raise LookupError("Solution preview is not ready")
             return f"/apps/{runtime.id}/preview"
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
-        if preview:return f"/api/custom-software/previews/{preview.id}/"
+        if preview:
+            # Runner responses are authenticated and HMAC-signed before this URL
+            # is persisted. Redirect the browser to the runner's random-token
+            # HTTPS origin so generated JavaScript never executes with Operly's
+            # host-only session cookies or same-origin API authority.
+            return preview.target_url
         # New generated Solutions are runner-backed: no active verified runner
         # preview means there is no truthful preview target. Legacy generated
         # projects retain the historical project renderer for compatibility.
@@ -217,7 +221,7 @@ class SolutionService:
             output.extend({"id":x.id,"version":x.version_number,"kind":"legacy_schema","status":x.status,"summary":x.change_summary,"created_at":x.created_at.isoformat()} for x in legacy)
             return output
         if row.runtime_type==RuntimeType.MANAGED_APP:
-            items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)))).all()
+            items=(await db.scalars(select(ApplicationVersion).where(ApplicationVersion.tenant_id==tenant_id,ApplicationVersion.application_id==runtime.id).order_by(desc(ApplicationVersion.version_number)).order_by(desc(ApplicationVersion.version_number))).all()
             return [{"id":x.id,"version":x.version_number,"status":"active" if x.active else "superseded","summary":x.summary,"created_at":x.created_at.isoformat()} for x in items]
         if runtime.plan_id and runtime.approved_plan_version:
             sources=(await db.scalars(select(GeneratedSourceBundle).where(GeneratedSourceBundle.tenant_id==tenant_id,GeneratedSourceBundle.plan_id==runtime.plan_id,GeneratedSourceBundle.plan_version==runtime.approved_plan_version).order_by(desc(GeneratedSourceBundle.source_version)))).all()
