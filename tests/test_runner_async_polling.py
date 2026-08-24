@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.coding_harness.build_service import submit_source_build
+from packages.coding_harness.build_service import _classify_runner_submit_error, submit_source_build
 from packages.coding_harness.execution_loop import _await_runner_build
 from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck
+from packages.custom_software.sandbox import SandboxFailure
 from packages.database.custom_software_models import (
     GeneratedSourceBundle,
     RunnerBuildRecord,
@@ -53,6 +54,18 @@ class AsyncRunnerPollingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, failed)
         self.assertEqual(result.state, "tests_failed")
+
+    async def test_runner_http_400_is_not_reported_as_runner_unavailable(self):
+        error = SandboxFailure("Runner request failed with status 400")
+        error.status = 400
+        error.response_body = {"error": "unsupported service binding: identity.app_users"}
+
+        evidence = _classify_runner_submit_error(error)
+
+        self.assertEqual(evidence["classification"], "runner_submission_rejected")
+        self.assertFalse(evidence["retryable"])
+        self.assertEqual(evidence["status"], 400)
+        self.assertEqual(evidence["message"], "unsupported service binding: identity.app_users")
 
     async def test_ambiguous_queued_build_without_remote_id_is_resubmitted_idempotently(self):
         import_all_models()
