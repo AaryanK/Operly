@@ -176,6 +176,7 @@ def test_workspace_and_personal_task_creation_and_crud():
                 assert resumed_job.status == "pending"
                 assert resumed_job.id != original_job_id
                 assert load_task_payload(resumed_job.content)["objective"].startswith("Write a funny")
+                resumed_run_at = resumed_job.run_at
 
                 rescheduled_for = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
                 rescheduled = await provider.execute(
@@ -192,7 +193,7 @@ def test_workspace_and_personal_task_creation_and_crud():
                 )
                 assert rescheduled_job is not None
                 assert rescheduled_job.id != resumed_job.id
-                assert rescheduled_job.run_at > resumed_job.run_at
+                assert rescheduled_job.run_at > resumed_run_at
 
                 personal = _context(
                     db,
