@@ -1,0 +1,8 @@
+- [ ] trusted SurfaceKind in ExecutionContext
+- [ ] fail-closed shared/personal boundary
+- [ ] surface-aware capability visibility/session keys
+- [ ] remove seamless/default bulk exposure and objective preflight expansion
+- [ ] semantic capability retrieval over authorized candidates
+- [ ] context refs/broker foundation with surface-aware resolution
+- [ ] regression tests for shared workspace vs personal surfaces
+- [ ] AI debug retrieval/security diagnostics
