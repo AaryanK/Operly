@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from sqlalchemy import select
 
 from packages.database.agent_models import AgentConversation, AgentMessage
+from packages.database.channel_models import ExternalIdentity
 from packages.database.db import session_scope
 from packages.database.models import AppUser
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
@@ -30,6 +31,7 @@ async def capture_task_origin(context) -> dict[str, Any]:
         or metadata.get("origin")
         or "operly"
     ).strip().lower()
+    personal_scope = bool(metadata.get("personal_scope"))
     user_id = str(context.actor_id or metadata.get("user_id") or "").strip() or None
     actor_name = str(metadata.get("actor_name") or "").strip()
     if not actor_name and user_id:
@@ -44,22 +46,33 @@ async def capture_task_origin(context) -> dict[str, Any]:
         or metadata.get("conversation_id")
         or metadata.get("_conversation_id")
     )
-    if provider == "discord" and external_conversation_id is None:
+    if provider == "discord":
         raw = str(metadata.get("conversation_id") or "")
-        if raw.startswith("discord:"):
+        if (external_conversation_id is None or str(external_conversation_id).startswith("discord:")) and raw.startswith("discord:"):
             external_conversation_id = raw.split(":", 1)[1]
-    if external_user_id is None:
+        if external_user_id is None and user_id:
+            identity = await context.db.scalar(
+                select(ExternalIdentity).where(
+                    ExternalIdentity.user_id == user_id,
+                    ExternalIdentity.provider == "discord",
+                )
+            )
+            if identity is not None:
+                external_user_id = identity.provider_subject
+                actor_name = actor_name or str(identity.display_name or "").strip()
+    elif external_user_id is None:
         external_user_id = user_id
-    if external_space_id is None and context.tenant_id:
+
+    if external_space_id is None and context.tenant_id and provider != "discord" and not personal_scope:
         external_space_id = context.tenant_id
 
     return {
         "provider": provider,
-        "scope": "personal" if bool(metadata.get("personal_scope")) else "workspace",
+        "scope": "personal" if personal_scope else "workspace",
         "tenant_id": context.tenant_id,
         "user_id": user_id,
         "actor_name": actor_name or "Operly user",
-        "is_direct": bool(metadata.get("is_direct", metadata.get("personal_scope", False))),
+        "is_direct": bool(metadata.get("is_direct", personal_scope)),
         "external_user_id": str(external_user_id) if external_user_id is not None else None,
         "external_space_id": str(external_space_id) if external_space_id is not None else None,
         "external_conversation_id": (
