@@ -24,6 +24,7 @@ from packages.runtime_plugins.fullstack_contract import (
     parse_fullstack_manifest,
     validate_fullstack_source,
 )
+from packages.runtime_plugins.relational_source_validation import validate_relational_source
 
 
 _FULLSTACK_OPERATIONS = (
@@ -92,7 +93,15 @@ class FullStackRuntime:
         )
 
     def validate(self, source: Any) -> RuntimeValidation:
-        return validate_fullstack_source(source)
+        base = validate_fullstack_source(source)
+        if not base.valid:
+            return base
+        relational = validate_relational_source(source)
+        return RuntimeValidation(
+            base.valid and relational.valid,
+            tuple(dict.fromkeys((*base.errors, *relational.errors))),
+            tuple(dict.fromkeys((*base.warnings, *relational.warnings))),
+        )
 
     def build_submission_from_record(
         self,
