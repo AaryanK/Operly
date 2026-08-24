@@ -1,6 +1,7 @@
 """Reference-first, surface-safe semantic context retrieval for agent runtimes."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import os
 from typing import Iterable
@@ -202,7 +203,11 @@ class ContextBroker:
             )
             for row in rows
         ]
-        matches = cls._semantic_index.rank(
+        # ONNX embedding/ranking is CPU-bound. Keep it outside the async DB/API event
+        # loop; SemanticTextIndex owns locks around its process-local caches so this is
+        # safe across concurrent searches.
+        matches = await asyncio.to_thread(
+            cls._semantic_index.rank,
             documents,
             clean_query,
             limit=min(wanted, len(documents)),
