@@ -15,6 +15,7 @@ __pycache__/
 *.sqlite3
 studio_assets/
 planning_traces/
+/artifacts/
 
 node_modules/
 dist/
