@@ -2,12 +2,14 @@ import {
   installRunnerLeaseGuard,
   startRunnerLeaseMaintenance,
 } from "./lease-guard.mjs";
+import { installSandboxNetworkGuard } from "./network-guard.mjs";
 import { runFullstackSmoke } from "./fullstack-smoke.mjs";
 
-// Install the durable ownership/lease boundary before server.mjs constructs its
-// Postgres pool or runs startup recovery. This keeps a rolling Railway deploy
-// from treating another still-live replica's fresh build as an abandoned job.
+// Install process-global guards before server.mjs imports Railway/Postgres
+// execution primitives. Rolling replicas respect durable job leases, and every
+// new Sandbox starts with generated uid 10001 denied external egress.
 installRunnerLeaseGuard();
+installSandboxNetworkGuard();
 await import("./server.mjs");
 startRunnerLeaseMaintenance();
 
