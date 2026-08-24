@@ -31,7 +31,7 @@ function fixture() {
   const rows = files.map((item) => {
     const bytes = Buffer.byteLength(item.content);
     return { path: item.path, bytes, digest: `sha256:${sha256Hex(Buffer.from(item.content))}`, generatedBy: item.generatedBy };
-  }).sort((a,b) => a.path.localeCompare(b.path));
+  }).sort((a,b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const manifest = {
     schemaVersion: 1,
     workspaceId: "workspace",
