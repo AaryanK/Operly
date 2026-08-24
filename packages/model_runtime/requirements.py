@@ -108,13 +108,13 @@ def _compatible_fallbacks(
     fallback_role: str | None,
     limit: int,
 ) -> list[ConfiguredModel]:
-    """Backfill unsatisfied pool slots from the legacy role chain.
+    """Backfill pool slots without bypassing concrete model constraints.
 
-    Capability selection remains authoritative. The role pool is consulted only
-    when the dynamic catalog cannot provide enough candidates (common during the
-    migration on deployments with sparse catalog metadata). Candidates must still
-    satisfy the concrete capability requirements and are de-duplicated by provider
-    model identity.
+    The legacy role chain is a compatibility source, never an escape hatch from
+    `requires`, `avoid_tags`, or context-window constraints. This is especially
+    important for small-worker pools: an explicit `heavy` exclusion must survive
+    provider failover, otherwise a routine turn could silently become a deep-model
+    invocation.
     """
     if not fallback_role or len(selected) >= limit:
         return selected
@@ -124,6 +124,7 @@ def _compatible_fallbacks(
         return selected
 
     required = set(requirements.requires)
+    avoided = set(requirements.avoid_tags)
     minimum = requirements.min_context_tokens
     seen = {
         (str(model.provider), str(model.provider_model_id))
@@ -134,6 +135,8 @@ def _compatible_fallbacks(
         if identity in seen:
             continue
         if not required.issubset(set(model.capabilities)):
+            continue
+        if avoided & set(model.tags):
             continue
         if minimum and _context_rank(model, minimum) >= 2:
             continue
@@ -159,7 +162,8 @@ def model_for_requirements(
     candidate scan. They are mutable process-local projections of role/env state
     and can remain in the registry after a prior lookup. Mixing those stale rows
     into capability selection caused duplicate/stale Studio fallbacks. The current
-    role chain is consulted only by `_compatible_fallbacks` after dynamic selection.
+    role chain is consulted only by `_compatible_fallbacks` after dynamic selection,
+    and must obey the same concrete requirements.
     """
     registry = default_model_registry()
     candidates = [
@@ -196,7 +200,10 @@ def model_for_requirements(
             if len(selected) == 1
             else ModelPool(selected, id="requirements:dynamic")
         )
-    if fallback_role:
+    # An unconstrained caller may still use the old role chain as a final migration
+    # fallback. If the caller explicitly excluded a model class, never erase that
+    # policy merely to keep the request alive.
+    if fallback_role and not requirements.avoid_tags:
         return model_for_role(fallback_role)
     required = ", ".join(sorted(requirements.requires)) or "text"
     raise LookupError(f"No model satisfies inference requirements: {required}")
