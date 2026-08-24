@@ -2,10 +2,7 @@ name: coding-harness-smoke
 
 on:
   push:
-    branches:
-      - main
-      - "architecture/**"
-      - "fix/**"
+    branches: [main, "architecture/**", "fix/**"]
     paths:
       - "apps/api/custom_software_router.py"
       - "apps/api/software_projects_router.py"
@@ -33,6 +30,7 @@ on:
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_generated_solution_worker.py"
+      - "tests/test_generation_stage_truth.py"
       - "tests/test_coding_spec_compaction.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
@@ -83,6 +81,7 @@ on:
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_generated_solution_worker.py"
+      - "tests/test_generation_stage_truth.py"
       - "tests/test_coding_spec_compaction.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
@@ -139,6 +138,7 @@ jobs:
           tests/test_coding_semantic_failover.py
           tests/test_solution_generation_trace_contract.py
           tests/test_generated_solution_worker.py
+          tests/test_generation_stage_truth.py
           tests/test_coding_spec_compaction.py
           tests/test_live_plan_projection.py
           tests/test_live_projection_independence.py
