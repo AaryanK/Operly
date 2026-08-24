@@ -372,6 +372,7 @@ async def disable(
     if not row:
         raise HTTPException(404, "Connector not found")
     row.enabled = False
+    row.status = "disabled"
     await append_event(
         db,
         tenant_id=auth.tenant.id,
