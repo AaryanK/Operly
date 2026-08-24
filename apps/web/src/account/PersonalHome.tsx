@@ -25,6 +25,7 @@ export function PersonalHome({ profile }: Props) {
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(() => {
     try { return window.localStorage.getItem("operly.personal-history-collapsed") === "true"; }
     catch { return false; }
@@ -46,9 +47,17 @@ export function PersonalHome({ profile }: Props) {
     try {
       const rows = await api<Message[]>(`/personal-agent/conversations/${encodeURIComponent(id)}/messages`);
       setMessages(rows);
+      setMobileHistoryOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Conversation could not be loaded");
     }
+  }
+
+  function newConversation() {
+    setConversationId(null);
+    setMessages([]);
+    setError(null);
+    setMobileHistoryOpen(false);
   }
 
   useEffect(() => {
@@ -59,6 +68,15 @@ export function PersonalHome({ profile }: Props) {
   useEffect(() => {
     stage.current?.scrollTo({ top: stage.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    if (!mobileHistoryOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileHistoryOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileHistoryOpen]);
 
   function toggleHistory() {
     setHistoryCollapsed((current) => {
@@ -113,9 +131,10 @@ export function PersonalHome({ profile }: Props) {
   }
 
   return (
-    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""}`}>
-      <aside className="personal-history">
-        <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><div className="history-head-actions"><button onClick={() => { setConversationId(null); setMessages([]); setError(null); }} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button></div></div>
+    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileHistoryOpen ? "mobile-history-open" : ""}`}>
+      <button className="personal-history-backdrop" type="button" aria-label="Close conversation history" onClick={() => setMobileHistoryOpen(false)} />
+      <aside className="personal-history" aria-label="Conversation history">
+        <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><div className="history-head-actions"><button onClick={newConversation} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button><button className="history-mobile-close" onClick={() => setMobileHistoryOpen(false)} aria-label="Close conversation history">×</button></div></div>
         <div className="history-list">
           {conversations.length === 0 && <p className="empty-copy">Your private conversations will appear here.</p>}
           {conversations.map((item) => <button key={item.id} className={conversationId === item.id ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
@@ -124,7 +143,7 @@ export function PersonalHome({ profile }: Props) {
       </aside>
 
       <main className="personal-surface">
-        <header className="surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><span className="privacy-pill">Private</span></header>
+        <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><button className="mobile-history-button" type="button" onClick={() => setMobileHistoryOpen(true)} aria-expanded={mobileHistoryOpen} aria-controls="personal-conversation-history">History</button><span className="privacy-pill">Private</span></div></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
           {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
           {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}
