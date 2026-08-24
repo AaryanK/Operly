@@ -70,6 +70,25 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _ensure_tool_call_ids(message: dict[str, Any]) -> None:
+    """Give provider-neutral tool calls a stable correlation id when absent.
+
+    Some providers (notably native Ollama) do not emit call ids, while other
+    providers require one when a tool result is replayed. The shared runtime owns
+    this correlation concern: native ids are preserved and only missing ids receive
+    an Operly-generated value. Provider adapters remain free to drop the id if their
+    wire protocol does not use it.
+    """
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if not str(call.get("id") or "").strip():
+            call["id"] = f"operly-call-{uuid4()}"
+
+
 class AgentRuntime:
     """Stable orchestration loop over Model + capability callbacks.
 
@@ -170,6 +189,7 @@ class AgentRuntime:
                 }
                 with runtime_trace_scope(model_metadata):
                     message = await self._infer(model, messages, tools, metadata=model_metadata)
+                _ensure_tool_call_ids(message)
                 messages.append(message)
                 steps_used += 1
                 calls = message.get("tool_calls") or []
@@ -219,13 +239,14 @@ class AgentRuntime:
                         call_id=call_id,
                     )
                     trace.append(entry)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_name": name,
-                            "content": json.dumps(observation, ensure_ascii=False, default=str),
-                        }
-                    )
+                    tool_message = {
+                        "role": "tool",
+                        "tool_name": name,
+                        "content": json.dumps(observation, ensure_ascii=False, default=str),
+                    }
+                    if call_id:
+                        tool_message["tool_call_id"] = call_id
+                    messages.append(tool_message)
                     if on_observation is not None:
                         await _resolve(on_observation(name, arguments, observation))
 
