@@ -159,10 +159,10 @@ def test_gmail_expanded_reads_are_read_only_capabilities():
 async def test_date_only_deadline_is_not_promoted_to_exact_conflict(monkeypatch):
     import packages.capabilities.calendar_semantics_provider as module
 
-    async def connector(db, tenant_id, scope):
+    async def connector(context, scope):
         return object()
 
-    async def token(db, connector):
+    async def token(context, connector):
         return "token"
 
     async def request(*args, **kwargs):
@@ -178,8 +178,8 @@ async def test_date_only_deadline_is_not_promoted_to_exact_conflict(monkeypatch)
             ]
         }
 
-    monkeypatch.setattr(module, "google_connector", connector)
-    monkeypatch.setattr(module, "access_token", token)
+    monkeypatch.setattr(module, "google_connector_for_context", connector)
+    monkeypatch.setattr(module, "google_access_token_for_context", token)
     monkeypatch.setattr(module, "request_json", request)
     result = await CalendarSemanticsProvider().execute(
         SimpleNamespace(db=None, tenant_id="tenant"),

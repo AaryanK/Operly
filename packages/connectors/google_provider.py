@@ -20,6 +20,11 @@ from packages.capabilities.contracts import (
 )
 from packages.capabilities.providers import BaseProvider
 from packages.company.events import append_event
+from packages.connectors.google_scope import (
+    google_access_token_for_context,
+    google_connector_any_for_context,
+    google_connector_for_context,
+)
 from packages.connectors.secrets import read_secret, update_secret
 from packages.database.business_models import Contact, Lead
 from packages.database.connector_models import TenantConnector
@@ -50,6 +55,7 @@ def _scopes(connector: TenantConnector) -> set[str]:
 
 
 async def google_connector(db, tenant_id, required_scope):
+    """Legacy workspace-only connector resolver kept for existing callers."""
     rows = (
         await db.scalars(
             select(TenantConnector).where(
@@ -69,6 +75,7 @@ async def google_connector(db, tenant_id, required_scope):
 
 
 async def google_connector_any(db, tenant_id, acceptable_scopes):
+    """Legacy workspace-only any-scope resolver kept for compatibility."""
     rows = (
         await db.scalars(
             select(TenantConnector).where(
@@ -87,6 +94,7 @@ async def google_connector_any(db, tenant_id, acceptable_scopes):
 
 
 async def access_token(db, connector):
+    """Legacy workspace-owned Google token resolver."""
     secret = await read_secret(db, connector.tenant_id, connector.credential_reference)
     if float(secret.get("expires_at", 0)) > datetime.now(timezone.utc).timestamp() + 60:
         return secret["access_token"]
@@ -267,7 +275,7 @@ def _message_bodies(payload: dict) -> tuple[str, str]:
 
 
 async def _gmail_send(context, connector, message: EmailMessage, *, event_payload: dict):
-    token = await access_token(context.db, connector)
+    token = await google_access_token_for_context(context, connector)
     body = await request_json(
         "POST",
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -285,7 +293,8 @@ async def _gmail_send(context, connector, message: EmailMessage, *, event_payloa
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         **event_payload,
     }
-    await append_event(context.db, tenant_id=context.tenant_id, event_type="message.sent", payload=evidence, source="gmail")
+    if context.tenant_id:
+        await append_event(context.db, tenant_id=context.tenant_id, event_type="message.sent", payload=evidence, source="gmail")
     return CapabilityResult(True, True, evidence, body["id"])
 
 
@@ -345,7 +354,9 @@ class GmailProvider(BaseProvider):
 
     async def execute(self, context, capability_name, arguments):
         if capability_name == "messaging.send":
-            connector = await google_connector_any(context.db, context.tenant_id, GMAIL_SEND_SCOPES)
+            if getattr(context, "scope_kind", "workspace") != "workspace" or not context.tenant_id:
+                return CapabilityResult(False, False, {"reason": "workspace_lead_context_required"})
+            connector = await google_connector_any_for_context(context, GMAIL_SEND_SCOPES)
             lead = await context.db.scalar(select(Lead).where(Lead.id == arguments["lead_id"], Lead.tenant_id == context.tenant_id))
             contact = await context.db.get(Contact, lead.contact_id) if lead and lead.contact_id else None
             if not contact or not contact.email:
@@ -360,7 +371,7 @@ class GmailProvider(BaseProvider):
             return result
 
         if capability_name == "gmail.send_email":
-            connector = await google_connector_any(context.db, context.tenant_id, GMAIL_SEND_SCOPES)
+            connector = await google_connector_any_for_context(context, GMAIL_SEND_SCOPES)
             message = _email_message(
                 to=arguments["to"], cc=arguments.get("cc"), bcc=arguments.get("bcc"), subject=arguments["subject"],
                 text_body=arguments.get("text_body") or "", html_body=arguments.get("html_body") or "", reply_to=arguments.get("reply_to"),
@@ -372,8 +383,8 @@ class GmailProvider(BaseProvider):
             return result
 
         if capability_name == "gmail.search":
-            connector = await google_connector_any(context.db, context.tenant_id, GMAIL_READ_SCOPES)
-            token = await access_token(context.db, connector)
+            connector = await google_connector_any_for_context(context, GMAIL_READ_SCOPES)
+            token = await google_access_token_for_context(context, connector)
             limit = max(1, min(int(arguments.get("limit", 10)), 10))
             listing = await request_json("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", token, params={"q": arguments["query"], "maxResults": limit})
             results = []
@@ -384,8 +395,8 @@ class GmailProvider(BaseProvider):
             return CapabilityResult(True, False, {"query": arguments["query"], "messages": results})
 
         if capability_name == "gmail.read_message":
-            connector = await google_connector_any(context.db, context.tenant_id, GMAIL_READ_SCOPES)
-            token = await access_token(context.db, connector)
+            connector = await google_connector_any_for_context(context, GMAIL_READ_SCOPES)
+            token = await google_access_token_for_context(context, connector)
             detail = await request_json("GET", f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{quote(arguments['message_id'], safe='')}", token, params={"format": "full"})
             headers = _headers(detail.get("payload") or {})
             plain, rich = _message_bodies(detail.get("payload") or {})
@@ -395,16 +406,17 @@ class GmailProvider(BaseProvider):
             })
 
         if capability_name == "gmail.modify_labels":
-            connector = await google_connector(context.db, context.tenant_id, GMAIL_MODIFY)
-            token = await access_token(context.db, connector)
+            connector = await google_connector_for_context(context, GMAIL_MODIFY)
+            token = await google_access_token_for_context(context, connector)
             body = await request_json("POST", f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{quote(arguments['message_id'], safe='')}/modify", token, {"addLabelIds": list(arguments.get("add_label_ids") or []), "removeLabelIds": list(arguments.get("remove_label_ids") or [])})
             evidence = {"message_id": body.get("id") or arguments["message_id"], "label_ids": body.get("labelIds", []), "add_label_ids": list(arguments.get("add_label_ids") or []), "remove_label_ids": list(arguments.get("remove_label_ids") or [])}
-            await append_event(context.db, tenant_id=context.tenant_id, event_type="message.labels_changed", payload=evidence, source="gmail")
+            if context.tenant_id:
+                await append_event(context.db, tenant_id=context.tenant_id, event_type="message.labels_changed", payload=evidence, source="gmail")
             return CapabilityResult(True, True, evidence, evidence["message_id"])
 
         if capability_name == "gmail.create_draft":
-            connector = await google_connector(context.db, context.tenant_id, GMAIL_MODIFY)
-            token = await access_token(context.db, connector)
+            connector = await google_connector_for_context(context, GMAIL_MODIFY)
+            token = await google_access_token_for_context(context, connector)
             message = _email_message(to=arguments["to"], cc=arguments.get("cc"), bcc=arguments.get("bcc"), subject=arguments["subject"], text_body=arguments.get("text_body") or "", html_body=arguments.get("html_body") or "", message_id=f"<{context.execution_id}@operly.local>")
             body = await request_json("POST", "https://gmail.googleapis.com/gmail/v1/users/me/drafts", token, {"message": {"raw": _raw_message(message)}})
             evidence = {"draft_id": body.get("id"), "message_id": (body.get("message") or {}).get("id"), "recipients": list(arguments["to"]), "subject": arguments["subject"], "rich_html": bool(arguments.get("html_body"))}
@@ -473,22 +485,22 @@ class GoogleCalendarProvider(BaseProvider):
 
     async def execute(self, context, capability_name, arguments):
         if capability_name == "calendar.freebusy":
-            connector = await google_connector(context.db, context.tenant_id, CALENDAR_FREEBUSY)
+            connector = await google_connector_for_context(context, CALENDAR_FREEBUSY)
             payload = {"timeMin": arguments["time_min"], "timeMax": arguments["time_max"], "items": [{"id": item} for item in arguments["calendar_ids"]]}
             if arguments.get("time_zone"):
                 payload["timeZone"] = arguments["time_zone"]
-            body = await request_json("POST", "https://www.googleapis.com/calendar/v3/freeBusy", await access_token(context.db, connector), payload)
+            body = await request_json("POST", "https://www.googleapis.com/calendar/v3/freeBusy", await google_access_token_for_context(context, connector), payload)
             return CapabilityResult(True, False, {"calendars": body.get("calendars", {}), "groups": body.get("groups", {})})
 
         if capability_name == "calendar.list_calendars":
-            connector = await google_connector(context.db, context.tenant_id, CALENDAR_LIST_READONLY)
-            body = await request_json("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList", await access_token(context.db, connector))
+            connector = await google_connector_for_context(context, CALENDAR_LIST_READONLY)
+            body = await request_json("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList", await google_access_token_for_context(context, connector))
             return CapabilityResult(True, False, {"calendars": [{"id": item.get("id"), "summary": item.get("summary"), "primary": item.get("primary", False), "access_role": item.get("accessRole"), "time_zone": item.get("timeZone")} for item in body.get("items", [])[:50]]})
 
-        connector = await google_connector(context.db, context.tenant_id, CALENDAR)
+        connector = await google_connector_for_context(context, CALENDAR)
         calendar_id = self._calendar_id(connector, arguments)
         encoded_calendar = quote(calendar_id, safe="")
-        token = await access_token(context.db, connector)
+        token = await google_access_token_for_context(context, connector)
 
         if capability_name == "calendar.list_events":
             params = {"timeMin": arguments["time_min"], "timeMax": arguments["time_max"], "singleEvents": "true", "orderBy": "startTime", "maxResults": max(1, min(int(arguments.get("limit", 20)), 50))}
@@ -515,12 +527,13 @@ class GoogleCalendarProvider(BaseProvider):
                 payload["conferenceData"] = {"createRequest": {"requestId": (context.execution_id or "operly").replace("-", "")[:32], "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
                 params["conferenceDataVersion"] = "1"
             body = await request_json("POST", f"https://www.googleapis.com/calendar/v3/calendars/{encoded_calendar}/events", token, payload, params=params or None)
-            if arguments.get("lead_id"):
+            if arguments.get("lead_id") and context.tenant_id:
                 lead = await context.db.scalar(select(Lead).where(Lead.id == arguments["lead_id"], Lead.tenant_id == context.tenant_id))
                 if lead:
                     lead.next_action = f"Calendar follow-up created ({body['id']})"
             evidence = {"provider": "google_calendar", "event_id": body["id"], "calendar_id": calendar_id, "start": arguments["start"], "end": arguments["end"], "attendees": arguments.get("attendees", []), "provider_status": body.get("status", "confirmed"), "html_link": body.get("htmlLink"), "hangout_link": body.get("hangoutLink")}
-            await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_created", payload=evidence, source="google_calendar")
+            if context.tenant_id:
+                await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_created", payload=evidence, source="google_calendar")
             return CapabilityResult(True, True, evidence, body["id"])
 
         if capability_name == "calendar.update_event":
@@ -545,14 +558,16 @@ class GoogleCalendarProvider(BaseProvider):
                     payload["end"]["timeZone"] = tz
             body = await request_json("PATCH", f"https://www.googleapis.com/calendar/v3/calendars/{encoded_calendar}/events/{event_id}", token, payload)
             evidence = {"event_id": body.get("id") or arguments["event_id"], "calendar_id": calendar_id, "provider_status": body.get("status"), "html_link": body.get("htmlLink")}
-            await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_updated", payload=evidence, source="google_calendar")
+            if context.tenant_id:
+                await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_updated", payload=evidence, source="google_calendar")
             return CapabilityResult(True, True, evidence, evidence["event_id"])
 
         if capability_name == "calendar.delete_event":
             event_id = quote(arguments["event_id"], safe="")
             await request_json("DELETE", f"https://www.googleapis.com/calendar/v3/calendars/{encoded_calendar}/events/{event_id}", token)
             evidence = {"event_id": arguments["event_id"], "calendar_id": calendar_id, "deleted": True}
-            await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_deleted", payload=evidence, source="google_calendar")
+            if context.tenant_id:
+                await append_event(context.db, tenant_id=context.tenant_id, event_type="calendar.event_deleted", payload=evidence, source="google_calendar")
             return CapabilityResult(True, True, evidence, arguments["event_id"])
 
         return CapabilityResult(False, False, {"reason": "unsupported_calendar_capability"})

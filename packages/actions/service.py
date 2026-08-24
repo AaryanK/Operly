@@ -309,7 +309,7 @@ class ActionService:
         *,
         runtime_context: dict[str, Any] | None = None,
     ) -> BusinessActionRecord:
-        kind, _, personal_owner_id, registry_scope_id = _action_scope(action)
+        kind, workspace_id, personal_owner_id, registry_scope_id = _action_scope(action)
         if kind is ScopeKind.PERSONAL and self.actor_id != personal_owner_id:
             raise PermissionError("Personal action owner must match the authenticated actor")
 
@@ -338,12 +338,15 @@ class ActionService:
             return action
 
         provider_context = ProviderContext(
-            registry_scope_id,
-            self.db,
-            self.actor_id,
-            self.registry.provider_config(registry_scope_id, action.capability),
-            action.id,
-            runtime_context,
+            tenant_id=workspace_id,
+            db=self.db,
+            actor_id=self.actor_id,
+            provider_config=self.registry.provider_config(registry_scope_id, action.capability),
+            execution_id=action.id,
+            invocation=runtime_context,
+            scope_kind=kind.value,
+            scope_id=registry_scope_id,
+            owner_user_id=personal_owner_id,
         )
         connector = str(definition.integration_provider or "").strip() or None
         if connector:
