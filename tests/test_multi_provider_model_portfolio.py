@@ -69,6 +69,29 @@ class _RequestTooLargeResponse:
         )
 
 
+class _ContextTooLargeResponse:
+    status = 413
+    headers = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def text(self):
+        return json.dumps(
+            {
+                "error": {
+                    "message": (
+                        "Request exceeds the maximum context length for this model: "
+                        "maximum 8192 tokens, requested 12000"
+                    )
+                }
+            }
+        )
+
+
 class _FakeSession:
     def __init__(self, response=None):
         self.url = None
@@ -181,7 +204,7 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["usage"]["total_tokens"], 12)
         self.assertEqual(result["finish_reason"], "stop")
 
-    async def test_openai_compatible_413_becomes_route_specific_size_failure(self):
+    async def test_openai_compatible_tpm_413_becomes_provider_capacity_failure(self):
         with patch.dict(os.environ, {"groq_api_key": "test-key"}, clear=True):
             client = OpenAICompatibleClient(
                 provider="groq",
@@ -191,6 +214,31 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
                 env_prefix="GROQ",
             )
             session = _FakeSession(_RequestTooLargeResponse())
+            with self.assertRaises(ModelInferenceError) as caught:
+                await client._request_once(
+                    session,
+                    {"Authorization": "Bearer test-key"},
+                    "openai/gpt-oss-20b",
+                    [{"role": "user", "content": "large packet"}],
+                    [],
+                )
+
+        self.assertEqual(caught.exception.classification, "rate_limited")
+        # Do not retry the same route immediately; ModelPool treats rate_limited as
+        # provider-wide and moves to another provider.
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(caught.exception.provider, "groq")
+
+    async def test_openai_compatible_true_context_413_stays_route_specific(self):
+        with patch.dict(os.environ, {"groq_api_key": "test-key"}, clear=True):
+            client = OpenAICompatibleClient(
+                provider="groq",
+                model="openai/gpt-oss-20b",
+                default_url="https://api.groq.com/openai/v1/chat/completions",
+                api_key_envs=("GROQ_API_KEY", "groq_api_key"),
+                env_prefix="GROQ",
+            )
+            session = _FakeSession(_ContextTooLargeResponse())
             with self.assertRaises(ModelInferenceError) as caught:
                 await client._request_once(
                     session,
