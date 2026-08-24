@@ -14,6 +14,8 @@ from packages.capabilities.validation import validate_arguments
 from packages.company.events import append_event
 from packages.database.company_models import BusinessActionRecord
 from packages.database.models import Approval
+from packages.database.runtime_trace_events import emit_runtime_trace_event
+from packages.model_runtime.trace_events import RuntimeTraceEvent
 
 
 class ActionStatus(StrEnum):
@@ -162,6 +164,17 @@ class ActionService:
         self.db.add(action)
         await self.db.flush()
         await self._event(action, "action.proposed")
+        await emit_runtime_trace_event(
+            RuntimeTraceEvent.ACTION_CREATED,
+            {
+                "action_id": action.id,
+                "capability": capability,
+                "risk_level": risk_level,
+                "connector_id": connector_id,
+                "authority_source": runtime.get("authority_source") or metadata.get("authority_source"),
+            },
+            resource_id=action.id,
+        )
 
         decision = evaluate_action(action)
         if definition.approval_policy == ApprovalPolicy.AUTO:
@@ -200,6 +213,15 @@ class ActionService:
                 "action.waiting_approval",
                 {"approval_id": approval.id},
             )
+            await emit_runtime_trace_event(
+                RuntimeTraceEvent.APPROVAL_REQUESTED,
+                {
+                    "action_id": action.id,
+                    "approval_id": approval.id,
+                    "capability": capability,
+                },
+                resource_id=approval.id,
+            )
         else:
             await self.execute(action, runtime_context=runtime)
         return action
@@ -214,6 +236,11 @@ class ActionService:
             action.tenant_id,
             action.capability,
             authority=self.authority,
+        )
+        definition = next(
+            item
+            for item in provider.capabilities
+            if item.id == action.capability or item.name == action.capability
         )
         action.provider = provider.name
         action.status = ActionStatus.EXECUTING
@@ -237,16 +264,56 @@ class ActionService:
             action.id,
             runtime_context,
         )
+        connector = str(definition.integration_provider or "").strip() or None
+        if connector:
+            await emit_runtime_trace_event(
+                RuntimeTraceEvent.CONNECTOR_REQUEST,
+                {
+                    "action_id": action.id,
+                    "capability": action.capability,
+                    "connector": connector,
+                    "argument_keys": sorted(arguments),
+                },
+                resource_id=f"{connector}:{action.capability}",
+            )
         try:
             result = await asyncio.wait_for(
                 provider.execute(provider_context, action.capability, arguments),
                 timeout=30,
             )
         except Exception as error:
+            if connector:
+                await emit_runtime_trace_event(
+                    RuntimeTraceEvent.CONNECTOR_RESPONSE,
+                    {
+                        "action_id": action.id,
+                        "capability": action.capability,
+                        "connector": connector,
+                        "success": False,
+                        "error_type": type(error).__name__,
+                    },
+                    resource_id=f"{connector}:{action.capability}",
+                    classification=type(error).__name__,
+                )
             action.status = ActionStatus.FAILED
             action.result_json = json.dumps({"error": str(error)})
             await self._event(action, "action.failed")
             return action
+
+        if connector:
+            await emit_runtime_trace_event(
+                RuntimeTraceEvent.CONNECTOR_RESPONSE,
+                {
+                    "action_id": action.id,
+                    "capability": action.capability,
+                    "connector": connector,
+                    "success": bool(result.success),
+                    "changed": bool(result.changed),
+                    "external_reference": result.external_reference,
+                    "evidence_keys": sorted(result.evidence) if isinstance(result.evidence, dict) else [],
+                },
+                resource_id=f"{connector}:{action.capability}",
+            )
 
         action.result_json = json.dumps(
             {
@@ -259,11 +326,7 @@ class ActionService:
         )
         if result.success:
             try:
-                output_schema = next(
-                    item
-                    for item in provider.capabilities
-                    if item.id == action.capability or item.name == action.capability
-                ).output_schema
+                output_schema = definition.output_schema
                 validate_arguments(output_schema, result.evidence)
             except ValueError as error:
                 action.status = ActionStatus.FAILED
@@ -315,6 +378,16 @@ class ActionService:
             "action.approved",
             {"arguments_digest": action.approved_arguments_digest},
         )
+        await emit_runtime_trace_event(
+            RuntimeTraceEvent.APPROVAL_RESOLVED,
+            {"action_id": action.id, "approval_id": action.approval_id, "approved": True},
+            resource_id=str(action.approval_id or action.id),
+        )
+        await emit_runtime_trace_event(
+            RuntimeTraceEvent.ACTION_RESUMED,
+            {"action_id": action.id, "capability": action.capability},
+            resource_id=action.id,
+        )
         return await self.execute(action)
 
     async def reject(self, tenant_id: str, action_id: str):
@@ -325,6 +398,11 @@ class ActionService:
         approval.status = "rejected"
         action.status = ActionStatus.REJECTED
         await self._event(action, "action.rejected")
+        await emit_runtime_trace_event(
+            RuntimeTraceEvent.APPROVAL_RESOLVED,
+            {"action_id": action.id, "approval_id": action.approval_id, "approved": False},
+            resource_id=str(action.approval_id or action.id),
+        )
         return action
 
     async def _get(self, tenant_id, action_id):
