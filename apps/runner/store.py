@@ -84,7 +84,9 @@ class RunnerStore:
         path = self.request_file(job_id)
         temp = path.with_suffix(".tmp")
         temp.write_text(json.dumps(request_payload, sort_keys=True, separators=(",", ":")))
+        os.chmod(temp, 0o600)
         os.replace(temp, path)
+        os.chmod(path, 0o600)
         now = self._now()
         with self._lock, self._connect() as db:
             try:
@@ -158,8 +160,9 @@ class RunnerStore:
         cancel_requested: bool | None = None,
     ) -> JobRecord:
         current = self.get(job_id)
+        next_state = state if state is not None else current.state
         values = {
-            "state": state if state is not None else current.state,
+            "state": next_state,
             "response_json": json.dumps(response if response is not None else current.response),
             "resources_json": json.dumps(resources if resources is not None else current.resources),
             "preview_id": preview_id if preview_id is not None else current.preview_id,
@@ -184,6 +187,11 @@ class RunnerStore:
                 """,
                 {**values, "id": job_id},
             )
+        # The request payload may contain short-lived runner-only transport grants.
+        # It is needed only while a job is in flight and is deleted immediately on
+        # every terminal state, including preview_ready.
+        if next_state in {"preview_ready", "failed", "cancelled", "cleaned"}:
+            Path(current.request_path).unlink(missing_ok=True)
         return self.get(job_id)
 
     def request_cancel(self, job_id: str) -> JobRecord:
