@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 RELATIONAL_CAPABILITY_ID = "data.relational"
 RELATIONAL_MIGRATION_SCHEMA = "operly.relational.migration/v1"
-_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+# Keep logical names short enough that the opaque workspace/application namespace
+# plus index/table suffix remains below PostgreSQL's 63-byte identifier ceiling.
+_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,29}$")
 
 
 class StrictModel(BaseModel):
@@ -22,7 +24,7 @@ class StrictModel(BaseModel):
 def _identifier(value: str) -> str:
     value = str(value or "").strip()
     if not _IDENTIFIER.fullmatch(value):
-        raise ValueError("Relational identifiers must be lowercase snake_case and at most 63 characters")
+        raise ValueError("Relational identifiers must be lowercase snake_case and at most 30 characters")
     return value
 
 
