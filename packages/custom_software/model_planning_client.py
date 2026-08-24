@@ -1,6 +1,7 @@
 """Provider-neutral structured planning client over OPERLY Model.infer()."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -26,6 +27,11 @@ from packages.model_runtime import (
 
 T = TypeVar("T", bound=BaseModel)
 MAX_MODEL_OUTPUT_BYTES = 512_000
+_ROLE_TIMEOUT_DEFAULTS = {
+    "requirements_analyst": 60,
+    "planner": 90,
+    "global_validator": 60,
+}
 
 
 def planning_mode() -> PlanningMode:
@@ -35,6 +41,36 @@ def planning_mode() -> PlanningMode:
         return PlanningMode(value)
     except ValueError:
         return PlanningMode.UNAVAILABLE
+
+
+def _planning_call_timeout(role: str, requested_seconds: int) -> int:
+    """Bound one structured planning call, including model-pool failover.
+
+    The model runtime's timeout is intentionally per candidate. Without an outer
+    deadline, a three-model pool can multiply a 120 second planner timeout into a
+    six-minute user-visible stall before the planning budget gets another chance to
+    run. Keep role calls bounded while still allowing a slower planning model more
+    time than the requirements/review roles.
+    """
+    requested = max(15, int(requested_seconds))
+    key = str(role or "planner").strip().lower()
+    default = _ROLE_TIMEOUT_DEFAULTS.get(key, 75)
+    env_key = "OPERLY_PLANNING_" + "".join(
+        character if character.isalnum() else "_" for character in key.upper()
+    ) + "_TIMEOUT_SECONDS"
+    try:
+        configured = int(os.getenv(env_key, str(default)))
+    except ValueError:
+        configured = default
+    return max(15, min(requested, configured, 120))
+
+
+def _planning_max_models() -> int:
+    try:
+        configured = int(os.getenv("OPERLY_PLANNING_MAX_MODELS", "2"))
+    except ValueError:
+        configured = 2
+    return max(1, min(configured, 3))
 
 
 def _failure(error: Exception) -> FailureClass:
@@ -122,18 +158,24 @@ class ModelPlanningClient:
         try:
             model = self.model_resolver(role)
             model_id = str(getattr(model, "id", model_id))
-            result = await model.infer(
+            call_timeout = _planning_call_timeout(role, timeout_seconds)
+            max_models = _planning_max_models()
+            # Give one candidate enough room to produce structured output, but keep
+            # the entire provider/model pool under the role-level deadline below.
+            candidate_timeout = max(15, min(60, call_timeout))
+            inference = model.infer(
                 InferenceRequest(
                     messages=messages,
                     response_schema=schema,
                     budget=InferenceBudget(
-                        timeout_seconds=max(15, int(timeout_seconds)),
+                        timeout_seconds=candidate_timeout,
                         attempts_per_model=1,
-                        max_models=3,
+                        max_models=max_models,
                     ),
                     metadata={"planning_role": role, "request_id": request_id},
                 )
             )
+            result = await asyncio.wait_for(inference, timeout=float(call_timeout))
             provider = result.provider
             model_id = result.provider_model_id
             raw, parsed = _parse_content(result.message)
