@@ -7,12 +7,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response=await call_next(request)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=(), payment=(), usb=()"
-        response.headers["Cross-Origin-Opener-Policy"]="same-origin-allow-popups"
         path=request.url.path
+        generated_preview=path.startswith("/api/custom-software/previews/")
+        solution_studio=path.startswith("/channels/") and path.endswith("/solutions")
+        if generated_preview or solution_studio:
+            # Generated full-stack previews may require browser/device primitives
+            # such as camera QR scanning. Keep that delegation scoped to the
+            # same-origin Solution Studio/preview surface; the browser still owns
+            # the user permission prompt and every other Operly page remains denied.
+            response.headers["Permissions-Policy"]="camera=(self), microphone=(self), geolocation=(self), payment=(self), usb=(self)"
+        else:
+            response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        response.headers["Cross-Origin-Opener-Policy"]="same-origin-allow-popups"
         solution_preview=path.startswith("/api/solutions/") and path.endswith("/preview")
         source_preview=path.startswith("/api/studio/projects/") and "/source/preview" in path
-        studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or source_preview or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview")) or path.startswith("/api/custom-software/previews/") or path.startswith("/api/coding-harness/sources/") or solution_preview
+        studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or source_preview or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview")) or generated_preview or path.startswith("/api/coding-harness/sources/") or solution_preview
         response.headers["X-Frame-Options"]="SAMEORIGIN" if studio_preview else "DENY"
 
         if source_preview:
