@@ -3,6 +3,7 @@ name: solution-architecture
 on:
   pull_request:
     paths:
+      - "apps/api/security_headers.py"
       - "apps/api/solution_generation_router.py"
       - "packages/capabilities/solution_provider.py"
       - "packages/solutions/**"
@@ -10,6 +11,7 @@ on:
       - "tests/test_solution_initial_generation_lifecycle.py"
       - "tests/test_solution_implementation_resolution.py"
       - "tests/test_generated_solution_lifecycle_truth.py"
+      - "tests/test_generated_preview_permissions.py"
       - "tests/test_solutions.py"
       - ".github/workflows/solution-architecture.yml"
   workflow_dispatch:
@@ -27,6 +29,7 @@ jobs:
       - name: Compile capability-first Solution path
         run: >-
           python -m py_compile
+          apps/api/security_headers.py
           apps/api/solution_generation_router.py
           packages/capabilities/solution_provider.py
           packages/solutions/manifest.py
@@ -45,4 +48,5 @@ jobs:
           tests/test_solution_initial_generation_lifecycle.py
           tests/test_solution_implementation_resolution.py
           tests/test_generated_solution_lifecycle_truth.py
+          tests/test_generated_preview_permissions.py
           tests/test_solutions.py
