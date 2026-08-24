@@ -3,11 +3,8 @@ import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.app_identity_router import admin_router as app_identity_admin_router
-from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from apps.api.schemas import TenantUpdate
-from apps.api.workspace_entities_router import router as workspace_entities_router
 from packages.database.models import Tenant
 from packages.model_runtime import (
     configured_portfolio,
@@ -21,9 +18,6 @@ from packages.model_runtime.routing_policy import (
 
 
 router = APIRouter(prefix="/api", tags=["system"])
-router.include_router(workspace_entities_router)
-router.include_router(app_identity_runtime_router)
-router.include_router(app_identity_admin_router)
 
 
 def deployed_commit_sha() -> str:
