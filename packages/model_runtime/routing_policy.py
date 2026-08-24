@@ -41,6 +41,7 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         "router",
         frozenset({"text", "reasoning"}),
         frozenset({"fast", "small", "verified", "reliable", "free"}),
+        avoid_tags=frozenset({"heavy"}),
         max_models=2,
     ),
     # Ordinary manager/worker turns should prefer genuinely small, fast resources.
@@ -52,7 +53,7 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         "business_agent",
         frozenset({"text", "tools"}),
         frozenset({"small", "verified", "fast", "reliable", "free"}),
-        avoid_tags=frozenset({"slow"}),
+        avoid_tags=frozenset({"slow", "heavy"}),
         max_models=3,
     ),
     "coding": RoleRoutingProfile(
@@ -77,10 +78,14 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         frozenset({"text", "reasoning"}),
         frozenset({"reasoning", "verified", "heavy", "reliable"}),
     ),
+    # The adaptive pre-execution planner uses this role. Keep its automatic provider
+    # pool small/non-heavy so a complex task cannot reach a deep model before the
+    # primary worker has explicitly requested model.deep_reason.
     "requirements_analyst": RoleRoutingProfile(
         "requirements_analyst",
         frozenset({"text", "reasoning"}),
         frozenset({"reasoning", "small", "verified", "fast", "reliable", "free"}),
+        avoid_tags=frozenset({"heavy"}),
         max_models=3,
     ),
     "capability_placement": RoleRoutingProfile(
