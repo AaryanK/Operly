@@ -17,6 +17,7 @@ from packages.capabilities.providers import (
     ResearchProvider,
 )
 from packages.capabilities.registry import CapabilityRegistry
+from packages.capabilities.relational_data_provider import RelationalDataProvider
 from packages.capabilities.reminder_provider import ReminderProvider
 from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
@@ -51,6 +52,7 @@ def _builtin_providers():
         OperationsProvider(),
         StudioProvider(),
         SoftwareProjectProvider(),
+        RelationalDataProvider(),
         ReminderProvider(),
         MessagingProvider(),
         MessageCurationProvider(),

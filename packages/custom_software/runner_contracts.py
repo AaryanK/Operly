@@ -5,6 +5,7 @@ import ipaddress
 import re
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -53,10 +54,38 @@ class Dependency(Strict):
         return self
 
 
+class ServiceBindingTransport(Strict):
+    """Runner-only material used to create a credential-hiding sidecar.
+
+    This object must never be persisted in generated source or the durable build
+    submission record. The generated runtime receives only a local endpoint.
+    """
+
+    gatewayUrl: str = Field(min_length=8, max_length=1000)
+    runtimeToken: str = Field(min_length=40, max_length=4096)
+    migrationToken: str | None = Field(default=None, min_length=40, max_length=4096)
+
+    @field_validator("gatewayUrl")
+    @classmethod
+    def gateway_url(cls, value: str) -> str:
+        parsed = urlparse(value.strip())
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Service binding gateway URL is invalid")
+        return value.rstrip("/")
+
+
 class ServiceBindingRequest(Strict):
     semanticName: str
     capabilityId: str
     required: bool = True
+    transport: ServiceBindingTransport | None = None
 
     @field_validator("semanticName")
     @classmethod

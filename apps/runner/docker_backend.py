@@ -2,7 +2,8 @@
 
 This module is intended for a *dedicated runner host*, never the Operly API host.
 The trusted gateway owns the Docker socket. Generated software never receives that
-socket, host mounts, Operly credentials, or another job's network namespace.
+socket, host mounts, Operly credentials, database credentials, or another job's
+network namespace.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlparse
 
 import docker
 from docker.errors import DockerException, ImageNotFound, NotFound
@@ -23,12 +25,14 @@ from docker.types import Ulimit
 
 from packages.custom_software.runner_contracts import BuildSubmission, RunnerResult
 from packages.custom_software.source_bundles import SourceBundle
+from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID, RelationalMigration
 from packages.runtime_plugins import (
     FULLSTACK_PROFILE_VERSION,
     FULLSTACK_RUNTIME_ID,
     parse_fullstack_manifest,
     validate_fullstack_source,
 )
+from packages.runtime_plugins.relational_source_validation import validate_relational_source
 
 
 class IsolationUnavailable(RuntimeError):
@@ -64,6 +68,12 @@ class DockerIsolationBackend:
             "OPERLY_RUNNER_CONTROL_NETWORK", "operly-runner-control"
         )
         self.egress_network = os.getenv("OPERLY_RUNNER_EGRESS_NETWORK", "bridge")
+        self.binding_hosts = {
+            item.strip().lower().rstrip(".")
+            for item in os.getenv("OPERLY_RUNNER_BINDING_HOSTS", "").split(",")
+            if item.strip()
+        }
+        self.allow_http_bindings = os.getenv("OPERLY_RUNNER_ALLOW_HTTP_BINDINGS") == "1"
         self._verify_host()
 
     def _verify_host(self) -> None:
@@ -98,8 +108,30 @@ class DockerIsolationBackend:
         cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-.")
         return cleaned[:48] or "job"
 
-    @staticmethod
-    def _archive(bundle: SourceBundle, submission: BuildSubmission) -> bytes:
+    def _binding_container_name(self, short: str, semantic_name: str) -> str:
+        semantic = self._safe_name(semantic_name).lower()[:24]
+        return f"operly-binding-{short}-{semantic}"
+
+    def _binding_file_rows(self, submission: BuildSubmission, short: str) -> list[dict]:
+        rows: list[dict] = []
+        for binding in submission.serviceBindings:
+            if binding.transport is not None and binding.capabilityId != RELATIONAL_CAPABILITY_ID:
+                raise IsolationFailure("Runner transport is unsupported for this capability")
+            row = {
+                "semanticName": binding.semanticName,
+                "capabilityId": binding.capabilityId,
+                "required": binding.required,
+            }
+            if binding.capabilityId == RELATIONAL_CAPABILITY_ID:
+                if binding.transport is None:
+                    raise IsolationFailure("Relational binding is missing runner transport authorization")
+                row["endpoint"] = (
+                    f"http://{self._binding_container_name(short, binding.semanticName)}:8083"
+                )
+            rows.append(row)
+        return rows
+
+    def _archive(self, bundle: SourceBundle, submission: BuildSubmission, short: str) -> bytes:
         payload = io.BytesIO()
         with tarfile.open(fileobj=payload, mode="w") as archive:
             for item in bundle.files:
@@ -109,8 +141,10 @@ class DockerIsolationBackend:
                 info.uid = 10001
                 info.gid = 10001
                 archive.addfile(info, io.BytesIO(item.content))
+            # Transport grants are runner-only. The generated runtime receives only
+            # semantic identity plus a local sidecar endpoint.
             bindings = json.dumps(
-                [item.model_dump(mode="json") for item in submission.serviceBindings],
+                self._binding_file_rows(submission, short),
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode()
@@ -121,6 +155,137 @@ class DockerIsolationBackend:
             info.gid = 10001
             archive.addfile(info, io.BytesIO(bindings))
         return payload.getvalue()
+
+    @staticmethod
+    def _relational_migrations(bundle: SourceBundle) -> list[RelationalMigration]:
+        migrations: list[RelationalMigration] = []
+        for item in bundle.files:
+            if not item.path.startswith("migrations/") or item.path == "migrations/README.md":
+                continue
+            if not item.path.endswith(".json"):
+                raise IsolationFailure(f"Relational migration must be JSON: {item.path}")
+            try:
+                raw = json.loads(item.content.decode("utf-8"))
+                migrations.append(RelationalMigration.model_validate(raw))
+            except Exception as error:
+                raise IsolationFailure(f"Relational migration is invalid: {item.path}") from error
+        return sorted(migrations, key=lambda item: item.version)
+
+    def _validated_binding_url(self, value: str) -> str:
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise IsolationFailure("Relational binding gateway URL is invalid")
+        if parsed.scheme != "https" and not self.allow_http_bindings:
+            raise IsolationFailure("Relational binding gateway must use HTTPS")
+        if not self.binding_hosts or host not in self.binding_hosts:
+            raise IsolationFailure("Relational binding gateway host is not runner-allowlisted")
+        return value.rstrip("/")
+
+    def _apply_relational_migrations(
+        self,
+        submission: BuildSubmission,
+        bundle: SourceBundle,
+    ) -> dict:
+        bindings = [
+            item for item in submission.serviceBindings if item.capabilityId == RELATIONAL_CAPABILITY_ID
+        ]
+        migrations = self._relational_migrations(bundle)
+        if migrations and not bindings:
+            raise IsolationFailure("Relational migrations require a data.relational binding")
+        if not bindings:
+            return {"configured": False, "appliedVersions": []}
+        if len(bindings) != 1:
+            raise IsolationFailure("Exactly one relational binding is supported per Solution")
+        transport = bindings[0].transport
+        if transport is None or not transport.migrationToken:
+            raise IsolationFailure("Relational migration authorization is unavailable")
+        gateway = self._validated_binding_url(transport.gatewayUrl)
+        if not migrations:
+            return {"configured": True, "appliedVersions": []}
+        body = json.dumps(
+            {"migrations": [item.model_dump(mode="json") for item in migrations]},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        request = urllib.request.Request(
+            gateway + "/api/runtime/relational/migrations/apply",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {transport.migrationToken}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read(1024 * 1024).decode("utf-8"))
+                if response.status not in range(200, 300):
+                    raise IsolationFailure("Relational migration gateway rejected the migration")
+        except IsolationFailure:
+            raise
+        except Exception as error:
+            raise IsolationFailure("Relational migration gateway request failed") from error
+        return {
+            "configured": True,
+            "currentVersion": payload.get("currentVersion"),
+            "appliedVersions": payload.get("appliedVersions") or [],
+        }
+
+    def _start_binding_proxies(
+        self,
+        submission: BuildSubmission,
+        network,
+        labels: dict,
+        short: str,
+    ) -> list:
+        proxies = []
+        try:
+            for binding in submission.serviceBindings:
+                if binding.capabilityId != RELATIONAL_CAPABILITY_ID:
+                    continue
+                transport = binding.transport
+                if transport is None:
+                    raise IsolationFailure("Relational runtime authorization is unavailable")
+                gateway = self._validated_binding_url(transport.gatewayUrl)
+                proxy = self.client.containers.run(
+                    self.proxy_image,
+                    detach=True,
+                    name=self._binding_container_name(short, binding.semanticName),
+                    network=network.name,
+                    environment={
+                        "OPERLY_PROXY_MODE": "binding",
+                        "OPERLY_PROXY_PORT": "8083",
+                        "OPERLY_PROXY_BINDING_TARGET": gateway,
+                        "OPERLY_PROXY_BINDING_TOKEN": transport.runtimeToken,
+                        "OPERLY_PROXY_BINDING_PREFIX": "/api/runtime/relational",
+                    },
+                    labels=labels,
+                    mem_limit="96m",
+                    pids_limit=64,
+                    cap_drop=["ALL"],
+                    security_opt=["no-new-privileges:true"],
+                    read_only=True,
+                    tmpfs={"/tmp": "rw,noexec,nosuid,size=16m"},
+                )
+                self.client.networks.get(self.egress_network).connect(proxy)
+                proxies.append(proxy)
+        except Exception:
+            for proxy in proxies:
+                try:
+                    proxy.remove(force=True)
+                except (DockerException, NotFound):
+                    pass
+            raise
+        return proxies
 
     def _event(
         self,
@@ -251,9 +416,11 @@ class DockerIsolationBackend:
         events: list[dict] = []
         network = build_container = runtime_container = None
         egress_proxy = preview_proxy = None
+        binding_proxies: list = []
         runtime_image_tag = None
         resources: dict = {}
         success = False
+        migration_report = {"configured": False, "appliedVersions": []}
         try:
             self._verify_host()
             if submission.stackId != FULLSTACK_RUNTIME_ID:
@@ -261,15 +428,21 @@ class DockerIsolationBackend:
             if submission.stackVersion != FULLSTACK_PROFILE_VERSION:
                 raise IsolationFailure("Runner profile version mismatch")
             validation = validate_fullstack_source(bundle)
-            if not validation.valid:
+            relational_validation = validate_relational_source(bundle)
+            errors = tuple((*validation.errors, *relational_validation.errors))
+            if not validation.valid or not relational_validation.valid:
                 return self._failed(
                     job_id,
                     events,
                     "security_policy_violation",
-                    "; ".join(validation.errors),
+                    "; ".join(errors),
                 )
             manifest = parse_fullstack_manifest(bundle)
             self._ensure_not_cancelled(cancelled)
+
+            # Validate runner-only transport before staging. _archive then writes a
+            # deliberately redacted binding file containing only local endpoints.
+            self._binding_file_rows(submission, short)
 
             network = self.client.networks.create(
                 f"operly-job-{short}-{uuid.uuid4().hex[:6]}",
@@ -347,7 +520,9 @@ class DockerIsolationBackend:
                 **self._container_security(submission, readonly=False),
             )
             resources["buildContainer"] = build_container.id
-            if not build_container.put_archive("/workspace", self._archive(bundle, submission)):
+            if not build_container.put_archive(
+                "/workspace", self._archive(bundle, submission, short)
+            ):
                 raise IsolationFailure("Unable to stage source bundle")
             self._event(events, event_callback, "source_staging", "Staged immutable source bundle")
             self._ensure_not_cancelled(cancelled)
@@ -362,7 +537,9 @@ class DockerIsolationBackend:
                     log_limit=submission.resources.logBytes,
                 )
                 if code:
-                    return self._failed(job_id, events, "dependency_failure", output or "venv creation failed")
+                    return self._failed(
+                        job_id, events, "dependency_failure", output or "venv creation failed"
+                    )
                 python_executable = "/workspace/.venv/bin/python"
                 code, output = self._exec(
                     build_container,
@@ -380,7 +557,12 @@ class DockerIsolationBackend:
                     log_limit=submission.resources.logBytes,
                 )
                 if code:
-                    return self._failed(job_id, events, "dependency_failure", output or "Python dependency installation failed")
+                    return self._failed(
+                        job_id,
+                        events,
+                        "dependency_failure",
+                        output or "Python dependency installation failed",
+                    )
             if any(item.ecosystem == "npm" for item in submission.dependencies):
                 code, output = self._exec(
                     build_container,
@@ -390,9 +572,13 @@ class DockerIsolationBackend:
                     log_limit=submission.resources.logBytes,
                 )
                 if code:
-                    return self._failed(job_id, events, "dependency_failure", output or "npm dependency installation failed")
+                    return self._failed(
+                        job_id,
+                        events,
+                        "dependency_failure",
+                        output or "npm dependency installation failed",
+                    )
 
-            # Install-time egress ends *before* any generated build/test code runs.
             if egress_proxy is not None:
                 try:
                     egress_proxy.remove(force=True)
@@ -414,7 +600,13 @@ class DockerIsolationBackend:
                 timeout_seconds=60,
                 log_limit=submission.resources.logBytes,
             )
-            self._event(events, event_callback, "static_analysis", output or "Python compile check passed", code)
+            self._event(
+                events,
+                event_callback,
+                "static_analysis",
+                output or "Python compile check passed",
+                code,
+            )
             if code:
                 return self._failed(job_id, events, "build_failure", "Python static analysis failed")
 
@@ -439,7 +631,13 @@ class DockerIsolationBackend:
                 if code:
                     return self._failed(job_id, events, "build_failure", "Frontend build failed")
             else:
-                self._event(events, event_callback, "building", "Static frontend requires no build command", 0)
+                self._event(
+                    events,
+                    event_callback,
+                    "building",
+                    "Static frontend requires no build command",
+                    0,
+                )
 
             self._ensure_not_cancelled(cancelled)
             python_tests = any(
@@ -482,6 +680,33 @@ class DockerIsolationBackend:
                 self._event(events, event_callback, "testing", output or "Node tests passed", code)
                 if code:
                     return self._failed(job_id, events, "test_failure", "Node tests failed")
+
+            # Persistent schema mutation is a post-test quality gate. The migration
+            # payload comes from the immutable original bundle, not the writable
+            # build container, so generated tests cannot rewrite what is applied.
+            self._ensure_not_cancelled(cancelled)
+            migration_report = self._apply_relational_migrations(submission, bundle)
+            if migration_report["configured"]:
+                self._event(
+                    events,
+                    event_callback,
+                    "migrating",
+                    "Relational application schema is current",
+                    0,
+                )
+
+            binding_proxies = self._start_binding_proxies(
+                submission, network, labels, short
+            )
+            if binding_proxies:
+                resources["bindingProxies"] = [proxy.id for proxy in binding_proxies]
+                self._event(
+                    events,
+                    event_callback,
+                    "binding_services",
+                    "Started credential-hiding relational binding sidecar",
+                    0,
+                )
 
             self._ensure_not_cancelled(cancelled)
             runtime_image_tag = f"operly-runner-runtime:{short}-{uuid.uuid4().hex[:8]}"
@@ -644,7 +869,12 @@ class DockerIsolationBackend:
                     "pidsLimit": security.get("PidsLimit"),
                     "memoryBytes": security.get("Memory"),
                     "nanoCpus": security.get("NanoCpus"),
-                    "network": "per-job internal bridge; preview only through trusted sidecar",
+                    "network": "per-job internal bridge; trusted sidecars only",
+                    "relationalData": {
+                        "configured": migration_report.get("configured", False),
+                        "currentVersion": migration_report.get("currentVersion"),
+                        "bindingSidecars": len(binding_proxies),
+                    },
                 },
             )
             preview_id = "preview-" + job_id
@@ -666,7 +896,9 @@ class DockerIsolationBackend:
             return self._failed(job_id, events, "cancelled", "Build was cancelled")
         except IsolationFailure as error:
             lowered = str(error).lower()
-            if "health check" in lowered:
+            if "migration" in lowered or "relational" in lowered or "binding" in lowered:
+                classification = "service_binding_failure"
+            elif "health check" in lowered:
                 classification = "health_check_failure"
             elif "worker" in lowered or "runtime" in lowered:
                 classification = "runtime_crash"
@@ -676,10 +908,10 @@ class DockerIsolationBackend:
         except DockerException as error:
             return self._failed(job_id, events, "runner_infrastructure_failure", str(error))
         finally:
-            # Only a verified preview-ready outcome may keep executable resources.
             if not success:
                 self._cleanup_objects(
                     preview_proxy=preview_proxy,
+                    binding_proxies=binding_proxies,
                     runtime_container=runtime_container,
                     build_container=build_container,
                     egress_proxy=egress_proxy,
@@ -691,13 +923,16 @@ class DockerIsolationBackend:
         self,
         *,
         preview_proxy=None,
+        binding_proxies=None,
         runtime_container=None,
         build_container=None,
         egress_proxy=None,
         runtime_image_tag: str | None = None,
         network=None,
     ) -> None:
-        for container in (preview_proxy, runtime_container, build_container, egress_proxy):
+        containers = [preview_proxy, runtime_container, build_container, egress_proxy]
+        containers.extend(binding_proxies or [])
+        for container in containers:
             if container is None:
                 continue
             try:
@@ -725,6 +960,12 @@ class DockerIsolationBackend:
             except NotFound:
                 return None
 
+        binding_proxies = []
+        for value in resources.get("bindingProxies") or []:
+            try:
+                binding_proxies.append(self.client.containers.get(value))
+            except NotFound:
+                pass
         network = None
         if resources.get("network"):
             try:
@@ -733,6 +974,7 @@ class DockerIsolationBackend:
                 pass
         self._cleanup_objects(
             preview_proxy=container("previewProxy"),
+            binding_proxies=binding_proxies,
             runtime_container=container("runtimeContainer"),
             build_container=container("buildContainer"),
             egress_proxy=container("egressProxy"),
@@ -776,6 +1018,7 @@ class DockerIsolationBackend:
             "capDrop": host.get("CapDrop") or [],
             "pidsLimit": host.get("PidsLimit"),
             "networks": sorted(networks),
+            "bindingSidecars": len(resources.get("bindingProxies") or []),
         }
 
 
