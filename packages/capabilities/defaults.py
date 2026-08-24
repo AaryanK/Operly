@@ -3,6 +3,7 @@ from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
+from packages.capabilities.event_provider import EventDiscoveryProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
 from packages.capabilities.message_curation import MessageCurationProvider
@@ -17,17 +18,20 @@ from packages.capabilities.providers import (
     ResearchProvider,
 )
 from packages.capabilities.registry import CapabilityRegistry
+from packages.capabilities.registry_workflow_task_provider import RegistryWorkflowTaskProvider
 from packages.capabilities.relational_data_provider import RelationalDataProvider
 from packages.capabilities.reminder_provider import ReminderProvider
 from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
+from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.lifecycle import discord_plugin_lifecycle
 from packages.connectors.discord.provider import DiscordProvider
 from packages.connectors.google_provider import GmailProvider, GoogleCalendarProvider
 from packages.plugins import (
+    EventSpec,
     PermissionSpec,
     PluginContribution,
     PluginLifecycleSpec,
@@ -54,6 +58,8 @@ def _builtin_providers():
         SoftwareProjectProvider(),
         RelationalDataProvider(),
         ReminderProvider(),
+        RegistryWorkflowTaskProvider(),
+        PublicWebReadProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
@@ -64,6 +70,32 @@ def _builtin_providers():
         GmailDraftLifecycleProvider(),
         GoogleCalendarProvider(),
     )
+
+
+def _provider_events(provider) -> tuple[EventSpec, ...]:
+    """Normalize events from providers/capabilities into the plugin manifest.
+
+    Future providers can expose a typed ``events`` tuple. During migration an
+    existing capability may also list event ids in ``event_capabilities``. Both land
+    in the same manifest catalog, so Task/event discovery stays plugin-driven.
+    """
+    output: dict[str, EventSpec] = {}
+    for raw in getattr(provider, "events", ()) or ():
+        if isinstance(raw, str):
+            event = EventSpec(raw)
+        else:
+            event = raw
+        if str(getattr(event, "id", "")).strip():
+            output[event.id] = event
+    for definition in provider.capabilities:
+        for event_id in definition.event_capabilities:
+            value = str(event_id or "").strip()
+            if value and value not in output:
+                output[value] = EventSpec(
+                    value,
+                    description=f"Event emitted by {definition.id}",
+                )
+    return tuple(output[event_id] for event_id in sorted(output))
 
 
 def bootstrap_builtin_plugins() -> None:
@@ -93,6 +125,7 @@ def bootstrap_builtin_plugins() -> None:
             capabilities=tuple(provider.capabilities),
             permissions=tuple(PermissionSpec(permission) for permission in permissions),
             connectors=tuple(integrations),
+            events=_provider_events(provider),
             lifecycle=(
                 PluginLifecycleSpec(start_on_boot=True, supports_health=True)
                 if is_discord
@@ -135,4 +168,5 @@ def default_registry(enabled_plugins=None, *, config_resolver=None) -> Capabilit
         registry.register(provider)
 
     registry.register(CapabilityDiscoveryProvider(registry))
+    registry.register(EventDiscoveryProvider())
     return registry
