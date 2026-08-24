@@ -43,13 +43,15 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=2,
     ),
-    # The ordinary manager/worker should be cheap and responsive. Strong/heavy
-    # reasoning is available explicitly through model.deep_reason rather than making
-    # every micro-step pay frontier-model latency and context cost.
+    # Ordinary manager/worker turns should prefer genuinely small, fast resources.
+    # Do not reward the legacy ``orchestrator`` compatibility tag here: the legacy
+    # route may point at a heavy model (for example Ox Alpha), which would otherwise
+    # win tie-breaks despite the small-model-first runtime contract. Strong reasoning
+    # remains explicitly available through model.deep_reason.
     "business_agent": RoleRoutingProfile(
         "business_agent",
         frozenset({"text", "tools"}),
-        frozenset({"orchestrator", "small", "verified", "fast", "reliable", "free"}),
+        frozenset({"small", "verified", "fast", "reliable", "free"}),
         avoid_tags=frozenset({"slow"}),
         max_models=3,
     ),
