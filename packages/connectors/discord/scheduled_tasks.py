@@ -85,6 +85,10 @@ async def run_harness_task_job(
             + "Return the task's final user-facing result as your assistant response. The Task delivery layer will send that response to the configured Discord destination exactly once. "
             + "Do not call Discord send-message/send-DM capabilities merely to deliver this final result. Only use a messaging capability if the task objective explicitly requires an additional side effect distinct from its configured delivery."
         )
+        # Each durable task gets its own logical ChannelService conversation. The real
+        # Discord destination stays in metadata/job delivery fields, so scheduled
+        # system prompts and task-run history never pollute the human channel thread.
+        execution_conversation_id = f"task:{task.id}"
         envelope = ChannelEnvelope(
             provider="discord",
             external_user_id=str(origin.get("external_user_id") or job.user_id),
@@ -93,7 +97,7 @@ async def run_harness_task_job(
                 if origin.get("external_space_id") is not None
                 else None
             ),
-            external_conversation_id=str(origin.get("external_conversation_id") or job.channel_id),
+            external_conversation_id=execution_conversation_id,
             actor_name=str(origin.get("actor_name") or "Operly user")[:200],
             text=execution_prompt,
             space_name=None,
@@ -102,6 +106,7 @@ async def run_harness_task_job(
                 "discord_guild_id": task.guild_id,
                 "discord_channel_id": job.channel_id,
                 "discord_user_id": job.user_id,
+                "task_origin_conversation_id": str(origin.get("external_conversation_id") or job.channel_id),
                 "scheduled_task_id": task.id,
                 "scheduled_job_id": job.id,
                 "scheduled_run": True,
