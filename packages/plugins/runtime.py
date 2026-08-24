@@ -36,6 +36,7 @@ class PluginContribution:
     runtime_plugins: tuple[Any, ...] = ()
     model_provider_registrars: tuple[Any, ...] = ()
     model_discoverer_registrars: tuple[Any, ...] = ()
+    task_delivery_adapters: tuple[Any, ...] = ()
 
 
 class PluginRuntime:
@@ -98,6 +99,30 @@ class PluginRuntime:
             for contribution in self._contributions.values()
             for runtime in contribution.runtime_plugins
         )
+
+    def task_delivery_adapters(self) -> tuple[Any, ...]:
+        return tuple(
+            adapter
+            for contribution in self._contributions.values()
+            for adapter in contribution.task_delivery_adapters
+        )
+
+    def task_delivery_adapter(self, provider: str) -> Any | None:
+        needle = str(provider or "").strip().lower()
+        if not needle:
+            return None
+        matches: list[Any] = []
+        for adapter in self.task_delivery_adapters():
+            providers = tuple(
+                str(item).strip().lower()
+                for item in (getattr(adapter, "providers", ()) or ())
+            )
+            single = str(getattr(adapter, "provider", "") or "").strip().lower()
+            if needle == single or needle in providers:
+                matches.append(adapter)
+        if len(matches) > 1:
+            raise RuntimeError(f"Multiple task delivery adapters registered for {needle}")
+        return matches[0] if matches else None
 
     async def install(self, plugin_id: str, context: Any = None) -> None:
         contribution = self.contribution(plugin_id)
