@@ -17,6 +17,7 @@ on:
       - "tests/test_assistant_first_personal_dm.py"
       - "tests/test_model_requirements.py"
       - "tests/test_model_request_failover.py"
+      - "tests/test_model_tool_continuation_adapters.py"
       - "tests/test_runtime_trace_contract.py"
       - "tests/test_runtime_trace_access.py"
       - ".github/workflows/runtime-hardening.yml"
@@ -64,6 +65,7 @@ jobs:
           tests/test_assistant_first_personal_dm.py
           tests/test_model_requirements.py
           tests/test_model_request_failover.py
+          tests/test_model_tool_continuation_adapters.py
           tests/test_runtime_trace_contract.py
           tests/test_runtime_trace_access.py
       - name: Verify migration chain on SQLite

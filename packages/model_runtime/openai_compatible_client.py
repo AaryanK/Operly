@@ -31,6 +31,7 @@ _TOOL_CALL_VALIDATION_MARKERS = (
     "function call validation",
 )
 _TRACE_RESPONSE_HEADERS = ("x-request-id", "x-reference-id", "x-correlation-id", "retry-after")
+_GEMINI_IMPORTED_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -67,7 +68,44 @@ def _wire_tool_arguments(value: Any) -> str:
         return json.dumps(str(value), ensure_ascii=False)
 
 
-def _compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _gemini_tool_history(messages: list[dict[str, Any]]) -> None:
+    """Make provider-neutral tool history valid for Gemini OpenAI compatibility.
+
+    Gemini 3 returns an opaque thought signature in the first function call of each
+    tool-calling step and requires that exact value on replay. Histories produced by
+    another model/provider legitimately have no Gemini signature. Google documents a
+    validator-skip sentinel for that transfer case, so the Gemini adapter supplies it
+    only when the first call is unsigned. Existing signatures are never rewritten.
+
+    This mutates only the adapter-owned deep copy produced by ``_compatible_messages``;
+    AgentRuntime and the shared conversation remain provider-neutral.
+    """
+    for message in messages:
+        if str(message.get("role") or "") not in {"assistant", "model"}:
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list) or not calls:
+            continue
+        first_call = next((call for call in calls if isinstance(call, dict)), None)
+        if first_call is None:
+            continue
+        extra = first_call.get("extra_content")
+        if not isinstance(extra, dict):
+            extra = {}
+            first_call["extra_content"] = extra
+        google = extra.get("google")
+        if not isinstance(google, dict):
+            google = {}
+            extra["google"] = google
+        if not str(google.get("thought_signature") or "").strip():
+            google["thought_signature"] = _GEMINI_IMPORTED_THOUGHT_SIGNATURE
+
+
+def _compatible_messages(
+    messages: list[dict[str, Any]],
+    *,
+    provider: str | None = None,
+) -> list[dict[str, Any]]:
     # _openrouter_messages copies the top-level message but intentionally preserves
     # nested provider-neutral structures. Deep-copy here before wire normalization so
     # failover/replay never mutates the caller-owned shared conversation history.
@@ -98,6 +136,9 @@ def _compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         if "arguments" in normalized:
             normalized["arguments"] = _wire_tool_arguments(normalized.get("arguments"))
         translated[index]["function_call"] = normalized
+
+    if str(provider or "").strip().lower() == "gemini":
+        _gemini_tool_history(translated)
 
     return translated
 
@@ -246,7 +287,7 @@ class OpenAICompatibleClient:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "messages": _compatible_messages(messages),
+            "messages": _compatible_messages(messages, provider=self.provider),
             "temperature": 0.2,
             "max_tokens": self.max_tokens,
         }
