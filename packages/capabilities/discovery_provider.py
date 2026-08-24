@@ -129,6 +129,9 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     "eligible_count": len(eligible),
                     "surface": surface.value,
                     "schemas_included": False,
+                    "semantic_backend": self.search_index.backend_name,
+                    "semantic_degraded_reason": self.search_index.degraded_reason,
+                    "ranked_ids": [row["id"] for row in rows],
                     "note": "Search ranks only an already-authorized surface-visible candidate set; discovery is not execution authority.",
                 },
             )
@@ -150,6 +153,8 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     "count": len(rows),
                     "requested_count": len(requested),
                     "surface": surface.value,
+                    "semantic_backend": self.search_index.backend_name,
+                    "semantic_degraded_reason": self.search_index.degraded_reason,
                     "note": "Invoke selected capabilities through the normal Operly capability boundary.",
                 },
             )
