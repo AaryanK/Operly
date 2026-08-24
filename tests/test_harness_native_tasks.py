@@ -14,6 +14,7 @@ from packages.capabilities.task_provider import (
     next_task_run,
     scheduled_task_prompt,
 )
+from packages.database import principal_models as _principal_models  # noqa: F401
 from packages.database.channel_models import ExternalIdentity
 from packages.database.db import Base
 from packages.database.models import AppUser, ScheduledJob, Task, Tenant
