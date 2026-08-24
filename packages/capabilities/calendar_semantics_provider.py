@@ -16,7 +16,11 @@ from packages.capabilities.contracts import (
     ExecutionMode,
 )
 from packages.capabilities.providers import BaseProvider
-from packages.connectors.google_provider import CALENDAR, access_token, google_connector, request_json
+from packages.connectors.google_provider import CALENDAR, request_json
+from packages.connectors.google_scope import (
+    google_access_token_for_context,
+    google_connector_for_context,
+)
 
 
 def _parse_date(value: str) -> date:
@@ -92,8 +96,8 @@ class CalendarSemanticsProvider(BaseProvider):
         start_of_day = datetime.combine(deadline, time.min, tzinfo=zone)
         end_of_day = start_of_day + timedelta(days=1)
 
-        connector = await google_connector(context.db, context.tenant_id, CALENDAR)
-        token = await access_token(context.db, connector)
+        connector = await google_connector_for_context(context, CALENDAR)
+        token = await google_access_token_for_context(context, connector)
         listing = await request_json(
             "GET",
             f"https://www.googleapis.com/calendar/v3/calendars/{quote(calendar_id, safe='')}/events",
@@ -142,7 +146,6 @@ class CalendarSemanticsProvider(BaseProvider):
         for event in events:
             window = _event_window(event, zone)
             if window is None:
-                # All-day/date-only entries are context, not an automatic exact-time collision.
                 continue
             event_start, event_end = window
             if event_start < target_end and event_end > target_start:
