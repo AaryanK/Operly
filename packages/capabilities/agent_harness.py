@@ -16,6 +16,11 @@ from packages.security.execution_context import (
     resolve_execution_context,
 )
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
+from packages.security.surfaces import (
+    SurfaceKind,
+    capability_surface_allowed,
+    surface_from_legacy_metadata,
+)
 
 
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
@@ -36,7 +41,6 @@ _PRIVATE_CONNECTOR_AUTHORITY = {
     "gmail.delete_draft": "gmail:draft",
 }
 
-_PERSONAL_ONLY_PREFIXES = ("account.",)
 _DISCORD_CURRENT_CONTEXT = {
     "discord.context",
     "discord.read_recent_messages",
@@ -45,18 +49,9 @@ _DISCORD_CURRENT_CONTEXT = {
     "discord.create_thread",
 }
 
-_DEFAULT_INITIAL_CAPABILITIES = frozenset(
-    {
-        "company.read_state",
-        "company.search_events",
-        "runtime.context",
-        "context.human.search",
-        "context.private_workspace_search",
-        "context.tenant.search",
-        "context.conversation.search",
-        "solution.inspect",
-    }
-)
+# Keep the boot surface deliberately tiny. Everything else must be discovered and
+# described before its exact schema is forwarded to a model.
+_DEFAULT_INITIAL_CAPABILITIES = frozenset({"runtime.context"})
 
 
 @dataclass(slots=True)
@@ -66,24 +61,31 @@ class PluginInvocationContext:
     role: str
     objective: str
     channel: str = "web"
+    surface: SurfaceKind | str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        explicit = SurfaceKind.coerce(self.surface)
+        self.surface = (
+            explicit
+            if explicit is not SurfaceKind.UNKNOWN
+            else surface_from_legacy_metadata(self.channel, self.metadata)
+        )
 
 
 class PluginAgentHarness:
     """Agent-facing capability view over one canonical invocation boundary.
 
-    Capability visibility is session-scoped and progressive. The harness performs
-    one bounded semantic preflight for each new objective so useful capabilities do
-    not depend on the model remembering a discovery ceremony. Preflight only exposes
-    schemas the caller is already authorized to see; execution still crosses the
-    canonical firewall and approval boundary.
+    Capability visibility is session-scoped and genuinely progressive. The model
+    begins with a tiny discovery/runtime kernel; authorization and surface policy
+    determine the eligible universe, semantic discovery determines relevance, and
+    exact schemas appear only after describe. Execution always crosses the canonical
+    firewall and approval boundary.
     """
 
     def __init__(self, registry=None):
         self.registry = registry
         self._session_views: dict[str, SessionCapabilityView] = {}
-        self._preflight_objectives: dict[str, str] = {}
-        self._preflight_diagnostics: dict[str, list[dict[str, Any]]] = {}
 
     async def registry_for(self, context: PluginInvocationContext):
         if self.registry:
@@ -166,8 +168,17 @@ class PluginAgentHarness:
             missing_scopes = [] if satisfied else sorted(required - union_scopes or required)
 
             health_values = {str(row.health_status or "unknown").lower() for row in connected}
-            healthy = False if health_values & {"error", "failed", "unhealthy"} else True if health_values & {"healthy", "ok"} else None
-            last_error = next((str(row.last_error)[:300] for row in connected if row.last_error), None)
+            healthy = (
+                False
+                if health_values & {"error", "failed", "unhealthy"}
+                else True
+                if health_values & {"healthy", "ok"}
+                else None
+            )
+            last_error = next(
+                (str(row.last_error)[:300] for row in connected if row.last_error),
+                None,
+            )
             if healthy is False:
                 return {
                     "configured": True,
@@ -190,8 +201,8 @@ class PluginAgentHarness:
             return {"configured": True, "healthy": healthy, "retryable": False}
 
         # Keep known capabilities registered even when their connector is missing.
-        # Availability explains connector/scope/health state; progressive exposure
-        # still prevents unusable capabilities from cluttering the model surface.
+        # Availability explains connector/scope/health state while progressive
+        # discovery prevents unusable schemas from cluttering the model surface.
         return default_registry(None, config_resolver=config_resolver)
 
     def authority(self, role: str) -> set[str]:
@@ -210,6 +221,7 @@ class PluginAgentHarness:
                     workspace_id=context.tenant_id,
                     user_id=context.user_id,
                     channel=context.channel,
+                    surface=context.surface,
                     conversation_id=str(context.metadata.get("_conversation_id") or "") or None,
                     metadata=context.metadata,
                     require_membership=True,
@@ -223,9 +235,7 @@ class PluginAgentHarness:
 
     @staticmethod
     def _is_private_surface(context: PluginInvocationContext) -> bool:
-        if context.channel == "discord":
-            return bool(context.metadata.get("is_direct"))
-        return not bool(context.metadata.get("shared_surface"))
+        return SurfaceKind.coerce(context.surface).allows_personal_global
 
     @classmethod
     def capability_authorized(
@@ -239,7 +249,7 @@ class PluginAgentHarness:
             return False
         if context is None:
             return True
-        if capability_id.startswith(_PERSONAL_ONLY_PREFIXES) and not cls._is_private_surface(context):
+        if not capability_surface_allowed(capability_id, SurfaceKind.coerce(context.surface)):
             return False
         if capability_id in _DISCORD_CURRENT_CONTEXT and context.channel != "discord":
             return False
@@ -249,11 +259,13 @@ class PluginAgentHarness:
     def _session_key(context: PluginInvocationContext) -> str:
         conversation = str(context.metadata.get("_conversation_id") or "").strip()
         principal = str(context.user_id or "anonymous")
+        surface = SurfaceKind.coerce(context.surface).value
         return ":".join(
             (
                 context.tenant_id,
                 principal,
                 context.channel,
+                surface,
                 conversation or "ephemeral",
             )
         )
@@ -300,39 +312,12 @@ class PluginAgentHarness:
         *,
         limit: int = 6,
     ) -> list[dict[str, Any]]:
-        """Bounded discovery owned by the harness, never by model initiative."""
-        authority = await self.authority_for(context)
-        if not authority:
-            return []
-        registry = await self.registry_for(context)
-        view = await self.session_view_for(context, authority=authority, registry=registry)
-        key = self._session_key(context)
-        objective = str(context.objective or "").strip()
-        if self._preflight_objectives.get(key) == objective:
-            return list(self._preflight_diagnostics.get(key, ()))
+        """Compatibility hook: discovery no longer bulk-exposes objective matches.
 
-        rows = registry.search(
-            context.tenant_id,
-            objective,
-            authority=authority,
-            limit=max(1, min(int(limit), 10)),
-        )
-        expose_ids = []
-        diagnostics = []
-        for row in rows:
-            availability = row.get("availability") or {}
-            diagnostics.append(
-                {
-                    "id": row.get("id"),
-                    "availability": availability,
-                }
-            )
-            if availability.get("available") is True and row.get("authorized") is not False:
-                expose_ids.append(str(row.get("id") or ""))
-        view.expose(expose_ids)
-        self._preflight_objectives[key] = objective
-        self._preflight_diagnostics[key] = diagnostics
-        return list(diagnostics)
+        Keeping the method avoids breaking older callers while ensuring model-visible
+        schemas are expanded only through capability.describe.
+        """
+        return []
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         authority = await self.authority_for(context)
@@ -344,7 +329,6 @@ class PluginAgentHarness:
             authority=authority,
             registry=registry,
         )
-        await self.preflight(context)
         stage = str(context.metadata.get("capability_stage") or "adaptive")
         return view.schemas(stage=stage)
 
@@ -467,6 +451,8 @@ class PluginAgentHarness:
         )[:2000]
 
         runtime_metadata = dict(context.metadata)
+        runtime_metadata["_surface_kind"] = execution.surface.value
+        runtime_metadata["surface"] = execution.surface.value
         if name in {"capability.search", "capability.describe"}:
             runtime_metadata["authority"] = sorted(authority)
 
@@ -507,6 +493,7 @@ class PluginAgentHarness:
             "tenant_id": context.tenant_id,
             "user_id": context.user_id,
             "channel": context.channel,
+            "surface": SurfaceKind.coerce(context.surface).value,
             "conversation_id": str(context.metadata.get("_conversation_id") or "") or None,
             "capability_stage": str(context.metadata.get("capability_stage") or "adaptive"),
         }
