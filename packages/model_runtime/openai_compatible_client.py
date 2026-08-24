@@ -30,6 +30,18 @@ _TOOL_CALL_VALIDATION_MARKERS = (
     "tool arguments",
     "function call validation",
 )
+_PROVIDER_CAPACITY_MARKERS = (
+    "tokens per minute",
+    "token per minute",
+    "requests per minute",
+    "request per minute",
+    "rate limit",
+    "rate_limit",
+    " tpm",
+    "tpm ",
+    " rpm",
+    "rpm ",
+)
 _TRACE_RESPONSE_HEADERS = ("x-request-id", "x-reference-id", "x-correlation-id", "retry-after")
 _GEMINI_IMPORTED_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
@@ -62,24 +74,11 @@ def _wire_tool_arguments(value: Any) -> str:
             separators=(",", ":"),
         )
     except (TypeError, ValueError):
-        # Never let an adapter-shape mismatch become a provider 400/agent 500.
-        # Stringifying the value keeps the payload valid while preserving a bounded,
-        # inspectable representation for providers that require a JSON string field.
         return json.dumps(str(value), ensure_ascii=False)
 
 
 def _gemini_tool_history(messages: list[dict[str, Any]]) -> None:
-    """Make provider-neutral tool history valid for Gemini OpenAI compatibility.
-
-    Gemini 3 returns an opaque thought signature in the first function call of each
-    tool-calling step and requires that exact value on replay. Histories produced by
-    another model/provider legitimately have no Gemini signature. Google documents a
-    validator-skip sentinel for that transfer case, so the Gemini adapter supplies it
-    only when the first call is unsigned. Existing signatures are never rewritten.
-
-    This mutates only the adapter-owned deep copy produced by ``_compatible_messages``;
-    AgentRuntime and the shared conversation remain provider-neutral.
-    """
+    """Make provider-neutral tool history valid for Gemini OpenAI compatibility."""
     for message in messages:
         if str(message.get("role") or "") not in {"assistant", "model"}:
             continue
@@ -106,9 +105,6 @@ def _compatible_messages(
     *,
     provider: str | None = None,
 ) -> list[dict[str, Any]]:
-    # _openrouter_messages copies the top-level message but intentionally preserves
-    # nested provider-neutral structures. Deep-copy here before wire normalization so
-    # failover/replay never mutates the caller-owned shared conversation history.
     translated = copy.deepcopy(_openrouter_messages(messages))
     for message in translated:
         message.pop("reasoning_details", None)
@@ -121,16 +117,10 @@ def _compatible_messages(
                 function = call.get("function")
                 if not isinstance(function, dict):
                     continue
-                # OpenAI-compatible providers such as Groq require replayed tool
-                # calls to declare the canonical discriminator even when the
-                # provider that originally produced the call omitted it.
                 call["type"] = "function"
                 if "arguments" in function:
                     function["arguments"] = _wire_tool_arguments(function.get("arguments"))
 
-    # Some provider-neutral/legacy histories still carry function_call rather
-    # than tool_calls. _openrouter_messages currently drops that legacy field,
-    # so preserve it explicitly for compatible providers when present.
     for index, original in enumerate(messages):
         if index >= len(translated) or not isinstance(original, dict):
             break
@@ -149,17 +139,24 @@ def _compatible_messages(
 
 
 def _provider_generated_tool_error(status: int, detail: str, tools: list[dict[str, Any]]) -> bool:
-    """Recognize provider rejection of the model's generated tool call.
-
-    This is not equivalent to a malformed Operly request. The provider accepted
-    our messages/schemas, generated a call, then rejected that generated call
-    against the schema. Treat it as model-route failure so ModelPool can repair by
-    trying another model/provider.
-    """
+    """Recognize provider rejection of the model's generated tool call."""
     if status != 400 or not tools:
         return False
     text = str(detail or "").lower()
     return any(marker in text for marker in _TOOL_CALL_VALIDATION_MARKERS)
+
+
+def _provider_capacity_error(status: int, detail: str) -> bool:
+    """Recognize capacity/rate semantics even when a provider reports HTTP 413.
+
+    Groq can report TPM exhaustion as 413 rather than 429. That is provider-wide
+    transient capacity pressure and must not be learned as a model/context defect.
+    True context/request overflow remains route-specific ``request_too_large``.
+    """
+    if status not in {413, 429}:
+        return False
+    text = " " + str(detail or "").lower() + " "
+    return status == 429 or any(marker in text for marker in _PROVIDER_CAPACITY_MARKERS)
 
 
 class OpenAICompatibleClient:
@@ -366,8 +363,16 @@ class OpenAICompatibleClient:
                         provider=self.provider,
                         model_id=model,
                     )
-                # A 413 is normally a route/model capacity or context/TPM limit,
-                # not evidence that the provider-neutral request itself is bad.
+                if _provider_capacity_error(response.status, detail):
+                    raise ModelInferenceError(
+                        f"{self.provider} capacity limit ({response.status}): {detail}",
+                        classification="rate_limited",
+                        # ModelPool owns cross-provider failover. Avoid immediately
+                        # retrying the same provider route and consuming more quota.
+                        retryable=False,
+                        provider=self.provider,
+                        model_id=model,
+                    )
                 if response.status == 413:
                     raise ModelInferenceError(
                         f"{self.provider} request failed (413): {detail}",
