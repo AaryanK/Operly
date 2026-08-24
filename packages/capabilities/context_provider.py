@@ -29,7 +29,7 @@ class ContextProvider(BaseProvider):
     capabilities = (
         CapabilityDefinition(
             "context.search", "context_search",
-            "Search context available to this authenticated surface and return compact references. Use context.get only for references whose contents you need in this model.",
+            "Semantically search context available to this authenticated surface and return compact references. Use context.get only for references whose contents you need in this model.",
             {"type": "object", "properties": {"query": {"type": "string", "maxLength": 1000}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"], "additionalProperties": False},
             {"type": "object"}, risk_level="read_only", approval_policy=ApprovalPolicy.AUTO,
             category="context", tags=frozenset({"kernel", "context", "retrieval"}),
@@ -63,7 +63,9 @@ class ContextProvider(BaseProvider):
     async def execute(self, context, capability_name, arguments):
         invocation, metadata = self._runtime(context)
         authority = set(invocation.get("authority") or [])
-        surface = SurfaceKind.coerce(metadata.get("_surface_kind"))
+        surface = SurfaceKind.coerce(
+            metadata.get("_surface_kind") or invocation.get("surface")
+        )
         query = str(arguments.get("query") or "")
         content = str(arguments.get("content") or "")
         kind = str(arguments.get("kind") or "fact")[:50]
@@ -83,15 +85,41 @@ class ContextProvider(BaseProvider):
                     conversation_id=conversation_id or None, authority=authority,
                     surface=surface, query=query, limit=int(arguments.get("limit") or 8),
                 )
-                return CapabilityResult(True, False, {"refs": [item.as_dict() for item in refs], "count": len(refs), "surface": surface.value, "contents_materialized": False})
+                return CapabilityResult(
+                    True,
+                    False,
+                    {
+                        "refs": [item.as_dict() for item in refs],
+                        "count": len(refs),
+                        "surface": surface.value,
+                        "contents_materialized": False,
+                        "semantic_backend": ContextBroker.semantic_backend_name(),
+                        "semantic_degraded_reason": ContextBroker.semantic_degraded_reason(),
+                        "ranked_refs": [item.id for item in refs],
+                        "estimated_tokens_if_all_materialized": sum(item.estimated_tokens for item in refs),
+                    },
+                )
 
             if capability_name == "context.get":
+                requested_refs = [str(item) for item in arguments.get("refs") or ()]
                 rows = await ContextBroker.materialize(
-                    context.db, refs=arguments.get("refs") or (), tenant_id=context.tenant_id,
+                    context.db, refs=requested_refs, tenant_id=context.tenant_id,
                     user_id=user_id, conversation_id=conversation_id or None,
                     authority=authority, surface=surface,
                 )
-                return CapabilityResult(True, False, {"contexts": rows, "count": len(rows), "surface": surface.value, "references_reauthorized": True})
+                return CapabilityResult(
+                    True,
+                    False,
+                    {
+                        "contexts": rows,
+                        "count": len(rows),
+                        "requested_count": len(requested_refs),
+                        "surface": surface.value,
+                        "references_reauthorized": True,
+                        "materialized_refs": [str(row.get("ref") or "") for row in rows],
+                        "materialized_estimated_tokens": sum(int(row.get("estimated_tokens") or 0) for row in rows),
+                    },
+                )
 
             if capability_name == "context.human.search":
                 rows = await ContextService.search_human(context.db, user_id=user_id or "", tenant_id=None, query=query)
