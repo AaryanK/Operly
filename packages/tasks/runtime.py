@@ -21,11 +21,7 @@ from packages.capabilities.task_provider import (
 from packages.database.db import session_scope
 from packages.database.models import ScheduledJob, Task
 from packages.plugins.runtime import PluginHealthResult
-from packages.tasks.delivery import (
-    TaskDeliveryError,
-    deliver_task_output,
-    delivery_target_from_origin,
-)
+from packages.tasks.delivery import deliver_task_output, delivery_target_from_origin
 from packages.tasks.personal_workflow import PersonalWorkflowExecutor
 from packages.tasks.safe_workflow import ApprovalAwareWorkflowExecutor
 from packages.tasks.workflow import WorkflowExecutionError
@@ -38,6 +34,16 @@ _MAX_BATCH = 20
 
 def _task_obj(row: dict):
     return SimpleNamespace(id=row["task_id"], title=row["title"])
+
+
+def _scheduled_for(payload: dict, fallback: datetime) -> datetime:
+    raw = str(payload.get("active_scheduled_for") or "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+    return fallback
 
 
 def _execution_prompt(row: dict, payload: dict) -> str:
@@ -107,6 +113,8 @@ async def _claim(job_id: str) -> tuple[dict, dict, str] | None:
             job.status = "cancelled"
             return None
         payload = load_task_payload(job.content)
+        if source_status == "pending" and not payload.get("active_scheduled_for"):
+            payload["active_scheduled_for"] = job.run_at.isoformat()
         payload.setdefault("active_run_key", uuid4().hex)
         payload["run_started_at"] = datetime.utcnow().isoformat() + "Z"
         job.content = dump_task_payload(payload)
@@ -116,7 +124,7 @@ async def _claim(job_id: str) -> tuple[dict, dict, str] | None:
             "tenant_id": task.tenant_id,
             "owner_user_id": task.owner_user_id,
             "title": task.title,
-            "current_run": job.run_at,
+            "current_run": _scheduled_for(payload, job.run_at),
         }
         return row, payload, source_status
 
@@ -224,6 +232,7 @@ async def _finish_run(row: dict, payload: dict) -> None:
         payload.pop("waiting_approval", None)
         payload.pop("run_started_at", None)
         payload.pop("active_run_key", None)
+        payload.pop("active_scheduled_for", None)
         trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
         trigger_kind = str(trigger.get("kind") or "once")
 
@@ -318,27 +327,75 @@ async def run_task_job(job_id: str) -> bool:
         return True
 
 
-async def resume_task_after_approval(db, approval_id: str, *, approved: bool) -> int:
-    rows = (
-        await db.scalars(
-            select(ScheduledJob).where(
-                ScheduledJob.job_type == "task",
-                ScheduledJob.status == "waiting_approval",
-            )
-        )
-    ).all()
+async def resume_task_after_approval(
+    db,
+    approval_id: str,
+    *,
+    approved: bool,
+    tenant_id: str | None = None,
+) -> int:
+    query = select(ScheduledJob).where(
+        ScheduledJob.job_type == "task",
+        ScheduledJob.status == "waiting_approval",
+    )
+    if tenant_id:
+        query = query.where(ScheduledJob.tenant_id == tenant_id)
+    rows = (await db.scalars(query)).all()
     changed = 0
     for job in rows:
         payload = load_task_payload(job.content)
         if str(payload.get("waiting_approval") or "") != str(approval_id):
             continue
+        task = await db.get(Task, job.task_id) if job.task_id else None
+        if task is None:
+            job.status = "cancelled"
+            continue
         payload.pop("waiting_approval", None)
+        payload["last_approval_result"] = {
+            "approval_id": str(approval_id),
+            "approved": bool(approved),
+            "resolved_at": datetime.utcnow().isoformat() + "Z",
+        }
         if approved:
+            # Preserve active_run_key + active_scheduled_for. Deterministic node ids
+            # resolve earlier/approved Actions instead of repeating side effects.
             job.status = "pending"
             job.run_at = datetime.utcnow()
+            job.content = dump_task_payload(payload)
+            changed += 1
+            continue
+
+        scheduled_for = _scheduled_for(payload, job.run_at)
+        payload.pop("active_run_key", None)
+        payload.pop("active_scheduled_for", None)
+        payload.pop("run_started_at", None)
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        kind = str(trigger.get("kind") or "once")
+        if kind == "event":
+            queue = payload.get("event_queue") if isinstance(payload.get("event_queue"), list) else []
+            if queue:
+                payload["event_context"] = queue.pop(0)
+                payload["event_queue"] = queue
+                job.status = "pending"
+                job.run_at = datetime.utcnow()
+            else:
+                payload.pop("event_context", None)
+                job.status = "waiting_event"
+            task.due_at = None
+        elif kind in {"daily", "interval", "monitor"}:
+            next_run = next_task_run(payload, scheduled_for)
+            if next_run is None:
+                job.status = "paused"
+                task.status = "paused"
+                task.due_at = None
+            else:
+                job.status = "pending"
+                job.run_at = next_run
+                task.due_at = next_run
         else:
-            payload["last_error"] = "approval_rejected"
-            job.status = "failed"
+            job.status = "paused"
+            task.status = "paused"
+            task.due_at = None
         job.content = dump_task_payload(payload)
         changed += 1
     return changed
