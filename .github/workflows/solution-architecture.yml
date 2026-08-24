@@ -17,6 +17,7 @@ on:
       - "tests/test_generated_solution_lifecycle_truth.py"
       - "tests/test_generated_preview_permissions.py"
       - "tests/test_generated_solution_worker.py"
+      - "tests/test_solution_generation_migration.py"
       - "tests/test_runner_async_polling.py"
       - "tests/test_solutions.py"
       - ".github/workflows/solution-architecture.yml"
@@ -61,5 +62,6 @@ jobs:
           tests/test_generated_solution_lifecycle_truth.py
           tests/test_generated_preview_permissions.py
           tests/test_generated_solution_worker.py
+          tests/test_solution_generation_migration.py
           tests/test_runner_async_polling.py
           tests/test_solutions.py
