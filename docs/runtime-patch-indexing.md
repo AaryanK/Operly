@@ -1,0 +1,1 @@
+Semantic capability indexing stores only discovery metadata and embeddings keyed by capability/version/document hash; exact JSON schemas remain out of the index and are exposed progressively through describe.
