@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.custom_software.compiler_planning import PLANNING_ENGINE
+from packages.custom_software.compiler_planning import PLANNING_ENGINE_VERSION as PLANNING_ENGINE
 from packages.database.custom_software_models import GeneratedProject, SoftwarePlanRecord
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant
