@@ -22,7 +22,7 @@ from packages.capabilities.reminder_provider import ReminderProvider
 from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
-from packages.capabilities.task_provider import TaskProvider
+from packages.capabilities.workflow_task_provider import WorkflowTaskProvider
 from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
@@ -56,7 +56,7 @@ def _builtin_providers():
         StudioProvider(),
         SoftwareProjectProvider(),
         ReminderProvider(),
-        TaskProvider(),
+        WorkflowTaskProvider(),
         PublicWebReadProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
