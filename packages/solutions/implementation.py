@@ -39,16 +39,16 @@ _BROWSER_CAPABILITY_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...
     (
         "device.camera",
         (
-            re.compile(r"\bcamera\b", re.I),
-            re.compile(r"\bwebcam\b", re.I),
-            re.compile(r"\btake (?:a )?(?:photo|picture)\b", re.I),
-            re.compile(r"\bcapture (?:a )?(?:photo|image|video)\b", re.I),
+            re.compile(r"\bcameras?\b", re.I),
+            re.compile(r"\bwebcams?\b", re.I),
+            re.compile(r"\btake (?:a )?(?:photo|picture)s?\b", re.I),
+            re.compile(r"\bcapture (?:a )?(?:photo|image|video)s?\b", re.I),
         ),
     ),
     (
         "device.microphone",
         (
-            re.compile(r"\bmicrophone\b", re.I),
+            re.compile(r"\bmicrophones?\b", re.I),
             re.compile(r"\brecord (?:audio|voice)\b", re.I),
             re.compile(r"\bvoice input\b", re.I),
         ),
@@ -74,8 +74,8 @@ _BROWSER_CAPABILITY_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...
         "browser.webrtc",
         (
             re.compile(r"\bwebrtc\b", re.I),
-            re.compile(r"\bvideo call\b", re.I),
-            re.compile(r"\bvideo chat\b", re.I),
+            re.compile(r"\bvideo calls?\b", re.I),
+            re.compile(r"\bvideo chats?\b", re.I),
             re.compile(r"\bpeer[- ]to[- ]peer\b", re.I),
         ),
     ),
@@ -85,7 +85,7 @@ _BROWSER_CAPABILITY_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...
     ),
     (
         "device.usb",
-        (re.compile(r"\bwebusb\b", re.I), re.compile(r"\busb device\b", re.I)),
+        (re.compile(r"\bwebusb\b", re.I), re.compile(r"\busb devices?\b", re.I)),
     ),
 )
 
