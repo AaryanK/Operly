@@ -1,0 +1,1 @@
+Session capability/context views must include trusted surface in cache identity so a personal/private view cannot be reused for a shared workspace invocation with the same principal/conversation identifiers.
