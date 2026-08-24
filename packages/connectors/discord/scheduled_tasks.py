@@ -79,6 +79,12 @@ async def run_harness_task_job(
             return
         job.status = "running"
         current_run = job.run_at
+        execution_prompt = (
+            scheduled_task_prompt(task, payload)
+            + "\n\nDELIVERY CONTRACT:\n"
+            + "Return the task's final user-facing result as your assistant response. The Task delivery layer will send that response to the configured Discord destination exactly once. "
+            + "Do not call Discord send-message/send-DM capabilities merely to deliver this final result. Only use a messaging capability if the task objective explicitly requires an additional side effect distinct from its configured delivery."
+        )
         envelope = ChannelEnvelope(
             provider="discord",
             external_user_id=str(origin.get("external_user_id") or job.user_id),
@@ -89,7 +95,7 @@ async def run_harness_task_job(
             ),
             external_conversation_id=str(origin.get("external_conversation_id") or job.channel_id),
             actor_name=str(origin.get("actor_name") or "Operly user")[:200],
-            text=scheduled_task_prompt(task, payload),
+            text=execution_prompt,
             space_name=None,
             is_direct=bool(origin.get("is_direct")),
             metadata={
