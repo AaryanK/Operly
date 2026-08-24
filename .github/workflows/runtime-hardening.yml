@@ -50,6 +50,8 @@ on:
       - "tests/test_model_requirements.py"
       - "tests/test_model_request_failover.py"
       - "tests/test_model_tool_continuation_adapters.py"
+      - "tests/test_multi_provider_model_portfolio.py"
+      - "tests/test_qualification_aware_routing.py"
       - "tests/test_runtime_contract_hardening.py"
       - "tests/test_runtime_retrieval_security.py"
       - "tests/test_runtime_trace_contract.py"
@@ -110,6 +112,7 @@ jobs:
           packages/database/runtime_trace_events.py
           packages/database/schema.py
           packages/model_runtime/conversation_policy.py
+          packages/model_runtime/qualification.py
           packages/model_runtime/requirements.py
           packages/model_runtime/registry.py
           packages/model_runtime/routing_policy.py
@@ -146,6 +149,8 @@ jobs:
           tests/test_model_requirements.py
           tests/test_model_request_failover.py
           tests/test_model_tool_continuation_adapters.py
+          tests/test_multi_provider_model_portfolio.py
+          tests/test_qualification_aware_routing.py
           tests/test_runtime_contract_hardening.py
           tests/test_runtime_retrieval_security.py
           tests/test_runtime_trace_contract.py
