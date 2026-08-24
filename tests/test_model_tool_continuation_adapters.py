@@ -105,6 +105,44 @@ def test_non_gemini_openai_compatible_history_does_not_gain_google_metadata():
     assert "extra_content" not in encoded[1]["tool_calls"][0]
 
 
+def test_groq_replay_supplies_function_type_for_foreign_tool_history():
+    # Reproduces the production ANHITRA failure shape: a prior provider emitted a
+    # valid function payload but omitted the OpenAI tool-call discriminator. Groq
+    # rejects replay unless every assistant tool call carries type="function".
+    messages = [
+        {"role": "user", "content": "Read the latest email and schedule a Discord DM."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "operly-call-foreign-1",
+                    "function": {
+                        "name": "gmail.search",
+                        "arguments": {"query": "NIMB"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "operly-call-foreign-1",
+            "tool_name": "gmail.search",
+            "content": '{"ok":true}',
+        },
+    ]
+    original = copy.deepcopy(messages)
+
+    encoded = _compatible_messages(messages, provider="groq")
+    call = encoded[1]["tool_calls"][0]
+
+    assert call["type"] == "function"
+    assert call["id"] == "operly-call-foreign-1"
+    assert call["function"]["arguments"] == '{"query":"NIMB"}'
+    assert "extra_content" not in call
+    assert messages == original
+
+
 def test_ollama_encodes_foreign_tool_history_into_native_shape():
     messages = [
         {"role": "user", "content": "Read it."},
