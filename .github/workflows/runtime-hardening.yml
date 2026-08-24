@@ -59,6 +59,7 @@ on:
       - "tests/test_personal_execution_scope.py"
       - "tests/test_account_scope_resolver.py"
       - "tests/test_scope_aware_actions.py"
+      - "tests/test_scope_aware_action_migration.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -154,6 +155,7 @@ jobs:
           tests/test_personal_execution_scope.py
           tests/test_account_scope_resolver.py
           tests/test_scope_aware_actions.py
+          tests/test_scope_aware_action_migration.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db
