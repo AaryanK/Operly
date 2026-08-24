@@ -11,6 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.personal_connectors_router import (
+    serializer as personal_serializer,
+    upsert_google_connector as upsert_personal_google_connector,
+)
 from packages.company.events import append_event
 from packages.connectors.google_provider import (
     CALENDAR,
@@ -56,6 +60,28 @@ def redirect_uri():
         os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
         + "/api/connectors/google/callback",
     )
+
+
+def load_google_oauth_state(state: str, *, max_age: int = 600) -> tuple[str, dict]:
+    """Validate Google OAuth state and identify its credential owner.
+
+    Workspace and personal flows intentionally use different signing salts, but
+    both return through the one redirect URI registered with Google.
+    """
+    try:
+        data = serializer().loads(state, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        try:
+            data = personal_serializer().loads(state, max_age=max_age)
+        except (BadSignature, SignatureExpired) as error:
+            raise HTTPException(400, "OAuth state is invalid or expired") from error
+        if data.get("ownership") != "personal" or not data.get("user_id"):
+            raise HTTPException(400, "OAuth state is invalid or expired")
+        return "personal", data
+
+    if not data.get("tenant_id") or not data.get("user_id"):
+        raise HTTPException(400, "OAuth state is invalid or expired")
+    return "workspace", data
 
 
 def owner(auth):
@@ -262,10 +288,7 @@ async def google_connect(
 
 @router.get("/google/callback")
 async def google_callback(code: str = Query(...), state: str = Query(...)):
-    try:
-        data = serializer().loads(state, max_age=600)
-    except (BadSignature, SignatureExpired) as error:
-        raise HTTPException(400, "OAuth state is invalid or expired") from error
+    ownership, data = load_google_oauth_state(state)
 
     form = {
         "code": code,
@@ -292,6 +315,18 @@ async def google_callback(code: str = Query(...), state: str = Query(...)):
         + int(tokens.get("expires_in", 3600))
     )
     scopes = str(tokens.get("scope", "")).split()
+
+    if ownership == "personal":
+        async with session_scope() as db:
+            await upsert_personal_google_connector(
+                db,
+                data["user_id"],
+                profile,
+                tokens,
+                scopes,
+            )
+        return RedirectResponse("/personal?connector=connected", 303)
+
     async with session_scope() as db:
         row = await upsert_google_connector(
             db,
@@ -337,7 +372,6 @@ async def disable(
     if not row:
         raise HTTPException(404, "Connector not found")
     row.enabled = False
-    row.status = "disabled"
     await append_event(
         db,
         tenant_id=auth.tenant.id,
