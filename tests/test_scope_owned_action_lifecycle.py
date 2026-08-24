@@ -8,7 +8,7 @@ from packages.actions.service import ActionService, ActionStatus
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
 from packages.capabilities.registry import CapabilityRegistry
-from packages.database.company_models import BusinessActionRecord, BusinessEventRecord
+from packages.database.company_models import BusinessEventRecord
 from packages.database.db import Base
 from packages.database.models import AppUser, Approval, Tenant
 from packages.database.schema import import_all_models
@@ -32,8 +32,8 @@ class _ScopeWriteProvider(BaseProvider):
                 "properties": {
                     "ok": {"type": "boolean"},
                     "scope_kind": {"type": "string"},
-                    "owner_user_id": {"type": ["string", "null"]},
-                    "tenant_id": {"type": ["string", "null"]},
+                    "owner_user_id": {},
+                    "tenant_id": {},
                 },
                 "required": ["ok", "scope_kind", "owner_user_id", "tenant_id"],
                 "additionalProperties": False,
@@ -151,7 +151,7 @@ class ScopeOwnedActionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
             await db.flush()
 
-            with self.assertRaisesRegex(LookupError, "Action not found"):
+            with self.assertRaisesRegex(PermissionError, "authenticated actor"):
                 await service.approve_personal(self.other_user_id, action.id)
 
             approved = await service.approve_personal(self.user_id, action.id)
@@ -162,6 +162,26 @@ class ScopeOwnedActionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"tenant_id": null', approved.result_json)
             approval = await db.get(Approval, approved.approval_id)
             self.assertEqual(approval.status, "approved")
+
+    async def test_personal_service_cannot_impersonate_another_owner(self):
+        async with self.sessions() as db:
+            other_service = ActionService(
+                db,
+                self.registry,
+                authority={"tasks:write"},
+                actor_id=self.other_user_id,
+            )
+            with self.assertRaisesRegex(PermissionError, "authenticated actor"):
+                await other_service.propose(
+                    tenant_id=None,
+                    owner_user_id=self.user_id,
+                    objective="forged personal write",
+                    capability="test.scope_write",
+                    arguments={"value": "x"},
+                    rationale="test",
+                    expected_outcome="test",
+                    risk_level="medium",
+                )
 
     async def test_workspace_action_preserves_existing_tenant_contract(self):
         async with self.sessions() as db:
