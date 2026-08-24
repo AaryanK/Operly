@@ -8,9 +8,11 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from packages.database.model_trace import ensure_model_trace_sink
+from packages.database.runtime_trace_events import emit_runtime_trace_event
 from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.conversation_policy import is_trivial_conversation
 from packages.model_runtime.trace_context import runtime_trace_scope
+from packages.model_runtime.trace_events import RuntimeTraceEvent
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -52,15 +54,50 @@ class AgentExecutionBudget:
         )
 
 
+class _DuplicateProperty(ValueError):
+    def __init__(self, key: str):
+        super().__init__(key)
+        self.key = key
+
+
 async def _resolve(value):
     return await value if inspect.isawaitable(value) else value
+
+
+def _strict_json_object(raw: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Parse model-authored JSON without silently accepting duplicate keys."""
+
+    def pairs_hook(pairs):
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise _DuplicateProperty(str(key))
+            value[str(key)] = item
+        return value
+
+    try:
+        parsed = json.loads(raw, object_pairs_hook=pairs_hook)
+    except _DuplicateProperty as error:
+        return {}, [{"path": error.key, "reason": "duplicate property"}]
+    except json.JSONDecodeError as error:
+        return {}, [{"path": "$", "reason": f"invalid JSON: {error.msg}"}]
+    if not isinstance(parsed, dict):
+        return {}, [{"path": "$", "reason": "arguments must be a JSON object"}]
+    return parsed, []
 
 
 def _made_progress(observation: dict[str, Any]) -> bool:
     if observation.get("ok") is True or observation.get("success") is True:
         return True
     status = str(observation.get("status") or "").lower()
-    return status in {"completed", "success", "verified", "waiting_approval", "awaiting_approval"}
+    return status in {
+        "completed",
+        "success",
+        "verified",
+        "waiting_approval",
+        "awaiting_approval",
+        "running",
+    }
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -87,6 +124,102 @@ def _ensure_tool_call_ids(message: dict[str, Any]) -> None:
             continue
         if not str(call.get("id") or "").strip():
             call["id"] = f"operly-call-{uuid4()}"
+
+
+def _tool_ids(tools: list[dict[str, Any]]) -> list[str]:
+    output: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        name = str(function.get("name") or "").strip()
+        if name:
+            output.append(name)
+    return output
+
+
+def _execution_truth(trace: list[AgentTraceEntry]) -> dict[str, Any] | None:
+    """Derive final user-facing execution truth from actual capability results.
+
+    Pending approvals remain unresolved even if the model performs additional read
+    operations afterwards. Other failure/running states guard the final response
+    only when they are the latest action-lifecycle result, allowing a later verified
+    retry to truthfully supersede an earlier failed attempt.
+    """
+    lifecycle_states = {
+        "WAITING_APPROVAL",
+        "RUNNING",
+        "VERIFIED",
+        "FAILED",
+        "UNVERIFIED",
+        "CANCELLED",
+        "EXPIRED",
+    }
+    pending = [
+        entry
+        for entry in trace
+        if str(entry.observation.get("status") or "").upper() == "WAITING_APPROVAL"
+    ]
+    if pending:
+        entry = pending[-1]
+        return {
+            "status": "WAITING_APPROVAL",
+            "completed": False,
+            "verified": False,
+            "capability_id": entry.capability_id,
+            "action_id": entry.observation.get("action_id"),
+            "approval_id": entry.observation.get("approval_id"),
+        }
+
+    for entry in reversed(trace):
+        status = str(entry.observation.get("status") or "").upper()
+        if status not in lifecycle_states:
+            continue
+        lifecycle = entry.observation.get("lifecycle")
+        completed = (
+            bool(lifecycle.get("completed"))
+            if isinstance(lifecycle, dict)
+            else status == "VERIFIED"
+        )
+        verified = (
+            bool(lifecycle.get("verified"))
+            if isinstance(lifecycle, dict)
+            else status == "VERIFIED"
+        )
+        return {
+            "status": status,
+            "completed": completed,
+            "verified": verified,
+            "capability_id": entry.capability_id,
+            "action_id": entry.observation.get("action_id"),
+            "approval_id": entry.observation.get("approval_id"),
+        }
+    return None
+
+
+def _truthful_final_message(model_message: str, truth: dict[str, Any] | None) -> str:
+    """Prevent model prose from claiming a lifecycle transition that did not occur."""
+    if not truth or truth.get("verified") is True:
+        return model_message or "Done."
+
+    status = str(truth.get("status") or "").upper()
+    capability = str(truth.get("capability_id") or "the operation")
+    if status == "WAITING_APPROVAL":
+        return (
+            f"Approval is required before {capability} can run. "
+            "The approval-gated operation has not been completed yet."
+        )
+    if status == "RUNNING":
+        return f"{capability} is still running and has not been verified complete."
+    if status == "FAILED":
+        return f"{capability} failed and was not completed."
+    if status == "UNVERIFIED":
+        return f"{capability} ran, but Operly could not verify that it completed successfully."
+    if status == "CANCELLED":
+        return f"{capability} was cancelled and was not completed."
+    if status == "EXPIRED":
+        return f"{capability} expired and was not completed."
+    return model_message or "Done."
 
 
 class AgentRuntime:
@@ -142,17 +275,29 @@ class AgentRuntime:
         raise TypeError("AgentRuntime requires a Model.infer-compatible object")
 
     @staticmethod
-    def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+    def _arguments_checked(
+        call: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], str | None, list[dict[str, str]]]:
         function = call.get("function") or {}
         name = str(function.get("name") or "").strip()
-        raw = function.get("arguments") or {}
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except json.JSONDecodeError:
-                raw = {}
-        arguments = raw if isinstance(raw, dict) else {}
+        raw = function.get("arguments")
+        errors: list[dict[str, str]] = []
+        if raw is None:
+            arguments: dict[str, Any] = {}
+        elif isinstance(raw, str):
+            arguments, errors = _strict_json_object(raw)
+        elif isinstance(raw, dict):
+            arguments = dict(raw)
+        else:
+            arguments = {}
+            errors = [{"path": "$", "reason": "arguments must be a JSON object"}]
         call_id = str(call.get("id") or "").strip() or None
+        return name, arguments, call_id, errors
+
+    @staticmethod
+    def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+        """Compatibility accessor retained for callers/tests outside the loop."""
+        name, arguments, call_id, _ = AgentRuntime._arguments_checked(call)
         return name, arguments, call_id
 
     async def run(
@@ -187,15 +332,43 @@ class AgentRuntime:
                     "runtime_component": "agent",
                     "runtime_step": model_call_index,
                 }
+                suppressed = is_trivial_conversation(_last_user_text(messages))
                 with runtime_trace_scope(model_metadata):
+                    await emit_runtime_trace_event(
+                        RuntimeTraceEvent.MODEL_REQUEST,
+                        {
+                            "message_count": len(messages),
+                            "candidate_tool_count": len(tools),
+                            "candidate_tool_ids": _tool_ids(tools),
+                            "tool_surface_suppressed": suppressed,
+                        },
+                        metadata=model_metadata,
+                        component="agent",
+                        step=model_call_index,
+                    )
                     message = await self._infer(model, messages, tools, metadata=model_metadata)
+                    await emit_runtime_trace_event(
+                        RuntimeTraceEvent.MODEL_RESPONSE,
+                        {
+                            "has_content": bool(str(message.get("content") or "").strip()),
+                            "tool_call_count": len(message.get("tool_calls") or []),
+                        },
+                        metadata=model_metadata,
+                        component="agent",
+                        step=model_call_index,
+                    )
                 _ensure_tool_call_ids(message)
                 messages.append(message)
                 steps_used += 1
                 calls = message.get("tool_calls") or []
                 if not calls:
+                    truth = _execution_truth(trace)
                     return {
-                        "message": message.get("content") or "Done.",
+                        "message": _truthful_final_message(
+                            str(message.get("content") or ""),
+                            truth,
+                        ),
+                        "execution_truth": truth,
                         "trace": trace,
                         "messages": messages,
                         "stopped": False,
@@ -217,7 +390,7 @@ class AgentRuntime:
                         break
                     if not isinstance(call, dict):
                         continue
-                    name, arguments, call_id = self._arguments(call)
+                    name, arguments, call_id, argument_errors = self._arguments_checked(call)
                     capability_metadata = {
                         **run_metadata,
                         "runtime_component": f"capability:{name or 'unknown'}",
@@ -226,10 +399,57 @@ class AgentRuntime:
                         "tool_call_id": call_id,
                     }
                     with runtime_trace_scope(capability_metadata):
+                        await emit_runtime_trace_event(
+                            RuntimeTraceEvent.CAPABILITY_REQUESTED,
+                            {
+                                "capability_id": name or None,
+                                "call_id": call_id,
+                                "argument_keys": sorted(arguments),
+                                "argument_parse_errors": list(argument_errors),
+                            },
+                            metadata=capability_metadata,
+                            component=f"capability:{name or 'unknown'}",
+                            step=model_call_index,
+                            resource_id=name or "unnamed-capability",
+                        )
                         if not name:
-                            observation = {"ok": False, "error": "Model requested an unnamed capability"}
+                            observation = {
+                                "ok": False,
+                                "status": "INVALID_ARGUMENTS",
+                                "error": "Model requested an unnamed capability",
+                                "errors": [{"path": "function.name", "reason": "required"}],
+                                "retryable": True,
+                            }
+                        elif argument_errors:
+                            observation = {
+                                "ok": False,
+                                "status": "INVALID_ARGUMENTS",
+                                "error": "Capability arguments are not valid JSON",
+                                "errors": argument_errors,
+                                "retryable": True,
+                            }
                         else:
                             observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
+                        if str(observation.get("status") or "").upper() in {
+                            "INVALID_ARGUMENTS",
+                            "DENIED",
+                        }:
+                            await emit_runtime_trace_event(
+                                RuntimeTraceEvent.CAPABILITY_REJECTED,
+                                {
+                                    "capability_id": name or None,
+                                    "call_id": call_id,
+                                    "status": observation.get("status"),
+                                    "error": observation.get("error"),
+                                    "errors": observation.get("errors") or [],
+                                },
+                                metadata=capability_metadata,
+                                component=f"capability:{name or 'unknown'}",
+                                step=model_call_index,
+                                resource_id=name or "unnamed-capability",
+                                classification=str(observation.get("status") or "").lower() or None,
+                                retryable=bool(observation.get("retryable")),
+                            )
                     tool_calls += 1
                     last_step_progress = last_step_progress or _made_progress(observation)
                     entry = AgentTraceEntry(
@@ -265,6 +485,7 @@ class AgentRuntime:
                 "Stopped after exhausting the bounded execution budget. "
                 "The run trace includes the exact stop reason and can be resumed safely."
             ),
+            "execution_truth": _execution_truth(trace),
             "trace": trace,
             "messages": messages,
             "stopped": True,

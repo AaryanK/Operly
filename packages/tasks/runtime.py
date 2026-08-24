@@ -20,6 +20,8 @@ from packages.capabilities.task_provider import (
 )
 from packages.database.db import session_scope
 from packages.database.models import ScheduledJob, Task
+from packages.database.runtime_trace_events import emit_runtime_trace_event
+from packages.model_runtime.trace_events import RuntimeTraceEvent
 from packages.plugins.runtime import PluginHealthResult
 from packages.tasks.delivery import deliver_task_output, delivery_target_from_origin
 from packages.tasks.personal_workflow import PersonalWorkflowExecutor
@@ -53,6 +55,22 @@ def _preserve_live_event_queue(job: ScheduledJob, payload: dict) -> None:
     queue = live.get("event_queue") if isinstance(live.get("event_queue"), list) else None
     if queue is not None:
         payload["event_queue"] = list(queue)
+
+
+def _task_trace_metadata(row: dict, payload: dict) -> dict:
+    origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+    return {
+        "conversation_id": f"task:{row['task_id']}",
+        "runtime_run_id": str(payload.get("active_run_key") or row["job_id"]),
+        "tenant_id": row.get("tenant_id"),
+        "user_id": row.get("owner_user_id"),
+        "principal_id": (
+            f"user:{row.get('owner_user_id')}" if row.get("owner_user_id") else None
+        ),
+        "channel": str(origin.get("provider") or "task"),
+        "surface": "scheduled_task",
+        "runtime_component": "task_runtime",
+    }
 
 
 def _execution_prompt(row: dict, payload: dict) -> str:
@@ -204,6 +222,8 @@ async def _persist_pending_output(job_id: str, payload: dict, output: str) -> No
         _preserve_live_event_queue(job, payload)
         payload["pending_output"] = output
         payload.pop("last_delivery_error", None)
+        payload.pop("last_delivery_receipt", None)
+        payload["delivery_status"] = "PENDING"
         job.content = dump_task_payload(payload)
         job.status = "pending_delivery"
         job.run_at = datetime.utcnow() + timedelta(seconds=DELIVERY_RETRY_SECONDS)
@@ -217,13 +237,26 @@ async def _delivery_target(payload: dict) -> dict:
     return delivery_target_from_origin(origin, str(payload.get("delivery") or "origin"))
 
 
+async def _record_delivery_receipt(job_id: str, payload: dict, receipt: dict) -> None:
+    async with session_scope() as db:
+        job = await db.get(ScheduledJob, job_id)
+        if job is None:
+            return
+        _preserve_live_event_queue(job, payload)
+        payload["delivery_status"] = "VERIFIED"
+        payload["last_delivery_receipt"] = dict(receipt)
+        payload.pop("last_delivery_error", None)
+        job.content = dump_task_payload(payload)
+
+
 async def _delivery_failed(job_id: str, payload: dict, error: Exception) -> None:
     async with session_scope() as db:
         job = await db.get(ScheduledJob, job_id)
         if job is None:
             return
         _preserve_live_event_queue(job, payload)
-        payload["last_delivery_error"] = type(error).__name__
+        payload["delivery_status"] = "FAILED"
+        payload["last_delivery_error"] = f"{type(error).__name__}:{str(error)[:300]}"
         job.content = dump_task_payload(payload)
         job.status = "pending_delivery"
         job.run_at = datetime.utcnow() + timedelta(seconds=DELIVERY_RETRY_SECONDS)
@@ -302,6 +335,7 @@ async def run_task_job(job_id: str) -> bool:
     if claimed is None:
         return False
     row, payload, source_status = claimed
+    trace_metadata = _task_trace_metadata(row, payload)
     try:
         if source_status == "pending_delivery":
             output = str(payload.get("pending_output") or "")
@@ -316,13 +350,55 @@ async def run_task_job(job_id: str) -> bool:
                 await _persist_pending_output(row["job_id"], payload, output)
 
         if output and output != TASK_NO_CHANGE:
+            target = await _delivery_target(payload)
             try:
-                await deliver_task_output(await _delivery_target(payload), output)
+                receipt = await deliver_task_output(target, output)
+                await _record_delivery_receipt(row["job_id"], payload, receipt)
+                await emit_runtime_trace_event(
+                    RuntimeTraceEvent.DELIVERY_VERIFIED,
+                    {
+                        "task_id": row["task_id"],
+                        "job_id": row["job_id"],
+                        "provider": receipt.get("provider"),
+                        "status": receipt.get("status"),
+                        "message_ids": list(receipt.get("message_ids") or []),
+                        "authority": receipt.get("authority"),
+                    },
+                    metadata=trace_metadata,
+                    component="task_delivery",
+                    resource_id=f"task:{row['task_id']}:delivery",
+                )
             except Exception as error:
                 await _delivery_failed(row["job_id"], payload, error)
+                await emit_runtime_trace_event(
+                    RuntimeTraceEvent.DELIVERY_FAILED,
+                    {
+                        "task_id": row["task_id"],
+                        "job_id": row["job_id"],
+                        "provider": target.get("provider"),
+                        "error_type": type(error).__name__,
+                    },
+                    metadata=trace_metadata,
+                    component="task_delivery",
+                    resource_id=f"task:{row['task_id']}:delivery",
+                    classification=type(error).__name__,
+                    retryable=True,
+                )
                 return True
 
         await _finish_run(row, payload)
+        await emit_runtime_trace_event(
+            RuntimeTraceEvent.WORKFLOW_COMPLETED,
+            {
+                "task_id": row["task_id"],
+                "job_id": row["job_id"],
+                "declared_workflow": isinstance(payload.get("workflow"), dict),
+                "delivery_status": payload.get("delivery_status"),
+            },
+            metadata=trace_metadata,
+            component="task_runtime",
+            resource_id=f"task:{row['task_id']}",
+        )
         return True
     except WorkflowExecutionError as error:
         message = str(error)
