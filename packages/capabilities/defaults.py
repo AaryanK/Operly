@@ -23,6 +23,7 @@ from packages.capabilities.software_project_provider import SoftwareProjectProvi
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
+from packages.capabilities.workspace_entity_provider import WorkspaceEntityProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
 from packages.connectors.discord.lifecycle import discord_plugin_lifecycle
 from packages.connectors.discord.provider import DiscordProvider
@@ -53,6 +54,7 @@ def _builtin_providers():
         StudioProvider(),
         SoftwareProjectProvider(),
         RelationalDataProvider(),
+        WorkspaceEntityProvider(),
         ReminderProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
