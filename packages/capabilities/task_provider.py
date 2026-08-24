@@ -14,7 +14,6 @@ from packages.database.models import ScheduledJob, Task
 
 
 TASK_NO_CHANGE = "__OPERLY_TASK_NO_CHANGE__"
-_TASK_STATUSES = {"open", "paused", "completed", "cancelled"}
 _TRIGGER_KINDS = {"once", "daily", "interval", "monitor"}
 _DELIVERY_KINDS = {"origin", "dm", "channel"}
 
@@ -22,7 +21,7 @@ _DELIVERY_KINDS = {"origin", "dm", "channel"}
 def load_task_payload(value: str | None) -> dict:
     try:
         payload = json.loads(str(value or "{}"))
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -166,7 +165,7 @@ class TaskProvider(BaseProvider):
         CapabilityDefinition(
             "task.update",
             "task_update",
-            "Edit an existing durable task. Changing a trigger reuses the same ScheduledJob rather than creating a second scheduler/runtime. Use runtime.context first when supplying a new run_at.",
+            "Edit an existing durable task. Trigger edits and resumes replace only the pending ScheduledJob wake-up so the existing APScheduler entry cannot fire at a stale time; the durable Task and scheduler/runtime stay the same. Use runtime.context first when supplying a new run_at.",
             {
                 "type": "object",
                 "properties": {
@@ -304,6 +303,33 @@ class TaskProvider(BaseProvider):
         return await context.db.scalar(
             select(ScheduledJob).where(ScheduledJob.task_id == str(task_id))
         )
+
+    async def _replace_wakeup(
+        self,
+        context,
+        *,
+        task: Task,
+        job: ScheduledJob,
+        payload: dict,
+        run_at: datetime,
+    ) -> ScheduledJob:
+        replacement = ScheduledJob(
+            tenant_id=job.tenant_id,
+            task_id=task.id,
+            guild_id=job.guild_id,
+            channel_id=job.channel_id,
+            user_id=job.user_id,
+            job_type="task",
+            content=dump_task_payload(payload),
+            delivery=job.delivery,
+            run_at=run_at,
+            status="pending",
+        )
+        await context.db.delete(job)
+        await context.db.flush()
+        context.db.add(replacement)
+        await context.db.flush()
+        return replacement
 
     @staticmethod
     def _task_view(task: Task, job: ScheduledJob | None) -> dict:
@@ -460,7 +486,7 @@ class TaskProvider(BaseProvider):
 
         if capability_name == "task.cancel":
             task.status = "cancelled"
-            if job and job.status in {"pending", "running"}:
+            if job and job.status in {"pending", "running", "paused"}:
                 job.status = "cancelled"
             await context.db.flush()
             return CapabilityResult(True, True, {"task": self._task_view(task, job)}, task.id)
@@ -469,6 +495,7 @@ class TaskProvider(BaseProvider):
             if job is None:
                 return CapabilityResult(False, False, {"reason": "task_job_missing"})
             payload = load_task_payload(job.content)
+            replace_wakeup = False
             if arguments.get("title") is not None:
                 title = " ".join(str(arguments.get("title") or "").split())[:500]
                 if not title:
@@ -501,6 +528,7 @@ class TaskProvider(BaseProvider):
                 task.due_at = run_at
                 job.run_at = run_at
                 job.status = "pending"
+                replace_wakeup = True
             if arguments.get("status") is not None:
                 status = str(arguments.get("status") or "").lower()
                 if status not in {"open", "paused"}:
@@ -508,10 +536,23 @@ class TaskProvider(BaseProvider):
                 task.status = status
                 if status == "paused":
                     job.status = "paused"
-                elif job.status in {"paused", "cancelled", "completed", "failed"}:
+                elif job.status != "pending":
                     job.status = "pending"
+                    if job.run_at < datetime.utcnow():
+                        job.run_at = datetime.utcnow()
+                    task.due_at = job.run_at
+                    replace_wakeup = True
             job.content = dump_task_payload(payload)
-            await context.db.flush()
+            if replace_wakeup and task.status == "open" and job.status == "pending":
+                job = await self._replace_wakeup(
+                    context,
+                    task=task,
+                    job=job,
+                    payload=payload,
+                    run_at=job.run_at,
+                )
+            else:
+                await context.db.flush()
             return CapabilityResult(True, True, {"task": self._task_view(task, job)}, task.id)
 
         if capability_name == "task.check_url_change":
