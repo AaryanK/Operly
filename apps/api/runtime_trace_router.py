@@ -16,9 +16,31 @@ from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.database.models import TenantMember
 from packages.database.principal_models import Principal, PrincipalConversation
 from packages.database.studio_source_models import StudioAgentRun, StudioModelTrace
+from packages.security.surfaces import SurfaceKind
 from packages.studio.model_trace import trace_json as studio_trace_json
 
 router = APIRouter(prefix="/api/runtime-traces", tags=["runtime-traces"])
+
+# AI Debug is an authorization boundary because trace packets can contain complete
+# model-visible context. Private/direct traces remain bound to the authenticated
+# human even when they carry a selected workspace id for delegation. Workspace-wide
+# owner browsing is therefore an explicit allowlist, never "anything not private".
+_PERSONAL_TRACE_SURFACES = frozenset(
+    {
+        "private/direct",  # legacy Personal AI / DM trace value
+        SurfaceKind.PERSONAL_PRIVATE.value,
+        SurfaceKind.DISCORD_DM.value,
+        SurfaceKind.WORKSPACE_PRIVATE.value,
+    }
+)
+_WORKSPACE_TRACE_SURFACES = frozenset(
+    {
+        "shared/workspace",  # legacy workspace trace value
+        SurfaceKind.WORKSPACE_SHARED.value,
+        SurfaceKind.DISCORD_GUILD.value,
+        SurfaceKind.SYSTEM_TASK.value,
+    }
+)
 
 
 def _decoded_payload(payload_json: str | None) -> dict[str, Any]:
@@ -185,16 +207,13 @@ async def _tenant_owner(db: AsyncSession, *, user_id: str, tenant_id: str) -> Te
 
 def _runtime_visibility_filters(*, user_id: str, tenant_id: str | None):
     if tenant_id:
-        # Personal AI may carry a selected workspace id while remaining private to
-        # the human. Never let tenant scoping alone promote private/direct traces
-        # into workspace-visible debug data.
         return [
             ModelRuntimeTrace.tenant_id == tenant_id,
-            ModelRuntimeTrace.surface != "private/direct",
+            ModelRuntimeTrace.surface.in_(_WORKSPACE_TRACE_SURFACES),
         ]
     return [
         ModelRuntimeTrace.user_id == user_id,
-        ModelRuntimeTrace.surface == "private/direct",
+        ModelRuntimeTrace.surface.in_(_PERSONAL_TRACE_SURFACES),
     ]
 
 

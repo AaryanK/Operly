@@ -62,9 +62,28 @@ class DurableRuntimeStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_global_human_memory_follows_person_but_workspace_private_does_not(self):
         user_id, alpha_id, beta_id = await self.seed()
         provider = ContextProvider()
+        personal_invocation = {
+            "channel": "web",
+            "surface": "personal_private",
+            "authority": ["context:human:read", "context:human:write"],
+            "metadata": {"_surface_kind": "personal_private", "is_direct": True},
+        }
         async with self.sessions() as db:
-            alpha = ProviderContext(alpha_id, db, user_id, invocation={"channel": "discord", "metadata": {}})
-            beta = ProviderContext(beta_id, db, user_id, invocation={"channel": "web", "metadata": {}})
+            # This test exercises Personal AI semantics. The surface is explicit so
+            # the regression cannot accidentally depend on the old fail-open rule
+            # where missing surface metadata was treated as private.
+            alpha = ProviderContext(
+                alpha_id,
+                db,
+                user_id,
+                invocation={**personal_invocation, "metadata": dict(personal_invocation["metadata"])},
+            )
+            beta = ProviderContext(
+                beta_id,
+                db,
+                user_id,
+                invocation={**personal_invocation, "metadata": dict(personal_invocation["metadata"])},
+            )
             await provider.execute(alpha, "context.human.remember", {"content": "My codeword is ORBIT-742"})
             await provider.execute(alpha, "context.private_workspace_remember", {"content": "Alpha-only preference Saturn"})
             await db.commit()

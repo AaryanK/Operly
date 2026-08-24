@@ -18,6 +18,7 @@ from packages.database.model_trace import encode_trace_envelope
 from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.database.principal_models import Principal, PrincipalConversation
+from packages.security.surfaces import SurfaceKind
 
 
 class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
@@ -102,7 +103,7 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                         user_id=self.owner.id,
                         principal_id=f"user:{self.owner.id}",
                         channel="web",
-                        surface="shared/workspace",
+                        surface=SurfaceKind.WORKSPACE_SHARED.value,
                         component="agent",
                         step=1,
                         attempt_id="attempt-workspace",
@@ -121,7 +122,7 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                         user_id=self.owner.id,
                         principal_id=f"user:{self.owner.id}",
                         channel="web",
-                        surface="shared/workspace",
+                        surface=SurfaceKind.WORKSPACE_SHARED.value,
                         component="agent",
                         step=1,
                         attempt_id="attempt-workspace",
@@ -145,9 +146,8 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ),
                     ),
-                    # A Personal AI run may carry the currently selected workspace id
-                    # for delegation. The surface remains private/direct and must
-                    # never become visible to that workspace's debug browser.
+                    # Personal AI may carry a selected workspace id for delegation.
+                    # Canonical DM surface must remain visible only to the human.
                     ModelRuntimeTrace(
                         run_id="run-personal",
                         conversation_id="discord:trace-channel",
@@ -155,7 +155,7 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                         user_id=self.owner.id,
                         principal_id=self.principal.id,
                         channel="discord",
-                        surface="private/direct",
+                        surface=SurfaceKind.DISCORD_DM.value,
                         component="agent",
                         step=1,
                         attempt_id="attempt-personal",
@@ -169,6 +169,33 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                             {
                                 "phase": "success",
                                 "output": {"message": {"role": "assistant", "content": "personal"}},
+                            }
+                        ),
+                    ),
+                    # A direct workspace conversation is still private to its human.
+                    # Workspace-wide owner browsing must not expose it merely because
+                    # it is tenant-bound and the current viewer owns the workspace.
+                    ModelRuntimeTrace(
+                        run_id="run-workspace-private",
+                        conversation_id="workspace-private-trace",
+                        tenant_id=self.tenant.id,
+                        user_id=self.owner.id,
+                        principal_id=f"user:{self.owner.id}",
+                        channel="web",
+                        surface=SurfaceKind.WORKSPACE_PRIVATE.value,
+                        component="agent",
+                        step=1,
+                        attempt_id="attempt-workspace-private",
+                        phase="success",
+                        resource_id="test:model",
+                        provider="test-provider",
+                        provider_model_id="test-model",
+                        attempt=1,
+                        latency_ms=2,
+                        payload_json=encode_trace_envelope(
+                            {
+                                "phase": "success",
+                                "output": {"message": {"role": "assistant", "content": "workspace private"}},
                             }
                         ),
                     ),
@@ -255,6 +282,7 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
             run_ids = {item["runId"] for item in listing["runs"]}
             self.assertIn("run-workspace", run_ids)
             self.assertNotIn("run-personal", run_ids)
+            self.assertNotIn("run-workspace-private", run_ids)
 
             runtime = next(item for item in listing["runs"] if item["runId"] == "run-workspace")
             self.assertEqual(runtime["status"], "success")
@@ -279,7 +307,17 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 "customer.lookup",
             )
 
-    async def test_personal_run_browser_keeps_private_run_visible_to_its_human(self):
+            with self.assertRaises(HTTPException) as caught:
+                await get_ai_run(
+                    "run-workspace-private",
+                    tenant_id=self.tenant_id,
+                    kind="runtime",
+                    account=SimpleNamespace(user=owner),
+                    db=db,
+                )
+            self.assertEqual(caught.exception.status_code, 404)
+
+    async def test_personal_run_browser_keeps_canonical_private_runs_visible_to_human(self):
         async with self.sessions() as db:
             owner = await db.get(AppUser, self.owner_id)
             listing = await list_ai_runs(
@@ -288,7 +326,10 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
-            self.assertIn("run-personal", {item["runId"] for item in listing["runs"]})
+            run_ids = {item["runId"] for item in listing["runs"]}
+            self.assertIn("run-personal", run_ids)
+            self.assertIn("run-workspace-private", run_ids)
+            self.assertNotIn("run-workspace", run_ids)
 
             detail = await get_ai_run(
                 "run-personal",
@@ -297,7 +338,16 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
-            self.assertEqual(detail["surface"], "private/direct")
+            self.assertEqual(detail["surface"], SurfaceKind.DISCORD_DM.value)
+
+            private_detail = await get_ai_run(
+                "run-workspace-private",
+                tenant_id=None,
+                kind="runtime",
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            self.assertEqual(private_detail["surface"], SurfaceKind.WORKSPACE_PRIVATE.value)
 
     async def test_non_owner_cannot_browse_workspace_ai_runs(self):
         async with self.sessions() as db:
