@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+from packages.model_runtime.trace_context import current_trace_metadata
+
 
 DEFAULT_KERNEL_IDS = frozenset(
     {
@@ -11,6 +13,19 @@ DEFAULT_KERNEL_IDS = frozenset(
         "capability.describe",
         "model.invoke",
     }
+)
+
+_READ_METHOD_MARKERS = (
+    ".read",
+    ".get",
+    ".list",
+    ".search",
+    ".inspect",
+    ".query",
+    ".context",
+    ".freebusy",
+    ".status",
+    ".describe",
 )
 
 
@@ -58,20 +73,50 @@ class SessionCapabilityView:
             return True
         return False
 
+    @staticmethod
+    def _stage_allows(definition, stage: str) -> bool:
+        """Reduce model-visible authority without ever granting new authority.
+
+        ``adaptive`` preserves current behavior. Durable workflows can set
+        ``capability_stage`` in runtime trace metadata to constrain each model turn.
+        The firewall remains authoritative even if a caller supplies a bad stage.
+        """
+        normalized = str(stage or "adaptive").strip().lower()
+        if normalized in {"", "adaptive", "execution", "execute"}:
+            return True
+        if definition.id in DEFAULT_KERNEL_IDS:
+            return True
+        if normalized in {"research", "calendar", "proposal", "planning"}:
+            return definition.risk_level == "read_only"
+        if normalized in {"verification", "verify"}:
+            if definition.risk_level == "read_only":
+                return True
+            capability_id = str(definition.id or "").lower()
+            return capability_id.startswith(("action.", "task.")) and any(
+                marker in capability_id for marker in _READ_METHOD_MARKERS
+            )
+        # Unknown stages fail closed for mutating capabilities while preserving
+        # observation/discovery so the model can recover rather than execute.
+        return definition.risk_level == "read_only"
+
     def expose_seamless_defaults(self) -> None:
         for definition in self.registry.definitions():
             if self._seamless_default(definition) and self._visible(definition.id):
                 self.exposed_ids.add(definition.id)
 
-    def schemas(self) -> list[dict[str, Any]]:
+    def schemas(self, *, stage: str | None = None) -> list[dict[str, Any]]:
         # Registry/connector availability can change during a conversation. Refresh
         # the seamless set every turn while _visible() removes anything revoked.
         self.expose_seamless_defaults()
+        metadata = current_trace_metadata()
+        effective_stage = str(stage or metadata.get("capability_stage") or "adaptive")
         schemas = []
         for capability_id in sorted(self.exposed_ids):
             if not self._visible(capability_id):
                 continue
             definition = self.registry.definition(capability_id)
+            if not self._stage_allows(definition, effective_stage):
+                continue
             schemas.append(definition.model_tool_schema())
         return schemas
 
