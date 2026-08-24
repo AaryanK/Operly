@@ -225,10 +225,11 @@ def test_identity_source_contract_requires_one_canonical_semantic_name():
 
 
 def test_identity_runtime_routes_are_mounted_under_single_api_prefix():
-    from apps.api.system_router import router
+    from apps.api.main import app
 
-    paths = {getattr(route, "path", "") for route in router.routes}
+    paths = {getattr(route, "path", "") for route in app.routes}
     assert "/api/runtime/app-identity/register" in paths
     assert "/api/runtime/app-identity/login" in paths
     assert "/api/app-identities/{application_id}/invitations" in paths
+    assert "/api/runtime/entities/schema" in paths
     assert "/api/api/runtime/app-identity/register" not in paths
