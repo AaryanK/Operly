@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from unittest.mock import patch
 
 from packages.business_brain.agent import AgentService
 from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.context.broker import ContextBroker
+from packages.model_runtime import ModelPool, model_for_role
 from packages.model_runtime.contracts import ModelSelector
 from packages.model_runtime.registry import ModelRegistry
 from packages.model_runtime.routing_policy import role_routing_profile
@@ -133,6 +136,25 @@ def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model()
     )
     selected = registry.resolve(role_routing_profile("business_agent").selector())
     assert selected.id == small.id
+
+
+def test_real_catalog_business_agent_starts_with_small_tool_model_when_available():
+    provider_env = {
+        "OPEN_ROUTER_API": "test-openrouter",
+        "OLLAMA_API_KEY": "test-ollama",
+        "groq_api_key": "test-groq",
+        "gemini_api_key": "test-gemini",
+        "nvidia_api_key": "test-nvidia",
+        "OPERLY_MODEL_AUTO_PORTFOLIO": "1",
+    }
+    with patch.dict(os.environ, provider_env, clear=False):
+        model = model_for_role("business_agent")
+
+    first = model.models[0] if isinstance(model, ModelPool) else model
+    assert "tools" in first.capabilities
+    assert "small" in first.tags
+    assert "heavy" not in first.tags
+    assert first.provider_model_id != "stealth/ox-alpha"
 
 
 def test_deep_reasoning_selector_prefers_heavy_and_excludes_small():
