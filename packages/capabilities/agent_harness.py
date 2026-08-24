@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.agents import AgentRuntime
+from packages.agents import AgentRunController
 from packages.capabilities.defaults import default_registry
 from packages.capabilities.firewall import (
     ActionBackedCapabilityFirewall,
@@ -543,10 +543,12 @@ class PluginAgentHarness:
                 context.metadata.get("capability_stage") or "adaptive"
             ),
         }
-        return await AgentRuntime(max_steps=max_steps).run(
+        return await AgentRunController(max_replans=1).run(
+            objective=context.objective,
             model=client,
             messages=messages,
             schemas=schemas,
             invoke=invoke,
+            max_steps=max_steps,
             inference_metadata=inference_metadata,
         )
