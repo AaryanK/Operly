@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bindingRuntimePlan,
   hmacHex,
   rebuildBundle,
   safeEqual,
@@ -81,4 +82,51 @@ test("runner HMAC comparison is constant-length safe", () => {
   const signature = hmacHex(token, body);
   assert.equal(safeEqual(signature, hmacHex(token, body)), true);
   assert.equal(safeEqual(signature, "bad"), false);
+});
+
+test("maps approved Operly capability bindings to isolated loopback sidecars", () => {
+  const { submission } = fixture();
+  submission.serviceBindings = [
+    {
+      semanticName: "attendance",
+      capabilityId: "data.relational",
+      required: true,
+      transport: { gatewayUrl: "https://operly.example", runtimeToken: "relational-token" },
+    },
+    {
+      semanticName: "employee",
+      capabilityId: "data.workspace_entities",
+      required: true,
+      transport: { gatewayUrl: "https://operly.example", runtimeToken: "entity-token" },
+    },
+    {
+      semanticName: "identity",
+      capabilityId: "identity.app_users",
+      required: true,
+      transport: { gatewayUrl: "https://operly.example", runtimeToken: "identity-token" },
+    },
+  ];
+
+  const plan = bindingRuntimePlan(submission);
+  assert.deepEqual(plan.rows, [
+    { semanticName: "attendance", capabilityId: "data.relational", required: true, endpoint: "http://127.0.0.1:8083" },
+    { semanticName: "employee", capabilityId: "data.workspace_entities", required: true, endpoint: "http://127.0.0.1:8084" },
+    { semanticName: "identity", capabilityId: "identity.app_users", required: true, endpoint: "http://127.0.0.1:8085" },
+  ]);
+  assert.deepEqual(plan.proxies.map(({ capabilityId, prefix, port }) => ({ capabilityId, prefix, port })), [
+    { capabilityId: "data.relational", prefix: "/api/runtime/relational", port: 8083 },
+    { capabilityId: "data.workspace_entities", prefix: "/api/runtime/entities", port: 8084 },
+    { capabilityId: "identity.app_users", prefix: "/api/runtime/app-identity", port: 8085 },
+  ]);
+  assert.equal(JSON.stringify(plan.rows).includes("token"), false);
+});
+
+test("fails closed for undeclared generated runtime binding capability", () => {
+  const { submission } = fixture();
+  submission.serviceBindings = [{
+    semanticName: "unknown",
+    capabilityId: "connector.arbitrary",
+    transport: { gatewayUrl: "https://operly.example", runtimeToken: "secret" },
+  }];
+  assert.throws(() => bindingRuntimePlan(submission), /unsupported service binding: connector\.arbitrary/);
 });
