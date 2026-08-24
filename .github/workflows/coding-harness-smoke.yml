@@ -22,12 +22,15 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
+      - "packages/solutions/traced_generation_worker.py"
+      - "packages/database/model_trace.py"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_coding_semantic_failover.py"
+      - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -64,12 +67,15 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
+      - "packages/solutions/traced_generation_worker.py"
+      - "packages/database/model_trace.py"
       - "packages/studio/model_latency_policy.py"
       - "packages/capability_sandbox/target_resolution.py"
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_coding_semantic_failover.py"
+      - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -114,6 +120,7 @@ jobs:
           tests/test_coding_agent_tool_loop.py
           tests/test_coding_agent_input_guardrail.py
           tests/test_coding_semantic_failover.py
+          tests/test_solution_generation_trace_contract.py
           tests/test_live_plan_projection.py
           tests/test_live_projection_independence.py
           tests/test_planning_model_runtime_boundary.py
