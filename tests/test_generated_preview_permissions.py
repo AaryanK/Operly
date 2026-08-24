@@ -4,6 +4,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from apps.api.security_headers import SecurityHeadersMiddleware
+from packages.solutions.service import _approved_runner_preview_target
 
 
 async def ok(request):
@@ -35,6 +36,30 @@ def test_solution_studio_keeps_device_permissions_denied_without_runner_allowlis
     response = client().get("/channels/workspace-1/solutions")
     assert response.headers["Permissions-Policy"] == (
         "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    )
+
+
+def test_generated_preview_redirect_requires_exact_allowlisted_https_host(monkeypatch):
+    monkeypatch.setenv("OPERLY_ENV", "production")
+    monkeypatch.setenv("OPERLY_SANDBOX_PREVIEW_HOSTS", "preview.runner.example")
+
+    assert _approved_runner_preview_target(
+        "https://preview.runner.example/preview/random-token/"
+    )
+    assert not _approved_runner_preview_target(
+        "https://evil.example/preview/random-token/"
+    )
+    assert not _approved_runner_preview_target(
+        "http://preview.runner.example/preview/random-token/"
+    )
+    assert not _approved_runner_preview_target(
+        "https://preview.runner.example.evil.test/preview/random-token/"
+    )
+    assert not _approved_runner_preview_target(
+        "https://preview.runner.example/preview/random-token/?next=https://evil.example"
+    )
+    assert not _approved_runner_preview_target(
+        "https://user@preview.runner.example/preview/random-token/"
     )
 
 
