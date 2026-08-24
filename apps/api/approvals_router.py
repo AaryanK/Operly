@@ -76,10 +76,16 @@ async def decide_approval(
                     db,
                     approval_id,
                     approved=str(action.status) == "VERIFIED",
+                    tenant_id=auth.tenant.id,
                 )
             else:
                 await service.reject(auth.tenant.id, business_action_id)
-                await resume_task_after_approval(db, approval_id, approved=False)
+                await resume_task_after_approval(
+                    db,
+                    approval_id,
+                    approved=False,
+                    tenant_id=auth.tenant.id,
+                )
                 proposal = await db.scalar(
                     select(SolutionImprovementProposal).where(
                         SolutionImprovementProposal.tenant_id == auth.tenant.id,
