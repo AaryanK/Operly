@@ -7,7 +7,13 @@ from unittest.mock import patch
 from packages.business_brain.agent import AgentService
 from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.context.broker import ContextBroker
-from packages.model_runtime import ModelPool, model_for_role
+from packages.model_runtime import (
+    InferenceRequest,
+    ModelPool,
+    TaskRouteDecision,
+    model_for_requirements,
+    requirements_for_task,
+)
 from packages.model_runtime.contracts import ModelSelector
 from packages.model_runtime.registry import ModelRegistry
 from packages.model_runtime.routing_policy import role_routing_profile
@@ -138,7 +144,8 @@ def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model()
     assert selected.id == small.id
 
 
-def test_real_catalog_business_agent_starts_with_small_tool_model_when_available():
+def test_real_catalog_requirements_route_starts_with_small_tool_model_when_available():
+    """Inspect the worker pool behind TaskRoutedBusinessModel, not its proxy tags."""
     provider_env = {
         "OPEN_ROUTER_API": "test-openrouter",
         "OLLAMA_API_KEY": "test-ollama",
@@ -147,10 +154,31 @@ def test_real_catalog_business_agent_starts_with_small_tool_model_when_available
         "nvidia_api_key": "test-nvidia",
         "OPERLY_MODEL_AUTO_PORTFOLIO": "1",
     }
-    with patch.dict(os.environ, provider_env, clear=False):
-        model = model_for_role("business_agent")
+    tool_schema = {
+        "type": "function",
+        "function": {
+            "name": "capability.search",
+            "description": "Discover an authorized capability",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    request = InferenceRequest(
+        messages=({"role": "user", "content": "help me with this routine task"},),
+        tools=(tool_schema,),
+    )
+    decision = TaskRouteDecision(
+        task_type="business_reasoning",
+        role="business_agent",
+        tool_policy="progressive_capability_access",
+        confidence=1.0,
+        reason="test routine primary-worker route",
+    )
+    requirements = requirements_for_task(decision, request)
 
-    first = model.models[0] if isinstance(model, ModelPool) else model
+    with patch.dict(os.environ, provider_env, clear=False):
+        selected = model_for_requirements(requirements, fallback_role="business_agent")
+
+    first = selected.models[0] if isinstance(selected, ModelPool) else selected
     assert "tools" in first.capabilities
     assert "small" in first.tags
     assert "heavy" not in first.tags
