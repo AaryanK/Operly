@@ -14,6 +14,8 @@ from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
 from apps.api.agent_router import router as agent_router
+from apps.api.app_identity_router import admin_router as app_identity_admin_router
+from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
 from apps.api.application_builder_router import router as application_builder_router
 from apps.api.approvals_router import router as approvals_router
 from apps.api.architecture_pack_router import router as architecture_pack_router
@@ -47,6 +49,7 @@ from apps.api.studio_router import router as studio_router
 from apps.api.studio_run_history_router import router as studio_run_history_router
 from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
+from apps.api.workspace_entities_router import router as workspace_entities_router
 from apps.api.workspace_router import router as workspace_router
 from packages.capabilities.defaults import bootstrap_builtin_plugins
 from packages.database.db import init_db, session_scope
@@ -219,6 +222,13 @@ for router in (
     solutions_public_router,
 ):
     app.include_router(router)
+
+# Runtime capability gateways that use relative router prefixes are mounted directly
+# at the API root. Avoid nesting them inside another APIRouter; route ownership and
+# the externally visible path stay explicit and testable here.
+app.include_router(workspace_entities_router, prefix="/api")
+app.include_router(app_identity_runtime_router, prefix="/api")
+app.include_router(app_identity_admin_router, prefix="/api")
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_STATIC = WEB_ROOT / "static"
