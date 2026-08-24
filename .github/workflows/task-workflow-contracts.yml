@@ -29,6 +29,7 @@ jobs:
           packages/plugins/manifest.py
           packages/capabilities/event_provider.py
           packages/capabilities/workflow_task_provider.py
+          packages/capabilities/registry_workflow_task_provider.py
           packages/capabilities/model_provider.py
           packages/tasks/workflow.py
           packages/tasks/safe_workflow.py
