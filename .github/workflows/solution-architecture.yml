@@ -6,7 +6,9 @@ on:
       - "alembic/versions/0038_durable_solution_generation_jobs.py"
       - "apps/api/security_headers.py"
       - "apps/api/solution_generation_router.py"
+      - "apps/sandbox_runner/**"
       - "packages/capabilities/solution_provider.py"
+      - "packages/coding_harness/build_service.py"
       - "packages/coding_harness/execution_loop.py"
       - "packages/database/product_models.py"
       - "packages/database/schema.py"
@@ -31,6 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
       - name: Compile capability-first Solution path
@@ -40,6 +45,7 @@ jobs:
           apps/api/security_headers.py
           apps/api/solution_generation_router.py
           packages/capabilities/solution_provider.py
+          packages/coding_harness/build_service.py
           packages/coding_harness/execution_loop.py
           packages/database/product_models.py
           packages/database/schema.py
@@ -48,6 +54,11 @@ jobs:
           packages/solutions/composer.py
           packages/solutions/generation_worker.py
           packages/solutions/service.py
+      - name: Validate Railway Sandbox runner
+        run: |
+          node --check apps/sandbox_runner/core.mjs
+          node --check apps/sandbox_runner/server.mjs
+          node --test apps/sandbox_runner/core.test.mjs
       - name: Run Solution architecture regressions
         env:
           ADMIN_PASSWORD: test-admin-password-1234
