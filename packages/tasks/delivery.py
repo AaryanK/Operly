@@ -6,11 +6,13 @@ from typing import Any, Protocol
 
 from sqlalchemy import select
 
+from packages.company.events import append_event
 from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.channel_models import ExternalIdentity
 from packages.database.db import session_scope
 from packages.database.models import AppUser
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
+from packages.model_runtime.trace_events import RuntimeTraceEvent
 
 
 class TaskDeliveryError(RuntimeError):
@@ -100,6 +102,36 @@ def delivery_target_from_origin(origin: dict[str, Any], delivery: str = "origin"
     }
 
 
+async def _record_workspace_delivery_event(
+    target: dict[str, Any],
+    event_type: RuntimeTraceEvent,
+    payload: dict[str, Any],
+) -> None:
+    tenant_id = str(target.get("tenant_id") or "").strip()
+    if not tenant_id:
+        return
+    try:
+        async with session_scope() as db:
+            await append_event(
+                db,
+                tenant_id=tenant_id,
+                event_type=event_type.value,
+                payload={
+                    "provider": target.get("provider"),
+                    "kind": target.get("kind"),
+                    "user_id": target.get("user_id"),
+                    "external_user_id": target.get("external_user_id"),
+                    "external_conversation_id": target.get("external_conversation_id"),
+                    **payload,
+                },
+                source="task_delivery",
+            )
+    except Exception:
+        # Delivery truth must not be changed by telemetry failure. The adapter
+        # receipt remains the source of truth for the active run.
+        return
+
+
 async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str, Any]:
     provider = str(target.get("provider") or "").strip().lower()
     if not provider:
@@ -108,12 +140,45 @@ async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str,
 
     adapter = default_plugin_runtime().task_delivery_adapter(provider)
     if adapter is None:
-        raise TaskDeliveryError(f"task_delivery_adapter_unavailable:{provider}")
-    receipt = await adapter.deliver(dict(target), str(message or ""))
+        error = TaskDeliveryError(f"task_delivery_adapter_unavailable:{provider}")
+        await _record_workspace_delivery_event(
+            target,
+            RuntimeTraceEvent.DELIVERY_FAILED,
+            {"status": "FAILED", "reason": str(error)},
+        )
+        raise error
+
+    try:
+        receipt = await adapter.deliver(dict(target), str(message or ""))
+    except Exception as error:
+        await _record_workspace_delivery_event(
+            target,
+            RuntimeTraceEvent.DELIVERY_FAILED,
+            {"status": "FAILED", "reason": type(error).__name__},
+        )
+        raise
+
     if not isinstance(receipt, dict) or str(receipt.get("status") or "").upper() != "VERIFIED":
-        raise TaskDeliveryError(f"task_delivery_unverified:{provider}")
+        error = TaskDeliveryError(f"task_delivery_unverified:{provider}")
+        await _record_workspace_delivery_event(
+            target,
+            RuntimeTraceEvent.DELIVERY_FAILED,
+            {"status": "FAILED", "reason": str(error)},
+        )
+        raise error
+
     receipt.setdefault("provider", provider)
     receipt.setdefault("verified_at", datetime.now(timezone.utc).isoformat())
+    await _record_workspace_delivery_event(
+        target,
+        RuntimeTraceEvent.DELIVERY_VERIFIED,
+        {
+            "status": "VERIFIED",
+            "message_ids": list(receipt.get("message_ids") or []),
+            "verified_at": receipt["verified_at"],
+            "authority": receipt.get("authority"),
+        },
+    )
     return receipt
 
 
