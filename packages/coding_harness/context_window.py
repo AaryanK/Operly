@@ -1,14 +1,16 @@
 """Deterministic context-window control for persistent coding sessions.
 
 Source files are durable task state, while old grep/web/progress observations are
-usually disposable. When a long coding session must be compacted, OPERLY now
+usually disposable. When a long coding session must be compacted, OPERLY
 materializes the latest trustworthy source observations into a compact working-set
 message before trimming older turns. This prevents a strong coding model from
 having to rediscover files it just read simply because those tool observations fell
 out of the recent-message tail.
 
-The first system message and first user packet remain authoritative and are always
-preserved. No summarization LLM call is introduced.
+The first system message and first user packet remain authoritative. If that initial
+packet itself exceeds the configured request budget, only reproducible machine-
+contract bulk is replaced with a deterministic note; requirements and owner intent
+remain intact. No summarization LLM call is introduced.
 """
 from __future__ import annotations
 
@@ -32,6 +34,17 @@ SOURCE_WORKING_SET_HEADER = (
     "may still exist in the project and can be inspected with normal project tools.\n"
 )
 
+MACHINE_CONTRACT_COMPACTION_NOTE = {
+    "compacted": True,
+    "reason": "initial_request_budget",
+    "instruction": (
+        "Exact machine contracts were omitted from this initial model packet because "
+        "they are reproducible from canonical Operly validators. Follow the semantic "
+        "execution contract and repair any exact validator mismatch from deterministic "
+        "runner/source-contract evidence rather than inventing a schema."
+    ),
+}
+
 
 def _message_chars(message: dict[str, Any]) -> int:
     try:
@@ -44,12 +57,36 @@ def _total_chars(messages: list[dict[str, Any]]) -> int:
     return sum(_message_chars(message) for message in messages)
 
 
+def _tool_chars(tools: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None) -> int:
+    if not tools:
+        return 0
+    try:
+        return len(json.dumps(list(tools), ensure_ascii=False, default=str))
+    except Exception:
+        return len(str(tools))
+
+
 def _configured_limit() -> int:
     try:
         configured = int(os.getenv("OPERLY_CODING_CONTEXT_CHARS", "160000"))
     except ValueError:
         configured = 160_000
     return max(32_000, min(configured, 400_000))
+
+
+def _configured_output_reserve() -> int:
+    """Reserve request headroom for the model's next response.
+
+    This is deliberately expressed in approximate serialized characters because the
+    coding harness is provider-neutral. Provider/model token accounting remains in
+    the shared model runtime; this guard prevents messages+tool schemas from consuming
+    the whole advertised coding-session budget before a route is even selected.
+    """
+    try:
+        configured = int(os.getenv("OPERLY_CODING_OUTPUT_RESERVE_CHARS", "16000"))
+    except ValueError:
+        configured = 16_000
+    return max(4_000, min(configured, 64_000))
 
 
 def _configured_tail() -> int:
@@ -66,6 +103,81 @@ def _configured_source_working_set_limit() -> int:
     except ValueError:
         configured = 72_000
     return max(8_000, min(configured, 160_000))
+
+
+def request_char_estimate(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    *,
+    output_reserve_chars: int | None = None,
+) -> dict[str, int]:
+    """Return the complete provider-neutral coding request size estimate."""
+    message_chars = _total_chars(messages)
+    tool_chars = _tool_chars(tools)
+    reserve_chars = (
+        _configured_output_reserve()
+        if output_reserve_chars is None
+        else max(0, int(output_reserve_chars))
+    )
+    return {
+        "messageChars": message_chars,
+        "toolSchemaChars": tool_chars,
+        "outputReserveChars": reserve_chars,
+        "estimatedRequestChars": message_chars + tool_chars + reserve_chars,
+    }
+
+
+def _compact_initial_authority(
+    messages: list[dict[str, Any]],
+    *,
+    message_budget: int,
+) -> list[dict[str, Any]]:
+    """Bound a two-message initial packet without truncating requirements/owner intent.
+
+    The largest reproducible component is normally machineContracts embedded inside
+    approvedSpecification. Replace only that component. If the packet is still too
+    large, leave it intact: downstream model routing/failover must see a truthful
+    oversized request rather than a silently truncated specification.
+    """
+    if len(messages) < 2 or _total_chars(messages[:2]) <= message_budget:
+        return list(messages[:2])
+    first = dict(messages[0])
+    second = dict(messages[1])
+    raw = second.get("content")
+    if not isinstance(raw, str):
+        return [first, second]
+    try:
+        packet = json.loads(raw)
+    except json.JSONDecodeError:
+        return [first, second]
+    if not isinstance(packet, dict):
+        return [first, second]
+    spec_raw = packet.get("approvedSpecification")
+    if not isinstance(spec_raw, str):
+        return [first, second]
+    try:
+        specification = json.loads(spec_raw)
+    except json.JSONDecodeError:
+        return [first, second]
+    if not isinstance(specification, dict):
+        return [first, second]
+    execution = specification.get("operlyExecutionContract")
+    if not isinstance(execution, dict) or "machineContracts" not in execution:
+        return [first, second]
+
+    execution = dict(execution)
+    execution["machineContracts"] = MACHINE_CONTRACT_COMPACTION_NOTE
+    specification = dict(specification)
+    specification["operlyExecutionContract"] = execution
+    packet = dict(packet)
+    packet["approvedSpecification"] = json.dumps(
+        specification,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    second["content"] = json.dumps(packet, ensure_ascii=False)
+    return [first, second]
 
 
 def _tool_call_name_and_args(call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -115,14 +227,6 @@ def _read_observation(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _latest_source_observations(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reconstruct only source observations confirmed by successful tool results.
-
-    Reads are keyed by path/range. A successful write supersedes previous observations
-    for that path and contributes its complete new content. Successful exact edits and
-    removes invalidate prior observations because this wrapper cannot safely rebuild a
-    whole post-edit file from a bounded snippet. Failed mutations never advance the
-    durable source view.
-    """
     observations: dict[tuple[str, int], dict[str, Any]] = {}
     pending: list[tuple[str, dict[str, Any]]] = []
 
@@ -184,8 +288,6 @@ def _source_working_set_message(messages: list[dict[str, Any]], *, budget_chars:
 
     selected: list[dict[str, Any]] = []
     used = len(SOURCE_WORKING_SET_HEADER)
-    # Prefer the most recent source observations when the working set itself must be
-    # bounded. Reverse again before rendering so the packet stays easy to scan.
     for item in reversed(observations):
         encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
         if used + len(encoded) > budget_chars:
@@ -211,23 +313,32 @@ def compact_messages(
     *,
     limit_chars: int | None = None,
     recent_messages: int | None = None,
+    tools: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    output_reserve_chars: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return bounded history while preserving authority, source state, and recent turns.
+    """Return bounded history including tool-schema and output headroom.
 
-    The first system message and first user packet contain the coding policy,
-    approved specification and task. They are always retained. When trimming the
-    tail, start at a non-tool message so an orphaned tool result is never presented
-    without the assistant turn that requested it.
+    Tool schemas are part of the real inference request and therefore consume the
+    same budget. The initial two-message packet is also checked instead of bypassing
+    compaction merely because the conversation has not accumulated turns yet.
     """
-    if len(messages) <= 2:
-        return list(messages)
-    limit = _configured_limit() if limit_chars is None else max(8_000, int(limit_chars))
-    if _total_chars(messages) <= limit:
+    overall_limit = _configured_limit() if limit_chars is None else max(8_000, int(limit_chars))
+    reserve = (
+        _configured_output_reserve()
+        if output_reserve_chars is None
+        else max(0, int(output_reserve_chars))
+    )
+    message_limit = max(8_000, overall_limit - _tool_chars(tools) - reserve)
+    if _total_chars(messages) <= message_limit:
         return list(messages)
 
-    head = list(messages[:2])
+    bounded_head = _compact_initial_authority(messages, message_budget=message_limit)
+    if len(messages) <= 2:
+        return bounded_head
+
+    head = bounded_head
     head_chars = _total_chars(head)
-    available_after_head = max(0, limit - head_chars - 1200)
+    available_after_head = max(0, message_limit - head_chars - 1200)
     source_budget = min(
         _configured_source_working_set_limit(),
         max(0, int(available_after_head * 0.7)),
@@ -237,8 +348,6 @@ def compact_messages(
     tail_count = _configured_tail() if recent_messages is None else max(2, int(recent_messages))
     start = max(2, len(messages) - tail_count)
 
-    # Tool responses belong to a preceding assistant tool-call turn. Never begin
-    # compacted history with a bare tool response.
     while start < len(messages) and str(messages[start].get("role") or "") == "tool":
         start += 1
     if start >= len(messages):
@@ -253,11 +362,8 @@ def compact_messages(
         compacted.append(source_message)
     compacted.extend(tail)
 
-    # If recent observations still make the prompt too large, drop the oldest
-    # complete recent turns first. The authoritative head and durable source packet
-    # stay. The source packet itself was already sized from the available budget.
     protected = 4 if source_message is not None else 3
-    while len(compacted) > protected + 1 and _total_chars(compacted) > limit:
+    while len(compacted) > protected + 1 and _total_chars(compacted) > message_limit:
         body = compacted[protected:]
         remove_through = 1
         if body and str(body[0].get("role") or "") == "assistant":
@@ -270,10 +376,13 @@ def compact_messages(
 
 
 class ContextBoundCodingClient:
-    """Provider-neutral chat wrapper that bounds stale coding observations."""
+    """Provider-neutral chat wrapper that bounds the complete model request."""
 
     def __init__(self, inner) -> None:
         self.inner = inner
 
     async def chat(self, messages: list[dict[str, Any]], tools=None):
-        return await self.inner.chat(compact_messages(messages), tools)
+        return await self.inner.chat(
+            compact_messages(messages, tools=list(tools or [])),
+            tools,
+        )

@@ -96,6 +96,121 @@ def _plan_specification(plan) -> str:
     return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _evidence_text(value) -> str:
+    try:
+        return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, default=str).lower()
+    except Exception:
+        return str(value or "").lower()
+
+
+def _repair_specification(plan, failure_evidence: dict | None) -> str:
+    """Project only failure-relevant semantic state into a repair model call.
+
+    Initial generation still receives the full canonical machine-contract packet.
+    Repairs instead receive runner/validator evidence plus the requirements and plan
+    nodes implicated by that evidence. Exact schema failures are already present in
+    deterministic evidence, so resending every machine schema on every repair wastes
+    context and can push otherwise-capable routes over provider request/TPM limits.
+    """
+    data = plan.model_dump(mode="json") if hasattr(plan, "model_dump") else dict(plan)
+    raw_requirements = [
+        item for item in (data.get("requirementLedger") or []) if isinstance(item, dict)
+    ]
+    raw_nodes = [item for item in (data.get("planTree") or []) if isinstance(item, dict)]
+    evidence_text = _evidence_text(failure_evidence)
+
+    known_requirement_ids = {
+        str(item.get("id") or "").strip()
+        for item in raw_requirements
+        if str(item.get("id") or "").strip()
+    }
+    referenced_requirement_ids = {
+        requirement_id
+        for requirement_id in known_requirement_ids
+        if requirement_id.lower() in evidence_text
+    }
+    known_node_ids = {
+        str(item.get("id") or "").strip()
+        for item in raw_nodes
+        if str(item.get("id") or "").strip()
+    }
+    referenced_node_ids = {
+        node_id for node_id in known_node_ids if node_id.lower() in evidence_text
+    }
+
+    if referenced_requirement_ids:
+        selected_requirements = [
+            item
+            for item in raw_requirements
+            if str(item.get("id") or "").strip() in referenced_requirement_ids
+        ]
+    else:
+        # Without an explicit requirement id in deterministic evidence, preserve the
+        # mandatory behavior contract while still dropping machine-schema bulk.
+        selected_requirements = [
+            item for item in raw_requirements if bool(item.get("mandatory", True))
+        ] or raw_requirements
+
+    selected_requirement_ids = {
+        str(item.get("id") or "").strip()
+        for item in selected_requirements
+        if str(item.get("id") or "").strip()
+    }
+    selected_nodes = []
+    for item in raw_nodes:
+        node_id = str(item.get("id") or "").strip()
+        node_requirement_ids = {
+            str(value).strip()
+            for value in (item.get("originalRequirementIds") or [])
+            if str(value).strip()
+        }
+        if (
+            node_id in referenced_node_ids
+            or bool(node_requirement_ids & selected_requirement_ids)
+        ):
+            selected_nodes.append(item)
+    if not selected_nodes and referenced_node_ids:
+        selected_nodes = [
+            item
+            for item in raw_nodes
+            if str(item.get("id") or "").strip() in referenced_node_ids
+        ]
+
+    execution_contract = {
+        "repairScope": "Repair the smallest amount necessary for the supplied deterministic failure evidence. Preserve unrelated behavior and previously passing requirements.",
+        "tests": "Re-run deterministic runner verification after the patch; do not claim success from reasoning alone.",
+        "contractAuthority": "The supplied runner/source-contract failure evidence is authoritative for exact machine-shape mismatches. Do not invent a replacement schema.",
+        "execution": "Never execute code in the OPERLY control plane. The isolated runner owns build, test, health and acceptance execution.",
+        "implementationFreedom": "Preserve the approved behavior; choose internal mechanics only where the requirement ledger does not constrain them.",
+    }
+    if any(marker in evidence_text for marker in ("operly.solution", "backend/", "health", "runtime_crash", "build_failure")):
+        execution_contract["fullStack"] = "For operly-fullstack-v1, keep the declared health path and generated backend/frontend runtime contract intact; use deterministic failure evidence for exact manifest or entrypoint repairs."
+    if any(marker in evidence_text for marker in ("data.relational", "migration", "database", "relational")):
+        execution_contract["relationalData"] = "Use the existing semantic data.relational binding and declarative migrations; never add raw provider credentials or raw SQL to work around a runner failure."
+    if any(marker in evidence_text for marker in ("workspace_entities", "workspace entity", "employee", "customer", "location")):
+        execution_contract["workspaceEntityGraph"] = "Preserve canonical workspace entity identity and use the existing data.workspace_entities semantic binding instead of duplicating canonical entity tables."
+    if any(marker in evidence_text for marker in ("identity.app_users", "sessiontoken", "login", "register", "identity")):
+        execution_contract["appIdentity"] = "Preserve identity.app_users boundaries; generated-app sessions must not expose Operly account credentials or provider secrets."
+    if any(marker in evidence_text for marker in ("interaction", "data-operly-interaction", "handler")):
+        execution_contract["interactionContracts"] = "Repair interaction ids/handlers/domain operations according to the deterministic interaction-contract evidence and keep critical interaction tests executable."
+
+    selected = {
+        "projectName": data.get("projectName"),
+        "objective": data.get("summary") or data.get("primaryGoal"),
+        "repairContext": {
+            "classification": str((failure_evidence or {}).get("classification") or "unknown_failure"),
+            "referencedRequirementIds": sorted(referenced_requirement_ids),
+            "referencedPlanNodeIds": sorted(referenced_node_ids),
+            "machineContractsIncluded": False,
+        },
+        "requirements": [_compact_requirement(item) for item in selected_requirements],
+        "capabilityGraph": [_compact_node(item) for item in selected_nodes],
+        "unsupportedRequirements": data.get("unsupportedRequirements") or [],
+        "operlyExecutionContract": execution_contract,
+    }
+    return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _prompt_text(plan) -> str:
     provenance = getattr(plan, "provenance", {}) or {}
     if hasattr(provenance, "model_dump"):
@@ -220,7 +335,6 @@ async def _persist_with_contract_repair(
     failure_evidence: dict | None = None,
 ):
     """Feed deterministic source-contract failures back into the same agent/workspace semantics."""
-    specification = _plan_specification(plan)
     current = result
     budget = _contract_repair_budget()
     for attempt in range(budget + 1):
@@ -240,15 +354,16 @@ async def _persist_with_contract_repair(
         except CodingHarnessError as error:
             if attempt >= budget:
                 raise
+            contract_evidence = {
+                "classification": "source_contract_failure",
+                "message": str(error),
+                "instruction": "Repair only what is necessary to satisfy the deterministic OPERLY source/runtime contract while preserving requested product behavior.",
+                "contractRepairAttempt": attempt + 1,
+            }
             current = await agent.repair(
-                specification,
+                _repair_specification(plan, contract_evidence),
                 current.files,
-                {
-                    "classification": "source_contract_failure",
-                    "message": str(error),
-                    "instruction": "Repair only what is necessary to satisfy the deterministic OPERLY source/runtime contract while preserving requested product behavior.",
-                    "contractRepairAttempt": attempt + 1,
-                },
+                contract_evidence,
             )
     raise CodingHarnessError("Source contract repair budget exhausted")
 
@@ -295,7 +410,11 @@ async def repair_source_for_plan(
     client=None,
 ):
     agent = OpenCodeStyleCodingAgent(client=client or coding_model_client("repair"))
-    result = await agent.repair(_plan_specification(plan), source_files_from_record(source), failure_evidence)
+    result = await agent.repair(
+        _repair_specification(plan, failure_evidence),
+        source_files_from_record(source),
+        failure_evidence,
+    )
     return await _persist_with_contract_repair(db, tenant_id, user_id, plan_row, plan, agent, result, kind="runner_repair", parent=source, failure_evidence=failure_evidence)
 
 

@@ -2,10 +2,7 @@ name: coding-harness-smoke
 
 on:
   push:
-    branches:
-      - main
-      - "architecture/**"
-      - "fix/**"
+    branches: [main, "architecture/**", "fix/**"]
     paths:
       - "apps/api/custom_software_router.py"
       - "apps/api/software_projects_router.py"
@@ -22,6 +19,7 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
+      - "packages/solutions/generation_worker.py"
       - "packages/solutions/traced_generation_worker.py"
       - "packages/database/model_trace.py"
       - "packages/studio/model_latency_policy.py"
@@ -31,6 +29,9 @@ on:
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_solution_generation_trace_contract.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_generation_stage_truth.py"
+      - "tests/test_coding_spec_compaction.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -69,6 +70,7 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
+      - "packages/solutions/generation_worker.py"
       - "packages/solutions/traced_generation_worker.py"
       - "packages/database/model_trace.py"
       - "packages/studio/model_latency_policy.py"
@@ -78,6 +80,9 @@ on:
       - "tests/test_coding_agent_input_guardrail.py"
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_solution_generation_trace_contract.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_generation_stage_truth.py"
+      - "tests/test_coding_spec_compaction.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -114,6 +119,13 @@ jobs:
           node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile Phase 0 coding runtime
+        run: >-
+          python -m py_compile
+          packages/coding_harness/context_window.py
+          packages/coding_harness/source_service.py
+          packages/coding_harness/execution_loop.py
+          packages/solutions/generation_worker.py
       - name: Check current browser JavaScript syntax
         run: |
           set -euo pipefail
@@ -125,6 +137,9 @@ jobs:
           tests/test_coding_agent_input_guardrail.py
           tests/test_coding_semantic_failover.py
           tests/test_solution_generation_trace_contract.py
+          tests/test_generated_solution_worker.py
+          tests/test_generation_stage_truth.py
+          tests/test_coding_spec_compaction.py
           tests/test_live_plan_projection.py
           tests/test_live_projection_independence.py
           tests/test_planning_model_runtime_boundary.py
