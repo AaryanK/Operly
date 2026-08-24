@@ -1,15 +1,16 @@
-"""Async-safe correlation and provider-wire telemetry for model-runtime calls.
+"""Async-safe correlation and runtime/provider telemetry for model calls.
 
-AgentRuntime binds conversation/run metadata once. Nested routing/capability model
-calls inherit that context. Provider adapters can emit their final normalized wire
-body through the sink contract without importing database/application modules.
+AgentRuntime or another durable orchestrator binds conversation/run metadata once.
+Nested routing/capability model calls inherit that context. Provider adapters and
+trusted runtime components can emit sanitized telemetry without importing database
+or application modules.
 """
 from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Iterator, Mapping
 
 _TRACE_METADATA: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -61,6 +62,44 @@ async def emit_provider_wire_event(event: ProviderWireEvent) -> None:
     for sink in tuple(_PROVIDER_WIRE_SINKS):
         try:
             result = sink(event)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            continue
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTraceEvent:
+    """Provider-neutral trusted-runtime event correlated to the current AI run."""
+
+    event_type: str
+    payload: Any = None
+    phase: str = "event"
+    resource_id: str = "operly.runtime"
+    classification: str | None = None
+    retryable: bool | None = None
+    metadata: dict[str, Any] | None = None
+
+
+RuntimeTraceTelemetrySink = Callable[
+    [RuntimeTraceEvent], Awaitable[None] | None
+]
+_RUNTIME_TRACE_SINKS: list[RuntimeTraceTelemetrySink] = []
+
+
+def register_runtime_trace_telemetry_sink(sink: RuntimeTraceTelemetrySink) -> None:
+    if sink not in _RUNTIME_TRACE_SINKS:
+        _RUNTIME_TRACE_SINKS.append(sink)
+
+
+async def emit_runtime_trace_event(event: RuntimeTraceEvent) -> None:
+    """Emit one sanitized runtime event without allowing tracing to break work."""
+    metadata = current_trace_metadata()
+    metadata.update(dict(event.metadata or {}))
+    correlated = replace(event, metadata=metadata)
+    for sink in tuple(_RUNTIME_TRACE_SINKS):
+        try:
+            result = sink(correlated)
             if asyncio.iscoroutine(result):
                 await result
         except Exception:
