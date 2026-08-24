@@ -31,6 +31,7 @@ jobs:
           packages/capabilities/workflow_task_provider.py
           packages/capabilities/model_provider.py
           packages/tasks/workflow.py
+          packages/tasks/safe_workflow.py
           packages/tasks/events.py
           packages/tasks/personal_workflow.py
           packages/company/events/service.py
