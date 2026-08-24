@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from packages.agents.planning import AdaptivePlanner
-from packages.agents.run_state import CompactRunState, RunPlan
+from packages.agents.run_state import CompactRunState
 from packages.agents.runtime import AgentRuntime, ObservationHook
 
 
@@ -108,10 +108,11 @@ class AgentRunController:
             arguments: dict[str, Any],
             observation: dict[str, Any],
         ) -> None:
-            del arguments
             state.record_observation(capability_id, observation)
             if on_observation is not None:
-                await _resolve(on_observation(capability_id, {}, observation))
+                # Preserve AgentRuntime's observation-hook contract exactly. The
+                # controller may summarize state, but it must not erase caller data.
+                await _resolve(on_observation(capability_id, arguments, observation))
 
         attempts: list[dict[str, Any]] = []
         combined_trace = []
