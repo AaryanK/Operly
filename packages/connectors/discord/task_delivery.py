@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import discord
 from sqlalchemy import select
 
-from packages.database.channel_models import ExternalIdentity
+from packages.database.channel_models import ChannelInstallation, ExternalIdentity
 from packages.database.db import session_scope
 from packages.tasks.delivery import TaskDeliveryError
 
@@ -55,6 +55,25 @@ async def _current_discord_user_id(target: dict) -> int:
     return int(raw_user_id)
 
 
+async def _validate_workspace_installation(target: dict) -> None:
+    tenant_id = str(target.get("tenant_id") or "").strip()
+    external_space_id = str(target.get("external_space_id") or "").strip()
+    if not tenant_id or not external_space_id:
+        raise TaskDeliveryError("discord_delivery_workspace_binding_missing")
+    async with session_scope() as db:
+        installation = await db.scalar(
+            select(ChannelInstallation).where(
+                ChannelInstallation.tenant_id == tenant_id,
+                ChannelInstallation.provider == "discord",
+                ChannelInstallation.external_space_id == external_space_id,
+                ChannelInstallation.status == "connected",
+                ChannelInstallation.provisional.is_(False),
+            )
+        )
+    if installation is None:
+        raise TaskDeliveryError("discord_delivery_workspace_binding_revoked")
+
+
 @dataclass(slots=True)
 class DiscordTaskDeliveryAdapter:
     providers: tuple[str, ...] = ("discord",)
@@ -89,6 +108,7 @@ class DiscordTaskDeliveryAdapter:
                 },
             }
 
+        await _validate_workspace_installation(target)
         raw_channel_id = target.get("external_conversation_id")
         if raw_channel_id is None:
             raise TaskDeliveryError("discord_delivery_channel_missing")
@@ -106,6 +126,7 @@ class DiscordTaskDeliveryAdapter:
             "kind": "channel",
             "message_ids": message_ids,
             "external_conversation_id": str(channel_id),
+            "external_space_id": str(target.get("external_space_id") or ""),
             "authority": {
                 "owner_type": "workspace",
                 "owner_id": target.get("tenant_id"),
