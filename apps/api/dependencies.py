@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.auth_cookies import session_secret_from_request
 from apps.api.security import hash_token
 from packages.database.db import SessionFactory
+from packages.database.model_trace import ensure_model_trace_sink
 from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
 from packages.model_runtime.trace_context import runtime_trace_scope
 
@@ -83,6 +84,10 @@ async def get_account_auth_context(
         auth_session.last_activity_at = now
         await db.commit()
 
+    # Install once per process before entering the ambient correlation scope. This
+    # makes non-AgentRuntime model callsites observable too; registration is
+    # idempotent and tracing failures never break inference.
+    ensure_model_trace_sink()
     context = AccountAuthContext(user=user, session=auth_session)
     request_run_id = str(uuid4())
     request_trace = {
