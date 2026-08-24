@@ -223,32 +223,19 @@ def test_identity_source_contract_requires_one_canonical_semantic_name():
 
 
 def test_identity_runtime_routes_are_mounted_under_single_api_prefix():
-    from apps.api.app_identity_router import admin_router, runtime_router
     from apps.api.main import app
-    from apps.api.workspace_entities_router import router as entity_router
 
-    runtime_paths = sorted(getattr(route, "path", "") for route in runtime_router.routes)
-    admin_paths = sorted(getattr(route, "path", "") for route in admin_router.routes)
-    entity_paths = sorted(getattr(route, "path", "") for route in entity_router.routes)
-    app_paths = {getattr(route, "path", "") for route in app.routes}
+    # FastAPI >=0.137 retains included routers as route-tree nodes instead of
+    # flattening every child APIRoute into app.routes. OpenAPI generation walks
+    # that effective route tree, so it is the stable assertion for public paths.
+    app.openapi_schema = None
+    paths = set(app.openapi()["paths"])
 
-    assert "/api/runtime/app-identity/register" in runtime_paths, runtime_paths
-    assert "/api/app-identities/{application_id}/invitations" in admin_paths, admin_paths
-    assert "/api/runtime/entities/schema" in entity_paths, entity_paths
-
-    diagnostics = {
-        "runtime_router": runtime_paths,
-        "admin_router": admin_paths,
-        "entity_router": entity_paths,
-        "app_identity_paths": sorted(
-            path for path in app_paths if "identity" in path or "entities" in path
-        ),
-    }
-    assert "/api/runtime/app-identity/register" in app_paths, diagnostics
-    assert "/api/runtime/app-identity/login" in app_paths, diagnostics
-    assert "/api/app-identities/{application_id}/invitations" in app_paths, diagnostics
-    assert "/api/runtime/entities/schema" in app_paths, diagnostics
-    assert "/api/api/runtime/app-identity/register" not in app_paths, diagnostics
+    assert "/api/runtime/app-identity/register" in paths
+    assert "/api/runtime/app-identity/login" in paths
+    assert "/api/app-identities/{application_id}/invitations" in paths
+    assert "/api/runtime/entities/schema" in paths
+    assert "/api/api/runtime/app-identity/register" not in paths
 
 
 def test_coding_specification_teaches_generated_apps_the_identity_binding():
