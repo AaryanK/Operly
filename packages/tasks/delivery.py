@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import select
@@ -19,7 +20,7 @@ class TaskDeliveryError(RuntimeError):
 class TaskDeliveryAdapter(Protocol):
     providers: tuple[str, ...]
 
-    async def deliver(self, target: dict[str, Any], message: str) -> None: ...
+    async def deliver(self, target: dict[str, Any], message: str) -> dict[str, Any]: ...
 
 
 async def capture_task_origin(context) -> dict[str, Any]:
@@ -99,7 +100,7 @@ def delivery_target_from_origin(origin: dict[str, Any], delivery: str = "origin"
     }
 
 
-async def deliver_task_output(target: dict[str, Any], message: str) -> None:
+async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str, Any]:
     provider = str(target.get("provider") or "").strip().lower()
     if not provider:
         raise TaskDeliveryError("task_delivery_provider_missing")
@@ -108,19 +109,21 @@ async def deliver_task_output(target: dict[str, Any], message: str) -> None:
     adapter = default_plugin_runtime().task_delivery_adapter(provider)
     if adapter is None:
         raise TaskDeliveryError(f"task_delivery_adapter_unavailable:{provider}")
-    await adapter.deliver(dict(target), str(message or ""))
+    receipt = await adapter.deliver(dict(target), str(message or ""))
+    if not isinstance(receipt, dict) or str(receipt.get("status") or "").upper() != "VERIFIED":
+        raise TaskDeliveryError(f"task_delivery_unverified:{provider}")
+    receipt.setdefault("provider", provider)
+    receipt.setdefault("verified_at", datetime.now(timezone.utc).isoformat())
+    return receipt
 
 
 @dataclass(slots=True)
 class OperlyConversationDeliveryAdapter:
-    """Persist task output back to an Operly web/personal conversation.
-
-    Realtime UI transport can layer on top later; persistence is the durable contract.
-    """
+    """Persist task output back to an Operly web/personal conversation."""
 
     providers: tuple[str, ...] = ("web", "operly", "task")
 
-    async def deliver(self, target: dict[str, Any], message: str) -> None:
+    async def deliver(self, target: dict[str, Any], message: str) -> dict[str, Any]:
         conversation_id = str(target.get("external_conversation_id") or "").strip()
         user_id = str(target.get("user_id") or "").strip()
         tenant_id = str(target.get("tenant_id") or "").strip()
@@ -146,14 +149,20 @@ class OperlyConversationDeliveryAdapter:
                 )
                 if conversation is None:
                     raise TaskDeliveryError("personal_delivery_conversation_missing")
-                db.add(
-                    PrincipalMessage(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=message[:24_000],
-                    )
+                row = PrincipalMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=message[:24_000],
                 )
-                return
+                db.add(row)
+                await db.flush()
+                return {
+                    "status": "VERIFIED",
+                    "provider": "operly",
+                    "message_ids": [row.id],
+                    "conversation_id": conversation.id,
+                    "authority": {"owner_type": "personal", "owner_id": user_id},
+                }
 
             conversation = await db.scalar(
                 select(AgentConversation).where(
@@ -163,11 +172,18 @@ class OperlyConversationDeliveryAdapter:
             )
             if conversation is None:
                 raise TaskDeliveryError("workspace_delivery_conversation_missing")
-            db.add(
-                AgentMessage(
-                    tenant_id=tenant_id,
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=message[:24_000],
-                )
+            row = AgentMessage(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                role="assistant",
+                content=message[:24_000],
             )
+            db.add(row)
+            await db.flush()
+            return {
+                "status": "VERIFIED",
+                "provider": "operly",
+                "message_ids": [row.id],
+                "conversation_id": conversation.id,
+                "authority": {"owner_type": "workspace", "owner_id": tenant_id},
+            }
