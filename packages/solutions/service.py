@@ -36,7 +36,10 @@ def _generation_payload(row):
     initial=_context_payload(row).get("initialGeneration")
     if not isinstance(initial,dict):return None
     result={}
-    for key in ("status","stage","jobId","attempt","changeSetId","versionId","bootstrapVersionId"):
+    for key in (
+        "status","stage","jobId","attempt","changeSetId","versionId","bootstrapVersionId",
+        "softwarePlanId","softwarePlanVersion","sourceBundleId","sourceVersion","buildId","repairCount",
+    ):
         value=initial.get(key)
         if value is not None:result[key]=value
     if initial.get("error"):
@@ -128,10 +131,48 @@ class SolutionService:
 
         projects=(await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==tenant_id))).all()
         for p in projects:
+            existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.GENERATED_PROJECT,SolutionRecord.runtime_reference==p.id))
             preview=await self.active_generated_preview(db,tenant_id,p.plan_id,p.approved_plan_version)
             source=await self.latest_generated_source(db,tenant_id,p.plan_id,p.approved_plan_version)
-            current=str(source.source_version) if source else str(p.version)
-            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=p.name,description=p.prompt[:4000],solution_type=SolutionType.CUSTOM_SOLUTION,lifecycle_status=LifecycleStatus.PREVIEW_READY if preview else LifecycleStatus.APPROVED,current_version_reference=current,preview_state="ready" if preview else "available",preview_url=f"/api/solutions/{{solution_id}}/preview",production_state="offline",production_url=None,visibility="private",context_json="{}")
+            context=_context_payload(existing) if existing else {}
+            initial=context.get("initialGeneration") if isinstance(context.get("initialGeneration"),dict) else None
+            generation_failed=bool(initial and initial.get("status") in {"retryable","failed"})
+            generation_building=bool(initial and initial.get("status") in {"pending","running"})
+            generation_verified=bool(initial and initial.get("status")=="applied")
+            legacy_generated=initial is None
+
+            if preview:
+                lifecycle=LifecycleStatus.PREVIEW_READY
+                current=str(source.source_version) if source else str(p.version)
+                preview_state="ready"
+                preview_url=f"/api/solutions/{{solution_id}}/preview"
+            elif generation_failed:
+                lifecycle=LifecycleStatus.FAILED
+                current=None
+                preview_state="unavailable"
+                preview_url=None
+            elif generation_building:
+                lifecycle=LifecycleStatus.BUILDING
+                current=None
+                preview_state="unavailable"
+                preview_url=None
+            elif generation_verified:
+                # The build was previously verified, but its isolated preview has
+                # expired/stopped. Preserve the accepted source version without
+                # pretending an unrelated compatibility renderer is a preview.
+                lifecycle=LifecycleStatus.APPROVED
+                current=str(source.source_version) if source else None
+                preview_state="unavailable"
+                preview_url=None
+            else:
+                # Legacy generated projects predate the runner-backed Solution
+                # lifecycle and retain their compatibility preview behavior.
+                lifecycle=LifecycleStatus.APPROVED
+                current=str(source.source_version) if source else str(p.version)
+                preview_state="available"
+                preview_url=f"/api/solutions/{{solution_id}}/preview"
+
+            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=existing.name if existing else p.name,description=existing.description if existing else p.prompt[:4000],solution_type=existing.solution_type if existing else SolutionType.CUSTOM_SOLUTION,lifecycle_status=lifecycle,current_version_reference=current,preview_state=preview_state,preview_url=preview_url,production_state=existing.production_state if existing else "offline",production_url=existing.production_url if existing else None,visibility=existing.visibility if existing else "private",context_json=existing.context_json if existing else "{}")
         await db.flush()
 
     async def list(self,db,tenant_id):
@@ -160,6 +201,11 @@ class SolutionService:
             return f"/apps/{runtime.id}/preview"
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
         if preview:return f"/api/custom-software/previews/{preview.id}/"
+        # New generated Solutions are runner-backed: no active verified runner
+        # preview means there is no truthful preview target. Legacy generated
+        # projects retain the historical project renderer for compatibility.
+        initial=_context_payload(row).get("initialGeneration")
+        if isinstance(initial,dict):raise LookupError("Solution preview is not ready")
         return f"/api/custom-software/projects/{runtime.id}/preview"
 
     async def versions(self,db,tenant_id,solution_id):
