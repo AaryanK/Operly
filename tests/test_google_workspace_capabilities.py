@@ -1,5 +1,10 @@
+import os
 import unittest
+from unittest.mock import patch
 
+from fastapi import HTTPException
+
+from apps.api import connectors_router, personal_connectors_router
 from apps.api.connectors_router import google_capabilities
 from packages.capabilities.agent_harness import PluginAgentHarness, ROLE_AUTHORITY
 from packages.connectors.google_provider import (
@@ -124,6 +129,55 @@ class GoogleWorkspaceCapabilityTests(unittest.TestCase):
 
         self.assertNotIn("messaging:send", employee)
         self.assertIn("messaging:send", owner)
+
+
+class GoogleOAuthRoutingContractTests(unittest.TestCase):
+    def setUp(self):
+        self.shared_redirect = "https://operly.example/api/connectors/google/callback"
+        self.env = patch.dict(
+            os.environ,
+            {
+                "SESSION_SECRET": "test-session-secret",
+                "GOOGLE_OAUTH_REDIRECT_URI": self.shared_redirect,
+            },
+        )
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+
+    def test_personal_and_workspace_oauth_share_registered_redirect(self):
+        self.assertEqual(connectors_router.redirect_uri(), self.shared_redirect)
+        self.assertEqual(personal_connectors_router.redirect_uri(), self.shared_redirect)
+
+    def test_shared_callback_distinguishes_workspace_and_personal_signed_state(self):
+        workspace_state = connectors_router.serializer().dumps(
+            {"tenant_id": "tenant-1", "user_id": "owner-1", "tier": "basic"}
+        )
+        personal_state = personal_connectors_router.serializer().dumps(
+            {"user_id": "personal-1", "tier": "assistant", "ownership": "personal"}
+        )
+
+        workspace_ownership, workspace_data = connectors_router.load_google_oauth_state(
+            workspace_state
+        )
+        personal_ownership, personal_data = connectors_router.load_google_oauth_state(
+            personal_state
+        )
+
+        self.assertEqual(workspace_ownership, "workspace")
+        self.assertEqual(workspace_data["tenant_id"], "tenant-1")
+        self.assertEqual(personal_ownership, "personal")
+        self.assertEqual(personal_data["user_id"], "personal-1")
+
+    def test_shared_callback_rejects_tampered_or_expired_personal_state(self):
+        state = personal_connectors_router.serializer().dumps(
+            {"user_id": "personal-1", "ownership": "personal"}
+        )
+        with self.assertRaises(HTTPException):
+            connectors_router.load_google_oauth_state(state + "tampered")
+        with self.assertRaises(HTTPException):
+            connectors_router.load_google_oauth_state(state, max_age=-1)
 
 
 if __name__ == "__main__":

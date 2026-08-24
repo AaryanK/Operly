@@ -49,7 +49,7 @@ def serializer():
 
 def redirect_uri():
     return os.getenv(
-        "GOOGLE_PERSONAL_OAUTH_REDIRECT_URI",
+        "GOOGLE_OAUTH_REDIRECT_URI",
         os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
         + "/api/personal-connectors/google/callback",
     )
