@@ -145,10 +145,13 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ),
                     ),
+                    # A Personal AI run may carry the currently selected workspace id
+                    # for delegation. The surface remains private/direct and must
+                    # never become visible to that workspace's debug browser.
                     ModelRuntimeTrace(
                         run_id="run-personal",
                         conversation_id="discord:trace-channel",
-                        tenant_id=None,
+                        tenant_id=self.tenant.id,
                         user_id=self.owner.id,
                         principal_id=self.principal.id,
                         channel="discord",
@@ -249,6 +252,10 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
+            run_ids = {item["runId"] for item in listing["runs"]}
+            self.assertIn("run-workspace", run_ids)
+            self.assertNotIn("run-personal", run_ids)
+
             runtime = next(item for item in listing["runs"] if item["runId"] == "run-workspace")
             self.assertEqual(runtime["status"], "success")
             self.assertEqual(runtime["tokenUsage"]["inputTokens"], 123)
@@ -271,6 +278,26 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 payload["input"]["tools"][0]["function"]["name"],
                 "customer.lookup",
             )
+
+    async def test_personal_run_browser_keeps_private_run_visible_to_its_human(self):
+        async with self.sessions() as db:
+            owner = await db.get(AppUser, self.owner_id)
+            listing = await list_ai_runs(
+                tenant_id=None,
+                limit=75,
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            self.assertIn("run-personal", {item["runId"] for item in listing["runs"]})
+
+            detail = await get_ai_run(
+                "run-personal",
+                tenant_id=None,
+                kind="runtime",
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            self.assertEqual(detail["surface"], "private/direct")
 
     async def test_non_owner_cannot_browse_workspace_ai_runs(self):
         async with self.sessions() as db:
