@@ -102,6 +102,9 @@ class ModelInvocationProvider(BaseProvider):
         )
 
     async def verify(self, context, capability_name, arguments, result):
+        # The delegated content is the observation downstream agent/workflow steps
+        # need to compose. Verification must preserve it rather than reducing a
+        # successful model call to provider metadata only.
         return CapabilityResult(
             result.success and bool(result.evidence.get("content")),
             False,
@@ -111,5 +114,6 @@ class ModelInvocationProvider(BaseProvider):
                 "model": result.evidence.get("model"),
                 "resource_id": result.evidence.get("resource_id"),
                 "selected_tags": result.evidence.get("selected_tags") or [],
+                "content": result.evidence.get("content"),
             },
         )

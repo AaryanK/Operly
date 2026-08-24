@@ -44,7 +44,15 @@ async def append_event(db: AsyncSession, *, tenant_id: str, event_type: str,
                               metadata_json=metadata_json)
     db.add(row)
     await db.flush()
-    return _event(row)
+    event = _event(row)
+
+    # Plugin/business events do not execute models inside the producer transaction.
+    # They only mark matching durable Tasks pending; the existing scheduled-task
+    # worker later re-enters the normal harness/firewall boundary.
+    from packages.tasks.events import wake_workspace_tasks
+
+    await wake_workspace_tasks(db, event)
+    return event
 
 
 async def query_events(db: AsyncSession, tenant_id: str, *, event_type: str | None = None,

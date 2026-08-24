@@ -18,7 +18,11 @@ async def _sync_commands() -> None:
 
 
 async def start_embedded() -> None:
-    """Run the workspace-safe Discord gateway on the current application's event loop."""
+    """Run the workspace-safe Discord gateway on the current application's event loop.
+
+    Durable Task wakeups are owned by the platform Task lifecycle. Discord is only an
+    ingress/egress adapter and does not poll or schedule generic Tasks.
+    """
     token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN is missing")
@@ -30,6 +34,7 @@ async def start_embedded() -> None:
     finally:
         if not sync_task.done():
             sync_task.cancel()
+        await asyncio.gather(sync_task, return_exceptions=True)
 
 
 async def stop_embedded() -> None:

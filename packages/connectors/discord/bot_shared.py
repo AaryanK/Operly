@@ -22,6 +22,7 @@ from packages.channels.envelope import ChannelEnvelope
 from packages.channels.identity import IdentityService
 from packages.channels.linking import IdentityLinkService
 from packages.channels.service import ChannelService
+from packages.connectors.discord.scheduled_tasks import run_harness_task_job
 from packages.database.agent_models import AttachmentAudit
 from packages.database.channel_models import ChannelInstallation
 from packages.database.db import init_db, session_scope
@@ -480,11 +481,22 @@ async def run_scheduled_job(job_id: str) -> None:
         job = await db.get(ScheduledJob, job_id)
         if job is None or job.status != "pending":
             return
-        job.status = "running"
-        delivery = job.delivery
-        content = job.content
-        channel_id = job.channel_id
-        user_id = job.user_id
+        is_task = bool(job.task_id)
+        if not is_task:
+            job.status = "running"
+            delivery = job.delivery
+            content = job.content
+            channel_id = job.channel_id
+            user_id = job.user_id
+
+    if is_task:
+        await run_harness_task_job(
+            bot=bot,
+            scheduler=scheduler,
+            job_id=job_id,
+            runner=run_scheduled_job,
+        )
+        return
 
     try:
         if delivery == "dm":

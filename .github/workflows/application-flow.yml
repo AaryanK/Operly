@@ -58,6 +58,7 @@ on:
       - "tests/test_plugin_first_runtime.py"
       - "tests/test_multi_provider_model_portfolio.py"
       - "tests/test_openai_compatible_tool_arguments.py"
+      - "tests/test_harness_native_tasks.py"
       - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
@@ -103,6 +104,7 @@ jobs:
           alembic/versions/0029_studio_agent_runs.py
           alembic/versions/0032_scope_boundaries.py
           alembic/versions/0033_personal_connectors.py
+          alembic/versions/0037_harness_native_tasks.py
           packages/agents/runtime.py
           packages/capabilities/registry.py
           packages/capabilities/firewall.py
@@ -160,6 +162,7 @@ jobs:
           packages/connectors/discord/slash_commands.py
           packages/connectors/discord/bot_shared.py
           packages/connectors/discord/provider.py
+          packages/connectors/discord/scheduled_tasks.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
           packages/capabilities/context_provider.py
@@ -174,6 +177,8 @@ jobs:
           packages/capabilities/operations_provider.py
           packages/capabilities/studio_provider.py
           packages/capabilities/reminder_provider.py
+          packages/capabilities/task_provider.py
+          packages/capabilities/web_read_provider.py
           packages/capabilities/solution_provider.py
           packages/capabilities/surface_contract.py
           packages/capabilities/website_provider.py
@@ -242,6 +247,7 @@ jobs:
           tests/test_plugin_first_runtime.py
           tests/test_multi_provider_model_portfolio.py
           tests/test_openai_compatible_tool_arguments.py
+          tests/test_harness_native_tasks.py
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production

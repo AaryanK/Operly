@@ -242,9 +242,14 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(
+    tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -278,9 +283,14 @@ class ScheduledJob(Base):
     __tablename__ = "scheduled_jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(
+    tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

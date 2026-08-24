@@ -1,5 +1,6 @@
 """Plugin manifests, lifecycle runtime, and trusted application extensions."""
 
+from .events import emit_workspace_event
 from .extensions import (
     ApplicationPlugin,
     ApplicationPluginContext,
@@ -29,6 +30,7 @@ __all__ = [
     "ApplicationPluginRegistry",
     "ApplicationPluginUnavailable",
     "default_application_plugins",
+    "emit_workspace_event",
     "EventSpec",
     "PermissionSpec",
     "PluginLifecycleSpec",
