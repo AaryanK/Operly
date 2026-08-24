@@ -11,6 +11,7 @@ from packages.capabilities.agent_harness import ROLE_AUTHORITY
 from packages.capabilities.defaults import default_registry
 from packages.database.models import Approval
 from packages.database.product_models import SolutionImprovementProposal
+from packages.tasks.runtime import resume_task_after_approval
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
@@ -60,6 +61,7 @@ async def decide_approval(
 
     details = json.loads(row.payload_json or "{}")
     business_action_id = details.get("business_action_id")
+    task_resumed = 0
     if business_action_id:
         service = ActionService(
             db,
@@ -69,9 +71,15 @@ async def decide_approval(
         )
         try:
             if payload.status == "approved":
-                await service.approve(auth.tenant.id, business_action_id)
+                action = await service.approve(auth.tenant.id, business_action_id)
+                task_resumed = await resume_task_after_approval(
+                    db,
+                    approval_id,
+                    approved=str(action.status) == "VERIFIED",
+                )
             else:
                 await service.reject(auth.tenant.id, business_action_id)
+                await resume_task_after_approval(db, approval_id, approved=False)
                 proposal = await db.scalar(
                     select(SolutionImprovementProposal).where(
                         SolutionImprovementProposal.tenant_id == auth.tenant.id,
@@ -86,4 +94,8 @@ async def decide_approval(
         row.status = payload.status
 
     await db.commit()
-    return {"ok": True, "business_action_id": business_action_id}
+    return {
+        "ok": True,
+        "business_action_id": business_action_id,
+        "task_resumed": task_resumed,
+    }
