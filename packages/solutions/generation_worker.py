@@ -8,6 +8,7 @@ still executed only by the isolated runner; this worker is control-plane code.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import socket
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, desc, or_, select
 
 from packages.coding_harness.execution_loop import build_with_repair
+from packages.custom_software.compiler_planning import PLANNING_ENGINE
 from packages.custom_software.live_planning import PlanningBlocked, PlanningMode, PlannerUnavailable
 from packages.custom_software.model_planning_client import planning_mode
 from packages.custom_software.plan_service import (
@@ -130,6 +132,65 @@ def _planning_prompt(name: str, objective: str, context: dict[str, Any]) -> str:
     )[:20000]
 
 
+def _planning_input_digest(name: str, objective: str, context: dict[str, Any]) -> str:
+    """Fingerprint only inputs that are allowed to make an approved plan reusable."""
+    payload = {
+        "planningEngine": PLANNING_ENGINE,
+        "name": " ".join(str(name or "").split()),
+        "objective": " ".join(str(objective or "").split()),
+        "solutionManifest": context.get("solutionManifest", {}),
+        "implementationResolution": context.get("implementationResolution", {}),
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _reusable_approved_plan(
+    db,
+    row: SolutionRecord,
+    planning_input_digest: str,
+) -> SoftwarePlanRecord | None:
+    """Return a prior approved plan only when its semantic inputs still match.
+
+    Retries should resume from completed work instead of paying the planner again.
+    Older jobs that predate checkpoint fingerprints are intentionally not reused;
+    the first run on a new planning engine establishes a fresh trustworthy checkpoint.
+    """
+    prior_jobs = (
+        await db.scalars(
+            select(SolutionJob)
+            .where(
+                SolutionJob.tenant_id == row.tenant_id,
+                SolutionJob.solution_id == row.id,
+                SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
+                SolutionJob.plan_id.is_not(None),
+            )
+            .order_by(desc(SolutionJob.attempt), desc(SolutionJob.created_at))
+            .limit(20)
+        )
+    ).all()
+    for prior in prior_jobs:
+        evidence = _evidence(prior)
+        if evidence.get("planningEngine") != PLANNING_ENGINE:
+            continue
+        if evidence.get("planningInputDigest") != planning_input_digest:
+            continue
+        plan = await db.get(SoftwarePlanRecord, prior.plan_id)
+        if (
+            plan is not None
+            and plan.tenant_id == row.tenant_id
+            and plan.approved_version is not None
+        ):
+            return plan
+    return None
+
+
 async def _next_attempt(db, tenant_id: str, solution_id: str) -> int:
     previous = await db.scalar(
         select(SolutionJob)
@@ -191,35 +252,62 @@ async def queue_generated_generation(
     context = _context(row)
     owner = context.get("ownerIntent") if isinstance(context.get("ownerIntent"), dict) else {}
     objective = " ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000]
+    planning_input_digest = _planning_input_digest(row.name, objective, context)
+    reusable_plan = await _reusable_approved_plan(db, row, planning_input_digest)
+    source_reference = (
+        f"software-plan:{reusable_plan.id}:{reusable_plan.approved_version}"
+        if reusable_plan is not None
+        else f"owner-intent:{row.id}"
+    )
+    evidence: dict[str, Any] = {
+        "objective": objective,
+        "createdBy": user_id,
+        "implementationResolution": context.get("implementationResolution", {}),
+        "planningEngine": PLANNING_ENGINE,
+        "planningInputDigest": planning_input_digest,
+    }
+    if reusable_plan is not None:
+        evidence.update(
+            {
+                "reusedSoftwarePlanId": reusable_plan.id,
+                "reusedSoftwarePlanVersion": reusable_plan.approved_version,
+            }
+        )
     job = SolutionJob(
         tenant_id=row.tenant_id,
         solution_id=row.id,
-        source_version_reference=f"owner-intent:{row.id}",
+        source_version_reference=source_reference,
         job_type=GENERATED_JOB_TYPE,
         status="queued",
         attempt=attempt,
         created_by=user_id,
+        plan_id=reusable_plan.id if reusable_plan is not None else None,
         log_json="[]",
-        evidence_json=json.dumps(
-            {
-                "objective": objective,
-                "createdBy": user_id,
-                "implementationResolution": context.get("implementationResolution", {}),
-            },
-            ensure_ascii=False,
-        ),
+        evidence_json=json.dumps(evidence, ensure_ascii=False),
         idempotency_key=f"solution:{row.id}:generated-build:{attempt}",
     )
     _append_log(job, "queue", "queued", "Generated Solution queued for durable worker execution")
+    if reusable_plan is not None:
+        _append_log(
+            job,
+            "planning",
+            "reused",
+            f"Reusing approved SoftwarePlan v{reusable_plan.approved_version}; retry resumes at source generation",
+        )
     db.add(job)
     await db.flush()
 
-    context["initialGeneration"] = {
+    initial: dict[str, Any] = {
         "status": "queued",
-        "stage": "planning",
+        "stage": "source_generation" if reusable_plan is not None else "planning",
         "jobId": job.id,
         "attempt": attempt,
     }
+    if reusable_plan is not None:
+        initial["softwarePlanId"] = reusable_plan.id
+        initial["softwarePlanVersion"] = reusable_plan.approved_version
+        initial["resumedFromCheckpoint"] = "planning"
+    context["initialGeneration"] = initial
     row.lifecycle_status = LifecycleStatus.BUILDING
     row.current_version_reference = None
     row.preview_state = "unavailable"
