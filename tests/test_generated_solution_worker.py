@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.database.custom_software_models import GeneratedProject
+from packages.custom_software.compiler_planning import PLANNING_ENGINE
+from packages.database.custom_software_models import GeneratedProject, SoftwarePlanRecord
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant
 from packages.database.product_models import SolutionJob
@@ -63,6 +64,21 @@ class GeneratedSolutionWorkerTests(unittest.IsolatedAsyncioTestCase):
             )
         ).all()
 
+    async def _fail_job(self, row, job, *, stage="source_generation", error="build failed"):
+        job.status = "failed"
+        job.ended_at = datetime.utcnow()
+        context = json.loads(row.context_json)
+        context["initialGeneration"] = {
+            "status": "retryable",
+            "stage": stage,
+            "jobId": job.id,
+            "attempt": job.attempt,
+            "error": error,
+        }
+        row.context_json = json.dumps(context)
+        row.lifecycle_status = LifecycleStatus.FAILED
+        await self.db.commit()
+
     async def test_compose_returns_queued_before_planning_or_source_generation(self):
         row, decision = await self._create_generated()
 
@@ -79,6 +95,9 @@ class GeneratedSolutionWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jobs[0].status, "queued")
         self.assertEqual(jobs[0].created_by, self.user.id)
         self.assertIsNone(jobs[0].plan_id)
+        evidence = json.loads(jobs[0].evidence_json)
+        self.assertEqual(evidence["planningEngine"], PLANNING_ENGINE)
+        self.assertEqual(len(evidence["planningInputDigest"]), 64)
         project = await self.db.get(GeneratedProject, row.runtime_reference)
         self.assertIsNotNone(project)
         self.assertIsNone(project.plan_id)
@@ -110,19 +129,7 @@ class GeneratedSolutionWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_generated_solution_retry_only_queues_new_attempt(self):
         row, _ = await self._create_generated()
         first = (await self._jobs(row.id))[0]
-        first.status = "failed"
-        first.ended_at = datetime.utcnow()
-        context = json.loads(row.context_json)
-        context["initialGeneration"] = {
-            "status": "retryable",
-            "stage": "planning",
-            "jobId": first.id,
-            "attempt": 1,
-            "error": "planner unavailable",
-        }
-        row.context_json = json.dumps(context)
-        row.lifecycle_status = LifecycleStatus.FAILED
-        await self.db.commit()
+        await self._fail_job(row, first, stage="planning", error="planner unavailable")
 
         retried = await retry_solution_initial_generation(
             self.db,
@@ -137,6 +144,90 @@ class GeneratedSolutionWorkerTests(unittest.IsolatedAsyncioTestCase):
         jobs = await self._jobs(row.id)
         self.assertEqual([item.attempt for item in jobs], [1, 2])
         self.assertEqual([item.status for item in jobs], ["failed", "queued"])
+
+    async def test_retry_reuses_matching_approved_plan_and_resumes_source_generation(self):
+        row, _ = await self._create_generated()
+        first = (await self._jobs(row.id))[0]
+        plan = SoftwarePlanRecord(
+            tenant_id=self.tenant.id,
+            prompt="approved fixture plan",
+            current_version=1,
+            approved_version=1,
+            status="approved",
+            created_by=self.user.id,
+        )
+        self.db.add(plan)
+        await self.db.flush()
+        first.plan_id = plan.id
+        evidence = json.loads(first.evidence_json)
+        evidence.update({"softwarePlanId": plan.id, "softwarePlanVersion": 1})
+        first.evidence_json = json.dumps(evidence)
+        await self._fail_job(row, first)
+
+        retried = await retry_solution_initial_generation(
+            self.db,
+            tenant_id=self.tenant.id,
+            user_id=self.user.id,
+            solution_id=row.id,
+            service=self.service,
+        )
+        await self.db.commit()
+
+        jobs = await self._jobs(row.id)
+        second = jobs[-1]
+        self.assertEqual(second.attempt, 2)
+        self.assertEqual(second.plan_id, plan.id)
+        self.assertEqual(second.source_version_reference, f"software-plan:{plan.id}:1")
+        retry_evidence = json.loads(second.evidence_json)
+        self.assertEqual(retry_evidence["planningEngine"], PLANNING_ENGINE)
+        self.assertEqual(retry_evidence["reusedSoftwarePlanId"], plan.id)
+        self.assertEqual(retry_evidence["reusedSoftwarePlanVersion"], 1)
+        payload = solution_json(retried)
+        self.assertEqual(payload["generation"]["stage"], "source_generation")
+        context = json.loads(retried.context_json)
+        self.assertEqual(context["initialGeneration"]["resumedFromCheckpoint"], "planning")
+        logs = json.loads(second.log_json)
+        self.assertTrue(any(item["status"] == "reused" for item in logs))
+
+    async def test_retry_does_not_reuse_plan_when_owner_intent_changes(self):
+        row, _ = await self._create_generated()
+        first = (await self._jobs(row.id))[0]
+        plan = SoftwarePlanRecord(
+            tenant_id=self.tenant.id,
+            prompt="approved fixture plan",
+            current_version=1,
+            approved_version=1,
+            status="approved",
+            created_by=self.user.id,
+        )
+        self.db.add(plan)
+        await self.db.flush()
+        first.plan_id = plan.id
+        await self._fail_job(row, first)
+
+        context = json.loads(row.context_json)
+        context["ownerIntent"]["objective"] = "Build a changed attendance system with manager approval."
+        row.context_json = json.dumps(context)
+        await self.db.commit()
+
+        retried = await retry_solution_initial_generation(
+            self.db,
+            tenant_id=self.tenant.id,
+            user_id=self.user.id,
+            solution_id=row.id,
+            service=self.service,
+        )
+        await self.db.commit()
+
+        jobs = await self._jobs(row.id)
+        second = jobs[-1]
+        self.assertIsNone(second.plan_id)
+        self.assertEqual(solution_json(retried)["generation"]["stage"], "planning")
+        retry_evidence = json.loads(second.evidence_json)
+        self.assertNotEqual(
+            retry_evidence["planningInputDigest"],
+            json.loads(first.evidence_json)["planningInputDigest"],
+        )
 
     async def test_worker_marks_preview_ready_only_after_verified_build(self):
         row, _ = await self._create_generated()
