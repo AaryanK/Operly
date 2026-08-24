@@ -38,6 +38,17 @@ _SECRET_KEY_PARTS = (
     "private_key",
     "session_token",
 )
+_HIDDEN_REASONING_KEYS = frozenset(
+    {
+        "reasoning",
+        "reasoning_details",
+        "reasoning_content",
+        "thinking",
+        "thinking_content",
+        "chain_of_thought",
+        "chain-of-thought",
+    }
+)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]{8,}")
 _SK_RE = re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b")
 
@@ -55,13 +66,19 @@ def _secret_key(key: str) -> bool:
     return any(part in lowered for part in _SECRET_KEY_PARTS)
 
 
+def _hidden_reasoning_key(key: str) -> bool:
+    return str(key or "").strip().lower() in _HIDDEN_REASONING_KEYS
+
+
 def _redact_string(value: str) -> str:
     text = _BEARER_RE.sub("Bearer [REDACTED]", value)
     return _SK_RE.sub("[REDACTED_API_KEY]", text)
 
 
 def redact_trace_value(value: Any, *, key: str = "") -> Any:
-    """Return a JSON-safe trace copy with credential-shaped material removed."""
+    """Return a JSON-safe trace copy with secrets and hidden reasoning removed."""
+    if key and _hidden_reasoning_key(key):
+        return "[REDACTED_HIDDEN_REASONING]"
     if key and _secret_key(key):
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -108,6 +125,7 @@ async def _persist_trace(phase: str, call_index: int, payload: dict[str, Any]) -
         "traceVersion": 1,
         "exactPayloadDigest": _digest(payload),
         "redactionApplied": True,
+        "hiddenReasoningRedacted": True,
         "payload": redact_trace_value(payload),
     }
     encoded = _canonical(envelope)
@@ -245,7 +263,7 @@ async def trace_rows(db, tenant_id: str, run_id: str) -> list[StudioModelTrace]:
                 select(StudioModelTrace)
                 .where(StudioModelTrace.tenant_id == tenant_id, StudioModelTrace.run_id == run_id)
                 .order_by(StudioModelTrace.call_index.asc(), StudioModelTrace.created_at.asc())
-                .limit(500)
+                .limit(5000)
             )
         ).all()
     )
@@ -255,7 +273,12 @@ def trace_json(row: StudioModelTrace) -> dict[str, Any]:
     try:
         payload = json.loads(row.payload_json or "{}")
     except Exception:
-        payload = {"traceVersion": 1, "redactionApplied": True, "payload": {}}
+        payload = {
+            "traceVersion": 1,
+            "redactionApplied": True,
+            "hiddenReasoningRedacted": True,
+            "payload": {},
+        }
     return {
         "id": row.id,
         "callIndex": row.call_index,
