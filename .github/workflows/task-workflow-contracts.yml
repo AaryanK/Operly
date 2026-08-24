@@ -13,6 +13,7 @@ on:
       - "tests/test_harness_native_tasks.py"
       - "tests/test_workflow_tasks.py"
       - "tests/test_channel_agnostic_tasks.py"
+      - "tests/test_task_schedule_resume.py"
       - ".github/workflows/task-workflow-contracts.yml"
   workflow_dispatch:
 
@@ -59,3 +60,4 @@ jobs:
           tests/test_harness_native_tasks.py
           tests/test_workflow_tasks.py
           tests/test_channel_agnostic_tasks.py
+          tests/test_task_schedule_resume.py
