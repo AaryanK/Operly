@@ -132,6 +132,14 @@ jobs:
           alembic/versions/0034_provider_trace_ids.py
           alembic/versions/0035_conversation_runtime_trace.py
           alembic/versions/0039_scope_aware_actions.py
+      - name: Run qualification-aware routing regressions
+        env:
+          OPERLY_ENV: test
+        run: python -m pytest -q tests/test_qualification_aware_routing.py
+      - name: Run multi-provider portfolio regressions
+        env:
+          OPERLY_ENV: test
+        run: python -m pytest -q tests/test_multi_provider_model_portfolio.py
       - name: Run runtime hardening regressions
         env:
           ADMIN_PASSWORD: test-admin-password-1234
