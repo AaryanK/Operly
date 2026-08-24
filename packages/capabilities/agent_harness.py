@@ -16,6 +16,11 @@ from packages.security.execution_context import (
     resolve_execution_context,
 )
 from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, default_permissions
+from packages.security.surfaces import (
+    SurfaceKind,
+    capability_surface_allowed,
+    surface_from_legacy_metadata,
+)
 
 
 ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
@@ -36,7 +41,6 @@ _PRIVATE_CONNECTOR_AUTHORITY = {
     "gmail.delete_draft": "gmail:draft",
 }
 
-_PERSONAL_ONLY_PREFIXES = ("account.",)
 _DISCORD_CURRENT_CONTEXT = {
     "discord.context",
     "discord.read_recent_messages",
@@ -45,18 +49,9 @@ _DISCORD_CURRENT_CONTEXT = {
     "discord.create_thread",
 }
 
-_DEFAULT_INITIAL_CAPABILITIES = frozenset(
-    {
-        "company.read_state",
-        "company.search_events",
-        "runtime.context",
-        "context.human.search",
-        "context.private_workspace_search",
-        "context.tenant.search",
-        "context.conversation.search",
-        "solution.inspect",
-    }
-)
+# Keep the boot surface deliberately tiny. Everything else must be discovered and
+# described before its exact schema is forwarded to a model.
+_DEFAULT_INITIAL_CAPABILITIES = frozenset({"runtime.context"})
 
 
 @dataclass(slots=True)
@@ -66,30 +61,39 @@ class PluginInvocationContext:
     role: str
     objective: str
     channel: str = "web"
+    # Keep metadata before surface for positional compatibility with older callers.
     metadata: dict[str, Any] = field(default_factory=dict)
+    surface: SurfaceKind | str | None = None
+
+    def __post_init__(self) -> None:
+        explicit = SurfaceKind.coerce(self.surface)
+        self.surface = (
+            explicit
+            if explicit is not SurfaceKind.UNKNOWN
+            else surface_from_legacy_metadata(self.channel, self.metadata)
+        )
 
 
 class PluginAgentHarness:
     """Agent-facing capability view over one canonical invocation boundary.
 
-    Capability visibility is session-scoped and progressive. The harness performs
-    one bounded semantic preflight for each new objective so useful capabilities do
-    not depend on the model remembering a discovery ceremony. Preflight only exposes
-    schemas the caller is already authorized to see; execution still crosses the
-    canonical firewall and approval boundary.
+    Capability visibility is session-scoped and genuinely progressive. The model
+    begins with a tiny discovery/runtime kernel; authorization and surface policy
+    determine the eligible universe, semantic discovery determines relevance, and
+    exact schemas appear only after describe. Execution always crosses the canonical
+    firewall and approval boundary.
     """
 
     def __init__(self, registry=None):
         self.registry = registry
         self._session_views: dict[str, SessionCapabilityView] = {}
-        self._preflight_objectives: dict[str, str] = {}
-        self._preflight_diagnostics: dict[str, list[dict[str, Any]]] = {}
 
     async def registry_for(self, context: PluginInvocationContext):
         if self.registry:
             return self.registry
 
         from sqlalchemy import select
+
         from packages.connectors.google_provider import (
             GMAIL_MODIFY,
             GMAIL_READONLY,
@@ -129,13 +133,17 @@ class PluginAgentHarness:
                     "retryable": False,
                 }
 
-            connected = [row for row in candidates if row.enabled and row.status == "connected"]
+            connected = [
+                row for row in candidates if row.enabled and row.status == "connected"
+            ]
             if not connected:
                 disabled = any(not row.enabled for row in candidates)
                 reason = "connector_disabled" if disabled else "connector_disconnected"
                 return {
                     "configured": False,
-                    "healthy": False if any(row.status == "error" for row in candidates) else None,
+                    "healthy": (
+                        False if any(row.status == "error" for row in candidates) else None
+                    ),
                     "missing_connector": provider,
                     "reason": reason,
                     "next_action": "Enable or reconnect the integration for this workspace.",
@@ -165,16 +173,29 @@ class PluginAgentHarness:
                 required = {GMAIL_READONLY}
             missing_scopes = [] if satisfied else sorted(required - union_scopes or required)
 
-            health_values = {str(row.health_status or "unknown").lower() for row in connected}
-            healthy = False if health_values & {"error", "failed", "unhealthy"} else True if health_values & {"healthy", "ok"} else None
-            last_error = next((str(row.last_error)[:300] for row in connected if row.last_error), None)
+            health_values = {
+                str(row.health_status or "unknown").lower() for row in connected
+            }
+            healthy = (
+                False
+                if health_values & {"error", "failed", "unhealthy"}
+                else True
+                if health_values & {"healthy", "ok"}
+                else None
+            )
+            last_error = next(
+                (str(row.last_error)[:300] for row in connected if row.last_error),
+                None,
+            )
             if healthy is False:
                 return {
                     "configured": True,
                     "healthy": False,
                     "missing_scopes": missing_scopes,
                     "reason": "provider_unhealthy",
-                    "next_action": "Retry after the provider recovers or reconnect the integration.",
+                    "next_action": (
+                        "Retry after the provider recovers or reconnect the integration."
+                    ),
                     "retryable": True,
                     "provider_error": last_error,
                 }
@@ -184,14 +205,16 @@ class PluginAgentHarness:
                     "healthy": healthy,
                     "missing_scopes": missing_scopes,
                     "reason": "oauth_scope_missing",
-                    "next_action": "Reconnect the integration and grant the required OAuth scope.",
+                    "next_action": (
+                        "Reconnect the integration and grant the required OAuth scope."
+                    ),
                     "retryable": False,
                 }
             return {"configured": True, "healthy": healthy, "retryable": False}
 
         # Keep known capabilities registered even when their connector is missing.
-        # Availability explains connector/scope/health state; progressive exposure
-        # still prevents unusable capabilities from cluttering the model surface.
+        # Availability explains connector/scope/health state while progressive
+        # discovery prevents unusable schemas from cluttering the model surface.
         return default_registry(None, config_resolver=config_resolver)
 
     def authority(self, role: str) -> set[str]:
@@ -210,7 +233,10 @@ class PluginAgentHarness:
                     workspace_id=context.tenant_id,
                     user_id=context.user_id,
                     channel=context.channel,
-                    conversation_id=str(context.metadata.get("_conversation_id") or "") or None,
+                    surface=context.surface,
+                    conversation_id=(
+                        str(context.metadata.get("_conversation_id") or "") or None
+                    ),
                     metadata=context.metadata,
                     require_membership=True,
                 )
@@ -223,9 +249,7 @@ class PluginAgentHarness:
 
     @staticmethod
     def _is_private_surface(context: PluginInvocationContext) -> bool:
-        if context.channel == "discord":
-            return bool(context.metadata.get("is_direct"))
-        return not bool(context.metadata.get("shared_surface"))
+        return SurfaceKind.coerce(context.surface).allows_personal_global
 
     @classmethod
     def capability_authorized(
@@ -239,7 +263,10 @@ class PluginAgentHarness:
             return False
         if context is None:
             return True
-        if capability_id.startswith(_PERSONAL_ONLY_PREFIXES) and not cls._is_private_surface(context):
+        if not capability_surface_allowed(
+            capability_id,
+            SurfaceKind.coerce(context.surface),
+        ):
             return False
         if capability_id in _DISCORD_CURRENT_CONTEXT and context.channel != "discord":
             return False
@@ -249,11 +276,13 @@ class PluginAgentHarness:
     def _session_key(context: PluginInvocationContext) -> str:
         conversation = str(context.metadata.get("_conversation_id") or "").strip()
         principal = str(context.user_id or "anonymous")
+        surface = SurfaceKind.coerce(context.surface).value
         return ":".join(
             (
                 context.tenant_id,
                 principal,
                 context.channel,
+                surface,
                 conversation or "ephemeral",
             )
         )
@@ -265,7 +294,9 @@ class PluginAgentHarness:
         authority: set[str] | None = None,
         registry=None,
     ) -> SessionCapabilityView:
-        authority = set(authority) if authority is not None else await self.authority_for(context)
+        authority = (
+            set(authority) if authority is not None else await self.authority_for(context)
+        )
         registry = registry or await self.registry_for(context)
         key = self._session_key(context)
         existing = self._session_views.get(key)
@@ -300,39 +331,8 @@ class PluginAgentHarness:
         *,
         limit: int = 6,
     ) -> list[dict[str, Any]]:
-        """Bounded discovery owned by the harness, never by model initiative."""
-        authority = await self.authority_for(context)
-        if not authority:
-            return []
-        registry = await self.registry_for(context)
-        view = await self.session_view_for(context, authority=authority, registry=registry)
-        key = self._session_key(context)
-        objective = str(context.objective or "").strip()
-        if self._preflight_objectives.get(key) == objective:
-            return list(self._preflight_diagnostics.get(key, ()))
-
-        rows = registry.search(
-            context.tenant_id,
-            objective,
-            authority=authority,
-            limit=max(1, min(int(limit), 10)),
-        )
-        expose_ids = []
-        diagnostics = []
-        for row in rows:
-            availability = row.get("availability") or {}
-            diagnostics.append(
-                {
-                    "id": row.get("id"),
-                    "availability": availability,
-                }
-            )
-            if availability.get("available") is True and row.get("authorized") is not False:
-                expose_ids.append(str(row.get("id") or ""))
-        view.expose(expose_ids)
-        self._preflight_objectives[key] = objective
-        self._preflight_diagnostics[key] = diagnostics
-        return list(diagnostics)
+        """Compatibility hook; objective preflight no longer exposes schemas."""
+        return []
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
         authority = await self.authority_for(context)
@@ -344,7 +344,6 @@ class PluginAgentHarness:
             authority=authority,
             registry=registry,
         )
-        await self.preflight(context)
         stage = str(context.metadata.get("capability_stage") or "adaptive")
         return view.schemas(stage=stage)
 
@@ -368,7 +367,9 @@ class PluginAgentHarness:
                 "surfaceHidden": False,
                 "exposed": False,
                 "retryable": False,
-                "nextAction": "Use capability.search to discover an installed operation.",
+                "nextAction": (
+                    "Use capability.search to discover an installed operation."
+                ),
                 "reason": "not_registered",
             }
         payload = registry.availability(
@@ -376,15 +377,29 @@ class PluginAgentHarness:
             definition.id,
             authority=authority,
         ).as_dict()
-        surface_allowed = self.capability_authorized(definition.id, authority, context)
-        payload["surfaceHidden"] = not surface_allowed and not payload.get("permissionDenied")
+        surface_allowed = self.capability_authorized(
+            definition.id,
+            authority,
+            context,
+        )
+        payload["surfaceHidden"] = (
+            not surface_allowed and not payload.get("permissionDenied")
+        )
         if payload["surfaceHidden"]:
             payload["available"] = False
             payload["reason"] = "surface_hidden"
-            payload["nextAction"] = "Use this capability from an allowed private/workspace surface."
+            payload["nextAction"] = (
+                "Use this capability from an allowed private/workspace surface."
+            )
         try:
-            view = await self.session_view_for(context, authority=authority, registry=registry)
-            payload["exposed"] = definition.id in view.exposed_ids and view._visible(definition.id)
+            view = await self.session_view_for(
+                context,
+                authority=authority,
+                registry=registry,
+            )
+            payload["exposed"] = (
+                definition.id in view.exposed_ids and view._visible(definition.id)
+            )
         except Exception:
             payload["exposed"] = False
         return payload
@@ -417,7 +432,9 @@ class PluginAgentHarness:
                     "surfaceHidden": False,
                     "exposed": False,
                     "retryable": False,
-                    "nextAction": "Use an authenticated workspace context with sufficient permission.",
+                    "nextAction": (
+                        "Use an authenticated workspace context with sufficient permission."
+                    ),
                     "reason": "permission_denied",
                 },
             }
@@ -441,10 +458,15 @@ class PluginAgentHarness:
             payload["exposed"] = False
             if payload.get("reason") in {None, "available"}:
                 payload["reason"] = "not_exposed"
-            payload["nextAction"] = payload.get("nextAction") or "Discover/describe this capability in the current agent session."
+            payload["nextAction"] = payload.get("nextAction") or (
+                "Discover/describe this capability in the current agent session."
+            )
             return {
                 "ok": False,
-                "error": "Capability is not exposed in this model session; discover and describe it first",
+                "error": (
+                    "Capability is not exposed in this model session; "
+                    "discover and describe it first"
+                ),
                 "availability": payload,
             }
 
@@ -467,7 +489,9 @@ class PluginAgentHarness:
         )[:2000]
 
         runtime_metadata = dict(context.metadata)
-        if name in {"capability.search", "capability.describe"}:
+        runtime_metadata["_surface_kind"] = execution.surface.value
+        runtime_metadata["surface"] = execution.surface.value
+        if name in {"capability.search", "capability.describe", "context.search", "context.get"}:
             runtime_metadata["authority"] = sorted(authority)
 
         firewall = ActionBackedCapabilityFirewall(registry)
@@ -499,7 +523,11 @@ class PluginAgentHarness:
         async def schemas():
             return await self.schemas(context)
 
-        async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
+        async def invoke(
+            name: str,
+            arguments: dict[str, Any],
+            call_id: str | None,
+        ):
             return await self.invoke(name, arguments, context, call_id=call_id)
 
         inference_metadata = {
@@ -507,8 +535,13 @@ class PluginAgentHarness:
             "tenant_id": context.tenant_id,
             "user_id": context.user_id,
             "channel": context.channel,
-            "conversation_id": str(context.metadata.get("_conversation_id") or "") or None,
-            "capability_stage": str(context.metadata.get("capability_stage") or "adaptive"),
+            "surface": SurfaceKind.coerce(context.surface).value,
+            "conversation_id": (
+                str(context.metadata.get("_conversation_id") or "") or None
+            ),
+            "capability_stage": str(
+                context.metadata.get("capability_stage") or "adaptive"
+            ),
         }
         return await AgentRuntime(max_steps=max_steps).run(
             model=client,
