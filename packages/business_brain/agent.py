@@ -100,15 +100,27 @@ class AgentService:
 
     @staticmethod
     def _surface_for(request: AgentInput) -> SurfaceKind:
+        """Resolve only surfaces valid for the workspace-scoped runtime.
+
+        Personal/private account surfaces belong to PersonalAgentService. Even an
+        internal caller that supplies PERSONAL_PRIVATE or DISCORD_DM metadata cannot
+        turn this workspace runtime into a personal one; direct workspace calls are
+        downgraded to WORKSPACE_PRIVATE and remain tenant-bound.
+        """
         explicit = SurfaceKind.coerce(request.metadata.get("_surface_kind"))
-        if explicit is not SurfaceKind.UNKNOWN:
+        if explicit in {
+            SurfaceKind.WORKSPACE_SHARED,
+            SurfaceKind.WORKSPACE_PRIVATE,
+            SurfaceKind.DISCORD_GUILD,
+            SurfaceKind.SYSTEM_TASK,
+        }:
             return explicit
         direct = bool(request.metadata.get("is_direct"))
+        if direct:
+            return SurfaceKind.WORKSPACE_PRIVATE
         if str(request.channel or "").strip().lower() == "discord":
-            return SurfaceKind.DISCORD_DM if direct else SurfaceKind.DISCORD_GUILD
-        # This service is workspace-scoped. A direct workspace view is private only
-        # within that workspace; account-level Personal AI uses PersonalAgentService.
-        return SurfaceKind.WORKSPACE_PRIVATE if direct else SurfaceKind.WORKSPACE_SHARED
+            return SurfaceKind.DISCORD_GUILD
+        return SurfaceKind.WORKSPACE_SHARED
 
     async def run(self, request: AgentInput) -> dict:
         if not request.tenant_id or not request.principal_id:
@@ -141,6 +153,7 @@ class AgentService:
                         workspace_id=request.tenant_id,
                         user_id=user_id,
                         channel=request.channel,
+                        surface=surface_kind,
                         conversation_id=conversation.id,
                         metadata=request.metadata,
                         require_membership=True,
@@ -156,6 +169,7 @@ class AgentService:
         request.metadata["role"] = trusted_role
         request.metadata["allow_tenant_context"] = allow_tenant_context
         request.metadata["_surface_kind"] = surface_kind.value
+        request.metadata["shared_surface"] = surface_kind.is_shared
 
         # Managed-application routing is now an explicit compatibility mode.
         builder_selected = bool(
