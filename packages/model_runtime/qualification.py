@@ -1,8 +1,8 @@
 """Runtime view of empirical model-route qualification evidence.
 
-The benchmark harness measures concrete provider + model routes.  This module turns
+The benchmark harness measures concrete provider + model routes. This module turns
 that evidence into conservative routing hints for the existing ModelRegistry rather
-than creating a second scheduler.  Positive deep evidence may promote capabilities
+than creating a second scheduler. Positive deep evidence may promote capabilities
 (for example a route that proved persistent tool calling); inconclusive provider
 failures never count against model quality, and advertised capabilities are never
 removed from one failed probe.
@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
+import packages.model_runtime.catalog as _catalog
 from packages.model_runtime.catalog import model_resources, register_model_resource
 
 
@@ -28,8 +29,15 @@ _TRANSIENT_CLASSIFICATIONS = frozenset(
     }
 )
 
+# Keys inserted into the existing registered-resource overlay by qualification.
+# The catalog is process-global, while provider configuration may be temporarily
+# patched in tests and differs between processes in production. Always remove our
+# previous derived rows before recomputing so qualification never leaks a route into
+# an unrelated ModelRegistry/session after that provider is no longer configured.
+_QUALIFICATION_OVERLAY_KEYS: set[tuple[str, str]] = set()
+
 # This seed is evidence from the production-key deep qualification run performed on
-# 2026-08-24.  Planning hit Groq capacity and is therefore intentionally not promoted.
+# 2026-08-24. Planning hit Groq capacity and is therefore intentionally not promoted.
 # Future benchmark reports can augment/replace this evidence through
 # OPERLY_MODEL_QUALIFICATION_JSON without code changes.
 _BOOTSTRAP_REPORTS: tuple[dict[str, Any], ...] = (
@@ -101,8 +109,8 @@ class RouteQualification:
     def task_score(self, task: str) -> int:
         """Return a small evidence score for observability/tests and future policy.
 
-        Runtime ranking currently consumes the derived ``qualified-*`` tags through
-        the existing ModelRegistry sort. Keeping this score here makes the evidence
+        Runtime ranking consumes the derived ``qualified-*`` tags through the
+        existing ModelRegistry sort. Keeping this score here makes the evidence
         semantics explicit without introducing a parallel routing engine.
         """
         key = str(task or "").strip().lower()
@@ -207,13 +215,33 @@ def qualification_for(resource_id: str) -> RouteQualification | None:
     return qualification_profiles().get(str(resource_id or "").strip())
 
 
-def apply_model_qualification_overrides() -> None:
-    """Promote only capabilities that concrete routes have empirically demonstrated.
+def _clear_previous_overlays() -> None:
+    """Remove only rows that this module derived on a prior resolution pass."""
+    if not _QUALIFICATION_OVERLAY_KEYS:
+        return
+    # catalog.register_model_resource is intentionally the public write primitive.
+    # There is not yet a public remove primitive; keep this cleanup tightly scoped to
+    # keys we inserted ourselves and use the catalog's own lock. This prevents the
+    # optional evidence layer from changing the lifetime of operator/discovery rows.
+    lock = getattr(_catalog, "_LOCK", None)
+    registered = getattr(_catalog, "_REGISTERED", None)
+    if lock is None or not isinstance(registered, dict):
+        _QUALIFICATION_OVERLAY_KEYS.clear()
+        return
+    with lock:
+        for key in tuple(_QUALIFICATION_OVERLAY_KEYS):
+            registered.pop(key, None)
+    _QUALIFICATION_OVERLAY_KEYS.clear()
 
-    Registered catalog resources have the highest normal catalog precedence, so this
-    is a small overlay on the existing resource system. No new registry, worker, or
-    routing service is introduced.
+
+def apply_model_qualification_overrides() -> None:
+    """Promote only capabilities that active concrete routes demonstrated.
+
+    Recompute the overlay from the current provider catalog every time. This keeps
+    temporary/test provider configuration from leaking into later registry instances
+    while still reusing the canonical ModelResource/ModelRegistry machinery.
     """
+    _clear_previous_overlays()
     profiles = qualification_profiles()
     if not profiles:
         return
@@ -227,14 +255,13 @@ def apply_model_qualification_overrides() -> None:
         capabilities.update(profile.verified_capabilities & promotable)
         tags = set(resource.tags)
         tags.update(profile.routing_tags)
-        register_model_resource(
-            replace(
-                resource,
-                capabilities=frozenset(capabilities),
-                tags=frozenset(tags),
-            ),
-            replace=True,
+        promoted = replace(
+            resource,
+            capabilities=frozenset(capabilities),
+            tags=frozenset(tags),
         )
+        register_model_resource(promoted, replace=True)
+        _QUALIFICATION_OVERLAY_KEYS.add((promoted.provider, promoted.id))
 
 
 def qualification_preference_tags(
