@@ -3,7 +3,6 @@ from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from packages.capabilities.agent_harness import PluginInvocationContext
@@ -11,11 +10,13 @@ from packages.capabilities.event_provider import EventDiscoveryProvider
 from packages.capabilities.task_provider import dump_task_payload, load_task_payload
 from packages.capabilities.workflow_task_provider import WorkflowTaskProvider
 from packages.company.events.service import BusinessEvent
+from packages.database import principal_models as _principal_models  # noqa: F401
 from packages.database.db import Base
 from packages.database.models import AppUser, ScheduledJob, Task, Tenant
 from packages.plugins import EventSpec, PluginContribution, PluginManifest, default_plugin_runtime
 from packages.tasks.events import wake_workspace_tasks
-from packages.tasks.workflow import WorkflowExecutor, WorkflowValidationError, validate_workflow
+from packages.tasks.safe_workflow import ApprovalAwareWorkflowExecutor
+from packages.tasks.workflow import WorkflowExecutionError, WorkflowExecutor, WorkflowValidationError, validate_workflow
 
 
 async def _database():
@@ -143,6 +144,61 @@ def test_workflow_executor_composes_capability_model_and_condition():
         )
         assert result.output == "Important Nepal story"
         assert result.state["last_score"] == 91
+
+    asyncio.run(scenario())
+
+
+class _WaitingRegistry:
+    def definition(self, capability):
+        return SimpleNamespace(id=capability)
+
+    def availability(self, tenant_id, capability, *, authority=None):
+        return SimpleNamespace(available=True, as_dict=lambda: {"available": True})
+
+
+class _WaitingView:
+    def expose(self, ids):
+        self.ids = ids
+
+
+class _WaitingHarness:
+    async def authority_for(self, context):
+        return SimpleNamespace()
+
+    async def registry_for(self, context):
+        return _WaitingRegistry()
+
+    def capability_authorized(self, capability_id, authority, context):
+        return True
+
+    async def session_view_for(self, context, *, authority, registry):
+        return _WaitingView()
+
+    async def invoke(self, capability, args, context, *, call_id=None):
+        return {
+            "ok": True,
+            "status": "WAITING_APPROVAL",
+            "approval_id": "approval-123",
+            "observation": {"reason": "human approval required"},
+        }
+
+
+def test_workflow_does_not_advance_past_waiting_approval():
+    async def scenario():
+        executor = ApprovalAwareWorkflowExecutor(harness=_WaitingHarness())
+        try:
+            await executor.execute(
+                {
+                    "steps": [
+                        {"id": "publish", "type": "invoke", "capability": "social.publish", "args": {"text": "hello"}},
+                        {"id": "after", "type": "emit", "value": "should-not-run"},
+                    ]
+                },
+                context=SimpleNamespace(tenant_id="tenant"),
+            )
+            assert False, "approval-gated action must suspend the workflow"
+        except WorkflowExecutionError as error:
+            assert "workflow_waiting_approval:approval-123" in str(error)
 
     asyncio.run(scenario())
 
