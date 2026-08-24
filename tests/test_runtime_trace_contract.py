@@ -1,9 +1,10 @@
+import json
 import unittest
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from packages.database.model_trace import redact_trace_value
+from packages.database.model_trace import encode_trace_envelope, redact_trace_value
 from packages.database.schema import ALEMBIC_HEAD
 from packages.model_runtime.trace_context import (
     ProviderWireEvent,
@@ -38,6 +39,28 @@ class RuntimeTraceContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(value["authorization"], "[REDACTED]")
         self.assertEqual(value["nested"]["api_key"], "[REDACTED]")
+
+    def test_trace_envelope_keeps_large_model_visible_payload_complete(self):
+        # This intentionally exceeds the former 4M trace cap. AI Debug must be able
+        # to answer what the model actually received, not replace it with a summary.
+        model_visible_content = "context-segment-" * 300_000
+        encoded = encode_trace_envelope(
+            {
+                "input": {
+                    "messages": [
+                        {"role": "system", "content": model_visible_content},
+                        {"role": "user", "content": "Use all supplied context."},
+                    ],
+                    "tools": [{"type": "function", "function": {"name": "lookup", "description": "test"}}],
+                },
+                "authorization": "Bearer abcdefghijklmnop",
+            }
+        )
+        envelope = json.loads(encoded)
+        self.assertNotIn("truncated", envelope)
+        self.assertEqual(envelope["payload"]["input"]["messages"][0]["content"], model_visible_content)
+        self.assertEqual(envelope["payload"]["input"]["tools"][0]["function"]["name"], "lookup")
+        self.assertEqual(envelope["payload"]["authorization"], "[REDACTED]")
 
     def test_nested_trace_context_inherits_conversation_and_run(self):
         self.assertEqual(current_trace_metadata(), {})
