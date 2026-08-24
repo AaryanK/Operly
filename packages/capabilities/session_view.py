@@ -11,6 +11,8 @@ DEFAULT_KERNEL_IDS = frozenset(
     {
         "capability.search",
         "capability.describe",
+        "context.search",
+        "context.get",
         "model.invoke",
     }
 )
