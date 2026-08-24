@@ -1,0 +1,1 @@
+Neither semantic search, session exposure, context descriptors, nor model delegation are execution authorization. Canonical database-backed ExecutionContext and the capability firewall remain final authority.
