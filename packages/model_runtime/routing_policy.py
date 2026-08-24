@@ -43,15 +43,22 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=2,
     ),
+    # The ordinary manager/worker should be cheap and responsive. Strong/heavy
+    # reasoning is available explicitly through model.deep_reason rather than making
+    # every micro-step pay frontier-model latency and context cost.
     "business_agent": RoleRoutingProfile(
         "business_agent",
         frozenset({"text", "tools"}),
-        frozenset({"orchestrator", "verified", "fast", "reliable"}),
+        frozenset({"orchestrator", "small", "verified", "fast", "reliable", "free"}),
+        avoid_tags=frozenset({"slow"}),
+        max_models=3,
     ),
     "coding": RoleRoutingProfile(
         "coding",
         frozenset({"text", "coding", "tools"}),
-        frozenset({"coding", "verified", "fast", "reliable"}),
+        frozenset({"coding", "small", "verified", "fast", "reliable"}),
+        avoid_tags=frozenset({"slow"}),
+        max_models=3,
     ),
     "repair": RoleRoutingProfile(
         "repair",
@@ -71,29 +78,32 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
     "requirements_analyst": RoleRoutingProfile(
         "requirements_analyst",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "fast", "reliable"}),
+        frozenset({"reasoning", "small", "verified", "fast", "reliable", "free"}),
+        max_models=3,
     ),
     "capability_placement": RoleRoutingProfile(
         "capability_placement",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "fast"}),
+        frozenset({"reasoning", "small", "verified", "fast"}),
+        max_models=3,
     ),
     "bounded_task": RoleRoutingProfile(
         "bounded_task",
         frozenset({"text", "tools"}),
         frozenset({"fast", "small", "verified", "free", "reliable"}),
+        avoid_tags=frozenset({"slow"}),
         max_models=3,
     ),
     "attachment_text": RoleRoutingProfile(
         "attachment_text",
         frozenset({"text", "reasoning"}),
-        frozenset({"fast", "verified", "reliable", "free"}),
+        frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=3,
     ),
     "attachment_vision": RoleRoutingProfile(
         "attachment_vision",
         frozenset({"text", "reasoning", "vision"}),
-        frozenset({"fast", "verified", "reliable", "free"}),
+        frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=3,
     ),
 }
@@ -120,4 +130,6 @@ def auto_portfolio_enabled() -> bool:
     value = os.getenv("OPERLY_MODEL_AUTO_PORTFOLIO", "1").strip().lower()
     if value in {"0", "false", "no", "off"}:
         return False
-    return configured_provider_count() >= 2
+    # Automatic capability/tag routing is useful even with one provider because a
+    # provider may expose multiple models with very different latency/cost profiles.
+    return configured_provider_count() >= 1
