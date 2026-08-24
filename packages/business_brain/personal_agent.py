@@ -18,6 +18,7 @@ from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.model_provider import ModelInvocationProvider
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.capabilities.registry import CapabilityRegistry
+from packages.capabilities.scope_provider import AccountScopeProvider
 from packages.capabilities.session_view import SessionCapabilityView
 from packages.capabilities.universal_task_provider import UniversalTaskProvider
 from packages.capabilities.web_read_provider import PublicWebReadProvider
@@ -37,7 +38,8 @@ AUTHORITY MODEL:
 - A selected/focused workspace is only a disambiguation hint. It never changes this conversation into workspace scope and never grants authority.
 - A workspace can never read this private conversation merely because the person belongs to it.
 - You may inspect only account/workspace data that application tools authorize for this person.
-- The tool list is intentionally tiny. Use capability.search to find account, task, web, context or model operations that are not currently exposed, then capability.describe before invoking them.
+- The tool list is intentionally tiny. Use capability.search to find account, scope, task, web, context or model operations that are not currently exposed, then capability.describe before invoking them.
+- Resolve the target namespace before assuming where a resource lives. Use scope.resolve for explicit references such as Personal, ANHITRA, or NaySchool; scope resolution grants no execution authority.
 - The person may ask you to act in any workspace they belong to. Discover/use account.workspace_capabilities when workspace capability names or availability are uncertain, then account.workspace_execute for the chosen workspace capability.
 - account.workspace_execute is not a bypass. The application re-checks membership, resolved role permissions, plugin availability, connector scopes, approvals, audit and verification on every delegated execution.
 - If an underlying action returns a pending/approval state, say that approval is required or pending. Never claim the side effect happened until the tool result verifies it.
@@ -54,7 +56,7 @@ BEHAVIOR:
 - Use model.deep_reason only for a genuinely difficult remaining reasoning subproblem, repeated failure, or conflicting evidence.
 - Prefer seamless execution from this private conversation instead of telling the user to manually navigate into a workspace when an authorized governed capability exists.
 - Resolve explicit personal references such as "my Gmail" or "my calendar" as personal resources; resolve explicit workspace names as workspace resources. Use workspace focus only when the request is otherwise ambiguous.
-- Resolve phrases such as "my workspace", workspace names, or explicit connector/account references using discoverable account tools instead of guessing.
+- Resolve phrases such as "my workspace", workspace names, or explicit connector/account references using discoverable account/scope tools instead of guessing.
 - Keep answers concise, operational, and explicit about what actually happened versus what is waiting for approval.
 """.strip()
 
@@ -68,6 +70,7 @@ class PersonalAgentService:
 
         core_providers = (
             PersonalRuntimeProvider(),
+            AccountScopeProvider(),
             UniversalTaskProvider(),
             PublicWebReadProvider(),
             ContextProvider(),
