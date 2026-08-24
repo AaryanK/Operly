@@ -19,10 +19,24 @@ def test_authorized_capabilities_are_not_bulk_exposed():
     )
 
     tools = _tool_ids(view)
-    assert tools == set(DEFAULT_KERNEL_IDS)
+    # Kernel membership is still authority-gated. This fake principal omitted
+    # model:invoke, so escalation tools must not appear merely because they are kernel IDs.
+    assert tools == set(DEFAULT_KERNEL_IDS) - {"model.invoke", "model.deep_reason"}
     assert "crm.list_contacts" not in tools
     assert "crm.create_contact" not in tools
     assert "orders.create" not in tools
+
+
+def test_model_escalation_kernel_is_visible_when_model_authority_exists():
+    registry = default_registry(set())
+    view = SessionCapabilityView(
+        registry,
+        "tenant-test",
+        {"model:invoke"},
+    )
+    tools = _tool_ids(view)
+    assert "model.invoke" in tools
+    assert "model.deep_reason" in tools
 
 
 def test_describe_observation_progressively_exposes_exact_schema():
