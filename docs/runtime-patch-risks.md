@@ -1,0 +1,1 @@
+Security risks under test: fail-open surface inference, shared-session reuse across privacy boundaries, personal context preloading on shared surfaces, personal capability discovery on workspace surfaces, and context-reference delegation bypass.
