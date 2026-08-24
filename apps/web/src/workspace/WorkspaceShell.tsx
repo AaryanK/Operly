@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
@@ -43,6 +43,8 @@ const navGlyphs: Record<WorkspaceSection, string> = {
   settings: "⚙",
 };
 
+const mobilePrimarySections: WorkspaceSection[] = ["home", "operly", "activity", "solutions"];
+
 function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
   switch (section) {
     case "home": return <WorkspaceHome workspace={workspace} />;
@@ -62,6 +64,7 @@ function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
 }
 
 export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
     try { return window.localStorage.getItem("operly.workspace-nav-collapsed") === "true"; }
     catch { return false; }
@@ -71,6 +74,21 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
     (result[item.group] ||= []).push(item);
     return result;
   }, {});
+  const mobileSecondarySections = visibleSections.filter((item) => !mobilePrimarySections.includes(item.id));
+  const secondaryActive = mobileSecondarySections.some((item) => item.id === section);
+
+  useEffect(() => {
+    setMobileMoreOpen(false);
+  }, [workspace.id, section]);
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMoreOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileMoreOpen]);
 
   function toggleCollapsed() {
     setCollapsed((current) => {
@@ -80,8 +98,13 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
     });
   }
 
+  function goTo(nextSection: WorkspaceSection) {
+    setMobileMoreOpen(false);
+    navigate(workspacePath(workspace.id, nextSection));
+  }
+
   return (
-    <div className={`workspace-shell ${collapsed ? "workspace-nav-collapsed" : ""}`}>
+    <div className={`workspace-shell ${collapsed ? "workspace-nav-collapsed" : ""} ${mobileMoreOpen ? "workspace-more-open" : ""}`}>
       <aside className="workspace-nav">
         <div className="workspace-nav-head">
           <header className="workspace-identity" onClick={() => navigate(workspacePath(workspace.id, "settings"))} title="Open workspace settings">
@@ -101,7 +124,25 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
           ))}
         </nav>
       </aside>
+
       <WorkspaceContent workspace={workspace} section={section} onScopeRefresh={onScopeRefresh} />
+
+      <button className="workspace-more-backdrop" type="button" aria-label="Close workspace navigation" onClick={() => setMobileMoreOpen(false)} />
+      <aside className="workspace-more-sheet" aria-label="More workspace sections">
+        <header><div><small>{workspace.name}</small><strong>More</strong></div><button type="button" aria-label="Close more navigation" onClick={() => setMobileMoreOpen(false)}>×</button></header>
+        <div className="workspace-more-list">
+          {mobileSecondarySections.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => goTo(item.id)}><span aria-hidden="true">{navGlyphs[item.id]}</span><span><strong>{item.label}</strong><small>{groupLabels[item.group]}</small></span></button>)}
+        </div>
+      </aside>
+
+      <nav className="workspace-mobile-nav" aria-label={`${workspace.name} primary sections`}>
+        {mobilePrimarySections.map((id) => {
+          const item = visibleSections.find((candidate) => candidate.id === id);
+          if (!item) return null;
+          return <button key={id} className={section === id ? "active" : ""} onClick={() => goTo(id)}><span aria-hidden="true">{navGlyphs[id]}</span><small>{item.label}</small></button>;
+        })}
+        <button className={secondaryActive || mobileMoreOpen ? "active" : ""} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((current) => !current)}><span aria-hidden="true">•••</span><small>More</small></button>
+      </nav>
     </div>
   );
 }
