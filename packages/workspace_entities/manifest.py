@@ -52,11 +52,20 @@ def validate_workspace_entity_source(source: Any) -> RuntimeValidation:
             errors.append(f"{WORKSPACE_ENTITY_CAPABILITY_ID} requires {WORKSPACE_ENTITY_MANIFEST}")
         return RuntimeValidation(not errors, tuple(errors))
     if not bindings:
-        errors.append(f"{WORKSPACE_ENTITY_MANIFEST} requires a {WORKSPACE_ENTITY_CAPABILITY_ID} binding")
-    if len(bindings) > 1:
-        errors.append("Exactly one workspace entity graph binding is supported per Solution")
+        errors.append(f"{WORKSPACE_ENTITY_MANIFEST} requires {WORKSPACE_ENTITY_CAPABILITY_ID} bindings")
 
-    declared_kinds = {item.kind for item in declaration.entities}
+    declared = {item.semanticName: item.kind for item in declaration.entities}
+    bound = {item.semanticName for item in bindings}
+    if len(bound) != len(bindings):
+        errors.append("Workspace entity binding semantic names must be unique")
+    missing = sorted(set(declared) - bound)
+    extra = sorted(bound - set(declared))
+    if missing:
+        errors.append("Missing canonical entity bindings: " + ", ".join(missing))
+    if extra:
+        errors.append("Undeclared canonical entity bindings: " + ", ".join(extra))
+
+    declared_kinds = set(declared.values())
     # If a Solution claims a canonical entity, it must not also create an app-private
     # table with the same business meaning. This is the anti-silo invariant.
     for path, payload in _files(source).items():
