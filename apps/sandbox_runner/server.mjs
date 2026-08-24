@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { Pool } from "pg";
 import { Sandbox } from "railway";
 import {
+  bindingRuntimePlan,
   bindingTarget,
   hmacHex,
   publicBaseUrl,
@@ -36,14 +37,15 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for dur
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
 
 const BINDING_PROXY = String.raw`
-import asyncio, http.client, json, os
+import asyncio, http.client, json, os, sys
 from urllib.parse import urlsplit
 
-cfg=json.load(open("/run/operly-binding.json","r",encoding="utf-8"))
+config_path=sys.argv[1] if len(sys.argv)>1 else "/run/operly-binding.json"
+cfg=json.load(open(config_path,"r",encoding="utf-8"))
 target=urlsplit(cfg["target"])
 token=cfg["token"]
-prefix=cfg.get("prefix","/api/runtime/relational").rstrip("/")
-port=int(cfg.get("port",8083))
+prefix=cfg["prefix"].rstrip("/")
+port=int(cfg["port"])
 MAX_BODY=1024*1024
 
 def upstream(method,path,body,content_type):
@@ -263,21 +265,12 @@ async function detached(box, command, cwd = "/") {
   return sessionName;
 }
 
-function bindingRows(submission) {
-  return (submission.serviceBindings || []).map((binding) => {
-    if (binding.capabilityId !== "data.relational") {
-      throw Object.assign(new Error(`unsupported service binding: ${binding.capabilityId}`), { classification: "service_binding_failure" });
-    }
-    if (!binding.transport?.runtimeToken || !binding.transport?.gatewayUrl) {
-      throw Object.assign(new Error("relational runtime authorization is unavailable"), { classification: "service_binding_failure" });
-    }
-    return {
-      semanticName: binding.semanticName,
-      capabilityId: binding.capabilityId,
-      required: binding.required !== false,
-      endpoint: "http://127.0.0.1:8083",
-    };
-  });
+function validatedBindingPlan(submission) {
+  const plan = bindingRuntimePlan(submission);
+  for (const proxy of plan.proxies) {
+    bindingTarget(proxy.gatewayUrl, BINDING_HOSTS);
+  }
+  return plan;
 }
 
 async function applyMigrations(submission, bundle) {
@@ -313,19 +306,21 @@ async function applyMigrations(submission, bundle) {
   };
 }
 
-async function startBindingProxy(box, submission) {
-  const relational = (submission.serviceBindings || []).filter((x) => x.capabilityId === "data.relational");
-  if (!relational.length) return null;
-  const binding = relational[0];
-  const transport = binding.transport;
-  const target = bindingTarget(transport.gatewayUrl, BINDING_HOSTS);
+async function startBindingProxies(box, plan) {
+  if (!plan.proxies.length) return [];
   await box.files.write("/opt/operly/binding_proxy.py", BINDING_PROXY, { mode: 0o700 });
-  await box.files.write(
-    "/run/operly-binding.json",
-    JSON.stringify({ target, token: transport.runtimeToken, prefix: "/api/runtime/relational", port: 8083 }),
-    { mode: 0o600 },
-  );
-  return detached(box, "exec python3 /opt/operly/binding_proxy.py", "/");
+  const sessions = [];
+  for (const proxy of plan.proxies) {
+    const target = bindingTarget(proxy.gatewayUrl, BINDING_HOSTS);
+    const configPath = `/run/operly-binding-${proxy.port}.json`;
+    await box.files.write(
+      configPath,
+      JSON.stringify({ target, token: proxy.runtimeToken, prefix: proxy.prefix, port: proxy.port }),
+      { mode: 0o600 },
+    );
+    sessions.push(await detached(box, `exec python3 /opt/operly/binding_proxy.py ${shellQuote(configPath)}`, "/"));
+  }
+  return sessions;
 }
 
 async function installDependencies(box, submission) {
@@ -364,7 +359,7 @@ async function runBuild(jobId, payload) {
     const submission = payload.submission;
     const bundle = rebuildBundle(submission, payload.bundle);
     const manifest = validateFullstackSource(submission, bundle);
-    const rows = bindingRows(submission);
+    const bindingPlan = validatedBindingPlan(submission);
     const template = await sandboxTemplate();
     box = await Sandbox.create(template, {
       environmentId: ENVIRONMENT_ID,
@@ -377,7 +372,7 @@ async function runBuild(jobId, payload) {
     for (const file of bundle.files) {
       await box.files.write(`/workspace/${file.path}`, file.content, { mode: 0o644 });
     }
-    await box.files.write("/workspace/.operly-bindings.json", JSON.stringify(rows), { mode: 0o444 });
+    await box.files.write("/workspace/.operly-bindings.json", JSON.stringify(bindingPlan.rows), { mode: 0o444 });
     await execChecked(box, "chown -R operly:operly /workspace && chmod 0444 /workspace/.operly-bindings.json", { label: "source_staging" });
     events.push({ state: "source_staging", message: "Staged immutable source bundle" });
 
@@ -416,8 +411,10 @@ async function runBuild(jobId, payload) {
     const migrationReport = await applyMigrations(submission, bundle);
     if (migrationReport.configured) events.push({ state: "migrating", message: "Relational application schema is current", exitCode: 0 });
 
-    const bindingSession = await startBindingProxy(box, submission);
-    if (bindingSession) events.push({ state: "binding_services", message: "Started root-only credential-hiding relational binding sidecar", exitCode: 0 });
+    const bindingSessions = await startBindingProxies(box, bindingPlan);
+    if (bindingSessions.length) {
+      events.push({ state: "binding_services", message: `Started ${bindingSessions.length} root-only credential-hiding capability binding sidecar${bindingSessions.length === 1 ? "" : "s"}`, exitCode: 0 });
+    }
 
     await blockGeneratedEgress(box);
     await execChecked(box, "chmod -R a-w /workspace", { label: "security_policy_violation" });
@@ -489,10 +486,14 @@ async function runBuild(jobId, payload) {
           generatedUid: 10001,
           sourceReadOnly: true,
           generatedEgress: "blocked_after_dependency_resolution",
+          capabilityBindings: {
+            sidecars: bindingSessions.length,
+            capabilities: bindingPlan.rows.map((item) => item.capabilityId),
+          },
           relationalData: {
             configured: migrationReport.configured,
             currentVersion: migrationReport.currentVersion ?? null,
-            bindingSidecars: bindingSession ? 1 : 0,
+            bindingSidecars: bindingPlan.rows.filter((item) => item.capabilityId === "data.relational").length,
           },
         },
         failureEvidence: {},
@@ -674,7 +675,7 @@ async function handle(req, res) {
         if (!payload.submission || typeof payload.submission.idempotencyKey !== "string" || payload.submission.idempotencyKey.length < 8) throw new Error("invalid idempotency key");
         const bundle = rebuildBundle(payload.submission, payload.bundle);
         validateFullstackSource(payload.submission, bundle);
-        bindingRows(payload.submission);
+        validatedBindingPlan(payload.submission);
       } catch (error) {
         return signedJson(res, 400, { error: error.message });
       }

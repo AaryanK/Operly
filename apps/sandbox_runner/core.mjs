@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 
 export const MAX_FILES = 100;
 export const MAX_BYTES = 2_000_000;
+export const BINDING_PORT_BASE = 8083;
+export const RUNTIME_BINDING_PREFIXES = Object.freeze({
+  "data.relational": "/api/runtime/relational",
+  "data.workspace_entities": "/api/runtime/entities",
+  "identity.app_users": "/api/runtime/app-identity",
+});
 const SAFE_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 export function stableJson(value) {
@@ -26,6 +32,46 @@ export function safeEqual(left, right) {
   const b = Buffer.from(String(right || ""));
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+export function bindingRuntimePlan(submission) {
+  if (!submission || typeof submission !== "object") throw new Error("submission is required");
+  const bindings = submission.serviceBindings ?? [];
+  if (!Array.isArray(bindings)) throw new Error("serviceBindings must be an array");
+  const rows = [];
+  const proxies = [];
+  const semanticNames = new Set();
+  for (let index = 0; index < bindings.length; index += 1) {
+    const binding = bindings[index];
+    if (!binding || typeof binding !== "object") throw new Error("service binding entries must be objects");
+    const capabilityId = String(binding.capabilityId || "");
+    const semanticName = String(binding.semanticName || "");
+    const prefix = RUNTIME_BINDING_PREFIXES[capabilityId];
+    if (!prefix) throw new Error(`unsupported service binding: ${capabilityId || "missing capability"}`);
+    if (!semanticName) throw new Error(`service binding semanticName is required for ${capabilityId}`);
+    if (semanticNames.has(semanticName)) throw new Error(`duplicate service binding semanticName: ${semanticName}`);
+    semanticNames.add(semanticName);
+    const transport = binding.transport;
+    if (!transport || typeof transport.runtimeToken !== "string" || !transport.runtimeToken || typeof transport.gatewayUrl !== "string" || !transport.gatewayUrl) {
+      throw new Error(`runtime authorization is unavailable for ${capabilityId}`);
+    }
+    const port = BINDING_PORT_BASE + index;
+    rows.push({
+      semanticName,
+      capabilityId,
+      required: binding.required !== false,
+      endpoint: `http://127.0.0.1:${port}`,
+    });
+    proxies.push({
+      semanticName,
+      capabilityId,
+      gatewayUrl: transport.gatewayUrl,
+      runtimeToken: transport.runtimeToken,
+      prefix,
+      port,
+    });
+  }
+  return { rows, proxies };
 }
 
 export function normalizedPath(path) {

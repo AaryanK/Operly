@@ -187,6 +187,70 @@ async def _record_binding_unavailable(db, row, submission: BuildSubmission, erro
     await db.refresh(row)
 
 
+def _classify_runner_submit_error(error: Exception) -> dict:
+    status = getattr(error, "status", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    response = getattr(error, "response_body", None)
+    detail = ""
+    if isinstance(response, dict):
+        detail = str(response.get("error") or response.get("detail") or "").strip()
+    message = detail or str(error) or type(error).__name__
+    message = " ".join(message.split())[:1000]
+    if status is not None and 400 <= status < 500 and status not in {408, 409, 425, 429}:
+        classification = "runner_submission_rejected"
+        retryable = False
+    else:
+        classification = "runner_unavailable"
+        retryable = True
+    return {
+        "classification": classification,
+        "retryable": retryable,
+        "status": status,
+        "message": message,
+    }
+
+
+async def _record_runner_submit_error(db, row, submission: BuildSubmission, error: Exception):
+    evidence = _classify_runner_submit_error(error)
+    classification = evidence["classification"]
+    details = {
+        "message": evidence["message"],
+        "runtime": submission.stackId,
+        "runtimeVersion": submission.stackVersion,
+        "runnerStatus": evidence["status"],
+        "retryable": evidence["retryable"],
+    }
+    await _event(
+        db,
+        row,
+        "failed",
+        event_type=classification,
+        message=classification,
+        details=details,
+    )
+    row.failure_classification = classification
+    row.result_json = json.dumps(
+        {
+            "code": classification,
+            "runtime": submission.stackId,
+            "runtimeVersion": submission.stackVersion,
+            "runnerStatus": evidence["status"],
+            "failureEvidence": {
+                "classification": classification,
+                "message": evidence["message"],
+                "runnerStatus": evidence["status"],
+                "retryable": evidence["retryable"],
+            },
+        }
+    )
+    row.completed_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+
+
 async def _submit_persisted_build(
     db,
     row: RunnerBuildRecord,
@@ -218,33 +282,7 @@ async def _submit_persisted_build(
     try:
         response = await adapter.submit(transport_submission, bundle)
     except Exception as error:
-        await _event(
-            db,
-            row,
-            "failed",
-            event_type="runner_unavailable",
-            message="runner_unavailable",
-            details={
-                "message": str(error),
-                "runtime": submission.stackId,
-                "runtimeVersion": submission.stackVersion,
-            },
-        )
-        row.failure_classification = "runner_unavailable"
-        row.result_json = json.dumps(
-            {
-                "code": "runner_unavailable",
-                "runtime": submission.stackId,
-                "runtimeVersion": submission.stackVersion,
-                "failureEvidence": {
-                    "classification": "runner_unavailable",
-                    "message": str(error),
-                },
-            }
-        )
-        row.completed_at = datetime.utcnow()
-        await db.commit()
-        await db.refresh(row)
+        await _record_runner_submit_error(db, row, submission, error)
         return row
 
     return await apply_runner_response(db, row, response, submission)
