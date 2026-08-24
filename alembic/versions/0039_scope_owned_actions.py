@@ -55,7 +55,7 @@ def upgrade():
                     ["id"],
                     ondelete="CASCADE",
                 )
-            if columns.get("tenant_id") is not None:
+            if "tenant_id" in columns:
                 batch.alter_column(
                     "tenant_id",
                     existing_type=sa.String(length=36),
