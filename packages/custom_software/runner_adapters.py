@@ -13,6 +13,7 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -21,6 +22,7 @@ from packages.custom_software.runner_contracts import BuildSubmission, RunnerRes
 from packages.custom_software.runtime_profiles import runtime_capabilities, runtime_profile
 from packages.custom_software.source_bundles import SourceBundle
 from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable, validate_runner_url
+from packages.model_runtime.trace_context import RuntimeTraceEvent, emit_runtime_trace_event
 
 
 class RunnerAdapter(abc.ABC):
@@ -46,6 +48,59 @@ class RunnerAdapter(abc.ABC):
         raise NotImplementedError
 
 
+def _safe_runner_payload(method: str, path: str, payload) -> dict:
+    """Keep execution evidence while never persisting runner transport grants/source text."""
+    if not isinstance(payload, dict):
+        return {"method": method, "path": path, "payloadType": type(payload).__name__}
+    if path != "/v1/builds":
+        return {"method": method, "path": path, "payload": payload}
+    submission = dict(payload.get("submission") or {})
+    bindings = []
+    for raw in submission.get("serviceBindings") or []:
+        item = dict(raw or {})
+        transport = item.pop("transport", None) or {}
+        gateway = str(transport.get("gatewayUrl") or "")
+        item["transport"] = {
+            "configured": bool(transport),
+            "gatewayHost": urlparse(gateway).hostname if gateway else None,
+            "runtimeTokenPresent": bool(transport.get("runtimeToken")),
+            "migrationTokenPresent": bool(transport.get("migrationToken")),
+        }
+        bindings.append(item)
+    submission["serviceBindings"] = bindings
+    raw_bundle = payload.get("bundle") or {}
+    files = []
+    for item in raw_bundle.get("files") or []:
+        content = str((item or {}).get("content") or "")
+        files.append(
+            {
+                "path": (item or {}).get("path"),
+                "generatedBy": (item or {}).get("generatedBy"),
+                "bytes": len(content.encode("utf-8")),
+                "digest": "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+        )
+    return {
+        "method": method,
+        "path": path,
+        "submission": submission,
+        "bundle": {"manifest": raw_bundle.get("manifest"), "files": files},
+    }
+
+
+async def _runner_trace(event_type: str, payload, *, phase: str = "event", classification: str | None = None, retryable: bool | None = None) -> None:
+    await emit_runtime_trace_event(
+        RuntimeTraceEvent(
+            event_type=event_type,
+            payload=payload,
+            phase=phase,
+            resource_id="sandbox_runner_http",
+            classification=classification,
+            retryable=retryable,
+        )
+    )
+
+
 class ExternalRunnerAdapter(RunnerAdapter):
     implementation = "external_https_v1"
     isolation_profile = "remote_container_or_microvm"
@@ -57,24 +112,77 @@ class ExternalRunnerAdapter(RunnerAdapter):
 
     async def _request(self, method, path, payload=None):
         if not self.url or not self.token:
+            await _runner_trace(
+                "runner.http.not_configured",
+                {"method": method, "path": path},
+                phase="error",
+                classification="runner_not_configured",
+                retryable=True,
+            )
             raise SandboxUnavailable("External isolated runner is not configured")
         self.url = validate_runner_url(self.url)
         raw = json.dumps(payload or {}, sort_keys=True).encode()
         signature = hmac.new(self.token.encode(), raw, hashlib.sha256).hexdigest()
         timeout = aiohttp.ClientTimeout(total=30)
+        await _runner_trace("runner.http.request", _safe_runner_payload(method, path, payload or {}))
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.request(method, self.url + path, data=raw, headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json", "X-Operly-Signature": signature}) as response:
                     body = await response.read()
-                    if response.status not in range(200, 300):
-                        raise SandboxFailure(f"Runner request failed with status {response.status}")
-                    expected = hmac.new(self.token.encode(), body, hashlib.sha256).hexdigest()
-                    if not hmac.compare_digest(response.headers.get("X-Operly-Signature", ""), expected):
+                    supplied_signature = response.headers.get("X-Operly-Signature", "")
+                    signature_valid = False
+                    if supplied_signature:
+                        expected = hmac.new(self.token.encode(), body, hashlib.sha256).hexdigest()
+                        signature_valid = hmac.compare_digest(supplied_signature, expected)
+                    if response.status in range(200, 300) and not signature_valid:
+                        await _runner_trace(
+                            "runner.http.invalid_signature",
+                            {"method": method, "path": path, "status": response.status},
+                            phase="error",
+                            classification="runner_response_signature_invalid",
+                            retryable=False,
+                        )
                         raise SandboxFailure("External runner response signature is invalid")
-                    return json.loads(body)
+                    try:
+                        parsed = json.loads(body or b"{}")
+                    except Exception:
+                        parsed = {"rawBody": body.decode("utf-8", errors="replace")[:4000]}
+                    await _runner_trace(
+                        "runner.http.response",
+                        {
+                            "method": method,
+                            "path": path,
+                            "status": response.status,
+                            "signed": bool(supplied_signature),
+                            "signatureValid": signature_valid if supplied_signature else None,
+                            "body": parsed,
+                        },
+                        phase="error" if response.status not in range(200, 300) else "event",
+                        classification="runner_http_rejected" if 400 <= response.status < 500 else "runner_http_failure" if response.status >= 500 else None,
+                        retryable=response.status >= 500 or response.status in {408, 409, 425, 429},
+                    )
+                    if response.status not in range(200, 300):
+                        detail = ""
+                        if isinstance(parsed, dict):
+                            detail = str(parsed.get("error") or parsed.get("detail") or "").strip()
+                        message = f"Runner request failed with status {response.status}"
+                        if detail:
+                            message += f": {detail[:1000]}"
+                        error = SandboxFailure(message)
+                        error.status = response.status
+                        error.response_body = parsed
+                        raise error
+                    return parsed
         except SandboxFailure:
             raise
         except (aiohttp.ClientError, ValueError) as error:
+            await _runner_trace(
+                "runner.http.communication_error",
+                {"method": method, "path": path, "type": type(error).__name__, "message": str(error)},
+                phase="error",
+                classification="runner_communication_failure",
+                retryable=True,
+            )
             raise SandboxFailure("External runner communication failed") from error
 
     async def capabilities(self) -> dict | None:
@@ -83,10 +191,6 @@ class ExternalRunnerAdapter(RunnerAdapter):
         try:
             self._capabilities = await self._request("GET", "/v1/capabilities")
         except SandboxFailure as error:
-            # Runners deployed before capability negotiation existed only knew the
-            # original Python stdlib profile.  Treat a missing endpoint as that
-            # explicit legacy contract rather than pretending every new profile
-            # is supported.
             if "status 404" not in str(error):
                 raise
             self._capabilities = {
