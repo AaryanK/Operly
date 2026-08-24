@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from packages.business_brain.agent import AgentService
 from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.context.broker import ContextBroker
+from packages.model_runtime.contracts import ModelSelector
+from packages.model_runtime.registry import ModelRegistry
+from packages.model_runtime.routing_policy import role_routing_profile
 from packages.retrieval.semantic import SemanticDocument, SemanticTextIndex
 from packages.security.surfaces import SurfaceKind
 
@@ -108,3 +111,54 @@ def test_workspace_agent_surface_is_explicit_and_never_account_private():
     assert AgentService._surface_for(shared) is SurfaceKind.WORKSPACE_SHARED
     assert AgentService._surface_for(direct) is SurfaceKind.WORKSPACE_PRIVATE
     assert AgentService._surface_for(direct) is not SurfaceKind.PERSONAL_PRIVATE
+
+
+def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model():
+    registry = ModelRegistry()
+    small = registry.configure(
+        id="small-worker",
+        provider="test",
+        model="small-worker",
+        capabilities={"text", "reasoning", "tools"},
+        tags={"orchestrator", "small", "fast", "verified", "reliable", "free"},
+        priority=20,
+    )
+    registry.configure(
+        id="heavy-reasoner",
+        provider="test",
+        model="heavy-reasoner",
+        capabilities={"text", "reasoning", "tools"},
+        tags={"orchestrator", "heavy", "verified", "reliable"},
+        priority=1,
+    )
+    selected = registry.resolve(role_routing_profile("business_agent").selector())
+    assert selected.id == small.id
+
+
+def test_deep_reasoning_selector_prefers_heavy_and_excludes_small():
+    registry = ModelRegistry()
+    registry.configure(
+        id="small-worker",
+        provider="test",
+        model="small-worker",
+        capabilities={"text", "reasoning"},
+        tags={"small", "fast", "verified", "reliable", "free"},
+        priority=1,
+    )
+    heavy = registry.configure(
+        id="heavy-reasoner",
+        provider="test",
+        model="heavy-reasoner",
+        capabilities={"text", "reasoning"},
+        tags={"heavy", "reasoning", "verified", "reliable"},
+        priority=50,
+    )
+    selected = registry.resolve(
+        ModelSelector(
+            requires=frozenset({"reasoning"}),
+            prefer_tags=frozenset({"heavy", "reasoning", "reliable"}),
+            avoid_tags=frozenset({"small"}),
+            prefer_free=False,
+        )
+    )
+    assert selected.id == heavy.id
