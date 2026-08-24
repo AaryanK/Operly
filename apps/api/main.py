@@ -285,21 +285,35 @@ def frontend_shell() -> HTMLResponse:
     )
 
 
-@app.get("/", include_in_schema=False)
-async def home():
-    return frontend_shell()
+def canonical_frontend_shell() -> HTMLResponse:
+    index = WEB_DIST / "index.html"
+    if not index.is_file():
+        # Local Python-only development can keep using the legacy shell until
+        # `npm run build` creates the canonical bundle. Production Docker builds
+        # always include dist via the web-build stage.
+        return frontend_shell()
+    return HTMLResponse(
+        index.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse(WEB_STATIC / "favicon.svg", media_type="image/svg+xml")
+@app.get("/{path:path}", include_in_schema=False)
+async def frontend(path: str):
+    # Authenticated account/workspace routes have one renderer: the canonical
+    # React application. Public/auth flows remain on the legacy shell while their
+    # separate in-flight account-home PR settles, which keeps this PR merge-safe.
+    if path == "channels" or path.startswith("channels/"):
+        return canonical_frontend_shell()
 
+    built_asset = WEB_DIST / path
+    if path and built_asset.is_file():
+        return FileResponse(built_asset)
 
-@app.get("/{full_path:path}", include_in_schema=False)
-async def spa_fallback(full_path: str):
-    if full_path.startswith("api/"):
-        return HTMLResponse(status_code=404, content="Not Found")
-    candidate = WEB_DIST / full_path
-    if candidate.is_file():
-        return FileResponse(candidate)
+    requested = WEB_STATIC / path
+    if path and requested.is_file():
+        return FileResponse(requested)
     return frontend_shell()
