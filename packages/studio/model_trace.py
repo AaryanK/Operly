@@ -2,9 +2,10 @@
 
 Normal Studio activity remains sanitized and compact. This module captures the exact
 provider-neutral packet passed from the context-bounded coding client into
-``ModelChatAdapter`` for debugging, then persists a redacted copy plus a digest of
-the exact unredacted packet. No chain-of-thought is synthesized or exposed: only
-messages/tool schemas actually supplied by the harness and the model response/error.
+``ModelChatAdapter`` for debugging, then persists a complete redacted copy plus a
+digest of the exact unredacted packet. No chain-of-thought is synthesized or exposed:
+only messages/tool schemas actually supplied by the harness and the model
+response/error.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ from packages.database.studio_source_models import StudioAgentRun, StudioModelTr
 
 _TRACE_RUN_ID: ContextVar[str | None] = ContextVar("operly_studio_model_trace_run_id", default=None)
 _INSTALLED = False
-_MAX_TRACE_JSON_CHARS = 1_500_000
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -101,6 +101,9 @@ async def _persist_trace(phase: str, call_index: int, payload: dict[str, Any]) -
     if not run_id:
         return
 
+    # Do not summarize or truncate model-visible data here. AI Debug exists to
+    # reconstruct exactly what the coding model saw. Retention/archival policy may
+    # bound history, but an individual persisted trace packet remains complete.
     envelope = {
         "traceVersion": 1,
         "exactPayloadDigest": _digest(payload),
@@ -108,28 +111,6 @@ async def _persist_trace(phase: str, call_index: int, payload: dict[str, Any]) -
         "payload": redact_trace_value(payload),
     }
     encoded = _canonical(envelope)
-    if len(encoded) > _MAX_TRACE_JSON_CHARS:
-        # Preserve exact identity even when an unexpectedly giant packet cannot be
-        # retained safely in one database row.
-        envelope = {
-            "traceVersion": 1,
-            "exactPayloadDigest": _digest(payload),
-            "redactionApplied": True,
-            "truncated": True,
-            "originalJsonChars": len(_canonical(payload)),
-            "payload": {
-                "notice": "Trace exceeded the durable debug-payload limit.",
-                "summary": redact_trace_value(
-                    {
-                        "phase": phase,
-                        "callIndex": call_index,
-                        "messageCount": len(payload.get("messages") or []),
-                        "toolCount": len(payload.get("tools") or []),
-                    }
-                ),
-            },
-        }
-        encoded = _canonical(envelope)
 
     async with SessionFactory() as db:
         run = await db.get(StudioAgentRun, run_id)
