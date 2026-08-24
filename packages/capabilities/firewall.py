@@ -82,12 +82,15 @@ class ActionBackedCapabilityFirewall:
 
     @staticmethod
     def _authority(execution_context: ExecutionContext) -> dict[str, Any]:
-        # This boundary is workspace-scoped. Personal connectors must be resolved by
-        # the personal runtime or explicit delegation resolver; request metadata alone
-        # is never enough to manufacture personal authority here.
         return {
-            "owner_type": "workspace",
-            "owner_id": execution_context.workspace_id,
+            "owner_type": execution_context.scope_kind.value,
+            "owner_id": (
+                execution_context.user_id
+                if execution_context.is_personal
+                else execution_context.workspace_id
+            ),
+            "scope_id": execution_context.scope_id,
+            "focus_workspace_id": execution_context.focus_workspace_id,
             "delegation_id": None,
             "surface": execution_context.surface.value,
         }
@@ -117,12 +120,21 @@ class ActionBackedCapabilityFirewall:
     ) -> CapabilityInvocationResult:
         authority = set(execution_context.permissions)
         authority_source = self._authority(execution_context)
+        scope_id = execution_context.scope_id
+        if not scope_id:
+            return CapabilityInvocationResult(
+                ok=False,
+                capability_id=request.capability_id,
+                status="DENIED",
+                error="Execution scope is unavailable",
+                authority=authority_source,
+            )
         try:
             definition = self.registry.definition(request.capability_id)
             if not capability_surface_allowed(definition.id, execution_context.surface):
                 raise PermissionError("Capability is unavailable on this surface")
             self.registry.resolve(
-                execution_context.workspace_id,
+                scope_id,
                 request.capability_id,
                 authority=authority,
             )
@@ -154,8 +166,11 @@ class ActionBackedCapabilityFirewall:
         metadata.setdefault("client_id", request.channel or "operly")
         metadata["authority"] = sorted(authority)
         metadata["authority_source"] = authority_source
-        # Surface is canonical execution state. Always overwrite caller-supplied
-        # metadata so provider code cannot be tricked into widening private scope.
+        metadata["scope_kind"] = execution_context.scope_kind.value
+        metadata["scope_id"] = scope_id
+        metadata["focus_workspace_id"] = execution_context.focus_workspace_id
+        # Scope and surface are canonical execution state. Always overwrite
+        # caller-supplied metadata so provider code cannot manufacture authority.
         metadata["_surface_kind"] = execution_context.surface.value
         metadata["surface"] = execution_context.surface.value
 
@@ -163,7 +178,11 @@ class ActionBackedCapabilityFirewall:
             temporal = await resolve_temporal_context(
                 db,
                 user_id=execution_context.user_id,
-                tenant_id=execution_context.workspace_id,
+                tenant_id=(
+                    execution_context.focus_workspace_id
+                    if execution_context.is_personal
+                    else execution_context.workspace_id
+                ),
             )
             metadata["temporal_context"] = temporal.as_dict()
             service = ActionService(
@@ -174,7 +193,16 @@ class ActionBackedCapabilityFirewall:
             )
             try:
                 action = await service.propose(
-                    tenant_id=execution_context.workspace_id,
+                    tenant_id=(
+                        execution_context.workspace_id
+                        if execution_context.is_workspace
+                        else None
+                    ),
+                    owner_user_id=(
+                        execution_context.user_id
+                        if execution_context.is_personal
+                        else None
+                    ),
                     objective=request.objective,
                     capability=request.capability_id,
                     arguments=dict(request.arguments),
@@ -188,7 +216,7 @@ class ActionBackedCapabilityFirewall:
                     risk_level=definition.risk_level,
                     causation_id=request.call_id,
                     idempotency_key=(
-                        f"{execution_context.workspace_id}:{request.call_id}"
+                        f"{scope_id}:{request.call_id}"
                         if request.call_id
                         else None
                     ),
