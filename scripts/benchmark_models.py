@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Run empirical qualification probes against every currently available Operly model route.
+"""Empirically qualify concrete model routes available to Operly.
+
+The safe workflow is staged:
+  probe  -> one tiny availability request per route
+  smoke  -> availability + JSON + reasoning + one tool call
+  deep   -> smoke + multi-turn tools + coding + repair + planning
 
 Examples:
-  python scripts/benchmark_models.py --deep
-  python scripts/benchmark_models.py --provider groq --deep
-  python scripts/benchmark_models.py --provider groq --model qwen/qwen3.6-27b --deep
+  python scripts/benchmark_models.py --suite deep --provider groq
+  python scripts/benchmark_models.py --suite deep --provider groq --model qwen/qwen3.6-27b
+  python scripts/benchmark_models.py --suite probe --refresh-discovery --free-only
 
-The script prints one MODEL_BENCH JSON line per route plus a final summary. It never
-writes provider credentials or model prompts containing secrets.
+One MODEL_BENCH JSON line is printed per route, followed by MODEL_BENCH_SUMMARY.
 """
 from __future__ import annotations
 
@@ -15,12 +19,11 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 from collections import defaultdict
 
-from packages.model_runtime.benchmark import benchmark_model
 from packages.model_runtime.catalog import model_resources, provider_is_configured
 from packages.model_runtime.discovery import refresh_model_discovery
+from packages.model_runtime.qualification_benchmark import SUITES, qualify_model
 from packages.model_runtime.registry import ModelRegistry
 
 
@@ -28,9 +31,10 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--provider", action="append", default=[], help="Provider(s) to benchmark")
     parser.add_argument("--model", action="append", default=[], help="Exact provider model id(s) to benchmark")
-    parser.add_argument("--deep", action="store_true", help="Run multi-turn tools, coding, repair and planning after smoke probes")
-    parser.add_argument("--refresh-discovery", action="store_true", help="Refresh dynamic provider catalogs such as OpenRouter before enumeration")
-    parser.add_argument("--max-per-provider", type=int, default=0, help="Optional cap after sorting by catalog priority; 0 means no cap")
+    parser.add_argument("--suite", choices=sorted(SUITES), default="smoke")
+    parser.add_argument("--refresh-discovery", action="store_true", help="Refresh dynamic catalogs such as OpenRouter")
+    parser.add_argument("--free-only", action="store_true", help="Skip routes whose catalog metadata is not free")
+    parser.add_argument("--max-per-provider", type=int, default=0, help="Optional cap after priority sort; 0 means no cap")
     parser.add_argument("--delay", type=float, default=float(os.getenv("OPERLY_MODEL_BENCH_DELAY", "0.35")))
     return parser.parse_args()
 
@@ -44,12 +48,18 @@ def _selected_resources(args: argparse.Namespace):
         if provider_is_configured(resource.provider)
         and (not providers or resource.provider in providers)
         and (not models or resource.id in models)
+        and (not args.free_only or resource.free)
     ]
-    # Keep one route per provider/model even if static and discovered catalogs overlap.
-    dedup = {}
-    for resource in rows:
-        dedup[(resource.provider, resource.id)] = resource
-    rows = sorted(dedup.values(), key=lambda item: (item.provider, item.priority, item.verified_latency_ms or 10**9, item.id))
+    dedup = {(resource.provider, resource.id): resource for resource in rows}
+    rows = sorted(
+        dedup.values(),
+        key=lambda item: (
+            item.provider,
+            item.priority,
+            item.verified_latency_ms or 10**9,
+            item.id,
+        ),
+    )
     if args.max_per_provider > 0:
         counts: dict[str, int] = defaultdict(int)
         limited = []
@@ -74,9 +84,14 @@ async def main() -> int:
         + json.dumps(
             {
                 "routes": len(resources),
-                "deep": bool(args.deep),
+                "suite": args.suite,
                 "providers": sorted({resource.provider for resource in resources}),
-                "filters": {"provider": args.provider, "model": args.model, "maxPerProvider": args.max_per_provider},
+                "freeOnly": bool(args.free_only),
+                "filters": {
+                    "provider": args.provider,
+                    "model": args.model,
+                    "maxPerProvider": args.max_per_provider,
+                },
             },
             sort_keys=True,
         ),
@@ -90,7 +105,7 @@ async def main() -> int:
     registry = ModelRegistry()
     for index, resource in enumerate(resources, 1):
         model = registry.register_resource(resource, replace=True)
-        report = await benchmark_model(model, resource, deep=args.deep)
+        report = await qualify_model(model, resource, suite=args.suite)
         reports.append(report)
         payload = report.as_dict()
         payload["index"] = index
@@ -99,11 +114,19 @@ async def main() -> int:
         if args.delay > 0 and index < len(resources):
             await asyncio.sleep(args.delay)
 
-    ranked = sorted(reports, key=lambda report: (-report.score, sum(case.latency_ms for case in report.cases), report.provider, report.model_id))
+    ranked = sorted(
+        reports,
+        key=lambda report: (
+            -report.score,
+            sum(case.latency_ms for case in report.cases),
+            report.provider,
+            report.model_id,
+        ),
+    )
     summary = {
         "routes": len(reports),
-        "deep": bool(args.deep),
-        "passingAvailability": sum(any(case.name == "availability" and case.passed for case in report.cases) for report in reports),
+        "suite": args.suite,
+        "passingAvailability": sum("text" in report.verified_capabilities for report in reports),
         "verifiedTools": sum("tools" in report.verified_capabilities for report in reports),
         "verifiedCoding": sum("coding" in report.verified_capabilities for report in reports),
         "verifiedRepair": sum("repair" in report.verified_capabilities for report in reports),
@@ -111,11 +134,12 @@ async def main() -> int:
             {
                 "provider": report.provider,
                 "modelId": report.model_id,
+                "free": report.free,
                 "score": report.score,
                 "verifiedCapabilities": report.verified_capabilities,
                 "latencyMs": sum(case.latency_ms for case in report.cases),
             }
-            for report in ranked[:20]
+            for report in ranked[:30]
         ],
     }
     print("MODEL_BENCH_SUMMARY " + json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
