@@ -10,8 +10,11 @@ on:
       - "packages/capabilities/solution_provider.py"
       - "packages/coding_harness/build_service.py"
       - "packages/coding_harness/execution_loop.py"
+      - "packages/custom_software/runner_adapters.py"
+      - "packages/database/model_trace.py"
       - "packages/database/product_models.py"
       - "packages/database/schema.py"
+      - "packages/model_runtime/trace_context.py"
       - "packages/solutions/**"
       - "tests/test_solution_manifest.py"
       - "tests/test_solution_initial_generation_lifecycle.py"
@@ -19,6 +22,7 @@ on:
       - "tests/test_generated_solution_lifecycle_truth.py"
       - "tests/test_generated_preview_permissions.py"
       - "tests/test_generated_solution_worker.py"
+      - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_solution_generation_migration.py"
       - "tests/test_runner_async_polling.py"
       - "tests/test_solutions.py"
@@ -47,12 +51,16 @@ jobs:
           packages/capabilities/solution_provider.py
           packages/coding_harness/build_service.py
           packages/coding_harness/execution_loop.py
+          packages/custom_software/runner_adapters.py
+          packages/database/model_trace.py
           packages/database/product_models.py
           packages/database/schema.py
+          packages/model_runtime/trace_context.py
           packages/solutions/manifest.py
           packages/solutions/implementation.py
           packages/solutions/composer.py
           packages/solutions/generation_worker.py
+          packages/solutions/traced_generation_worker.py
           packages/solutions/service.py
       - name: Validate Railway Sandbox runner
         run: |
@@ -73,6 +81,7 @@ jobs:
           tests/test_generated_solution_lifecycle_truth.py
           tests/test_generated_preview_permissions.py
           tests/test_generated_solution_worker.py
+          tests/test_solution_generation_trace_contract.py
           tests/test_solution_generation_migration.py
           tests/test_runner_async_polling.py
           tests/test_solutions.py
