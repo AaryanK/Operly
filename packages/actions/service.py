@@ -45,10 +45,36 @@ class ActionService:
         self.authority = authority
         self.actor_id = actor_id
 
+    @staticmethod
+    def _scope_identity(
+        *,
+        tenant_id: str | None,
+        owner_user_id: str | None,
+    ) -> tuple[str, str]:
+        if bool(tenant_id) == bool(owner_user_id):
+            raise ValueError("Action must belong to exactly one Personal or Workspace scope")
+        if tenant_id:
+            return "workspace", tenant_id
+        return "personal", f"personal:{owner_user_id}"
+
+    @staticmethod
+    def _same_scope(action: BusinessActionRecord, approval: Approval) -> bool:
+        return (
+            action.scope_kind == approval.scope_kind
+            and action.tenant_id == approval.tenant_id
+            and action.owner_user_id == approval.owner_user_id
+        )
+
     async def _event(self, action, event_type, payload=None):
         provenance = {
             key: value
             for key, value in {
+                "scope_kind": action.scope_kind,
+                "scope_id": (
+                    action.tenant_id
+                    if action.scope_kind == "workspace"
+                    else f"personal:{action.owner_user_id}"
+                ),
                 "principal_id": action.principal_id,
                 "client_id": action.client_id,
                 "origin": action.origin,
@@ -60,6 +86,7 @@ class ActionService:
         event = await append_event(
             self.db,
             tenant_id=action.tenant_id,
+            owner_user_id=action.owner_user_id,
             event_type=event_type,
             payload={
                 "action_id": action.id,
@@ -83,6 +110,7 @@ class ActionService:
             await append_event(
                 self.db,
                 tenant_id=action.tenant_id,
+                owner_user_id=action.owner_user_id,
                 event_type=normalized,
                 payload={"action_id": action.id, **provenance, **(payload or {})},
                 correlation_id=action.correlation_id,
@@ -94,7 +122,7 @@ class ActionService:
     async def propose(
         self,
         *,
-        tenant_id: str,
+        tenant_id: str | None,
         objective: str,
         capability: str,
         arguments: dict[str, Any],
@@ -104,11 +132,22 @@ class ActionService:
         causation_id: str | None = None,
         idempotency_key: str | None = None,
         runtime_context: dict[str, Any] | None = None,
+        owner_user_id: str | None = None,
     ) -> BusinessActionRecord:
+        scope_kind, scope_id = self._scope_identity(
+            tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
+        )
         if idempotency_key:
+            scope_filter = (
+                BusinessActionRecord.tenant_id == tenant_id
+                if scope_kind == "workspace"
+                else BusinessActionRecord.owner_user_id == owner_user_id
+            )
             existing = await self.db.scalar(
                 select(BusinessActionRecord).where(
-                    BusinessActionRecord.tenant_id == tenant_id,
+                    BusinessActionRecord.scope_kind == scope_kind,
+                    scope_filter,
                     BusinessActionRecord.idempotency_key == idempotency_key,
                 )
             )
@@ -116,7 +155,7 @@ class ActionService:
                 return existing
 
         provider = self.registry.resolve(
-            tenant_id,
+            scope_id,
             capability,
             authority=self.authority,
         )
@@ -146,7 +185,9 @@ class ActionService:
         ).strip() or None
 
         action = BusinessActionRecord(
+            scope_kind=scope_kind,
             tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
             objective=objective,
             capability=capability,
             arguments_json=json.dumps(arguments, sort_keys=True),
@@ -171,6 +212,8 @@ class ActionService:
                 "capability": capability,
                 "risk_level": risk_level,
                 "connector_id": connector_id,
+                "scope_kind": scope_kind,
+                "scope_id": scope_id,
                 "authority_source": runtime.get("authority_source") or metadata.get("authority_source"),
             },
             resource_id=action.id,
@@ -194,7 +237,9 @@ class ActionService:
             await self._event(action, "action.rejected", {"reason": decision.reason})
         elif decision.decision == PolicyDecisionType.REQUIRE_APPROVAL:
             approval = Approval(
+                scope_kind=scope_kind,
                 tenant_id=tenant_id,
+                owner_user_id=owner_user_id,
                 action=capability,
                 payload_json=json.dumps(
                     {
@@ -219,6 +264,8 @@ class ActionService:
                     "action_id": action.id,
                     "approval_id": approval.id,
                     "capability": capability,
+                    "scope_kind": scope_kind,
+                    "scope_id": scope_id,
                 },
                 resource_id=approval.id,
             )
@@ -232,8 +279,12 @@ class ActionService:
         *,
         runtime_context: dict[str, Any] | None = None,
     ) -> BusinessActionRecord:
+        _, scope_id = self._scope_identity(
+            tenant_id=action.tenant_id,
+            owner_user_id=action.owner_user_id,
+        )
         provider = self.registry.resolve(
-            action.tenant_id,
+            scope_id,
             action.capability,
             authority=self.authority,
         )
@@ -260,9 +311,11 @@ class ActionService:
             action.tenant_id,
             self.db,
             self.actor_id,
-            self.registry.provider_config(action.tenant_id, action.capability),
+            self.registry.provider_config(scope_id, action.capability),
             action.id,
             runtime_context,
+            scope_kind=action.scope_kind,
+            owner_user_id=action.owner_user_id,
         )
         connector = str(definition.integration_provider or "").strip() or None
         if connector:
@@ -272,6 +325,8 @@ class ActionService:
                     "action_id": action.id,
                     "capability": action.capability,
                     "connector": connector,
+                    "scope_kind": action.scope_kind,
+                    "scope_id": scope_id,
                     "argument_keys": sorted(arguments),
                 },
                 resource_id=f"{connector}:{action.capability}",
@@ -289,6 +344,8 @@ class ActionService:
                         "action_id": action.id,
                         "capability": action.capability,
                         "connector": connector,
+                        "scope_kind": action.scope_kind,
+                        "scope_id": scope_id,
                         "success": False,
                         "error_type": type(error).__name__,
                     },
@@ -307,6 +364,8 @@ class ActionService:
                     "action_id": action.id,
                     "capability": action.capability,
                     "connector": connector,
+                    "scope_kind": action.scope_kind,
+                    "scope_id": scope_id,
                     "success": bool(result.success),
                     "changed": bool(result.changed),
                     "external_reference": result.external_reference,
@@ -365,11 +424,12 @@ class ActionService:
         )
         return action
 
-    async def approve(self, tenant_id: str, action_id: str):
-        action = await self._get(tenant_id, action_id)
+    async def _approve_action(self, action: BusinessActionRecord):
         if action.status != ActionStatus.WAITING_APPROVAL:
             raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id)
+        if approval is None or not self._same_scope(action, approval):
+            raise PermissionError("Approval scope does not match action scope")
         approval.status = "approved"
         action.approved_arguments_digest = hashlib.sha256(action.arguments_json.encode()).hexdigest()
         action.status = ActionStatus.APPROVED
@@ -380,36 +440,72 @@ class ActionService:
         )
         await emit_runtime_trace_event(
             RuntimeTraceEvent.APPROVAL_RESOLVED,
-            {"action_id": action.id, "approval_id": action.approval_id, "approved": True},
+            {
+                "action_id": action.id,
+                "approval_id": action.approval_id,
+                "approved": True,
+                "scope_kind": action.scope_kind,
+            },
             resource_id=str(action.approval_id or action.id),
         )
         await emit_runtime_trace_event(
             RuntimeTraceEvent.ACTION_RESUMED,
-            {"action_id": action.id, "capability": action.capability},
+            {"action_id": action.id, "capability": action.capability, "scope_kind": action.scope_kind},
             resource_id=action.id,
         )
         return await self.execute(action)
 
-    async def reject(self, tenant_id: str, action_id: str):
-        action = await self._get(tenant_id, action_id)
+    async def _reject_action(self, action: BusinessActionRecord):
         if action.status != ActionStatus.WAITING_APPROVAL:
             raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id)
+        if approval is None or not self._same_scope(action, approval):
+            raise PermissionError("Approval scope does not match action scope")
         approval.status = "rejected"
         action.status = ActionStatus.REJECTED
         await self._event(action, "action.rejected")
         await emit_runtime_trace_event(
             RuntimeTraceEvent.APPROVAL_RESOLVED,
-            {"action_id": action.id, "approval_id": action.approval_id, "approved": False},
+            {
+                "action_id": action.id,
+                "approval_id": action.approval_id,
+                "approved": False,
+                "scope_kind": action.scope_kind,
+            },
             resource_id=str(action.approval_id or action.id),
         )
         return action
+
+    async def approve(self, tenant_id: str, action_id: str):
+        return await self._approve_action(await self._get(tenant_id, action_id))
+
+    async def reject(self, tenant_id: str, action_id: str):
+        return await self._reject_action(await self._get(tenant_id, action_id))
+
+    async def approve_personal(self, owner_user_id: str, action_id: str):
+        return await self._approve_action(await self._get_personal(owner_user_id, action_id))
+
+    async def reject_personal(self, owner_user_id: str, action_id: str):
+        return await self._reject_action(await self._get_personal(owner_user_id, action_id))
 
     async def _get(self, tenant_id, action_id):
         action = await self.db.scalar(
             select(BusinessActionRecord).where(
                 BusinessActionRecord.id == action_id,
+                BusinessActionRecord.scope_kind == "workspace",
                 BusinessActionRecord.tenant_id == tenant_id,
+            )
+        )
+        if action is None:
+            raise LookupError("Action not found")
+        return action
+
+    async def _get_personal(self, owner_user_id: str, action_id: str):
+        action = await self.db.scalar(
+            select(BusinessActionRecord).where(
+                BusinessActionRecord.id == action_id,
+                BusinessActionRecord.scope_kind == "personal",
+                BusinessActionRecord.owner_user_id == owner_user_id,
             )
         )
         if action is None:
