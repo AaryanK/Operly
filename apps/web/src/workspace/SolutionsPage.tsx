@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
@@ -14,6 +14,7 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const composeInFlight = useRef(false);
 
   async function reload() {
     setLoading(true);
@@ -25,10 +26,15 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
 
   async function compose(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    if (composeInFlight.current) return;
+
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const objective = text(form.get("objective")).trim();
     const name = text(form.get("name")).trim() || objective.slice(0, 80) || "New Solution";
     if (!objective) return;
+
+    composeInFlight.current = true;
     setCreating(true); setError(null); setResult(null);
     try {
       const response = await api<Row>("/solutions/compose", {
@@ -40,11 +46,14 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
         throw new Error(text(response.message || response.error || object(response.job).failure_message, "Solution creation failed and was recorded."));
       }
       setResult(responseStatus === "created" ? "Solution creation started." : `Solution status: ${title(responseStatus)}.`);
-      event.currentTarget.reset();
+      formElement.reset();
       await reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Solution creation could not be verified");
-    } finally { setCreating(false); }
+    } finally {
+      composeInFlight.current = false;
+      setCreating(false);
+    }
   }
 
   return <main className="workspace-page">
