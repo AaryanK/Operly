@@ -14,12 +14,14 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const [publicShell, auth, runtime, main, convergence, personal, workspace, emailBase] = await Promise.all([
+const [publicShell, auth, runtime, main, convergence, theme, brand, personal, workspace, emailBase] = await Promise.all([
   text("static/index.html"),
   text("static/auth.js"),
   text("static/auth-runtime.js"),
   text("src/main.tsx"),
   text("src/ui/convergence.css"),
+  text("src/ui/theme.css"),
+  text("src/ui/brand.css"),
   text("src/account/PersonalHome.tsx"),
   text("src/workspace/WorkspaceShell.tsx"),
   readFile(resolve(repoRoot, "packages/email/templates/base.html"), "utf8"),
@@ -60,6 +62,13 @@ assert(convergence.includes(".workspace-more-sheet"), "Mobile More sheet contrac
 assert(convergence.includes(".mobile-history-open .personal-history"), "Personal history drawer contract is missing");
 assert(convergence.includes("--ui-accent: #185d43"), "React brand accent must match the public Operly green");
 assert(convergence.includes("--ui-accent-cyan: #b9ee72"), "React secondary accent must match the public Operly lime");
+
+for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
+  assert(!theme.toLowerCase().includes(legacyPurple.toLowerCase()), `Dark theme contains legacy purple brand accent: ${legacyPurple}`);
+}
+for (const legacyPurple of ["#7d6cff", "rgba(125,108,255", "rgba(111,92,255"]) {
+  assert(!brand.toLowerCase().includes(legacyPurple.toLowerCase()), `Brand boot contains legacy purple accent: ${legacyPurple}`);
+}
 
 assert(workspace.includes('const mobilePrimarySections: WorkspaceSection[] = ["home", "operly", "activity", "solutions"]'), "Workspace phone navigation must stay intentionally small");
 assert(workspace.includes("workspace-more-sheet"), "Workspace secondary destinations must remain reachable on phones");
