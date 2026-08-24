@@ -15,7 +15,7 @@ from sqlalchemy import select
 from packages.agents import AgentRuntime
 from packages.capabilities.model_provider import ModelInvocationProvider
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
-from packages.capabilities.workflow_task_provider import WorkflowTaskProvider
+from packages.capabilities.universal_task_provider import UniversalTaskProvider
 from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.database.db import session_scope
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
@@ -55,7 +55,7 @@ class PersonalAgentService:
         self.runtime = AgentRuntime(max_steps=8)
         self.providers = (
             PersonalRuntimeProvider(),
-            WorkflowTaskProvider(),
+            UniversalTaskProvider(),
             PublicWebReadProvider(),
             ModelInvocationProvider(),
         )
@@ -215,6 +215,7 @@ class PersonalAgentService:
                             "actor_name": display_name,
                             "call_id": call_id,
                             "temporal_context": temporal_context,
+                            "origin_provider": channel,
                         },
                     },
                 )
