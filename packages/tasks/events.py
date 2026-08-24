@@ -9,6 +9,9 @@ from packages.capabilities.task_provider import dump_task_payload, load_task_pay
 from packages.database.models import ScheduledJob, Task
 
 
+_BUSY_STATUSES = {"pending", "running", "pending_delivery", "waiting_approval"}
+
+
 def _value(event: Any, path: str):
     first, _, rest = str(path or "").partition(".")
     if first == "payload":
@@ -63,8 +66,9 @@ async def wake_workspace_tasks(db, event: Any) -> int:
     """Wake open Tasks subscribed to a durable workspace BusinessEvent.
 
     A Task keeps one ScheduledJob row as its durable wake-up slot. If an event arrives
-    while the task is already pending/running, the bounded event queue preserves it
-    for the next run instead of invoking models inside the event transaction.
+    while a run is pending, executing, waiting for approval, or waiting for delivery,
+    the bounded queue preserves that event for a later run. Event ingestion never
+    changes the state of the active run.
     """
     tasks = (
         await db.scalars(
@@ -86,7 +90,7 @@ async def wake_workspace_tasks(db, event: Any) -> int:
         if not event_matches(trigger, event):
             continue
         context = event_context(event)
-        if job.status in {"pending", "running"}:
+        if job.status in _BUSY_STATUSES:
             queue = payload.get("event_queue") if isinstance(payload.get("event_queue"), list) else []
             queue.append(context)
             payload["event_queue"] = queue[-20:]
