@@ -317,7 +317,7 @@ async def _run_generated_generation(
     job = SolutionJob(
         tenant_id=tenant_id,
         solution_id=row.id,
-        source_version_reference=None,
+        source_version_reference=f"software-plan:{software_plan_row.id}:{software_plan_row.approved_version}",
         job_type="initial_generation",
         status="running",
         attempt=attempt,
