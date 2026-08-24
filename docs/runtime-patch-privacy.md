@@ -1,0 +1,1 @@
+Personal global/private context may be available on explicitly private personal surfaces, but shared workspace surfaces cannot discover, materialize, delegate, or reason over it solely because the authenticated human owns that context.
