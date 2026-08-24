@@ -1,21 +1,24 @@
-"""Fast metadata-only semantic retrieval for capability discovery.
+"""Metadata-only hybrid semantic retrieval for capability discovery.
 
-The index intentionally knows nothing about principals or permissions. Callers must
-pass an already-authorized/visible candidate set. This keeps semantic ranking out of
-the authority path while avoiding thousands of schemas in model prompts.
+The index intentionally knows nothing about principals or permissions. Callers pass
+an already-authorized and surface-visible candidate set. Production semantic scores
+come from the shared local ONNX embedding backend; lexical/exact signals remain as a
+precision boost and deterministic degraded-mode fallback.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import blake2b
-from math import sqrt
 import re
 from typing import Iterable, Sequence
+
+from packages.retrieval.semantic import SemanticDocument, SemanticTextIndex
 
 
 _WORD_RE = re.compile(r"[a-z0-9_.:-]+")
 
-_SEMANTIC_EXPANSIONS: dict[str, tuple[str, ...]] = {
+# These are lexical boosts only. They are not the semantic engine; the production
+# semantic signal comes from the embedding backend in SemanticTextIndex.
+_LEXICAL_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "email": ("mail", "message", "gmail", "inbox"),
     "mail": ("email", "message", "gmail", "inbox"),
     "message": ("email", "mail", "send", "communication"),
@@ -43,42 +46,8 @@ def _expanded_words(value: str) -> list[str]:
     words = _words(value)
     expanded = list(words)
     for word in words:
-        expanded.extend(_SEMANTIC_EXPANSIONS.get(word, ()))
+        expanded.extend(_LEXICAL_EXPANSIONS.get(word, ()))
     return expanded
-
-
-def _feature_key(feature: str, dimensions: int) -> int:
-    digest = blake2b(feature.encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(digest, "big") % dimensions
-
-
-def _vector(value: str, *, dimensions: int = 384) -> dict[int, float]:
-    words = _expanded_words(value)
-    features: dict[int, float] = {}
-    for word in words:
-        key = _feature_key(f"w:{word}", dimensions)
-        features[key] = features.get(key, 0.0) + 1.0
-    for left, right in zip(words, words[1:]):
-        key = _feature_key(f"b:{left}:{right}", dimensions)
-        features[key] = features.get(key, 0.0) + 0.65
-    compact = " ".join(words)
-    for size in (3, 4, 5):
-        if len(compact) < size:
-            continue
-        for index in range(0, len(compact) - size + 1):
-            gram = compact[index : index + size]
-            key = _feature_key(f"c{size}:{gram}", dimensions)
-            features[key] = features.get(key, 0.0) + 0.08
-    norm = sqrt(sum(weight * weight for weight in features.values()))
-    if norm:
-        return {key: weight / norm for key, weight in features.items()}
-    return {}
-
-
-def _cosine(left: dict[int, float], right: dict[int, float]) -> float:
-    if len(left) > len(right):
-        left, right = right, left
-    return sum(weight * right.get(key, 0.0) for key, weight in left.items())
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,20 +59,18 @@ class CapabilitySearchHit:
 
 
 class CapabilitySearchIndex:
-    """In-process hybrid index over CapabilityDefinition.discovery_document()."""
+    """Exact hybrid ranking over CapabilityDefinition.discovery_document()."""
 
-    def __init__(self, *, dimensions: int = 384) -> None:
-        self.dimensions = max(64, int(dimensions))
-        self._documents: dict[str, str] = {}
-        self._vectors: dict[str, dict[int, float]] = {}
+    def __init__(self, *, semantic_index: SemanticTextIndex | None = None) -> None:
+        self.semantic_index = semantic_index or SemanticTextIndex()
 
-    def _ensure(self, definition) -> None:
-        document = str(definition.discovery_document() or "").strip().lower()
-        capability_id = str(definition.id)
-        if self._documents.get(capability_id) == document:
-            return
-        self._documents[capability_id] = document
-        self._vectors[capability_id] = _vector(document, dimensions=self.dimensions)
+    @property
+    def backend_name(self) -> str:
+        return self.semantic_index.backend_name
+
+    @property
+    def degraded_reason(self) -> str | None:
+        return self.semantic_index.degraded_reason
 
     @staticmethod
     def _lexical_score(definition, query: str) -> float:
@@ -113,12 +80,13 @@ class CapabilitySearchIndex:
         overlap = len(query_words & document_words)
         score = float(overlap)
         capability_id = str(definition.id or "").lower()
+        name = str(definition.name or "").lower()
         display_name = str(definition.display_name or definition.name or "").lower()
         category = str(definition.category or "").lower()
         tags = {str(tag).lower() for tag in definition.tags}
         operations = " ".join(str(item).lower() for item in definition.semantic_operations)
         if normalized:
-            if normalized == capability_id or normalized == str(definition.name or "").lower():
+            if normalized in {capability_id, name}:
                 score += 12.0
             elif normalized in capability_id or normalized in display_name:
                 score += 5.0
@@ -142,23 +110,45 @@ class CapabilitySearchIndex:
             str(item).strip().lower() for item in categories if str(item).strip()
         }
         wanted_tags = {str(item).strip().lower() for item in tags if str(item).strip()}
-        query_vector = _vector(query, dimensions=self.dimensions)
-        ranked: list[CapabilitySearchHit] = []
+        eligible = []
         for definition in definitions:
             if wanted_categories and str(definition.category or "").lower() not in wanted_categories:
                 continue
             definition_tags = {str(item).lower() for item in definition.tags}
             if wanted_tags and not wanted_tags.issubset(definition_tags):
                 continue
-            self._ensure(definition)
-            semantic = _cosine(query_vector, self._vectors.get(str(definition.id), {}))
-            lexical = self._lexical_score(definition, query)
+            eligible.append(definition)
+
+        semantic_scores: dict[str, float] = {}
+        clean_query = str(query or "").strip()
+        if eligible and clean_query:
+            documents = [
+                SemanticDocument(
+                    key=str(definition.id),
+                    text=str(definition.discovery_document() or ""),
+                )
+                for definition in eligible
+            ]
+            semantic_scores = {
+                match.key: match.score
+                for match in self.semantic_index.rank(
+                    documents,
+                    clean_query,
+                    limit=len(documents),
+                )
+            }
+
+        ranked: list[CapabilitySearchHit] = []
+        for definition in eligible:
+            capability_id = str(definition.id)
+            semantic = semantic_scores.get(capability_id, 0.0)
+            lexical = self._lexical_score(definition, clean_query)
             score = semantic * 10.0 + lexical
-            if str(query or "").strip() and score <= 0.0:
+            if clean_query and score <= 0.0:
                 continue
             ranked.append(
                 CapabilitySearchHit(
-                    capability_id=str(definition.id),
+                    capability_id=capability_id,
                     score=round(score, 6),
                     semantic_score=round(semantic, 6),
                     lexical_score=round(lexical, 6),
