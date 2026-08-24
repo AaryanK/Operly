@@ -17,9 +17,11 @@ from packages.connectors.google_provider import (
     GMAIL_READ_SCOPES,
     _headers,
     _message_bodies,
-    access_token,
-    google_connector_any,
     request_json,
+)
+from packages.connectors.google_scope import (
+    google_access_token_for_context,
+    google_connector_any_for_context,
 )
 
 
@@ -139,8 +141,8 @@ class GmailReadProvider(BaseProvider):
     )
 
     async def execute(self, context, capability_name, arguments):
-        connector = await google_connector_any(context.db, context.tenant_id, GMAIL_READ_SCOPES)
-        token = await access_token(context.db, connector)
+        connector = await google_connector_any_for_context(context, GMAIL_READ_SCOPES)
+        token = await google_access_token_for_context(context, connector)
 
         if capability_name == "gmail.read_thread":
             thread_id = str(arguments["thread_id"])
