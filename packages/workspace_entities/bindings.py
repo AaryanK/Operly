@@ -1,4 +1,4 @@
-"""Resolve workspace entity declarations into runner-only scoped grants."""
+"""Resolve workspace entity semantic bindings into runner-only scoped grants."""
 from __future__ import annotations
 
 import os
@@ -7,8 +7,7 @@ from urllib.parse import urlparse
 from packages.custom_software.runner_contracts import ServiceBindingTransport
 from packages.relational_data.store import configured_app_data_url
 from packages.relational_data.tokens import BindingGrantError, issue_capability_grant
-from packages.workspace_entities.contracts import WORKSPACE_ENTITY_CAPABILITY_ID
-from packages.workspace_entities.manifest import parse_workspace_entity_manifest
+from packages.workspace_entities.contracts import CANONICAL_ENTITY_SCHEMAS, WORKSPACE_ENTITY_CAPABILITY_ID
 
 
 class WorkspaceEntityBindingUnavailable(RuntimeError):
@@ -42,33 +41,35 @@ def _gateway_url() -> str:
     return configured
 
 
-def attach_workspace_entity_grants(submission, source_bundle):
+def attach_workspace_entity_grants(submission):
     requests = workspace_entity_binding_requests(submission)
     if not requests:
         return submission
-    if len(requests) != 1:
-        raise WorkspaceEntityBindingUnavailable("Exactly one workspace entity graph binding is supported")
-    declaration = parse_workspace_entity_manifest(source_bundle)
-    if declaration is None:
-        raise WorkspaceEntityBindingUnavailable("Workspace entity declaration is missing")
+    seen: set[str] = set()
+    for request in requests:
+        kind = request.semanticName
+        if kind not in CANONICAL_ENTITY_SCHEMAS:
+            raise WorkspaceEntityBindingUnavailable(f"Unknown canonical entity binding: {kind}")
+        if kind in seen:
+            raise WorkspaceEntityBindingUnavailable(f"Duplicate canonical entity binding: {kind}")
+        seen.add(kind)
     try:
         configured_app_data_url()
         gateway = _gateway_url()
-        scopes = tuple(sorted({scope for item in declaration.entities for scope in item.access}))
-        resources = tuple(sorted({item.kind for item in declaration.entities}))
         ttl = max(900, int(submission.resources.previewSeconds) + 900)
         bindings = []
         for request in submission.serviceBindings:
             if request.capabilityId != WORKSPACE_ENTITY_CAPABILITY_ID:
                 bindings.append(request)
                 continue
+            kind = request.semanticName
             token = issue_capability_grant(
                 submission.workspaceId,
                 submission.applicationId,
                 capability_id=WORKSPACE_ENTITY_CAPABILITY_ID,
-                scopes=scopes,
+                scopes=("read", "write"),
                 allowed_scopes=frozenset({"read", "write"}),
-                resources=resources,
+                resources=(kind,),
                 ttl_seconds=ttl,
             )
             bindings.append(
