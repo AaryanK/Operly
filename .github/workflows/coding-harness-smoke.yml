@@ -27,6 +27,7 @@ on:
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
+      - "tests/test_coding_semantic_failover.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -68,6 +69,7 @@ on:
       - "tests/test_opencode_coding_harness.py"
       - "tests/test_coding_agent_tool_loop.py"
       - "tests/test_coding_agent_input_guardrail.py"
+      - "tests/test_coding_semantic_failover.py"
       - "tests/test_live_plan_projection.py"
       - "tests/test_live_projection_independence.py"
       - "tests/test_planning_model_runtime_boundary.py"
@@ -111,6 +113,7 @@ jobs:
           tests/test_opencode_coding_harness.py
           tests/test_coding_agent_tool_loop.py
           tests/test_coding_agent_input_guardrail.py
+          tests/test_coding_semantic_failover.py
           tests/test_live_plan_projection.py
           tests/test_live_projection_independence.py
           tests/test_planning_model_runtime_boundary.py
