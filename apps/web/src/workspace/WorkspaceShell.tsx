@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import { lazy, ReactNode, Suspense, useEffect, useState } from "react";
 
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
-import { AccessPage } from "./AccessPage";
-import { AIDebugPage } from "./AIDebugPage";
-import { ActivityPage, ConnectionsPage, CRMPage, OperationsPage, PresencePage } from "./DataPages";
-import { MembersPage } from "./MembersPage";
-import { PluginsPage } from "./PluginsPage";
-import { SolutionsPage } from "./SolutionsPage";
 import { WorkspaceHome } from "./WorkspaceHome";
-import { WorkspaceOperly } from "./WorkspaceOperly";
-import { WorkspaceSettings } from "./WorkspaceSettings";
+
+const AccessPage = lazy(() => import("./AccessPage").then((module) => ({ default: module.AccessPage })));
+const AIDebugPage = lazy(() => import("./AIDebugPage").then((module) => ({ default: module.AIDebugPage })));
+const CRMPage = lazy(() => import("./DataPages").then((module) => ({ default: module.CRMPage })));
+const OperationsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.OperationsPage })));
+const ActivityPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ActivityPage })));
+const PresencePage = lazy(() => import("./DataPages").then((module) => ({ default: module.PresencePage })));
+const ConnectionsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ConnectionsPage })));
+const MembersPage = lazy(() => import("./MembersPage").then((module) => ({ default: module.MembersPage })));
+const PluginsPage = lazy(() => import("./PluginsPage").then((module) => ({ default: module.PluginsPage })));
+const SolutionsPage = lazy(() => import("./SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
+const WorkspaceOperly = lazy(() => import("./WorkspaceOperly").then((module) => ({ default: module.WorkspaceOperly })));
+const WorkspaceSettings = lazy(() => import("./WorkspaceSettings").then((module) => ({ default: module.WorkspaceSettings })));
 
 type Props = {
   workspace: WorkspaceSummary;
@@ -45,21 +50,25 @@ const navGlyphs: Record<WorkspaceSection, string> = {
 
 const mobilePrimarySections: WorkspaceSection[] = ["home", "operly", "activity", "solutions"];
 
+function DeferredPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<main className="workspace-page"><div className="loading-panel">Loading workspace section…</div></main>}>{children}</Suspense>;
+}
+
 function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
   switch (section) {
     case "home": return <WorkspaceHome workspace={workspace} />;
-    case "operly": return <WorkspaceOperly workspace={workspace} />;
-    case "crm": return <CRMPage workspace={workspace} />;
-    case "operations": return <OperationsPage workspace={workspace} />;
-    case "activity": return <ActivityPage workspace={workspace} />;
-    case "presence": return <PresencePage workspace={workspace} />;
-    case "solutions": return <SolutionsPage workspace={workspace} />;
-    case "connections": return <ConnectionsPage workspace={workspace} />;
-    case "plugins": return <PluginsPage workspace={workspace} />;
-    case "members": return <MembersPage workspace={workspace} />;
-    case "access": return <AccessPage workspace={workspace} />;
-    case "ai-debug": return <AIDebugPage workspace={workspace} />;
-    case "settings": return <WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} />;
+    case "operly": return <DeferredPage><WorkspaceOperly workspace={workspace} /></DeferredPage>;
+    case "crm": return <DeferredPage><CRMPage workspace={workspace} /></DeferredPage>;
+    case "operations": return <DeferredPage><OperationsPage workspace={workspace} /></DeferredPage>;
+    case "activity": return <DeferredPage><ActivityPage workspace={workspace} /></DeferredPage>;
+    case "presence": return <DeferredPage><PresencePage workspace={workspace} /></DeferredPage>;
+    case "solutions": return <DeferredPage><SolutionsPage workspace={workspace} /></DeferredPage>;
+    case "connections": return <DeferredPage><ConnectionsPage workspace={workspace} /></DeferredPage>;
+    case "plugins": return <DeferredPage><PluginsPage workspace={workspace} /></DeferredPage>;
+    case "members": return <DeferredPage><MembersPage workspace={workspace} /></DeferredPage>;
+    case "access": return <DeferredPage><AccessPage workspace={workspace} /></DeferredPage>;
+    case "ai-debug": return <DeferredPage><AIDebugPage workspace={workspace} /></DeferredPage>;
+    case "settings": return <DeferredPage><WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} /></DeferredPage>;
   }
 }
 
