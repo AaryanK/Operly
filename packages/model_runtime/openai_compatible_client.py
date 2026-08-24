@@ -119,9 +119,14 @@ def _compatible_messages(
                 if not isinstance(call, dict):
                     continue
                 function = call.get("function")
-                if not isinstance(function, dict) or "arguments" not in function:
+                if not isinstance(function, dict):
                     continue
-                function["arguments"] = _wire_tool_arguments(function.get("arguments"))
+                # OpenAI-compatible providers such as Groq require replayed tool
+                # calls to declare the canonical discriminator even when the
+                # provider that originally produced the call omitted it.
+                call["type"] = "function"
+                if "arguments" in function:
+                    function["arguments"] = _wire_tool_arguments(function.get("arguments"))
 
     # Some provider-neutral/legacy histories still carry function_call rather
     # than tool_calls. _openrouter_messages currently drops that legacy field,
