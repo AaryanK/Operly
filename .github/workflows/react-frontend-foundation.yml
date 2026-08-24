@@ -16,8 +16,12 @@ on:
       - "apps/web/static/index.html"
       - "apps/web/static/auth.js"
       - "apps/web/static/auth-runtime.js"
+      - "apps/web/static/legal.css"
+      - "apps/web/static/privacy"
+      - "apps/web/static/terms"
       - "apps/web/scripts/**"
       - "apps/web/FRONTEND_MIGRATION.md"
+      - "docs/legal/**"
       - ".github/workflows/react-frontend-foundation.yml"
   workflow_dispatch:
 
@@ -63,6 +67,8 @@ jobs:
           grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q '/channels/@me' apps/web/static/auth.js
+          grep -q 'href="/privacy"' apps/web/static/index.html
+          grep -q 'href="/terms"' apps/web/static/index.html
           ! grep -q 'id="dashboard"' apps/web/static/index.html
       - name: Build Railway-style production image
         run: docker build --tag operly-frontend-pr .
