@@ -18,6 +18,7 @@ from packages.channels.envelope import ChannelEnvelope
 from packages.channels.service import ChannelService
 from packages.database.db import session_scope
 from packages.database.models import ScheduledJob, Task
+from packages.tasks.personal_workflow import PersonalWorkflowExecutor
 from packages.tasks.workflow import WorkflowExecutionError, WorkflowExecutor
 
 
@@ -60,9 +61,9 @@ async def _deliver(bot: discord.Client, job: ScheduledJob, message: str) -> None
 def _workflow_context(task: Task, job: ScheduledJob, payload: dict) -> PluginInvocationContext:
     origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
     return PluginInvocationContext(
-        tenant_id=str(task.tenant_id),
+        tenant_id=str(task.tenant_id or ""),
         user_id=task.owner_user_id,
-        role="member",  # execution_context_for re-resolves the trusted membership/role
+        role="member",  # workspace execution re-resolves trusted membership/role
         objective=str(payload.get("objective") or task.title),
         channel="discord" if origin.get("provider") == "discord" else "task",
         metadata={
@@ -78,20 +79,22 @@ def _workflow_context(task: Task, job: ScheduledJob, payload: dict) -> PluginInv
             "scheduled_job_id": job.id,
             "scheduled_run": True,
             "_conversation_id": f"task:{task.id}",
-            "allow_tenant_context": True,
+            "allow_tenant_context": bool(task.tenant_id),
+            "personal_scope": task.tenant_id is None,
         },
     )
 
 
 async def _run_declared_workflow(task: Task, job: ScheduledJob, payload: dict) -> str:
     workflow = payload.get("workflow")
-    if not isinstance(workflow, dict) or not task.tenant_id:
-        raise WorkflowExecutionError("workspace_workflow_required")
+    if not isinstance(workflow, dict):
+        raise WorkflowExecutionError("workflow_required")
     trigger_context = payload.get("event_context") if isinstance(payload.get("event_context"), dict) else {
         "kind": str((payload.get("trigger") or {}).get("kind") or "schedule"),
         "scheduled_for": job.run_at.isoformat(),
     }
-    result = await WorkflowExecutor().execute(
+    executor = WorkflowExecutor() if task.tenant_id else PersonalWorkflowExecutor()
+    result = await executor.execute(
         workflow,
         context=_workflow_context(task, job, payload),
         trigger=trigger_context,
@@ -169,7 +172,7 @@ async def run_harness_task_job(
         )
 
     try:
-        if workflow is not None and task.tenant_id:
+        if workflow is not None:
             async with session_scope() as db:
                 live_job = await db.get(ScheduledJob, job_id)
                 live_task = await db.get(Task, live_job.task_id) if live_job and live_job.task_id else None
@@ -256,8 +259,6 @@ async def run_harness_task_job(
         async with session_scope() as db:
             job = await db.get(ScheduledJob, job_id)
             if job is not None:
-                # Event subscriptions stay alive after a failed run so the failure is
-                # observable/retryable instead of silently destroying the subscription.
                 payload = load_task_payload(job.content)
                 trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
                 job.status = "waiting_event" if str(trigger.get("kind") or "") == "event" else "failed"
