@@ -68,7 +68,9 @@ class ExecutionContext:
 
     @property
     def scope_id(self) -> str | None:
-        return self.user_id if self.is_personal else self.workspace_id
+        if self.is_personal:
+            return f"personal:{self.user_id}" if self.user_id else None
+        return self.workspace_id
 
     def can(self, permission: str) -> bool:
         # Workspace owner remains the existing root-authority shortcut. Personal
