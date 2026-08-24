@@ -85,8 +85,7 @@ def attach_transport_grants(submission):
             raise RelationalBindingUnavailable(str(error)) from error
 
     # Keep one build-service transport entrypoint while each semantic capability owns
-    # its own grant rules. Import lazily so relational-only runner environments stay
-    # dependency-light.
+    # its own grant rules. Imports stay lazy so runner contract modules stay light.
     try:
         from packages.workspace_entities.bindings import (
             WorkspaceEntityBindingUnavailable,
@@ -94,6 +93,15 @@ def attach_transport_grants(submission):
         )
         result = attach_workspace_entity_grants(result)
     except WorkspaceEntityBindingUnavailable as error:
+        raise RelationalBindingUnavailable(str(error)) from error
+
+    try:
+        from packages.app_identity.bindings import (
+            AppIdentityBindingUnavailable,
+            attach_app_identity_grants,
+        )
+        result = attach_app_identity_grants(result)
+    except AppIdentityBindingUnavailable as error:
         raise RelationalBindingUnavailable(str(error)) from error
     return result
 
