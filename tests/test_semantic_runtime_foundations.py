@@ -117,9 +117,21 @@ def test_shared_workspace_context_predicate_does_not_include_private_human_scope
 def test_workspace_agent_surface_is_explicit_and_never_account_private():
     shared = type("Request", (), {"metadata": {}, "channel": "web"})()
     direct = type("Request", (), {"metadata": {"is_direct": True}, "channel": "web"})()
+    injected_personal = type(
+        "Request",
+        (),
+        {"metadata": {"_surface_kind": "personal_private"}, "channel": "web"},
+    )()
+    direct_discord = type(
+        "Request",
+        (),
+        {"metadata": {"_surface_kind": "discord_dm", "is_direct": True}, "channel": "discord"},
+    )()
     assert AgentService._surface_for(shared) is SurfaceKind.WORKSPACE_SHARED
     assert AgentService._surface_for(direct) is SurfaceKind.WORKSPACE_PRIVATE
-    assert AgentService._surface_for(direct) is not SurfaceKind.PERSONAL_PRIVATE
+    assert AgentService._surface_for(injected_personal) is SurfaceKind.WORKSPACE_SHARED
+    assert AgentService._surface_for(direct_discord) is SurfaceKind.WORKSPACE_PRIVATE
+    assert not AgentService._surface_for(direct_discord).allows_personal_global
 
 
 def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model():
