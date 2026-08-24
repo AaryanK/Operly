@@ -52,6 +52,9 @@ class SemanticFailoverCodingClient:
     """
 
     def __init__(self, adapter) -> None:
+        # Preserve the legacy ContextBoundCodingClient inspection contract used by
+        # authorization/diagnostic code: coding clients expose `.inner.model`.
+        self.inner = adapter
         self.adapter = adapter
         self.context = ContextBoundCodingClient(adapter)
 
