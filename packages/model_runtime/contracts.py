@@ -82,6 +82,33 @@ class Model(Protocol):
     async def infer(self, request: InferenceRequest) -> InferenceResult: ...
 
 
+def _normalize_failure_classification(message: str, classification: str) -> str:
+    """Distinguish provider throughput pressure from true request/context overflow.
+
+    Some OpenAI-compatible providers report tokens-per-minute exhaustion as HTTP 413
+    rather than 429. Adapters historically classified every 413 as
+    ``request_too_large``, which made the pool keep trying other routes on the same
+    constrained provider. Normalize only explicit throughput markers here; real
+    context/body-size failures remain route-specific ``request_too_large`` errors.
+    """
+    clean = str(classification or "model_error").strip().lower() or "model_error"
+    if clean != "request_too_large":
+        return clean
+    detail = str(message or "").lower()
+    throughput_markers = (
+        "tokens per minute",
+        "token per minute",
+        "tokens/minute",
+        "token/minute",
+        " tpm",
+        "tpm:",
+        "tpm limit",
+    )
+    if any(marker in detail for marker in throughput_markers):
+        return "rate_limited"
+    return clean
+
+
 class ModelInferenceError(RuntimeError):
     """Normalized inference failure independent of the provider transport."""
 
@@ -95,7 +122,7 @@ class ModelInferenceError(RuntimeError):
         model_id: str | None = None,
     ) -> None:
         super().__init__(message)
-        self.classification = classification
+        self.classification = _normalize_failure_classification(message, classification)
         self.retryable = retryable
         self.provider = provider
         self.model_id = model_id

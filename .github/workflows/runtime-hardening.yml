@@ -50,6 +50,8 @@ on:
       - "tests/test_model_requirements.py"
       - "tests/test_model_request_failover.py"
       - "tests/test_model_tool_continuation_adapters.py"
+      - "tests/test_multi_provider_model_portfolio.py"
+      - "tests/test_qualification_aware_routing.py"
       - "tests/test_runtime_contract_hardening.py"
       - "tests/test_runtime_retrieval_security.py"
       - "tests/test_runtime_trace_contract.py"
@@ -110,6 +112,7 @@ jobs:
           packages/database/runtime_trace_events.py
           packages/database/schema.py
           packages/model_runtime/conversation_policy.py
+          packages/model_runtime/qualification.py
           packages/model_runtime/requirements.py
           packages/model_runtime/registry.py
           packages/model_runtime/routing_policy.py
@@ -129,6 +132,14 @@ jobs:
           alembic/versions/0034_provider_trace_ids.py
           alembic/versions/0035_conversation_runtime_trace.py
           alembic/versions/0039_scope_aware_actions.py
+      - name: Run qualification-aware routing regressions
+        env:
+          OPERLY_ENV: test
+        run: python -m pytest -q tests/test_qualification_aware_routing.py
+      - name: Run multi-provider portfolio regressions
+        env:
+          OPERLY_ENV: test
+        run: python -m pytest -q tests/test_multi_provider_model_portfolio.py
       - name: Run runtime hardening regressions
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -146,6 +157,8 @@ jobs:
           tests/test_model_requirements.py
           tests/test_model_request_failover.py
           tests/test_model_tool_continuation_adapters.py
+          tests/test_multi_provider_model_portfolio.py
+          tests/test_qualification_aware_routing.py
           tests/test_runtime_contract_hardening.py
           tests/test_runtime_retrieval_security.py
           tests/test_runtime_trace_contract.py

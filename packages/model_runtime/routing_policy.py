@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from packages.model_runtime.catalog import provider_is_configured
 from packages.model_runtime.contracts import ModelSelector
+from packages.model_runtime.qualification import apply_model_qualification_overrides
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +49,7 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
     # Do not reward the legacy ``orchestrator`` compatibility tag here: the legacy
     # route may point at a heavy model (for example Ox Alpha), which would otherwise
     # win tie-breaks despite the small-model-first runtime contract. Strong reasoning
-    # remains explicitly available through model.deep_reason.
+    # remains explicitly available through ai.reason / the compatibility deep route.
     "business_agent": RoleRoutingProfile(
         "business_agent",
         frozenset({"text", "tools"}),
@@ -59,39 +60,82 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
     "coding": RoleRoutingProfile(
         "coding",
         frozenset({"text", "coding", "tools"}),
-        frozenset({"coding", "small", "verified", "fast", "reliable"}),
+        frozenset(
+            {
+                "qualified-coding",
+                "qualified-tools",
+                "coding",
+                "small",
+                "verified",
+                "fast",
+                "reliable",
+            }
+        ),
         avoid_tags=frozenset({"slow"}),
         max_models=3,
     ),
     "repair": RoleRoutingProfile(
         "repair",
         frozenset({"text", "coding", "tools"}),
-        frozenset({"coding", "reasoning", "verified", "reliable", "heavy"}),
+        frozenset(
+            {
+                "qualified-repair",
+                "qualified-coding",
+                "qualified-tools",
+                "coding",
+                "reasoning",
+                "verified",
+                "reliable",
+                "heavy",
+            }
+        ),
     ),
     "planner": RoleRoutingProfile(
         "planner",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "heavy", "long-context", "reliable"}),
+        frozenset(
+            {
+                "qualified-planning",
+                "reasoning",
+                "verified",
+                "heavy",
+                "long-context",
+                "reliable",
+            }
+        ),
     ),
     "global_validator": RoleRoutingProfile(
         "global_validator",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "heavy", "reliable"}),
+        frozenset(
+            {"qualified-reasoning", "reasoning", "verified", "heavy", "reliable"}
+        ),
     ),
     # The adaptive pre-execution planner uses this role. Keep its automatic provider
     # pool small/non-heavy so a complex task cannot reach a deep model before the
-    # primary worker has explicitly requested model.deep_reason.
+    # primary worker has explicitly requested ai.reason.
     "requirements_analyst": RoleRoutingProfile(
         "requirements_analyst",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "small", "verified", "fast", "reliable", "free"}),
+        frozenset(
+            {
+                "qualified-reasoning",
+                "qualified-structured-output",
+                "reasoning",
+                "small",
+                "verified",
+                "fast",
+                "reliable",
+                "free",
+            }
+        ),
         avoid_tags=frozenset({"heavy"}),
         max_models=3,
     ),
     "capability_placement": RoleRoutingProfile(
         "capability_placement",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "small", "verified", "fast"}),
+        frozenset({"qualified-reasoning", "reasoning", "small", "verified", "fast"}),
         max_models=3,
     ),
     "bounded_task": RoleRoutingProfile(
@@ -117,11 +161,16 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
 
 
 def role_routing_profile(role: str) -> RoleRoutingProfile:
+    # Qualification uses the normal catalog registration precedence. Applying the
+    # overlay here means every existing role consumer (including Studio's coding
+    # harness) sees the same measured evidence without a new scheduler/runtime.
+    apply_model_qualification_overrides()
     key = str(role or "bounded_task").strip().lower()
     return _PROFILES.get(key, _PROFILES["bounded_task"])
 
 
 def role_routing_profiles() -> dict[str, dict]:
+    apply_model_qualification_overrides()
     return {name: profile.as_dict() for name, profile in sorted(_PROFILES.items())}
 
 
