@@ -33,7 +33,7 @@ _REQUIRED_LAYOUT = {
     "tests": "tests",
     "migrations": "migrations",
 }
-_ALLOWED_ROOT_FILES = {FULLSTACK_MANIFEST, "README.md"}
+_ALLOWED_ROOT_FILES = {FULLSTACK_MANIFEST, "README.md", "operly.entities.json"}
 _FORBIDDEN_SEGMENTS = {".env", ".npmrc", ".pypirc", "credentials.json", "secrets.json"}
 _PACKAGE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@/_.-]{0,119}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9*_.+!<>=~^|-]{0,79}$")
