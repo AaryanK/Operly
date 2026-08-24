@@ -223,12 +223,11 @@ for router in (
 ):
     app.include_router(router)
 
-# Runtime capability gateways that use relative router prefixes are mounted directly
-# at the API root. Avoid nesting them inside another APIRouter; route ownership and
-# the externally visible path stay explicit and testable here.
-app.include_router(workspace_entities_router, prefix="/api")
-app.include_router(app_identity_runtime_router, prefix="/api")
-app.include_router(app_identity_admin_router, prefix="/api")
+# Runtime capability gateways own their complete /api paths so route ownership stays
+# explicit and does not depend on nested-router prefix composition.
+app.include_router(workspace_entities_router)
+app.include_router(app_identity_runtime_router)
+app.include_router(app_identity_admin_router)
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_STATIC = WEB_ROOT / "static"
