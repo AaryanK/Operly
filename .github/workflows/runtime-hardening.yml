@@ -6,8 +6,11 @@ on:
       - "apps/api/agent_router.py"
       - "apps/api/runtime_trace_router.py"
       - "packages/actions/lifecycle.py"
+      - "packages/actions/service.py"
       - "packages/agents/runtime.py"
+      - "packages/capabilities/agent_harness.py"
       - "packages/capabilities/calendar_semantics_provider.py"
+      - "packages/capabilities/defaults.py"
       - "packages/capabilities/firewall.py"
       - "packages/capabilities/gmail_read_provider.py"
       - "packages/capabilities/session_view.py"
@@ -17,9 +20,11 @@ on:
       - "packages/database/company_models.py"
       - "packages/database/model_trace.py"
       - "packages/database/model_trace_models.py"
+      - "packages/database/runtime_trace_events.py"
       - "packages/database/schema.py"
       - "packages/model_runtime/**"
       - "packages/tasks/delivery.py"
+      - "packages/tasks/runtime.py"
       - "alembic/versions/0034_provider_trace_ids.py"
       - "alembic/versions/0035_conversation_runtime_trace.py"
       - "tests/test_agent_runtime_hardening.py"
@@ -30,6 +35,7 @@ on:
       - "tests/test_runtime_contract_hardening.py"
       - "tests/test_runtime_trace_contract.py"
       - "tests/test_runtime_trace_access.py"
+      - "tests/test_truthful_execution_response.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -49,8 +55,11 @@ jobs:
           apps/api/agent_router.py
           apps/api/runtime_trace_router.py
           packages/actions/lifecycle.py
+          packages/actions/service.py
           packages/agents/runtime.py
+          packages/capabilities/agent_harness.py
           packages/capabilities/calendar_semantics_provider.py
+          packages/capabilities/defaults.py
           packages/capabilities/firewall.py
           packages/capabilities/gmail_read_provider.py
           packages/capabilities/session_view.py
@@ -60,6 +69,7 @@ jobs:
           packages/database/company_models.py
           packages/database/model_trace.py
           packages/database/model_trace_models.py
+          packages/database/runtime_trace_events.py
           packages/database/schema.py
           packages/model_runtime/conversation_policy.py
           packages/model_runtime/requirements.py
@@ -71,6 +81,7 @@ jobs:
           packages/model_runtime/openrouter_client.py
           packages/model_runtime/openai_compatible_client.py
           packages/tasks/delivery.py
+          packages/tasks/runtime.py
           alembic/versions/0034_provider_trace_ids.py
           alembic/versions/0035_conversation_runtime_trace.py
       - name: Run runtime hardening regressions
@@ -89,6 +100,7 @@ jobs:
           tests/test_runtime_contract_hardening.py
           tests/test_runtime_trace_contract.py
           tests/test_runtime_trace_access.py
+          tests/test_truthful_execution_response.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db
