@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.security.permissions import resolve_workspace_permissions
-from packages.security.surfaces import SurfaceKind
+from packages.security.surfaces import SurfaceKind, surface_from_legacy_metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +49,11 @@ async def resolve_execution_context(
     """Resolve workspace membership and permissions from trusted database state.
 
     Role and permission values are never accepted from the model or request payload.
-    Surface is a first-class application value; missing or invalid surface values are
-    UNKNOWN and therefore fail closed for personal/private capability and context
-    access. Membership in the selected workspace is revalidated on every execution
-    boundary.
+    Surface is a first-class application value. During ingress migration, an absent
+    explicit surface may be recovered only through the conservative legacy bridge;
+    missing/invalid web metadata remains UNKNOWN and therefore fails closed for
+    personal/private capability and context access. Membership in the selected
+    workspace is revalidated on every execution boundary.
     """
     workspace = await db.get(Tenant, workspace_id)
     if workspace is None:
@@ -85,6 +86,10 @@ async def resolve_execution_context(
         else set()
     )
 
+    surface_kind = SurfaceKind.coerce(surface)
+    if surface_kind is SurfaceKind.UNKNOWN:
+        surface_kind = surface_from_legacy_metadata(channel, metadata)
+
     return ExecutionContext(
         workspace_id=workspace_id,
         user_id=user_id,
@@ -92,7 +97,7 @@ async def resolve_execution_context(
         role=role,
         permissions=frozenset(permissions),
         channel=str(channel or "unknown"),
-        surface=SurfaceKind.coerce(surface),
+        surface=surface_kind,
         conversation_id=conversation_id,
         metadata=dict(metadata or {}),
     )
