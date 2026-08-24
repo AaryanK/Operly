@@ -5,6 +5,7 @@ import os
 from urllib.parse import urlparse
 
 from packages.app_identity.contracts import APP_IDENTITY_BINDING_NAME, APP_IDENTITY_CAPABILITY_ID
+from packages.app_identity.crypto import identity_secret
 from packages.custom_software.runner_contracts import ServiceBindingTransport
 from packages.relational_data.store import configured_app_data_url
 from packages.relational_data.tokens import BindingGrantError, issue_capability_grant
@@ -51,6 +52,7 @@ def attach_app_identity_grants(submission):
         )
     try:
         configured_app_data_url()
+        identity_secret()  # Runtime user sessions must never fall back to Operly account auth.
         gateway = _gateway_url()
         ttl = max(900, int(submission.resources.previewSeconds) + 900)
         bindings = []
@@ -77,7 +79,7 @@ def attach_app_identity_grants(submission):
                 )
             )
         return submission.model_copy(update={"serviceBindings": bindings})
-    except (BindingGrantError, ValueError) as error:
+    except (BindingGrantError, RuntimeError, ValueError) as error:
         raise AppIdentityBindingUnavailable(str(error)) from error
 
 
