@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, desc, or_, select
 
 from packages.coding_harness.execution_loop import build_with_repair
-from packages.custom_software.compiler_planning import PLANNING_ENGINE
+from packages.custom_software.compiler_planning import PLANNING_ENGINE_VERSION as PLANNING_ENGINE
 from packages.custom_software.live_planning import PlanningBlocked, PlanningMode, PlannerUnavailable
 from packages.custom_software.model_planning_client import planning_mode
 from packages.custom_software.plan_service import (
