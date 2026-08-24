@@ -18,8 +18,9 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const [publicShell, auth, runtime, main, convergence, theme, brand, legalLinks, legalPage, personal, workspace, emailBase, ...emailBodies] = await Promise.all([
+const [publicShell, publicStyles, auth, runtime, main, convergence, theme, brand, legalLinks, legalPage, personal, workspace, emailBase, ...emailBodies] = await Promise.all([
   text("static/index.html"),
+  text("static/styles.css"),
   text("static/auth.js"),
   text("static/auth-runtime.js"),
   text("src/main.tsx"),
@@ -76,14 +77,16 @@ assert(convergence.includes(".workspace-more-sheet"), "Mobile More sheet contrac
 assert(convergence.includes(".mobile-history-open .personal-history"), "Personal history drawer contract is missing");
 assert(convergence.includes("--ui-accent: #185d43"), "React brand accent must match the public Operly green");
 assert(convergence.includes("--ui-accent-cyan: #b9ee72"), "React secondary accent must match the public Operly lime");
+assert(legalLinks.includes("position: static"), "Mobile legal links must leave the floating interaction layer");
 assert(legalLinks.includes(".workspace-shell ~ .operly-legal-links"), "Mobile workspace legal links must clear the bottom navigation");
 assert(legalLinks.includes("env(safe-area-inset-bottom)"), "Signed-in legal links must respect phone safe areas");
 
-for (const token of ["#f3f5f1", "#13231c", "#dfe6df", "#102f24", "#185d43", "#b9ee72"]) {
-  assert(legalPage.toLowerCase().includes(token), `Legal pages are missing canonical Operly token: ${token}`);
+for (const token of ["--ink:#13231c", "--green:#185d43", "--dark:#102f24", "--lime:#b9ee72", "--line:#dfe6df", "--bg:#f3f5f1"]) {
+  assert(publicStyles.toLowerCase().includes(token), `Public design system is missing canonical Operly token: ${token}`);
 }
-for (const legacyLegalColor of ["#10130f", "#62685f", "#dfe4dc", "#f8faf6", "#b9ff38"]) {
-  assert(!legalPage.toLowerCase().includes(legacyLegalColor), `Legal pages contain legacy palette value: ${legacyLegalColor}`);
+assert(legalPage.includes('@import url("/static/styles.css'), "Legal pages must inherit the public Operly design system");
+for (const sharedToken of ["var(--bg)", "var(--ink)", "var(--green)", "var(--lime)", "var(--line)"]) {
+  assert(legalPage.includes(sharedToken), `Legal pages must consume shared public token: ${sharedToken}`);
 }
 
 for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
