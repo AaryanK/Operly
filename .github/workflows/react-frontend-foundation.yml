@@ -51,7 +51,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile changed Python serving and frontend build helpers
-        run: python -m py_compile apps/api/main.py apps/api/personal_agent_router.py packages/business_brain/personal_agent.py apps/web/scripts/optimize_logo.py
+        run: python -m py_compile apps/api/main.py apps/api/personal_agent_router.py packages/business_brain/personal_agent.py apps/web/scripts/optimize_logo.py apps/web/scripts/viewport_smoke.py
+      - name: Install Chromium viewport smoke dependency
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Verify responsive surfaces in Chromium
+        working-directory: apps/web
+        run: python scripts/viewport_smoke.py
       - name: Assert production image includes the frontend build stage
         run: |
           grep -q 'FROM node:22-alpine AS web-build' Dockerfile
