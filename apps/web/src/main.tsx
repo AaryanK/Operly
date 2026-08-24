@@ -12,6 +12,7 @@ import "./ui/security.css";
 import "./ui/premium.css";
 import "./ui/theme.css";
 import "./ui/brand.css";
+import "./ui/surface-polish.css";
 
 initializeTheme();
 

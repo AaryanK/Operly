@@ -1,3 +1,5 @@
+@import url('/static/operly-brand-bridge.css');
+
 .planning-decision-card {
   max-height: calc(100dvh - 48px);
   overflow: auto;
