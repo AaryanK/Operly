@@ -3,14 +3,15 @@
 Modes:
 - ``egress``: HTTP CONNECT proxy that only reaches an explicit registry allowlist.
 - ``preview``: dumb TCP forwarder from the runner control network to one job runtime.
+- ``binding``: fixed-destination HTTP gateway that injects one scoped capability grant.
 
-The sidecar deliberately has no Docker socket, runner token, Operly credentials, or
-business-service bindings. It is the only component allowed to bridge the isolated
-job network to another network.
+Generated code never receives the sidecar's token, Docker socket, runner token, Operly
+session, provider credential, or direct route to the sidecar's external network.
 """
 from __future__ import annotations
 
 import asyncio
+import http.client
 import ipaddress
 import os
 import socket
@@ -29,7 +30,13 @@ _ALLOWED = {
 }
 _TARGET_HOST = os.getenv("OPERLY_PROXY_TARGET_HOST", "").strip()
 _TARGET_PORT = int(os.getenv("OPERLY_PROXY_TARGET_PORT", "8080"))
+_BINDING_TARGET = os.getenv("OPERLY_PROXY_BINDING_TARGET", "").strip().rstrip("/")
+_BINDING_TOKEN = os.getenv("OPERLY_PROXY_BINDING_TOKEN", "")
+_BINDING_PREFIX = os.getenv(
+    "OPERLY_PROXY_BINDING_PREFIX", "/api/runtime/relational"
+).rstrip("/")
 _MAX_HEADER_BYTES = 32 * 1024
+_MAX_BINDING_BODY = 1024 * 1024
 
 
 def _safe_hostname(value: str) -> str:
@@ -141,8 +148,6 @@ async def _connect_proxy(
                 break
 
         if method.upper() != "CONNECT":
-            # pip/npm registry traffic is HTTPS. Refusing ordinary forwarding keeps
-            # this proxy from becoming a generic HTTP egress path.
             client_writer.write(
                 b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n"
             )
@@ -194,21 +199,118 @@ async def _connect_proxy(
             await client_writer.wait_closed()
 
 
-async def _handle(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-) -> None:
+def _binding_request(method: str, path: str, body: bytes, content_type: str) -> tuple[int, str, bytes]:
+    target = urlsplit(_BINDING_TARGET)
+    if target.scheme == "https":
+        connection = http.client.HTTPSConnection(target.hostname, target.port or 443, timeout=8)
+    elif target.scheme == "http":
+        connection = http.client.HTTPConnection(target.hostname, target.port or 80, timeout=8)
+    else:
+        raise ValueError("binding target scheme is invalid")
+    base = (target.path or "").rstrip("/")
+    forwarded_path = base + _BINDING_PREFIX + (path if path.startswith("/") else "/" + path)
+    headers = {
+        "Authorization": f"Bearer {_BINDING_TOKEN}",
+        "Content-Type": content_type or "application/json",
+        "Accept": "application/json",
+        "Connection": "close",
+    }
+    try:
+        connection.request(method, forwarded_path, body=body, headers=headers)
+        response = connection.getresponse()
+        payload = response.read(_MAX_BINDING_BODY + 1)
+        if len(payload) > _MAX_BINDING_BODY:
+            raise ValueError("binding response too large")
+        return response.status, response.getheader("Content-Type") or "application/json", payload
+    finally:
+        connection.close()
+
+
+async def _binding(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        request_line = await reader.readline()
+        if not request_line or len(request_line) > 4096:
+            raise ValueError("invalid binding request")
+        try:
+            method, path, version = request_line.decode("ascii").strip().split(" ", 2)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("invalid binding request line") from error
+        method = method.upper()
+        if method not in {"GET", "POST"} or not path.startswith("/") or "//" in path:
+            raise ValueError("binding request method/path is forbidden")
+        if version not in {"HTTP/1.0", "HTTP/1.1"}:
+            raise ValueError("binding request version is invalid")
+
+        headers: dict[str, str] = {}
+        total = len(request_line)
+        while True:
+            line = await reader.readline()
+            total += len(line)
+            if total > _MAX_HEADER_BYTES:
+                raise ValueError("binding headers too large")
+            if line in {b"\r\n", b"\n", b""}:
+                break
+            try:
+                key, value = line.decode("latin1").split(":", 1)
+            except ValueError as error:
+                raise ValueError("invalid binding header") from error
+            headers[key.strip().lower()] = value.strip()
+        length = int(headers.get("content-length", "0") or 0)
+        if length < 0 or length > _MAX_BINDING_BODY:
+            raise ValueError("binding body too large")
+        body = await reader.readexactly(length) if length else b""
+        status, content_type, payload = await asyncio.to_thread(
+            _binding_request,
+            method,
+            path,
+            body,
+            headers.get("content-type", "application/json"),
+        )
+        reason = http.client.responses.get(status, "Response")
+        writer.write(
+            f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {len(payload)}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".encode("latin1")
+            + payload
+        )
+        await writer.drain()
+    except Exception:
+        payload = b'{"detail":"capability_binding_proxy_failure"}'
+        try:
+            writer.write(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\n"
+                + f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+                + payload
+            )
+            await writer.drain()
+        except OSError:
+            pass
+    finally:
+        writer.close()
+        await asyncio.gather(writer.wait_closed(), return_exceptions=True)
+
+
+async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     if _MODE == "preview":
         await _preview(reader, writer)
+        return
+    if _MODE == "binding":
+        await _binding(reader, writer)
         return
     await _connect_proxy(reader, writer)
 
 
 async def main() -> None:
-    if _MODE not in {"egress", "preview"}:
-        raise RuntimeError("OPERLY_PROXY_MODE must be egress or preview")
+    if _MODE not in {"egress", "preview", "binding"}:
+        raise RuntimeError("OPERLY_PROXY_MODE must be egress, preview, or binding")
     if _MODE == "preview" and not _TARGET_HOST:
         raise RuntimeError("preview mode requires OPERLY_PROXY_TARGET_HOST")
+    if _MODE == "binding":
+        parsed = urlsplit(_BINDING_TARGET)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError("binding mode requires a valid OPERLY_PROXY_BINDING_TARGET")
+        if len(_BINDING_TOKEN) < 40:
+            raise RuntimeError("binding mode requires a scoped binding token")
+        if not _BINDING_PREFIX.startswith("/"):
+            raise RuntimeError("binding prefix must be an absolute path")
     server = await asyncio.start_server(_handle, _LISTEN_HOST, _LISTEN_PORT)
     async with server:
         await server.serve_forever()
