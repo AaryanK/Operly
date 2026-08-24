@@ -7,7 +7,7 @@
   },
   "packageManager": "npm@10.9.8",
   "scripts": {
-    "start": "node startup-smoke.mjs && node server.mjs",
+    "start": "node startup-smoke.mjs && node launch.mjs",
     "test": "node --test core.test.mjs && node startup-smoke.mjs"
   },
   "dependencies": {
