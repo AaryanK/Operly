@@ -18,7 +18,6 @@ from packages.database import principal_models as _principal_models  # noqa: F40
 from packages.database.channel_models import ExternalIdentity
 from packages.database.db import Base
 from packages.database.models import AppUser, ScheduledJob, Task, Tenant
-from packages.database.schema import ALEMBIC_HEAD
 
 
 def _context(db, *, tenant_id, user_id, personal=False, direct=False):
@@ -62,7 +61,6 @@ def test_task_and_web_are_builtin_plugins():
     assert "task.update" in ids
     assert "task.check_url_change" in ids
     assert "web.read_url" in ids
-    assert ALEMBIC_HEAD == "0038_solution_generation_leases"
 
 
 def test_recurring_schedule_helpers_and_monitor_prompt():

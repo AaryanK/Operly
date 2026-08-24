@@ -27,6 +27,7 @@ on:
       - "packages/connectors/discord/task_delivery.py"
       - "packages/context/**"
       - "packages/database/company_models.py"
+      - "packages/database/models.py"
       - "packages/database/model_trace.py"
       - "packages/database/model_trace_models.py"
       - "packages/database/runtime_trace_events.py"
@@ -41,6 +42,7 @@ on:
       - "requirements.txt"
       - "alembic/versions/0034_provider_trace_ids.py"
       - "alembic/versions/0035_conversation_runtime_trace.py"
+      - "alembic/versions/0039_scope_aware_actions.py"
       - "tests/test_agent_runtime_hardening.py"
       - "tests/test_assistant_first_personal_dm.py"
       - "tests/test_authority_boundaries.py"
@@ -56,6 +58,8 @@ on:
       - "tests/test_truthful_execution_response.py"
       - "tests/test_personal_execution_scope.py"
       - "tests/test_account_scope_resolver.py"
+      - "tests/test_scope_aware_actions.py"
+      - "tests/test_scope_aware_action_migration.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -100,6 +104,7 @@ jobs:
           packages/context/broker.py
           packages/context/service.py
           packages/database/company_models.py
+          packages/database/models.py
           packages/database/model_trace.py
           packages/database/model_trace_models.py
           packages/database/runtime_trace_events.py
@@ -123,6 +128,7 @@ jobs:
           packages/tasks/runtime.py
           alembic/versions/0034_provider_trace_ids.py
           alembic/versions/0035_conversation_runtime_trace.py
+          alembic/versions/0039_scope_aware_actions.py
       - name: Run runtime hardening regressions
         env:
           ADMIN_PASSWORD: test-admin-password-1234
@@ -148,6 +154,8 @@ jobs:
           tests/test_truthful_execution_response.py
           tests/test_personal_execution_scope.py
           tests/test_account_scope_resolver.py
+          tests/test_scope_aware_actions.py
+          tests/test_scope_aware_action_migration.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db

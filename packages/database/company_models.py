@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, event
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, event
 from sqlalchemy.orm import Mapped, mapped_column
 
 from packages.database.db import Base
@@ -36,7 +36,13 @@ class BusinessEventRecord(Base):
 class BusinessActionRecord(Base):
     __tablename__ = "business_actions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id"), nullable=True, index=True)
+    scope_kind: Mapped[str] = mapped_column(
+        String(20), default="workspace", server_default="workspace", nullable=False, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     capability: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -60,6 +66,14 @@ class BusinessActionRecord(Base):
     resource_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "(scope_kind = 'workspace' AND tenant_id IS NOT NULL AND owner_user_id IS NULL) "
+            "OR (scope_kind = 'personal' AND tenant_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_business_actions_scope_owner",
+        ),
+    )
 
 
 @event.listens_for(BusinessEventRecord, "before_update")
