@@ -183,6 +183,21 @@ async def _tenant_owner(db: AsyncSession, *, user_id: str, tenant_id: str) -> Te
     return membership
 
 
+def _runtime_visibility_filters(*, user_id: str, tenant_id: str | None):
+    if tenant_id:
+        # Personal AI may carry a selected workspace id while remaining private to
+        # the human. Never let tenant scoping alone promote private/direct traces
+        # into workspace-visible debug data.
+        return [
+            ModelRuntimeTrace.tenant_id == tenant_id,
+            ModelRuntimeTrace.surface != "private/direct",
+        ]
+    return [
+        ModelRuntimeTrace.user_id == user_id,
+        ModelRuntimeTrace.surface == "private/direct",
+    ]
+
+
 async def _runtime_rows_for_runs(
     db: AsyncSession,
     *,
@@ -190,11 +205,7 @@ async def _runtime_rows_for_runs(
     tenant_id: str | None,
     limit: int,
 ) -> list[ModelRuntimeTrace]:
-    filters = (
-        [ModelRuntimeTrace.tenant_id == tenant_id]
-        if tenant_id
-        else [ModelRuntimeTrace.user_id == user_id, ModelRuntimeTrace.tenant_id.is_(None)]
-    )
+    filters = _runtime_visibility_filters(user_id=user_id, tenant_id=tenant_id)
     run_ids = list(
         (
             await db.scalars(
@@ -229,8 +240,9 @@ async def list_ai_runs(
     """List AI executions across the shared runtime and Studio trace stores.
 
     Workspace mode is owner-only because the entries can contain complete model-visible
-    business context. Without ``tenant_id`` this endpoint returns only the signed-in
-    person's personal, non-workspace model runs.
+    business context. Without ``tenant_id`` this endpoint returns the signed-in
+    person's private/direct model runs, including runs that delegated into a selected
+    workspace without granting that workspace access to the private conversation.
     """
     user_id = account.user.id
     if tenant_id:
@@ -323,16 +335,7 @@ async def get_ai_run(
             "entries": [studio_trace_json(row) for row in rows],
         }
 
-    filters = [ModelRuntimeTrace.run_id == run_id]
-    if tenant_id:
-        filters.append(ModelRuntimeTrace.tenant_id == tenant_id)
-    else:
-        filters.extend(
-            [
-                ModelRuntimeTrace.user_id == user_id,
-                ModelRuntimeTrace.tenant_id.is_(None),
-            ]
-        )
+    filters = [ModelRuntimeTrace.run_id == run_id, *_runtime_visibility_filters(user_id=user_id, tenant_id=tenant_id)]
     rows = list(
         (
             await db.scalars(
