@@ -4,6 +4,10 @@ The sink records runtime-visible request/response evidence and provider diagnost
 never transport credentials or hidden provider reasoning. Credential-shaped and
 reasoning-only values are redacted in the durable payload while a SHA-256 digest
 preserves the identity of the exact unredacted packet observed at runtime.
+
+Model-visible payloads are deliberately not truncated here: AI Debug is intended to
+answer exactly what the model received. Storage retention is an operational concern
+and must not silently alter an individual trace packet.
 """
 from __future__ import annotations
 
@@ -25,7 +29,6 @@ from packages.model_runtime.trace_context import (
 )
 
 _INSTALLED = False
-_MAX_TRACE_JSON_CHARS = 4_000_000
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -96,36 +99,16 @@ def redact_trace_value(value: Any, *, key: str = "") -> Any:
     return _redact_string(str(value))
 
 
-def _encoded_envelope(payload: dict[str, Any]) -> str:
-    exact_digest = _digest(payload)
+def encode_trace_envelope(payload: dict[str, Any]) -> str:
+    """Encode the complete redacted model-visible packet plus exact-packet digest."""
     envelope = {
         "traceVersion": 2,
-        "exactPayloadDigest": exact_digest,
+        "exactPayloadDigest": _digest(payload),
         "redactionApplied": True,
         "hiddenReasoningRedacted": True,
         "payload": redact_trace_value(payload),
     }
-    encoded = _canonical(envelope)
-    if len(encoded) <= _MAX_TRACE_JSON_CHARS:
-        return encoded
-    return _canonical(
-        {
-            "traceVersion": 2,
-            "exactPayloadDigest": exact_digest,
-            "redactionApplied": True,
-            "hiddenReasoningRedacted": True,
-            "truncated": True,
-            "originalJsonChars": len(_canonical(payload)),
-            "payload": {
-                "notice": "Trace exceeded the durable debug-payload limit.",
-                "phase": payload.get("phase"),
-                "attemptId": payload.get("attemptId") or payload.get("wireCallId"),
-                "resourceId": payload.get("resourceId"),
-                "provider": payload.get("provider"),
-                "providerModelId": payload.get("providerModelId"),
-            },
-        }
-    )
+    return _canonical(envelope)
 
 
 def _trace_row(
@@ -163,7 +146,7 @@ def _trace_row(
         latency_ms=(int(latency_ms) if latency_ms is not None else None),
         classification=(classification[:80] if classification else None),
         retryable=retryable,
-        payload_json=_encoded_envelope(payload),
+        payload_json=encode_trace_envelope(payload),
         created_at=datetime.utcnow(),
     )
 

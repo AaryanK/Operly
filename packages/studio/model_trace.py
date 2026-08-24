@@ -2,9 +2,10 @@
 
 Normal Studio activity remains sanitized and compact. This module captures the exact
 provider-neutral packet passed from the context-bounded coding client into
-``ModelChatAdapter`` for debugging, then persists a redacted copy plus a digest of
-the exact unredacted packet. No chain-of-thought is synthesized or exposed: only
-messages/tool schemas actually supplied by the harness and the model response/error.
+``ModelChatAdapter`` for debugging, then persists a complete redacted copy plus a
+digest of the exact unredacted packet. No chain-of-thought is synthesized or exposed:
+only messages/tool schemas actually supplied by the harness and the model
+response/error.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ from packages.database.studio_source_models import StudioAgentRun, StudioModelTr
 
 _TRACE_RUN_ID: ContextVar[str | None] = ContextVar("operly_studio_model_trace_run_id", default=None)
 _INSTALLED = False
-_MAX_TRACE_JSON_CHARS = 1_500_000
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -37,6 +37,17 @@ _SECRET_KEY_PARTS = (
     "credential",
     "private_key",
     "session_token",
+)
+_HIDDEN_REASONING_KEYS = frozenset(
+    {
+        "reasoning",
+        "reasoning_details",
+        "reasoning_content",
+        "thinking",
+        "thinking_content",
+        "chain_of_thought",
+        "chain-of-thought",
+    }
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]{8,}")
 _SK_RE = re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b")
@@ -55,13 +66,19 @@ def _secret_key(key: str) -> bool:
     return any(part in lowered for part in _SECRET_KEY_PARTS)
 
 
+def _hidden_reasoning_key(key: str) -> bool:
+    return str(key or "").strip().lower() in _HIDDEN_REASONING_KEYS
+
+
 def _redact_string(value: str) -> str:
     text = _BEARER_RE.sub("Bearer [REDACTED]", value)
     return _SK_RE.sub("[REDACTED_API_KEY]", text)
 
 
 def redact_trace_value(value: Any, *, key: str = "") -> Any:
-    """Return a JSON-safe trace copy with credential-shaped material removed."""
+    """Return a JSON-safe trace copy with secrets and hidden reasoning removed."""
+    if key and _hidden_reasoning_key(key):
+        return "[REDACTED_HIDDEN_REASONING]"
     if key and _secret_key(key):
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -101,35 +118,17 @@ async def _persist_trace(phase: str, call_index: int, payload: dict[str, Any]) -
     if not run_id:
         return
 
+    # Do not summarize or truncate model-visible data here. AI Debug exists to
+    # reconstruct exactly what the coding model saw. Retention/archival policy may
+    # bound history, but an individual persisted trace packet remains complete.
     envelope = {
         "traceVersion": 1,
         "exactPayloadDigest": _digest(payload),
         "redactionApplied": True,
+        "hiddenReasoningRedacted": True,
         "payload": redact_trace_value(payload),
     }
     encoded = _canonical(envelope)
-    if len(encoded) > _MAX_TRACE_JSON_CHARS:
-        # Preserve exact identity even when an unexpectedly giant packet cannot be
-        # retained safely in one database row.
-        envelope = {
-            "traceVersion": 1,
-            "exactPayloadDigest": _digest(payload),
-            "redactionApplied": True,
-            "truncated": True,
-            "originalJsonChars": len(_canonical(payload)),
-            "payload": {
-                "notice": "Trace exceeded the durable debug-payload limit.",
-                "summary": redact_trace_value(
-                    {
-                        "phase": phase,
-                        "callIndex": call_index,
-                        "messageCount": len(payload.get("messages") or []),
-                        "toolCount": len(payload.get("tools") or []),
-                    }
-                ),
-            },
-        }
-        encoded = _canonical(envelope)
 
     async with SessionFactory() as db:
         run = await db.get(StudioAgentRun, run_id)
@@ -264,7 +263,7 @@ async def trace_rows(db, tenant_id: str, run_id: str) -> list[StudioModelTrace]:
                 select(StudioModelTrace)
                 .where(StudioModelTrace.tenant_id == tenant_id, StudioModelTrace.run_id == run_id)
                 .order_by(StudioModelTrace.call_index.asc(), StudioModelTrace.created_at.asc())
-                .limit(500)
+                .limit(5000)
             )
         ).all()
     )
@@ -274,7 +273,12 @@ def trace_json(row: StudioModelTrace) -> dict[str, Any]:
     try:
         payload = json.loads(row.payload_json or "{}")
     except Exception:
-        payload = {"traceVersion": 1, "redactionApplied": True, "payload": {}}
+        payload = {
+            "traceVersion": 1,
+            "redactionApplied": True,
+            "hiddenReasoningRedacted": True,
+            "payload": {},
+        }
     return {
         "id": row.id,
         "callIndex": row.call_index,

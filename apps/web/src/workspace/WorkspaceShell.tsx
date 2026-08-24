@@ -3,6 +3,7 @@ import { useState } from "react";
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
 import { AccessPage } from "./AccessPage";
+import { AIDebugPage } from "./AIDebugPage";
 import { ActivityPage, ConnectionsPage, CRMPage, OperationsPage, PresencePage } from "./DataPages";
 import { MembersPage } from "./MembersPage";
 import { PluginsPage } from "./PluginsPage";
@@ -22,6 +23,7 @@ const groupLabels: Record<(typeof workspaceSections)[number]["group"], string> =
   business: "Business",
   digital: "Digital presence",
   extend: "Extend",
+  debug: "Debug",
   admin: "Administration",
 };
 
@@ -37,6 +39,7 @@ const navGlyphs: Record<WorkspaceSection, string> = {
   plugins: "⬡",
   members: "♙",
   access: "⌁",
+  "ai-debug": "⌘",
   settings: "⚙",
 };
 
@@ -53,6 +56,7 @@ function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
     case "plugins": return <PluginsPage workspace={workspace} />;
     case "members": return <MembersPage workspace={workspace} />;
     case "access": return <AccessPage workspace={workspace} />;
+    case "ai-debug": return <AIDebugPage workspace={workspace} />;
     case "settings": return <WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} />;
   }
 }
@@ -62,7 +66,8 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
     try { return window.localStorage.getItem("operly.workspace-nav-collapsed") === "true"; }
     catch { return false; }
   });
-  const grouped = workspaceSections.reduce<Record<string, typeof workspaceSections>>((result, item) => {
+  const visibleSections = workspaceSections.filter((item) => item.id !== "ai-debug" || workspace.role === "owner");
+  const grouped = visibleSections.reduce<Record<string, typeof workspaceSections>>((result, item) => {
     (result[item.group] ||= []).push(item);
     return result;
   }, {});

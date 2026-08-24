@@ -7,9 +7,14 @@ from fastapi import HTTPException
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from apps.api.runtime_trace_router import get_conversation_runtime_trace
+from apps.api.runtime_trace_router import (
+    get_ai_run,
+    get_conversation_runtime_trace,
+    list_ai_runs,
+)
 from packages.database.agent_models import AgentConversation
 from packages.database.db import Base
+from packages.database.model_trace import encode_trace_envelope
 from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.database.principal_models import Principal, PrincipalConversation
@@ -35,6 +40,11 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 user_id=self.owner.id,
                 role="owner",
             )
+            self.other_membership = TenantMember(
+                tenant_id=self.tenant.id,
+                user_id=self.other.id,
+                role="member",
+            )
             self.workspace_conversation = AgentConversation(
                 id="workspace-trace-conversation",
                 tenant_id=self.tenant.id,
@@ -48,7 +58,14 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 display_name=self.owner.display_name,
                 status="active",
             )
-            db.add_all([self.membership, self.workspace_conversation, self.principal])
+            db.add_all(
+                [
+                    self.membership,
+                    self.other_membership,
+                    self.workspace_conversation,
+                    self.principal,
+                ]
+            )
             await db.flush()
             self.personal_conversation = PrincipalConversation(
                 principal_id=self.principal.id,
@@ -58,8 +75,45 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 status="active",
             )
             db.add(self.personal_conversation)
+            workspace_payload = encode_trace_envelope(
+                {
+                    "phase": "start",
+                    "input": {
+                        "messages": [
+                            {"role": "system", "content": "workspace system prompt"},
+                            {"role": "user", "content": "inspect exactly what the model saw"},
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {"name": "customer.lookup", "description": "Find a customer"},
+                            }
+                        ],
+                    },
+                    "metadata": {"runtime_component": "agent"},
+                }
+            )
             db.add_all(
                 [
+                    ModelRuntimeTrace(
+                        run_id="run-workspace",
+                        conversation_id=self.workspace_conversation.id,
+                        tenant_id=self.tenant.id,
+                        user_id=self.owner.id,
+                        principal_id=f"user:{self.owner.id}",
+                        channel="web",
+                        surface="shared/workspace",
+                        component="agent",
+                        step=1,
+                        attempt_id="attempt-workspace",
+                        phase="start",
+                        resource_id="test:model",
+                        provider="test-provider",
+                        provider_model_id="test-model",
+                        attempt=1,
+                        latency_ms=None,
+                        payload_json=workspace_payload,
+                    ),
                     ModelRuntimeTrace(
                         run_id="run-workspace",
                         conversation_id=self.workspace_conversation.id,
@@ -76,13 +130,28 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                         provider="test-provider",
                         provider_model_id="test-model",
                         attempt=1,
-                        latency_ms=1,
-                        payload_json="{}",
+                        latency_ms=7,
+                        payload_json=encode_trace_envelope(
+                            {
+                                "phase": "success",
+                                "output": {
+                                    "message": {"role": "assistant", "content": "done"},
+                                    "usage": {
+                                        "input_tokens": 123,
+                                        "output_tokens": 17,
+                                        "total_tokens": 140,
+                                    },
+                                },
+                            }
+                        ),
                     ),
+                    # A Personal AI run may carry the currently selected workspace id
+                    # for delegation. The surface remains private/direct and must
+                    # never become visible to that workspace's debug browser.
                     ModelRuntimeTrace(
                         run_id="run-personal",
                         conversation_id="discord:trace-channel",
-                        tenant_id=None,
+                        tenant_id=self.tenant.id,
                         user_id=self.owner.id,
                         principal_id=self.principal.id,
                         channel="discord",
@@ -96,7 +165,12 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                         provider_model_id="test-model",
                         attempt=1,
                         latency_ms=1,
-                        payload_json="{}",
+                        payload_json=encode_trace_envelope(
+                            {
+                                "phase": "success",
+                                "output": {"message": {"role": "assistant", "content": "personal"}},
+                            }
+                        ),
                     ),
                 ]
             )
@@ -119,7 +193,7 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(report["scope"], "workspace")
             self.assertEqual(report["tenantId"], self.tenant_id)
-            self.assertEqual(report["entryCount"], 1)
+            self.assertEqual(report["entryCount"], 2)
 
         async with self.sessions() as db:
             other = await db.get(AppUser, self.other_id)
@@ -168,6 +242,74 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                     db=db,
                 )
             self.assertEqual(caught.exception.status_code, 404)
+
+    async def test_owner_run_browser_lists_usage_and_returns_full_model_visible_payload(self):
+        async with self.sessions() as db:
+            owner = await db.get(AppUser, self.owner_id)
+            listing = await list_ai_runs(
+                tenant_id=self.tenant_id,
+                limit=75,
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            run_ids = {item["runId"] for item in listing["runs"]}
+            self.assertIn("run-workspace", run_ids)
+            self.assertNotIn("run-personal", run_ids)
+
+            runtime = next(item for item in listing["runs"] if item["runId"] == "run-workspace")
+            self.assertEqual(runtime["status"], "success")
+            self.assertEqual(runtime["tokenUsage"]["inputTokens"], 123)
+            self.assertEqual(runtime["tokenUsage"]["outputTokens"], 17)
+
+            detail = await get_ai_run(
+                "run-workspace",
+                tenant_id=self.tenant_id,
+                kind="runtime",
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            request_entry = next(entry for entry in detail["entries"] if entry["phase"] == "start")
+            payload = request_entry["trace"]["payload"]
+            self.assertEqual(
+                payload["input"]["messages"][1]["content"],
+                "inspect exactly what the model saw",
+            )
+            self.assertEqual(
+                payload["input"]["tools"][0]["function"]["name"],
+                "customer.lookup",
+            )
+
+    async def test_personal_run_browser_keeps_private_run_visible_to_its_human(self):
+        async with self.sessions() as db:
+            owner = await db.get(AppUser, self.owner_id)
+            listing = await list_ai_runs(
+                tenant_id=None,
+                limit=75,
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            self.assertIn("run-personal", {item["runId"] for item in listing["runs"]})
+
+            detail = await get_ai_run(
+                "run-personal",
+                tenant_id=None,
+                kind="runtime",
+                account=SimpleNamespace(user=owner),
+                db=db,
+            )
+            self.assertEqual(detail["surface"], "private/direct")
+
+    async def test_non_owner_cannot_browse_workspace_ai_runs(self):
+        async with self.sessions() as db:
+            other = await db.get(AppUser, self.other_id)
+            with self.assertRaises(HTTPException) as caught:
+                await list_ai_runs(
+                    tenant_id=self.tenant_id,
+                    limit=75,
+                    account=SimpleNamespace(user=other),
+                    db=db,
+                )
+            self.assertEqual(caught.exception.status_code, 403)
 
 
 if __name__ == "__main__":
