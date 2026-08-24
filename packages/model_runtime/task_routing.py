@@ -215,9 +215,16 @@ def requirements_for_task(
     decision: TaskRouteDecision,
     request: InferenceRequest,
 ) -> ModelRequirements:
-    """Translate a workload shape into model capabilities and preferences."""
+    """Translate a workload shape into primary-worker requirements.
+
+    Normal agent turns are deliberately small-model-first *and non-heavy*. A task
+    label may add required capabilities such as coding/reasoning/long-context, but it
+    must not silently promote routine execution or automatic provider failover to the
+    heavy tier. When stronger reasoning is actually needed, the worker has the
+    explicit model.deep_reason capability.
+    """
     required = {"text"}
-    preferred = {"reliable"}
+    preferred = {"reliable", "small", "fast"}
     if request.tools:
         required.add("tools")
         preferred.add("tools")
@@ -240,9 +247,11 @@ def requirements_for_task(
     return ModelRequirements(
         requires=frozenset(required),
         prefer_tags=frozenset(preferred),
+        avoid_tags=frozenset({"heavy"}),
+        prefer_free=True,
         max_models=max(1, int((request.budget.max_models if request.budget else None) or 3)),
         min_context_tokens=minimum,
-        reason=f"task={decision.task_type}; tools={bool(request.tools)}",
+        reason=f"task={decision.task_type}; tools={bool(request.tools)}; small-first; heavy=explicit-escalation-only",
     )
 
 
@@ -267,8 +276,10 @@ class ModelTaskRouterPlugin:
             router_requirements = ModelRequirements(
                 requires=frozenset({"text", "reasoning"}),
                 prefer_tags=frozenset({"fast", "small", "reliable"}),
+                avoid_tags=frozenset({"heavy"}),
+                prefer_free=True,
                 max_models=2,
-                reason="low-latency task-shape routing",
+                reason="low-latency task-shape routing; heavy tier excluded",
             )
             router_model = model_for_requirements(router_requirements, fallback_role="router")
             router_client = ModelChatAdapter(
@@ -425,7 +436,7 @@ class TaskRoutedBusinessModel:
     """Lazy model proxy with workload routing and requirements-first execution."""
 
     id = "task-router:business-agent"
-    tags = frozenset({"task-routed", "requirements-routed"})
+    tags = frozenset({"task-routed", "requirements-routed", "small-first"})
     capabilities = frozenset({"text", "tools", "reasoning", "coding"})
     traits = ModelTraits()
 
@@ -452,6 +463,8 @@ class TaskRoutedBusinessModel:
         route_metadata["compatibilityRole"] = decision.role
         route_metadata["modelRequirements"] = requirements.as_dict()
         route_metadata["toolSchemasForwarded"] = bool(request.tools and "tools" in requirements.requires)
+        route_metadata["smallModelFirst"] = "small" in requirements.prefer_tags
+        route_metadata["automaticHeavyFallback"] = False
         metadata["task_route"] = route_metadata
         routed = InferenceRequest(
             messages=request.messages,

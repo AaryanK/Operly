@@ -1,5 +1,5 @@
 from packages.capabilities.defaults import default_registry
-from packages.capabilities.session_view import SessionCapabilityView
+from packages.capabilities.session_view import DEFAULT_KERNEL_IDS, SessionCapabilityView
 
 
 def _tool_ids(view: SessionCapabilityView) -> set[str]:
@@ -10,7 +10,7 @@ def _tool_ids(view: SessionCapabilityView) -> set[str]:
     }
 
 
-def test_common_crm_reads_and_low_risk_writes_need_no_discovery_roundtrip():
+def test_authorized_capabilities_are_not_bulk_exposed():
     registry = default_registry(set())
     view = SessionCapabilityView(
         registry,
@@ -19,81 +19,73 @@ def test_common_crm_reads_and_low_risk_writes_need_no_discovery_roundtrip():
     )
 
     tools = _tool_ids(view)
-    assert "crm.list_contacts" in tools
-    assert "crm.search_contacts" in tools
-    assert "crm.get_contact" in tools
-    assert "crm.search_leads" in tools
-    assert "crm.create_contact" in tools
-    assert "crm.create_lead" in tools
-
-    # Medium/high-risk operations remain progressive even when the principal has
-    # authority. They can still be found through capability.search/describe and
-    # every execution remains firewall-controlled.
+    # Kernel membership is still authority-gated. This fake principal omitted
+    # model:invoke, so escalation tools must not appear merely because they are kernel IDs.
+    assert tools == set(DEFAULT_KERNEL_IDS) - {"model.invoke", "model.deep_reason"}
+    assert "crm.list_contacts" not in tools
+    assert "crm.create_contact" not in tools
     assert "orders.create" not in tools
 
 
-def test_connected_google_capabilities_are_immediately_visible_when_authorized():
-    enabled = {
-        "calendar.list_events",
-        "calendar.create_event",
-        "calendar.update_event",
-        "calendar.delete_event",
-    }
-    registry = default_registry(enabled)
+def test_model_escalation_kernel_is_visible_when_model_authority_exists():
+    registry = default_registry(set())
     view = SessionCapabilityView(
         registry,
         "tenant-test",
-        {"calendar:read", "calendar:write"},
+        {"model:invoke"},
+    )
+    tools = _tool_ids(view)
+    assert "model.invoke" in tools
+    assert "model.deep_reason" in tools
+
+
+def test_describe_observation_progressively_exposes_exact_schema():
+    registry = default_registry(set())
+    view = SessionCapabilityView(registry, "tenant-test", {"crm:read"})
+
+    view.observe(
+        "capability.describe",
+        {
+            "observation": {
+                "capabilities": [
+                    {"id": "crm.list_contacts", "authorized": True},
+                ]
+            }
+        },
     )
 
     tools = _tool_ids(view)
-    assert "calendar.list_events" in tools
-    assert "calendar.create_event" in tools
-    assert "calendar.update_event" in tools
-    assert "calendar.delete_event" in tools
+    assert "crm.list_contacts" in tools
+    assert "crm.search_contacts" not in tools
 
 
-def test_discord_current_context_tools_are_seamless_on_discord_but_hideable_elsewhere():
+def test_describe_cannot_expose_surface_hidden_capability():
     registry = default_registry(set())
-    authority = {"discord:read", "discord:write"}
-
-    discord_view = SessionCapabilityView(
+    view = SessionCapabilityView(
         registry,
         "tenant-test",
-        authority,
-        visible_predicate=lambda capability_id: True,
+        {"workspace:read"},
+        visible_predicate=lambda capability_id: not capability_id.startswith("account."),
     )
-    discord_tools = _tool_ids(discord_view)
-    assert "discord.context" in discord_tools
-    assert "discord.read_recent_messages" in discord_tools
-    assert "discord.send_message" in discord_tools
-    assert "discord.add_reaction" in discord_tools
 
-    current_context = {
-        "discord.context",
-        "discord.read_recent_messages",
-        "discord.send_message",
-        "discord.add_reaction",
-        "discord.create_thread",
-    }
-    web_view = SessionCapabilityView(
-        registry,
-        "tenant-test",
-        authority,
-        visible_predicate=lambda capability_id: capability_id not in current_context,
+    view.observe(
+        "capability.describe",
+        {
+            "observation": {
+                "capabilities": [
+                    {"id": "account.list_workspaces", "authorized": True},
+                ]
+            }
+        },
     )
-    web_tools = _tool_ids(web_view)
-    assert "discord.context" not in web_tools
-    assert "discord.read_recent_messages" not in web_tools
-    assert "discord.send_message" not in web_tools
-    # A linked-user DM capability is not tied to the current Discord channel and
-    # may remain available on an authorized private Operly surface.
-    assert "discord.send_dm" in web_tools
+
+    assert "account.list_workspaces" not in _tool_ids(view)
 
 
 def test_revoked_authority_removes_previously_exposed_schema():
     registry = default_registry(set())
     view = SessionCapabilityView(registry, "tenant-test", {"crm:read"})
+    view.expose(["crm.list_contacts"])
     assert "crm.list_contacts" in _tool_ids(view)
 
     view.authority = set()

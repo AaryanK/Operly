@@ -41,17 +41,27 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         "router",
         frozenset({"text", "reasoning"}),
         frozenset({"fast", "small", "verified", "reliable", "free"}),
+        avoid_tags=frozenset({"heavy"}),
         max_models=2,
     ),
+    # Ordinary manager/worker turns should prefer genuinely small, fast resources.
+    # Do not reward the legacy ``orchestrator`` compatibility tag here: the legacy
+    # route may point at a heavy model (for example Ox Alpha), which would otherwise
+    # win tie-breaks despite the small-model-first runtime contract. Strong reasoning
+    # remains explicitly available through model.deep_reason.
     "business_agent": RoleRoutingProfile(
         "business_agent",
         frozenset({"text", "tools"}),
-        frozenset({"orchestrator", "verified", "fast", "reliable"}),
+        frozenset({"small", "verified", "fast", "reliable", "free"}),
+        avoid_tags=frozenset({"slow", "heavy"}),
+        max_models=3,
     ),
     "coding": RoleRoutingProfile(
         "coding",
         frozenset({"text", "coding", "tools"}),
-        frozenset({"coding", "verified", "fast", "reliable"}),
+        frozenset({"coding", "small", "verified", "fast", "reliable"}),
+        avoid_tags=frozenset({"slow"}),
+        max_models=3,
     ),
     "repair": RoleRoutingProfile(
         "repair",
@@ -68,32 +78,39 @@ _PROFILES: dict[str, RoleRoutingProfile] = {
         frozenset({"text", "reasoning"}),
         frozenset({"reasoning", "verified", "heavy", "reliable"}),
     ),
+    # The adaptive pre-execution planner uses this role. Keep its automatic provider
+    # pool small/non-heavy so a complex task cannot reach a deep model before the
+    # primary worker has explicitly requested model.deep_reason.
     "requirements_analyst": RoleRoutingProfile(
         "requirements_analyst",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "fast", "reliable"}),
+        frozenset({"reasoning", "small", "verified", "fast", "reliable", "free"}),
+        avoid_tags=frozenset({"heavy"}),
+        max_models=3,
     ),
     "capability_placement": RoleRoutingProfile(
         "capability_placement",
         frozenset({"text", "reasoning"}),
-        frozenset({"reasoning", "verified", "fast"}),
+        frozenset({"reasoning", "small", "verified", "fast"}),
+        max_models=3,
     ),
     "bounded_task": RoleRoutingProfile(
         "bounded_task",
         frozenset({"text", "tools"}),
         frozenset({"fast", "small", "verified", "free", "reliable"}),
+        avoid_tags=frozenset({"slow"}),
         max_models=3,
     ),
     "attachment_text": RoleRoutingProfile(
         "attachment_text",
         frozenset({"text", "reasoning"}),
-        frozenset({"fast", "verified", "reliable", "free"}),
+        frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=3,
     ),
     "attachment_vision": RoleRoutingProfile(
         "attachment_vision",
         frozenset({"text", "reasoning", "vision"}),
-        frozenset({"fast", "verified", "reliable", "free"}),
+        frozenset({"fast", "small", "verified", "reliable", "free"}),
         max_models=3,
     ),
 }
@@ -120,4 +137,6 @@ def auto_portfolio_enabled() -> bool:
     value = os.getenv("OPERLY_MODEL_AUTO_PORTFOLIO", "1").strip().lower()
     if value in {"0", "false", "no", "off"}:
         return False
-    return configured_provider_count() >= 2
+    # Automatic capability/tag routing is useful even with one provider because a
+    # provider may expose multiple models with very different latency/cost profiles.
+    return configured_provider_count() >= 1

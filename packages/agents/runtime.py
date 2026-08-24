@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from packages.agents.compaction import (
+    AgentCompactionPolicy,
+    approx_tokens,
+    compact_working_messages,
+    serialized_chars,
+)
 from packages.database.model_trace import ensure_model_trace_sink
 from packages.database.runtime_trace_events import emit_runtime_trace_event
 from packages.model_runtime import InferenceBudget, InferenceRequest
@@ -108,14 +114,6 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
 
 
 def _ensure_tool_call_ids(message: dict[str, Any]) -> None:
-    """Give provider-neutral tool calls a stable correlation id when absent.
-
-    Some providers (notably native Ollama) do not emit call ids, while other
-    providers require one when a tool result is replayed. The shared runtime owns
-    this correlation concern: native ids are preserved and only missing ids receive
-    an Operly-generated value. Provider adapters remain free to drop the id if their
-    wire protocol does not use it.
-    """
     calls = message.get("tool_calls")
     if not isinstance(calls, list):
         return
@@ -139,13 +137,6 @@ def _tool_ids(tools: list[dict[str, Any]]) -> list[str]:
 
 
 def _execution_truth(trace: list[AgentTraceEntry]) -> dict[str, Any] | None:
-    """Derive final user-facing execution truth from actual capability results.
-
-    Pending approvals remain unresolved even if the model performs additional read
-    operations afterwards. Other failure/running states guard the final response
-    only when they are the latest action-lifecycle result, allowing a later verified
-    retry to truthfully supersede an earlier failed attempt.
-    """
     lifecycle_states = {
         "WAITING_APPROVAL",
         "RUNNING",
@@ -198,7 +189,6 @@ def _execution_truth(trace: list[AgentTraceEntry]) -> dict[str, Any] | None:
 
 
 def _truthful_final_message(model_message: str, truth: dict[str, Any] | None) -> str:
-    """Prevent model prose from claiming a lifecycle transition that did not occur."""
     if not truth or truth.get("verified") is True:
         return model_message or "Done."
 
@@ -223,10 +213,11 @@ def _truthful_final_message(model_message: str, truth: dict[str, Any] | None) ->
 
 
 class AgentRuntime:
-    """Stable orchestration loop over Model + capability callbacks.
+    """Stable micro-loop over a model and capability callbacks.
 
-    ``max_steps`` is retained as the compatibility name for the initial budget,
-    not a hard abort. Productive work can extend up to the bounded hard ceiling.
+    Long-horizon planning/durability belongs above this class. This loop owns bounded
+    reason-act-observe iterations and keeps its working prompt compact while raw
+    observations remain in the run trace.
     """
 
     def __init__(
@@ -235,6 +226,7 @@ class AgentRuntime:
         max_steps: int = 8,
         inference_budget: InferenceBudget | None = None,
         execution_budget: AgentExecutionBudget | None = None,
+        compaction_policy: AgentCompactionPolicy | None = None,
     ) -> None:
         self.max_steps = max(1, int(max_steps))
         self.inference_budget = inference_budget
@@ -245,6 +237,7 @@ class AgentRuntime:
                 max_steps=max(self.max_steps + 4, self.max_steps * 3),
             )
         ).normalized()
+        self.compaction_policy = (compaction_policy or AgentCompactionPolicy()).normalized()
 
     async def _infer(
         self,
@@ -253,9 +246,6 @@ class AgentRuntime:
         tools: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        # Progressive tool exposure starts at zero for unmistakable conversation.
-        # This is enforced at the final model boundary so a greeting cannot call
-        # capability.search even if the harness has already prepared schemas.
         effective_tools = [] if is_trivial_conversation(_last_user_text(messages)) else tools
         infer = getattr(model, "infer", None)
         if callable(infer):
@@ -296,7 +286,6 @@ class AgentRuntime:
 
     @staticmethod
     def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
-        """Compatibility accessor retained for callers/tests outside the loop."""
         name, arguments, call_id, _ = AgentRuntime._arguments_checked(call)
         return name, arguments, call_id
 
@@ -319,6 +308,9 @@ class AgentRuntime:
         extensions = 0
         last_step_progress = False
         model_call_index = 0
+        compaction_events = 0
+        compacted_tool_messages = 0
+        approx_tokens_saved = 0
         run_metadata = dict(inference_metadata or {})
         runtime_run_id = str(run_metadata.get("runtime_run_id") or uuid4())
         run_metadata["runtime_run_id"] = runtime_run_id
@@ -333,6 +325,8 @@ class AgentRuntime:
                     "runtime_step": model_call_index,
                 }
                 suppressed = is_trivial_conversation(_last_user_text(messages))
+                message_chars = serialized_chars(messages)
+                tool_schema_chars = serialized_chars(tools)
                 with runtime_trace_scope(model_metadata):
                     await emit_runtime_trace_event(
                         RuntimeTraceEvent.MODEL_REQUEST,
@@ -341,12 +335,24 @@ class AgentRuntime:
                             "candidate_tool_count": len(tools),
                             "candidate_tool_ids": _tool_ids(tools),
                             "tool_surface_suppressed": suppressed,
+                            "message_chars": message_chars,
+                            "tool_schema_chars": tool_schema_chars,
+                            "approx_message_tokens": approx_tokens(messages),
+                            "approx_tool_schema_tokens": approx_tokens(tools),
+                            "approx_total_input_tokens": approx_tokens(messages) + (
+                                0 if suppressed else approx_tokens(tools)
+                            ),
                         },
                         metadata=model_metadata,
                         component="agent",
                         step=model_call_index,
                     )
-                    message = await self._infer(model, messages, tools, metadata=model_metadata)
+                    message = await self._infer(
+                        model,
+                        messages,
+                        tools,
+                        metadata=model_metadata,
+                    )
                     await emit_runtime_trace_event(
                         RuntimeTraceEvent.MODEL_RESPONSE,
                         {
@@ -381,6 +387,9 @@ class AgentRuntime:
                             "toolCalls": tool_calls,
                             "maxToolCalls": budget.max_tool_calls,
                             "extensions": extensions,
+                            "compactionEvents": compaction_events,
+                            "compactedToolMessages": compacted_tool_messages,
+                            "approxTokensSaved": approx_tokens_saved,
                         },
                     }
 
@@ -417,7 +426,9 @@ class AgentRuntime:
                                 "ok": False,
                                 "status": "INVALID_ARGUMENTS",
                                 "error": "Model requested an unnamed capability",
-                                "errors": [{"path": "function.name", "reason": "required"}],
+                                "errors": [
+                                    {"path": "function.name", "reason": "required"}
+                                ],
                                 "retryable": True,
                             }
                         elif argument_errors:
@@ -429,7 +440,9 @@ class AgentRuntime:
                                 "retryable": True,
                             }
                         else:
-                            observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
+                            observation = dict(
+                                await _resolve(invoke(name, dict(arguments), call_id)) or {}
+                            )
                         if str(observation.get("status") or "").upper() in {
                             "INVALID_ARGUMENTS",
                             "DENIED",
@@ -447,22 +460,29 @@ class AgentRuntime:
                                 component=f"capability:{name or 'unknown'}",
                                 step=model_call_index,
                                 resource_id=name or "unnamed-capability",
-                                classification=str(observation.get("status") or "").lower() or None,
+                                classification=(
+                                    str(observation.get("status") or "").lower() or None
+                                ),
                                 retryable=bool(observation.get("retryable")),
                             )
                     tool_calls += 1
                     last_step_progress = last_step_progress or _made_progress(observation)
-                    entry = AgentTraceEntry(
-                        capability_id=name,
-                        arguments=dict(arguments),
-                        observation=observation,
-                        call_id=call_id,
+                    trace.append(
+                        AgentTraceEntry(
+                            capability_id=name,
+                            arguments=dict(arguments),
+                            observation=observation,
+                            call_id=call_id,
+                        )
                     )
-                    trace.append(entry)
                     tool_message = {
                         "role": "tool",
                         "tool_name": name,
-                        "content": json.dumps(observation, ensure_ascii=False, default=str),
+                        "content": json.dumps(
+                            observation,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
                     }
                     if call_id:
                         tool_message["tool_call_id"] = call_id
@@ -470,16 +490,49 @@ class AgentRuntime:
                     if on_observation is not None:
                         await _resolve(on_observation(name, arguments, observation))
 
+                compaction = compact_working_messages(
+                    messages,
+                    self.compaction_policy,
+                )
+                if compaction.compacted_tool_messages:
+                    compaction_events += 1
+                    compacted_tool_messages += compaction.compacted_tool_messages
+                    approx_tokens_saved += compaction.approx_saved_tokens
+                    await emit_runtime_trace_event(
+                        RuntimeTraceEvent.RUN_COMPACTED,
+                        {
+                            "before_chars": compaction.before_chars,
+                            "after_chars": compaction.after_chars,
+                            "saved_chars": compaction.saved_chars,
+                            "approx_saved_tokens": compaction.approx_saved_tokens,
+                            "compacted_tool_messages": compaction.compacted_tool_messages,
+                        },
+                        metadata=run_metadata,
+                        component="agent",
+                        step=model_call_index,
+                    )
+
                 if tool_calls >= budget.max_tool_calls:
                     break
 
-                if steps_used >= allowed_steps and last_step_progress and allowed_steps < budget.max_steps:
-                    new_allowed = min(budget.max_steps, allowed_steps + budget.extension_steps)
+                if (
+                    steps_used >= allowed_steps
+                    and last_step_progress
+                    and allowed_steps < budget.max_steps
+                ):
+                    new_allowed = min(
+                        budget.max_steps,
+                        allowed_steps + budget.extension_steps,
+                    )
                     if new_allowed > allowed_steps:
                         allowed_steps = new_allowed
                         extensions += 1
 
-        stop_reason = "tool_call_budget_exhausted" if tool_calls >= budget.max_tool_calls else "execution_budget_exhausted"
+        stop_reason = (
+            "tool_call_budget_exhausted"
+            if tool_calls >= budget.max_tool_calls
+            else "execution_budget_exhausted"
+        )
         return {
             "message": (
                 "Stopped after exhausting the bounded execution budget. "
@@ -499,5 +552,8 @@ class AgentRuntime:
                 "maxToolCalls": budget.max_tool_calls,
                 "extensions": extensions,
                 "lastStepMadeProgress": last_step_progress,
+                "compactionEvents": compaction_events,
+                "compactedToolMessages": compacted_tool_messages,
+                "approxTokensSaved": approx_tokens_saved,
             },
         }
