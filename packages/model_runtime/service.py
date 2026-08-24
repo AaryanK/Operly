@@ -8,6 +8,10 @@ from typing import Any, Iterable
 from packages.model_runtime.contracts import InferenceBudget, InferenceRequest, ModelSelector
 from packages.model_runtime.discovery import refresh_model_discovery
 from packages.model_runtime.portfolio import model_route
+from packages.model_runtime.qualification import (
+    apply_model_qualification_overrides,
+    qualification_preference_tags,
+)
 from packages.model_runtime.registry import default_model_registry
 
 
@@ -62,6 +66,11 @@ class ModelInvocationService:
     capability plus provider-neutral preference tags. Delegated calls receive no
     tools, keeping model-to-model delegation one level deep by default. A bounded
     model pool provides failover without inheriting provider-client 180s retry loops.
+
+    Empirical qualification is deliberately an overlay on the same registry: deep
+    benchmark evidence contributes ``qualified-*`` preference tags and may promote a
+    capability a concrete route has actually demonstrated. Unknown/inconclusive
+    evidence remains neutral.
     """
 
     async def invoke(
@@ -87,12 +96,19 @@ class ModelInvocationService:
             preferred.add("free")
         if preferred & set(avoided):
             raise ValueError("Model preference and avoidance tags must not overlap")
+        preferred.update(
+            qualification_preference_tags(clean_capability, preferred) - set(avoided)
+        )
 
         try:
             ttl = float(os.getenv("OPERLY_MODEL_DISCOVERY_TTL_SECONDS", "600"))
         except ValueError:
             ttl = 600.0
         await refresh_model_discovery(ttl_seconds=max(0.0, ttl))
+        # Reuse catalog registration rather than maintaining a second model registry.
+        # Calling this after discovery also lets configured qualification reports
+        # promote newly discovered concrete routes.
+        apply_model_qualification_overrides()
 
         excluded: set[str] = set()
         if exclude_orchestrator:
@@ -148,6 +164,9 @@ class ModelInvocationService:
                     "delegated_model_call": True,
                     "latency_class": str(latency_class or "normal"),
                     "capability": clean_capability,
+                    "qualification_preferences": sorted(
+                        tag for tag in preferred if tag.startswith("qualified-")
+                    ),
                 },
             )
         )
