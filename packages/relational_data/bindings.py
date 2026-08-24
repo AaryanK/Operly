@@ -1,13 +1,14 @@
 """Resolve semantic relational bindings into runner-only scoped grants.
 
-The returned dictionaries are transport material for the trusted runner. Callers must
-not persist them in RunnerBuildRecord.submission_json or generated source bundles.
+Transport grants are attached to a copy of ``BuildSubmission`` only after the durable
+build record has stored the credential-free semantic submission.
 """
 from __future__ import annotations
 
 import os
 from urllib.parse import urlparse
 
+from packages.custom_software.runner_contracts import ServiceBindingTransport
 from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID
 from packages.relational_data.store import configured_app_data_url
 from packages.relational_data.tokens import BindingGrantError, issue_binding_grant
@@ -34,45 +35,55 @@ def _gateway_url() -> str:
     if not configured and environment not in {"production", "prod"}:
         configured = "http://host.docker.internal:8000"
     parsed = urlparse(configured)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         raise RelationalBindingUnavailable("Relational capability gateway URL is not configured")
     if environment in {"production", "prod"} and parsed.scheme != "https":
         raise RelationalBindingUnavailable("Relational capability gateway must use HTTPS in production")
     return configured
 
 
-def resolve_transport_grants(submission) -> list[dict]:
+def attach_transport_grants(submission):
     requests = relational_binding_requests(submission)
     if not requests:
-        return []
+        return submission
     try:
-        # Fail before runner submission when the backing data plane is absent or
-        # accidentally aliases the Operly control-plane database.
         configured_app_data_url()
         gateway = _gateway_url()
         ttl = max(900, int(submission.resources.previewSeconds) + 900)
-        grants = []
-        for request in requests:
-            grants.append(
-                {
-                    "semanticName": request.semanticName,
-                    "capabilityId": request.capabilityId,
-                    "gatewayUrl": gateway,
-                    "runtimeToken": issue_binding_grant(
-                        submission.workspaceId,
-                        submission.applicationId,
-                        scopes=("read", "write"),
-                        ttl_seconds=ttl,
-                    ),
-                    "migrationToken": issue_binding_grant(
-                        submission.workspaceId,
-                        submission.applicationId,
-                        scopes=("migrate",),
-                        ttl_seconds=900,
-                    ),
-                }
+        bindings = []
+        for request in submission.serviceBindings:
+            if request.capabilityId != RELATIONAL_CAPABILITY_ID:
+                bindings.append(request)
+                continue
+            bindings.append(
+                request.model_copy(
+                    update={
+                        "transport": ServiceBindingTransport(
+                            gatewayUrl=gateway,
+                            runtimeToken=issue_binding_grant(
+                                submission.workspaceId,
+                                submission.applicationId,
+                                scopes=("read", "write"),
+                                ttl_seconds=ttl,
+                            ),
+                            migrationToken=issue_binding_grant(
+                                submission.workspaceId,
+                                submission.applicationId,
+                                scopes=("migrate",),
+                                ttl_seconds=900,
+                            ),
+                        )
+                    }
+                )
             )
-        return grants
+        return submission.model_copy(update={"serviceBindings": bindings})
     except (BindingGrantError, ValueError) as error:
         raise RelationalBindingUnavailable(str(error)) from error
 
@@ -80,5 +91,5 @@ def resolve_transport_grants(submission) -> list[dict]:
 __all__ = [
     "RelationalBindingUnavailable",
     "relational_binding_requests",
-    "resolve_transport_grants",
+    "attach_transport_grants",
 ]
