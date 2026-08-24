@@ -12,6 +12,7 @@ from packages.custom_software.runner_contracts import BuildSubmission
 from packages.custom_software.runner_service import _event, apply_runner_response
 from packages.custom_software.source_bundles import SourceFile, build_bundle
 from packages.database.custom_software_models import GeneratedSourceBundle, RunnerBuildRecord
+from packages.relational_data.bindings import RelationalBindingUnavailable, attach_transport_grants
 from packages.runtime_plugins import register_builtin_runtimes
 
 
@@ -99,8 +100,6 @@ async def _check_runner_profile(
     try:
         capabilities = await adapter.capabilities()
     except Exception:
-        # Communication errors are recorded by the normal submit path with a
-        # durable build record. Do not turn network availability into a source error.
         return
     if not capabilities:
         return
@@ -141,8 +140,6 @@ async def _record_profile_mismatch(db, row, submission: BuildSubmission, error: 
             "advertisedVersion": error.advertised_version,
         },
     )
-    # `failed` is the generic durable terminal state; preserve the more precise
-    # infrastructure classification for UI, repair policy and trace consumers.
     row.failure_classification = "runner_profile_unsupported"
     row.result_json = json.dumps(
         {
@@ -153,6 +150,34 @@ async def _record_profile_mismatch(db, row, submission: BuildSubmission, error: 
             "advertisedVersion": error.advertised_version,
             "failureEvidence": {
                 "classification": "runner_profile_unsupported",
+                "message": str(error),
+            },
+        }
+    )
+    row.completed_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+
+
+async def _record_binding_unavailable(db, row, submission: BuildSubmission, error: Exception):
+    await _event(
+        db,
+        row,
+        "failed",
+        event_type="service_binding_unavailable",
+        message="service_binding_unavailable",
+        details={
+            "message": str(error),
+            "runtime": submission.stackId,
+            "applicationId": submission.applicationId,
+        },
+    )
+    row.failure_classification = "service_binding_unavailable"
+    row.result_json = json.dumps(
+        {
+            "code": "service_binding_unavailable",
+            "failureEvidence": {
+                "classification": "service_binding_unavailable",
                 "message": str(error),
             },
         }
@@ -190,9 +215,8 @@ async def submit_source_build(
     submission = _submission_for_source(source, bundle, idempotency_key)
     adapter = adapter or ExternalRunnerAdapter()
 
-    # The build record exists before runner capability negotiation. A missing or
-    # stale runner profile is infrastructure failure evidence, not an exception
-    # that should disappear from Studio/Activity traces.
+    # Persist only the semantic, credential-free submission. Short-lived transport
+    # grants are attached later and exist only while crossing the trusted runner boundary.
     row = RunnerBuildRecord(
         tenant_id=tenant_id,
         plan_id=plan_row.id,
@@ -231,7 +255,13 @@ async def submit_source_build(
         raise
 
     try:
-        response = await adapter.submit(submission, bundle)
+        transport_submission = attach_transport_grants(submission)
+    except RelationalBindingUnavailable as error:
+        await _record_binding_unavailable(db, row, submission, error)
+        return row
+
+    try:
+        response = await adapter.submit(transport_submission, bundle)
     except Exception as error:
         await _event(
             db,
