@@ -1,21 +1,34 @@
 """Evidence-based qualification of concrete model routes.
 
-This benchmark intentionally measures a provider route rather than trusting catalog
-labels.  A route is not promoted to an Operly capability merely because a vendor
-advertises it.  The benchmark records reproducible evidence that can later drive
-routing policy.
+A model route is the concrete provider + provider model ID.  Catalog/vendor labels
+are hints; qualification evidence is what routing policy should trust.  The probes
+are intentionally small, deterministic, and provider-neutral.
 """
 from __future__ import annotations
 
 import ast
+import asyncio
 import builtins
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 
 from packages.model_runtime.contracts import InferenceBudget, InferenceRequest, ModelInferenceError
+
+
+_TRANSIENT_CLASSIFICATIONS = frozenset(
+    {
+        "rate_limited",
+        "quota_or_credits",
+        "provider_5xx",
+        "provider_error",
+        "response_timeout",
+        "request_too_large",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -28,6 +41,19 @@ class QualificationCase:
     provider_model_id: str | None = None
     finish_reason: str | None = None
     usage: dict[str, int | None] | None = None
+
+    @property
+    def status(self) -> str:
+        if self.passed:
+            return "pass"
+        if self.classification in _TRANSIENT_CLASSIFICATIONS:
+            return "inconclusive"
+        return "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["status"] = self.status
+        return value
 
 
 @dataclass(slots=True)
@@ -55,6 +81,8 @@ class QualificationReport:
             caps.add("structured_output")
         if "reasoning" in passed:
             caps.add("reasoning")
+        # Studio needs a persistent tool protocol, so one function call alone is
+        # deliberately insufficient to grant the tools capability.
         if {"tool_single", "tool_multi"}.issubset(passed):
             caps.add("tools")
         if "coding" in passed:
@@ -90,7 +118,8 @@ class QualificationReport:
             "advertisedCapabilities": self.advertised_capabilities,
             "verifiedCapabilities": self.verified_capabilities,
             "score": self.score,
-            "cases": [asdict(case) for case in self.cases],
+            "inconclusiveCases": [case.name for case in self.cases if case.status == "inconclusive"],
+            "cases": [case.as_dict() for case in self.cases],
         }
 
 
@@ -100,7 +129,6 @@ def _usage(result) -> dict[str, int | None] | None:
 
 
 def _final_text(message: dict[str, Any]) -> str:
-    """Prefer the final answer after provider-exposed reasoning blocks."""
     text = str(message.get("content") or "").strip()
     if "</think>" in text:
         tail = text.rsplit("</think>", 1)[-1].strip()
@@ -182,7 +210,14 @@ PLAN_TOOL = _tool(
 )
 
 
-async def _infer(model, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None, max_output_tokens: int = 1024, timeout: float = 60.0):
+async def _infer(
+    model,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    max_output_tokens: int = 1024,
+    timeout: float = 60.0,
+):
     started = time.monotonic()
     try:
         result = await model.infer(
@@ -241,7 +276,7 @@ async def availability(model) -> QualificationCase:
     if error:
         return _error_case("availability", latency, error)
     text = _final_text(result.message)
-    return _result_case("availability", "OPERLY_OK" in text, latency, result, text)
+    return _result_case("availability", text == "OPERLY_OK", latency, result, text)
 
 
 async def structured_json(model) -> QualificationCase:
@@ -276,7 +311,7 @@ async def reasoning(model) -> QualificationCase:
 async def tool_single(model) -> QualificationCase:
     result, latency, error = await _infer(
         model,
-        [{"role": "user", "content": "Do not answer in prose. Call benchmark_record with label operly and value 42."}],
+        [{"role": "user", "content": "Do not answer in prose. Call benchmark_record with label operly and integer value 42."}],
         tools=[RECORD_TOOL],
         max_output_tokens=1024,
     )
@@ -289,7 +324,7 @@ async def tool_single(model) -> QualificationCase:
 
 async def tool_multi(model) -> QualificationCase:
     messages = [
-        {"role": "user", "content": "First call read_fixture for secret-number. After receiving the tool result, call benchmark_record with label fixture and value equal to the fixture value plus 7. Do not answer in prose."}
+        {"role": "user", "content": "First call read_fixture for secret-number. After receiving the tool result, call benchmark_record with label fixture and integer value equal to the fixture value plus 7. Do not answer in prose."}
     ]
     first, latency_a, error = await _infer(model, messages, tools=[READ_TOOL, RECORD_TOOL], max_output_tokens=1024)
     if error:
@@ -302,9 +337,9 @@ async def tool_multi(model) -> QualificationCase:
     second, latency_b, error = await _infer(model, messages, tools=[READ_TOOL, RECORD_TOOL], max_output_tokens=1024)
     if error:
         return _error_case("tool_multi", latency_a + latency_b, error)
-    second_calls = _tool_calls(second.message)
-    passed = any(name == "benchmark_record" and args.get("label") == "fixture" and args.get("value") == 42 for name, args, _ in second_calls)
-    return _result_case("tool_multi", passed, latency_a + latency_b, second, json.dumps(second_calls, default=str))
+    calls = _tool_calls(second.message)
+    passed = any(name == "benchmark_record" and args.get("label") == "fixture" and args.get("value") == 42 for name, args, _ in calls)
+    return _result_case("tool_multi", passed, latency_a + latency_b, second, json.dumps(calls, default=str))
 
 
 def _safe_python(source: str, function_name: str, cases: list[tuple[tuple[Any, ...], Any]]) -> tuple[bool, str]:
@@ -358,15 +393,7 @@ async def coding(model) -> QualificationCase:
     source = next((args.get("source") for name, args, _ in calls if name == "submit_code"), None)
     if not isinstance(source, str):
         return _result_case("coding", False, latency, result, "submit_code was not called; final=" + _final_text(result.message))
-    passed, detail = _safe_python(
-        source,
-        "worked_minutes",
-        [
-            (([(0, 10), (20, 35)],), 25),
-            (([(10, 10), (60, 30), (100, 160)],), 60),
-            (([],), 0),
-        ],
-    )
+    passed, detail = _safe_python(source, "worked_minutes", [(([(0, 10), (20, 35)],), 25), (([(10, 10), (60, 30), (100, 160)],), 60), (([],), 0)])
     return _result_case("coding", passed, latency, result, detail)
 
 
@@ -410,6 +437,13 @@ SUITES = {
 }
 
 
+def _case_delay() -> float:
+    try:
+        return max(0.0, min(float(os.getenv("OPERLY_MODEL_BENCH_CASE_DELAY", "0.75")), 10.0))
+    except ValueError:
+        return 0.75
+
+
 async def qualify_model(model, resource, *, suite: str = "deep") -> QualificationReport:
     if suite not in SUITES:
         raise ValueError(f"Unknown benchmark suite: {suite}")
@@ -422,12 +456,13 @@ async def qualify_model(model, resource, *, suite: str = "deep") -> Qualificatio
         free=bool(resource.free),
         context_length=resource.context_length,
     )
-    for case in SUITES[suite]:
-        # Only the cheapest availability probe is required before spending on the
-        # rest of a suite. A dead route should not consume seven additional calls.
+    cases = SUITES[suite]
+    for index, case in enumerate(cases):
         if case is not availability and report.cases and not report.cases[0].passed:
             break
         report.cases.append(await case(model))
+        if index + 1 < len(cases) and _case_delay() > 0:
+            await asyncio.sleep(_case_delay())
     return report
 
 
