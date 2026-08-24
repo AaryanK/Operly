@@ -345,7 +345,8 @@ class PluginAgentHarness:
             registry=registry,
         )
         await self.preflight(context)
-        return view.schemas()
+        stage = str(context.metadata.get("capability_stage") or "adaptive")
+        return view.schemas(stage=stage)
 
     async def availability(
         self,
@@ -501,9 +502,18 @@ class PluginAgentHarness:
         async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
             return await self.invoke(name, arguments, context, call_id=call_id)
 
+        inference_metadata = {
+            **dict(context.metadata),
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "channel": context.channel,
+            "conversation_id": str(context.metadata.get("_conversation_id") or "") or None,
+            "capability_stage": str(context.metadata.get("capability_stage") or "adaptive"),
+        }
         return await AgentRuntime(max_steps=max_steps).run(
             model=client,
             messages=messages,
             schemas=schemas,
             invoke=invoke,
+            inference_metadata=inference_metadata,
         )
