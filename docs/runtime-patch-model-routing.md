@@ -1,0 +1,1 @@
+Model-routing follow-up in same architectural patch context: small-model-first role execution with policy-governed deep reasoning escalation. Context refs are resolved directly into target model calls rather than materialized into the caller model.
