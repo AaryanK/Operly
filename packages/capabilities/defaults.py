@@ -18,12 +18,12 @@ from packages.capabilities.providers import (
     ResearchProvider,
 )
 from packages.capabilities.registry import CapabilityRegistry
-from packages.capabilities.registry_workflow_task_provider import RegistryWorkflowTaskProvider
 from packages.capabilities.relational_data_provider import RelationalDataProvider
 from packages.capabilities.reminder_provider import ReminderProvider
 from packages.capabilities.software_project_provider import SoftwareProjectProvider
 from packages.capabilities.solution_provider import UnifiedSolutionProvider
 from packages.capabilities.studio_provider import StudioProvider
+from packages.capabilities.universal_task_provider import UniversalTaskProvider
 from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.capabilities.website_provider import UnifiedWebsiteProvider
 from packages.capabilities.workspace_provider import WorkspaceProvider
@@ -58,7 +58,7 @@ def _builtin_providers():
         SoftwareProjectProvider(),
         RelationalDataProvider(),
         ReminderProvider(),
-        RegistryWorkflowTaskProvider(),
+        UniversalTaskProvider(),
         PublicWebReadProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
@@ -73,12 +73,7 @@ def _builtin_providers():
 
 
 def _provider_events(provider) -> tuple[EventSpec, ...]:
-    """Normalize events from providers/capabilities into the plugin manifest.
-
-    Future providers can expose a typed ``events`` tuple. During migration an
-    existing capability may also list event ids in ``event_capabilities``. Both land
-    in the same manifest catalog, so Task/event discovery stays plugin-driven.
-    """
+    """Normalize events from providers/capabilities into the plugin manifest."""
     output: dict[str, EventSpec] = {}
     for raw in getattr(provider, "events", ()) or ():
         if isinstance(raw, str):
@@ -133,14 +128,41 @@ def bootstrap_builtin_plugins() -> None:
             ),
             metadata={"builtin": True, "provider_name": provider.name},
         )
+        delivery_adapters = ()
+        if is_discord:
+            from packages.connectors.discord.task_delivery import DiscordTaskDeliveryAdapter
+
+            delivery_adapters = (DiscordTaskDeliveryAdapter(),)
         runtime.register(
             PluginContribution(
                 manifest=manifest,
                 capability_provider=provider,
                 lifecycle=discord_plugin_lifecycle if is_discord else None,
+                task_delivery_adapters=delivery_adapters,
             ),
             replace=True,
         )
+
+    # Task execution is a platform lifecycle, not a Discord lifecycle. It polls the
+    # existing ScheduledJob wake-up rows and routes outputs through plugin adapters.
+    from packages.tasks.delivery import OperlyConversationDeliveryAdapter
+    from packages.tasks.runtime import task_plugin_lifecycle
+
+    runtime.register(
+        PluginContribution(
+            manifest=PluginManifest(
+                id="builtin:task_runtime",
+                version="1.0.0",
+                display_name="Task Runtime",
+                description="Channel-agnostic durable Task dispatcher and Operly delivery adapter.",
+                lifecycle=PluginLifecycleSpec(start_on_boot=True, supports_health=True),
+                metadata={"builtin": True, "platform_runtime": True},
+            ),
+            lifecycle=task_plugin_lifecycle,
+            task_delivery_adapters=(OperlyConversationDeliveryAdapter(),),
+        ),
+        replace=True,
+    )
 
 
 def default_registry(enabled_plugins=None, *, config_resolver=None) -> CapabilityRegistry:
