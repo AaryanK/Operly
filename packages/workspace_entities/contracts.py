@@ -2,22 +2,19 @@
 
 Entity kinds are owned by Operly, not redefined per application. Generated source
 explicitly declares which kinds it consumes in ``operly.entities.json`` and receives
-only a scoped capability binding at runtime.
+one semantic binding per canonical kind at runtime.
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 WORKSPACE_ENTITY_CAPABILITY_ID = "data.workspace_entities"
 WORKSPACE_ENTITY_SCHEMA_VERSION = "operly.workspace-entities/v1"
 WORKSPACE_ENTITY_MANIFEST = "operly.entities.json"
 EntityKind = Literal["employee", "customer", "location"]
 EntityAccess = Literal["read", "write"]
-
-_SEMANTIC = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
 
 
 class StrictModel(BaseModel):
@@ -27,36 +24,24 @@ class StrictModel(BaseModel):
 class EntityUse(StrictModel):
     semanticName: str
     kind: EntityKind
-    access: tuple[EntityAccess, ...] = ("read",)
+    access: tuple[EntityAccess, ...] = ("read", "write")
 
-    @field_validator("semanticName")
-    @classmethod
-    def semantic_name(cls, value: str) -> str:
-        value = str(value or "").strip()
-        if not _SEMANTIC.fullmatch(value):
-            raise ValueError("Entity semanticName must be a stable lowercase identifier")
-        return value
-
-    @field_validator("access")
-    @classmethod
-    def unique_access(cls, value: tuple[EntityAccess, ...]) -> tuple[EntityAccess, ...]:
-        if not value:
-            raise ValueError("Entity access cannot be empty")
-        if len(value) != len(set(value)):
-            raise ValueError("Entity access values must be unique")
-        return value
+    @model_validator(mode="after")
+    def canonical_binding(self):
+        if self.semanticName != self.kind:
+            raise ValueError("Workspace entity v1 semanticName must equal the canonical entity kind")
+        if not self.access or len(self.access) != len(set(self.access)):
+            raise ValueError("Entity access values must be non-empty and unique")
+        return self
 
 
 class WorkspaceEntityManifest(StrictModel):
     schemaVersion: Literal["operly.workspace-entities/v1"] = WORKSPACE_ENTITY_SCHEMA_VERSION
-    entities: tuple[EntityUse, ...] = Field(min_length=1, max_length=32)
+    entities: tuple[EntityUse, ...] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
     def unique_entities(self):
-        semantic = [item.semanticName for item in self.entities]
         kinds = [item.kind for item in self.entities]
-        if len(semantic) != len(set(semantic)):
-            raise ValueError("Entity semanticName values must be unique")
         if len(kinds) != len(set(kinds)):
             raise ValueError("Each canonical entity kind may be declared once")
         return self
