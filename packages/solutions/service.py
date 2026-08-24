@@ -1,6 +1,8 @@
 import json
+import os
 from datetime import datetime
 from enum import StrEnum
+from urllib.parse import urlparse
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +49,31 @@ def _generation_payload(row):
     return result or None
 
 
+def _approved_runner_preview_target(value: str) -> bool:
+    try:
+        parsed=urlparse(value)
+        port=parsed.port
+    except ValueError:
+        return False
+    if not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
+        return False
+    environment=os.getenv("OPERLY_ENV",os.getenv("APP_ENV","development")).strip().lower()
+    local_test=(
+        environment in {"test","development","dev"}
+        and os.getenv("OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER","").strip()=="1"
+        and parsed.hostname=="127.0.0.1"
+        and parsed.scheme in {"http","https"}
+    )
+    if local_test:
+        return True
+    allowed={
+        host.strip().lower()
+        for host in os.getenv("OPERLY_SANDBOX_PREVIEW_HOSTS","").split(",")
+        if host.strip()
+    }
+    return parsed.scheme=="https" and port in {None,443} and parsed.hostname.lower() in allowed
+
+
 def solution_json(row):
     preview=row.preview_url.replace("{solution_id}",row.id) if row.preview_url else None
     runtime_kind={RuntimeType.STUDIO:"studio",RuntimeType.MANAGED_APP:"app",RuntimeType.GENERATED_PROJECT:"generated"}.get(row.runtime_type,"unknown")
@@ -67,7 +94,7 @@ class SolutionService:
 
     async def active_generated_preview(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
         if not plan_id or not plan_version:return None
-        return await db.scalar(
+        preview=await db.scalar(
             select(RunnerPreviewRecord)
             .join(RunnerBuildRecord,RunnerPreviewRecord.build_id==RunnerBuildRecord.id)
             .join(GeneratedSourceBundle,RunnerBuildRecord.source_bundle_id==GeneratedSourceBundle.id)
@@ -85,6 +112,9 @@ class SolutionService:
             .order_by(desc(RunnerPreviewRecord.created_at))
             .limit(1)
         )
+        if preview and not _approved_runner_preview_target(preview.target_url):
+            return None
+        return preview
 
     async def latest_generated_source(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
         if not plan_id or not plan_version:return None
