@@ -72,6 +72,11 @@ def validate_workflow(value: dict | None) -> dict | None:
             objective = str(node.get("objective") or "").strip()
             if not objective or len(objective) > 8000:
                 raise WorkflowValidationError("workflow_model_objective_required")
+            ai_capability = str(node.get("ai_capability") or "").strip()
+            if ai_capability and (
+                not ai_capability.startswith("ai.") or len(ai_capability) > 200
+            ):
+                raise WorkflowValidationError("workflow_ai_capability_invalid")
         elif node_type == "if":
             if not isinstance(node.get("condition"), dict):
                 raise WorkflowValidationError("workflow_if_condition_required")
@@ -199,6 +204,36 @@ def _json_from_model(value: str) -> Any:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     return json.loads(text)
+
+
+_LEGACY_MODEL_CAPABILITY_TO_AI = {
+    "text": "ai.generate",
+    "generation": "ai.generate",
+    "summarization": "ai.generate",
+    "reasoning": "ai.reason",
+    "planning": "ai.plan",
+    "coding": "ai.code.generate",
+}
+
+
+def _workflow_model_target(node: dict[str, Any]) -> tuple[str, str | None]:
+    """Resolve an existing model node onto the semantic AI capability bus.
+
+    Explicit ``ai_capability`` is the new contract.  Common historical model
+    capabilities map onto ``ai.*`` without changing workflow definitions. Unknown
+    historical capabilities keep using ``model.invoke`` so older workflows retain
+    access to specialist capabilities that do not yet have a semantic alias.
+    """
+    explicit = str(node.get("ai_capability") or "").strip()
+    if explicit:
+        return explicit, None
+    legacy = str(node.get("capability") or "reasoning").strip() or "reasoning"
+    if legacy.startswith("ai."):
+        return legacy, None
+    semantic = _LEGACY_MODEL_CAPABILITY_TO_AI.get(legacy.lower())
+    if semantic:
+        return semantic, None
+    return "model.invoke", legacy
 
 
 @dataclass(slots=True)
@@ -330,8 +365,8 @@ class WorkflowExecutor:
                         )
                     local_env[node_id] = result.get("observation", result)
                 elif node_type == "model":
+                    target_capability, legacy_model_capability = _workflow_model_target(node)
                     model_args = {
-                        "capability": str(node.get("capability") or "reasoning"),
                         "objective": str(resolve_value(node.get("objective"), local_env) or "")[:8000],
                         "context": json.dumps(
                             resolve_value(node.get("context") or {}, local_env),
@@ -342,11 +377,16 @@ class WorkflowExecutor:
                         "avoid_tags": list(node.get("avoid_tags") or [])[:8],
                         "prefer_free": bool(node.get("prefer_free", True)),
                     }
+                    latency_class = str(node.get("latency_class") or "").strip()
+                    if latency_class:
+                        model_args["latency_class"] = latency_class
+                    if legacy_model_capability is not None:
+                        model_args["capability"] = legacy_model_capability
                     result = await self._invoke_workspace(
-                        "model.invoke",
+                        target_capability,
                         model_args,
                         context,
-                        call_id=_stable_call_id(run_key, node_path, "model.invoke"),
+                        call_id=_stable_call_id(run_key, node_path, target_capability),
                     )
                     if not result.get("ok"):
                         raise WorkflowExecutionError(
