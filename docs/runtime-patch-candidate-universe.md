@@ -1,0 +1,1 @@
+Capability/context semantic search consumes only server-authorized candidate identifiers. Search ranking cannot add candidates outside that universe, and final execution/materialization rechecks canonical authority.
