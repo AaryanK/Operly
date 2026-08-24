@@ -4,6 +4,7 @@ from uuid import uuid4
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -266,9 +267,15 @@ class Approval(Base):
     __tablename__ = "approvals"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(
+    scope_kind: Mapped[str] = mapped_column(String(20), default="workspace", nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -277,6 +284,14 @@ class Approval(Base):
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(30), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint(
+            "(scope_kind = 'workspace' AND tenant_id IS NOT NULL AND owner_user_id IS NULL) OR "
+            "(scope_kind = 'personal' AND tenant_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_approvals_scope_owner",
+        ),
+        Index("ix_approvals_owner_status", "owner_user_id", "status", "created_at"),
+    )
 
 
 class ScheduledJob(Base):
