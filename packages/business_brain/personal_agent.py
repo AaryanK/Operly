@@ -15,7 +15,12 @@ from sqlalchemy import select
 from packages.agents.controller import AgentRunController
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
+from packages.capabilities.firewall import (
+    ActionBackedCapabilityFirewall,
+    CapabilityInvocation,
+)
 from packages.capabilities.model_provider import ModelInvocationProvider
+from packages.capabilities.personal_google_provider import PersonalGoogleCapabilityProvider
 from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.capabilities.registry import CapabilityRegistry
 from packages.capabilities.scope_provider import AccountScopeProvider
@@ -25,7 +30,10 @@ from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.database.db import session_scope
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
 from packages.model_runtime import model_for_role
-from packages.security.execution_context import PERSONAL_EXECUTION_PERMISSIONS
+from packages.security.execution_context import (
+    PERSONAL_EXECUTION_PERMISSIONS,
+    resolve_personal_execution_context,
+)
 from packages.security.surfaces import SurfaceKind, capability_surface_allowed
 from packages.security.temporal_context import resolve_temporal_context
 
@@ -38,10 +46,11 @@ AUTHORITY MODEL:
 - A selected/focused workspace is only a disambiguation hint. It never changes this conversation into workspace scope and never grants authority.
 - A workspace can never read this private conversation merely because the person belongs to it.
 - You may inspect only account/workspace data that application tools authorize for this person.
-- The tool list is intentionally tiny. Use capability.search to find account, scope, task, web, context or model operations that are not currently exposed, then capability.describe before invoking them.
+- The tool list is intentionally tiny. Use capability.search to find account, scope, task, web, context, Google or model operations that are not currently exposed, then capability.describe before invoking them.
 - Resolve the target namespace before assuming where a resource lives. Use scope.resolve for explicit references such as Personal, ANHITRA, or NaySchool; scope resolution grants no execution authority.
 - The person may ask you to act in any workspace they belong to. Discover/use account.workspace_capabilities when workspace capability names or availability are uncertain, then account.workspace_execute for the chosen workspace capability.
 - account.workspace_execute is not a bypass. The application re-checks membership, resolved role permissions, plugin availability, connector scopes, approvals, audit and verification on every delegated execution.
+- Personal Gmail and Calendar operations use the account-owned Google connector when authorized. They still cross Operly's canonical action firewall; Gmail sends, calendar writes, label mutations and destructive draft operations can require approval.
 - If an underlying action returns a pending/approval state, say that approval is required or pending. Never claim the side effect happened until the tool result verifies it.
 - Personal connectors are private to the account. Discover account.list_personal_connectors when needed; never reveal credentials or tokens. Do not claim a personal connector must be linked to a workspace merely because a workspace capability uses a different connector.
 - Durable work is represented by task.* capabilities. Do not emulate future work in conversation memory.
@@ -63,14 +72,13 @@ BEHAVIOR:
 
 class PersonalAgentService:
     def __init__(self) -> None:
-        # business_agent is deliberately small/fast-first; model.deep_reason is the
-        # explicit heavy-model escape hatch when the remaining reasoning requires it.
         self.model = model_for_role("business_agent")
         self.run_controller = AgentRunController(max_replans=1)
 
         core_providers = (
             PersonalRuntimeProvider(),
             AccountScopeProvider(),
+            PersonalGoogleCapabilityProvider(),
             UniversalTaskProvider(),
             PublicWebReadProvider(),
             ContextProvider(),
@@ -168,8 +176,6 @@ class PersonalAgentService:
                 await resolve_temporal_context(
                     db,
                     user_id=user_id,
-                    # Workspace selection may inform timezone while remaining only a
-                    # focus hint; it is never used as Personal execution authority.
                     tenant_id=selected_workspace_id,
                 )
             ).as_dict()
@@ -206,8 +212,6 @@ class PersonalAgentService:
             if channel == "discord"
             else SurfaceKind.PERSONAL_PRIVATE
         )
-        # Personal identity is stable. Selecting ANHITRA/NaySchool in the UI must not
-        # mutate this capability namespace into a tenant namespace.
         personal_scope_id = f"personal:{user_id}"
         authority = set(PERSONAL_EXECUTION_PERMISSIONS)
         view = SessionCapabilityView(
@@ -243,10 +247,72 @@ class PersonalAgentService:
             provider, definition = resolved
             if not set(definition.permissions).issubset(authority):
                 return {"ok": False, "status": "DENIED", "error": "Personal capability authority denied"}
+
             async with session_scope() as db:
+                invocation_metadata = {
+                    "is_direct": True,
+                    "shared_surface": False,
+                    "_surface_kind": surface_kind.value,
+                    "principal_id": principal_id,
+                    "conversation_id": external_conversation_id,
+                    "external_conversation_id": channel_conversation_id,
+                    "_conversation_id": external_conversation_id,
+                    "objective": visible_text,
+                    "personal_scope": True,
+                    "personal_scope_id": personal_scope_id,
+                    "focus_workspace_id": selected_workspace_id,
+                    "selected_workspace_id": selected_workspace_id,
+                    "attachment_names": attachment_names,
+                    "actor_name": display_name,
+                    "call_id": call_id,
+                    "temporal_context": temporal_context,
+                    "origin_provider": channel,
+                }
+
+                if isinstance(provider, PersonalGoogleCapabilityProvider):
+                    execution = await resolve_personal_execution_context(
+                        db,
+                        user_id=user_id,
+                        channel=channel,
+                        surface=surface_kind,
+                        conversation_id=external_conversation_id,
+                        metadata=invocation_metadata,
+                        focus_workspace_id=selected_workspace_id,
+                    )
+                    governed_registry = await provider.registry_for(db, user_id=user_id)
+                    availability = governed_registry.availability(
+                        personal_scope_id,
+                        name,
+                        authority=authority,
+                    )
+                    if not availability.available:
+                        payload = {
+                            "ok": False,
+                            "status": "DENIED",
+                            "error": "Personal Google capability is unavailable",
+                            "availability": availability.as_dict(),
+                        }
+                        view.observe(name, payload)
+                        return payload
+
+                    result = await ActionBackedCapabilityFirewall(governed_registry).invoke(
+                        CapabilityInvocation(
+                            capability_id=name,
+                            arguments=dict(arguments),
+                            objective=visible_text,
+                            rationale=f"Personal AI selected {name} for the current objective",
+                            expected_outcome=definition.description,
+                            call_id=call_id,
+                            channel=channel,
+                            metadata=invocation_metadata,
+                        ),
+                        execution,
+                    )
+                    payload = result.as_dict()
+                    view.observe(name, payload)
+                    return payload
+
                 context = SimpleNamespace(
-                    # Compatibility key for Personal-only providers. This is not a
-                    # Tenant ID and must never be interpreted as workspace authority.
                     tenant_id=personal_scope_id,
                     actor_id=user_id,
                     db=db,
@@ -255,27 +321,7 @@ class PersonalAgentService:
                         "surface": surface_kind.value,
                         "authority": sorted(authority),
                         "temporal_context": temporal_context,
-                        "metadata": {
-                            "is_direct": True,
-                            "shared_surface": False,
-                            "_surface_kind": surface_kind.value,
-                            "principal_id": principal_id,
-                            "conversation_id": external_conversation_id,
-                            "external_conversation_id": channel_conversation_id,
-                            "_conversation_id": external_conversation_id,
-                            "objective": visible_text,
-                            "personal_scope": True,
-                            "personal_scope_id": personal_scope_id,
-                            "focus_workspace_id": selected_workspace_id,
-                            # Compatibility during ingress migration. Consumers must
-                            # treat this as focus, not execution scope.
-                            "selected_workspace_id": selected_workspace_id,
-                            "attachment_names": attachment_names,
-                            "actor_name": display_name,
-                            "call_id": call_id,
-                            "temporal_context": temporal_context,
-                            "origin_provider": channel,
-                        },
+                        "metadata": invocation_metadata,
                     },
                 )
                 result = await provider.execute(context, name, dict(arguments))
