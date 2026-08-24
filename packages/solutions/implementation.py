@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from packages.solutions.manifest import SolutionManifest
 
 
-# Capabilities that the current managed ApplicationManifest runtime can represent
-# and execute without arbitrary source generation. Keep this intentionally
-# conservative: routing to generated source is safer than claiming support that
-# the declarative runtime does not actually provide.
+# Capabilities the current managed ApplicationManifest runtime can execute
+# truthfully without arbitrary source generation. General state machines are not
+# included: the managed workflow module exposes bounded trigger/action bindings,
+# not arbitrary conditional domain invariants.
 MANAGED_RUNTIME_CAPABILITIES = frozenset(
     {
         "ui.public_web",
@@ -26,8 +26,23 @@ MANAGED_RUNTIME_CAPABILITIES = frozenset(
         "data.relational",
         "auth.sessions",
         "auth.roles",
-        "workflow.state_machine",
     }
+)
+
+
+# Managed App remains a useful low-latency optimization for straightforward
+# declarative data applications. Crucially, this is an allow-list for the fast
+# path, not an attempt to enumerate everything users might ever build. Requests
+# outside this recognizable envelope fall through to generated source.
+_MANAGED_DECLARATIVE_PATTERNS = (
+    re.compile(r"\b(?:customer )?notebook\b", re.I),
+    re.compile(r"\b(?:record|records|recorder|recording)\b", re.I),
+    re.compile(r"\b(?:save|store)\b.{0,50}\b(?:data|details|information|records?|grades?|notes?)\b", re.I),
+    re.compile(r"\b(?:track|tracker|tracking|log|logger)\b", re.I),
+    re.compile(r"\b(?:form|forms|table|tables|directory|list|lists)\b", re.I),
+    re.compile(r"\b(?:customer|contact) management\b", re.I),
+    re.compile(r"\b(?:crm|dashboard)\b", re.I),
+    re.compile(r"\b(?:login|sign[- ]?in|authentication)\b", re.I),
 )
 
 
@@ -90,8 +105,8 @@ _BROWSER_CAPABILITY_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...
 )
 
 
-# Phrases whose semantics imply durable state/workflow even when the older token
-# floor does not split them into the exact deterministic keywords.
+# Phrases whose semantics imply durable workflow/domain invariants even when the
+# older token floor does not split them into exact deterministic keywords.
 _DURABLE_WORKFLOW_PATTERNS = (
     re.compile(r"\bclock(?:ing)?[ -]?in\b", re.I),
     re.compile(r"\bclock(?:ing)?[ -]?out\b", re.I),
@@ -137,22 +152,32 @@ def _semantic_extensions(name: str, objective: str) -> set[str]:
     return extra
 
 
+def _managed_declarative_fit(name: str, objective: str) -> bool:
+    text = f"{name}\n{objective}"
+    return any(pattern.search(text) for pattern in _MANAGED_DECLARATIVE_PATTERNS)
+
+
 def resolve_solution_implementation(
     manifest: SolutionManifest,
     *,
     name: str | None = None,
     objective: str | None = None,
 ) -> ImplementationResolution:
-    """Choose the narrowest runtime that truthfully implements the full contract."""
+    """Choose the narrowest runtime that truthfully implements the full contract.
 
+    The default for an application with unproven declarative coverage is generated
+    source. This is what makes the system open-ended: new product semantics do not
+    need a keyword/component release before the coding runtime can attempt them.
+    """
+
+    effective_name = name or manifest.name
+    effective_objective = objective or manifest.objective
     required = set(manifest.capability_ids)
-    required.update(_semantic_extensions(name or manifest.name, objective or manifest.objective))
+    required.update(_semantic_extensions(effective_name, effective_objective))
 
     # Presentation-only work stays on Studio. Device/browser extensions make the
     # request executable software even if the older manifest floor was static.
-    if not manifest.stateful and required.issubset(MANAGED_RUNTIME_CAPABILITIES) and not (
-        required - set(manifest.capability_ids)
-    ):
+    if not manifest.stateful and required == set(manifest.capability_ids):
         return ImplementationResolution(
             runtime_type="studio",
             solution_type="digital_presence",
@@ -164,13 +189,20 @@ def resolve_solution_implementation(
         )
 
     generated = required - MANAGED_RUNTIME_CAPABILITIES
+    if not generated and not _managed_declarative_fit(effective_name, effective_objective):
+        # Unknown/custom behavior is intentionally represented as a semantic
+        # generated-code requirement instead of being forced through finite UI
+        # primitives. The coding planner can refine this into concrete mechanics.
+        required.add("implementation.generated_logic")
+        generated.add("implementation.generated_logic")
+
     if generated:
         return ImplementationResolution(
             runtime_type="generated_project",
             solution_type="custom_solution",
             implementation_mode="generated_fullstack",
             reason=(
-                "The request requires capabilities outside the finite managed-app declarative runtime; "
+                "The request requires capabilities or behavior outside the proven managed-app declarative envelope; "
                 "generate executable source and verify it in the isolated full-stack runner."
             ),
             confidence="high",
@@ -182,7 +214,7 @@ def resolve_solution_implementation(
         runtime_type="managed_app",
         solution_type="business_app",
         implementation_mode="managed_declarative",
-        reason="The complete stateful capability graph is covered by the managed declarative runtime.",
+        reason="The complete stateful capability graph is covered by the managed declarative fast path.",
         confidence="high" if manifest.stateful else "medium",
         required_capabilities=tuple(sorted(required)),
         generated_capabilities=(),
