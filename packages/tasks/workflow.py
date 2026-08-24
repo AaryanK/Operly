@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
-
 
 class WorkflowValidationError(ValueError):
     pass
@@ -121,7 +119,6 @@ def resolve_value(value: Any, env: dict[str, Any]) -> Any:
     if isinstance(value, str):
         if value.startswith("$"):
             return _resolve_ref(value, env)
-        # Lightweight interpolation for human-readable model prompts/emit text.
         output = value
         for key in list(env):
             marker = "{{" + key + "}}"
@@ -197,26 +194,35 @@ AgentInvoker = Callable[[str, dict[str, Any]], Awaitable[Any]]
 class WorkflowExecutor:
     """Deterministic interpreter whose side effects still cross PluginAgentHarness.
 
-    The workflow language provides control flow only. It cannot access the network,
-    filesystem, credentials or external services directly. All real operations are
-    named plugin capability invocations and are re-authorized when the workflow runs.
+    The module deliberately does not import the capability harness at import time.
+    ``capabilities.defaults`` owns the Task provider and the harness owns the default
+    registry, so eager imports would form a cycle. The existing harness is resolved
+    lazily only when a workflow capability is actually executed.
     """
 
-    def __init__(self, harness: PluginAgentHarness | None = None) -> None:
-        self.harness = harness or PluginAgentHarness()
+    def __init__(self, harness: Any | None = None) -> None:
+        self.harness = harness
+
+    def _harness(self):
+        if self.harness is None:
+            from packages.capabilities.agent_harness import PluginAgentHarness
+
+            self.harness = PluginAgentHarness()
+        return self.harness
 
     async def _invoke_workspace(
         self,
         capability: str,
         args: dict[str, Any],
-        context: PluginInvocationContext,
+        context: Any,
         *,
         call_id: str,
     ) -> dict[str, Any]:
-        authority = await self.harness.authority_for(context)
+        harness = self._harness()
+        authority = await harness.authority_for(context)
         if not authority:
             return {"ok": False, "error": "workflow_execution_not_authorized"}
-        registry = await self.harness.registry_for(context)
+        registry = await harness.registry_for(context)
         try:
             definition = registry.definition(capability)
         except LookupError:
@@ -226,7 +232,7 @@ class WorkflowExecutor:
             definition.id,
             authority=authority,
         )
-        if not availability.available or not self.harness.capability_authorized(
+        if not availability.available or not harness.capability_authorized(
             definition.id, authority, context
         ):
             return {
@@ -234,16 +240,13 @@ class WorkflowExecutor:
                 "error": "workflow_capability_unavailable",
                 "availability": availability.as_dict(),
             }
-        # A persisted workflow is an application-controlled declaration rather than
-        # a model improvising a hidden tool. Expose only this declared capability for
-        # this invocation, then use the ordinary harness/firewall path unchanged.
-        view = await self.harness.session_view_for(
+        view = await harness.session_view_for(
             context,
             authority=authority,
             registry=registry,
         )
         view.expose([definition.id])
-        return await self.harness.invoke(
+        return await harness.invoke(
             definition.id,
             args,
             context,
@@ -254,7 +257,7 @@ class WorkflowExecutor:
         self,
         workflow: dict,
         *,
-        context: PluginInvocationContext,
+        context: Any,
         trigger: dict[str, Any] | None = None,
         state: dict[str, Any] | None = None,
         agent_invoke: AgentInvoker | None = None,
@@ -338,7 +341,6 @@ class WorkflowExecutor:
                         child[alias] = item
                         child["index"] = index
                         await run_steps(list(node.get("steps") or []), local_env=child)
-                        # Preserve named node outputs/state produced by each iteration.
                         local_env["state"] = child.get("state", local_env.get("state", {}))
                         local_env["vars"] = child.get("vars", local_env.get("vars", {}))
                 elif node_type == "set":
