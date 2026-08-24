@@ -19,6 +19,7 @@ from packages.capabilities.web_read_provider import PublicWebReadProvider
 from packages.database.db import session_scope
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
 from packages.model_runtime import model_for_role
+from packages.security.temporal_context import resolve_temporal_context
 
 
 PERSONAL_SYSTEM_PROMPT = """
@@ -135,6 +136,13 @@ class PersonalAgentService:
                 conversation_id=conversation_id,
                 initial_text=visible_text,
             )
+            temporal_context = (
+                await resolve_temporal_context(
+                    db,
+                    user_id=user_id,
+                    tenant_id=selected_workspace_id,
+                )
+            ).as_dict()
             rows = (
                 await db.scalars(
                     select(PrincipalMessage)
@@ -181,7 +189,7 @@ class PersonalAgentService:
             resolved = self._definitions.get(name)
             if resolved is None:
                 return {"ok": False, "error": "Unknown personal capability"}
-            provider, definition = resolved
+            provider, _definition = resolved
             async with session_scope() as db:
                 context = SimpleNamespace(
                     tenant_id=selected_workspace_id,
@@ -189,6 +197,7 @@ class PersonalAgentService:
                     db=db,
                     invocation={
                         "channel": channel,
+                        "temporal_context": temporal_context,
                         "metadata": {
                             "is_direct": True,
                             "shared_surface": False,
@@ -202,6 +211,7 @@ class PersonalAgentService:
                             "attachment_names": attachment_names,
                             "actor_name": display_name,
                             "call_id": call_id,
+                            "temporal_context": temporal_context,
                         },
                     },
                 )
