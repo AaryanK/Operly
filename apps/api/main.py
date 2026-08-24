@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -54,6 +55,8 @@ from apps.api.workspace_router import router as workspace_router
 from packages.capabilities.defaults import bootstrap_builtin_plugins
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.model_runtime.catalog import provider_is_configured
+from packages.model_runtime.discovery import refresh_model_discovery
 from packages.plugins import default_plugin_runtime
 from packages.studio.agent_resume import resume_interrupted_studio_runs
 
@@ -142,12 +145,32 @@ def validate_runtime_configuration() -> None:
         raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
 
 
+async def warm_model_discovery() -> None:
+    """Bounded catalog warmup so the first worker can see small tool-capable models."""
+    if not provider_is_configured("openrouter"):
+        return
+    try:
+        timeout = float(os.getenv("OPERLY_STARTUP_MODEL_DISCOVERY_TIMEOUT_SECONDS", "4"))
+    except ValueError:
+        timeout = 4.0
+    try:
+        await asyncio.wait_for(
+            refresh_model_discovery(provider="openrouter", ttl_seconds=0.0, force=True),
+            timeout=max(1.0, min(timeout, 10.0)),
+        )
+    except (asyncio.TimeoutError, RuntimeError):
+        # Static verified/configured resources remain available. Discovery is an
+        # optimization for better model selection, never a startup dependency.
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_runtime_configuration()
     await init_db()
     await bootstrap_admin()
     bootstrap_builtin_plugins()
+    await warm_model_discovery()
     plugin_runtime = default_plugin_runtime()
     await plugin_runtime.start()
     await resume_interrupted_studio_runs()
@@ -262,35 +285,21 @@ def frontend_shell() -> HTMLResponse:
     )
 
 
-def canonical_frontend_shell() -> HTMLResponse:
-    index = WEB_DIST / "index.html"
-    if not index.is_file():
-        # Local Python-only development can keep using the legacy shell until
-        # `npm run build` creates the canonical bundle. Production Docker builds
-        # always include dist via the web-build stage.
-        return frontend_shell()
-    return HTMLResponse(
-        index.read_text(encoding="utf-8"),
-        headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
+@app.get("/", include_in_schema=False)
+async def home():
+    return frontend_shell()
 
 
-@app.get("/{path:path}", include_in_schema=False)
-async def frontend(path: str):
-    # Authenticated account/workspace routes have one renderer: the canonical
-    # React application. Public/auth flows remain on the legacy shell while their
-    # separate in-flight account-home PR settles, which keeps this PR merge-safe.
-    if path == "channels" or path.startswith("channels/"):
-        return canonical_frontend_shell()
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(WEB_STATIC / "favicon.svg", media_type="image/svg+xml")
 
-    built_asset = WEB_DIST / path
-    if path and built_asset.is_file():
-        return FileResponse(built_asset)
 
-    requested = WEB_STATIC / path
-    if path and requested.is_file():
-        return FileResponse(requested)
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    if full_path.startswith("api/"):
+        return HTMLResponse(status_code=404, content="Not Found")
+    candidate = WEB_DIST / full_path
+    if candidate.is_file():
+        return FileResponse(candidate)
     return frontend_shell()
