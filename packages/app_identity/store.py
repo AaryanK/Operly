@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from packages.app_identity.contracts import InvitationCreateRequest, RegisterRequest
@@ -181,7 +182,7 @@ class AppIdentityStore:
                     },
                 )
                 session = await self._create_session(conn, workspace_id, application_id, user_id)
-        except Exception as error:
+        except IntegrityError as error:
             raise AppIdentityError("An account with that email already exists") from error
         user = await self.get_user(workspace_id, application_id, user_id)
         return {"user": user, "sessionToken": session}
