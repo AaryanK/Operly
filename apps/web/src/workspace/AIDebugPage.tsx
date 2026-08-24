@@ -159,7 +159,7 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
               <strong>{run.surface} · {run.kind === "studio" ? run.operation || "Studio" : run.components[0] || "AI runtime"}</strong>
               <span className={statusClass(run.status)}>{run.status}</span>
               <p>{primaryModel ? `${primaryModel.provider} / ${primaryModel.model}` : "Model not recorded"} · {number(run.tokenUsage.inputTokens)} in / {number(run.tokenUsage.outputTokens)} out · {when(run.startedAt)}</p>
-              <details onClick={(event) => event.stopPropagation()}><summary>Identifiers</summary><code>{run.runId}{run.conversationId ? `\nconversation: ${run.conversationId}` : ""}{run.projectId ? `\nproject: ${run.projectId}` : ""}</code></details>
+              <p><code>{run.runId}</code>{run.conversationId ? ` · conversation ${run.conversationId}` : ""}{run.projectId ? ` · project ${run.projectId}` : ""}</p>
             </div>
           </button>;
         })}</div> : <div className="empty-panel">{loading ? "Loading AI runs…" : "No AI runs match these filters."}</div>}
