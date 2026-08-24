@@ -57,6 +57,10 @@ class ActionService:
             return "workspace", tenant_id
         return "personal", f"personal:{owner_user_id}"
 
+    def _assert_personal_actor(self, owner_user_id: str | None) -> None:
+        if not owner_user_id or not self.actor_id or self.actor_id != owner_user_id:
+            raise PermissionError("Personal action owner must match the authenticated actor")
+
     @staticmethod
     def _same_scope(action: BusinessActionRecord, approval: Approval) -> bool:
         return (
@@ -138,6 +142,8 @@ class ActionService:
             tenant_id=tenant_id,
             owner_user_id=owner_user_id,
         )
+        if scope_kind == "personal":
+            self._assert_personal_actor(owner_user_id)
         if idempotency_key:
             scope_filter = (
                 BusinessActionRecord.tenant_id == tenant_id
@@ -283,6 +289,8 @@ class ActionService:
             tenant_id=action.tenant_id,
             owner_user_id=action.owner_user_id,
         )
+        if action.scope_kind == "personal":
+            self._assert_personal_actor(action.owner_user_id)
         provider = self.registry.resolve(
             scope_id,
             action.capability,
@@ -425,6 +433,8 @@ class ActionService:
         return action
 
     async def _approve_action(self, action: BusinessActionRecord):
+        if action.scope_kind == "personal":
+            self._assert_personal_actor(action.owner_user_id)
         if action.status != ActionStatus.WAITING_APPROVAL:
             raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id)
@@ -456,6 +466,8 @@ class ActionService:
         return await self.execute(action)
 
     async def _reject_action(self, action: BusinessActionRecord):
+        if action.scope_kind == "personal":
+            self._assert_personal_actor(action.owner_user_id)
         if action.status != ActionStatus.WAITING_APPROVAL:
             raise ValueError("Action is not waiting for approval")
         approval = await self.db.get(Approval, action.approval_id)
@@ -483,9 +495,11 @@ class ActionService:
         return await self._reject_action(await self._get(tenant_id, action_id))
 
     async def approve_personal(self, owner_user_id: str, action_id: str):
+        self._assert_personal_actor(owner_user_id)
         return await self._approve_action(await self._get_personal(owner_user_id, action_id))
 
     async def reject_personal(self, owner_user_id: str, action_id: str):
+        self._assert_personal_actor(owner_user_id)
         return await self._reject_action(await self._get_personal(owner_user_id, action_id))
 
     async def _get(self, tenant_id, action_id):
