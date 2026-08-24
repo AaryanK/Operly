@@ -13,6 +13,7 @@ import "./ui/premium.css";
 import "./ui/theme.css";
 import "./ui/brand.css";
 import "./ui/surface-polish.css";
+import "./ui/legal-links.css";
 import "./ui/convergence.css";
 
 initializeTheme();
