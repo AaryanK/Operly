@@ -104,8 +104,9 @@ class _FakeWorkflowExecutor(WorkflowExecutor):
     async def _invoke_workspace(self, capability, args, context, *, call_id):
         if capability == "example.read":
             return {"ok": True, "observation": {"headline": "Important Nepal story"}}
-        if capability == "model.invoke":
+        if capability == "ai.reason":
             assert "Important Nepal story" in args["context"]
+            assert "capability" not in args
             return {"ok": True, "observation": {"content": '{"publish": true, "score": 91}'}}
         raise AssertionError(capability)
 
