@@ -19,6 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 COPY --from=web-build /web/dist /app/apps/web/dist
 
+# The source logo is intentionally kept lossless in the repository. Production
+# only renders it at UI/social-preview sizes, so ship a bounded optimized copy
+# for both the public/auth shell and the canonical React bundle.
+RUN python apps/web/scripts/optimize_logo.py \
+    apps/web/static/operly-logo.png \
+    apps/web/dist/operly-logo.png
+
 EXPOSE 8000
 
 # Bring a fresh/copy deployment to the current schema before starting the API.
