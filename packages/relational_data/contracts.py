@@ -138,7 +138,7 @@ class FilterClause(StrictModel):
     def validate_value(self):
         if self.op == "in" and (not isinstance(self.value, list) or len(self.value) > 100):
             raise ValueError("in filters require a list of at most 100 values")
-        if self.op == "is_null" and self.value not in {None, True, False}:
+        if self.op == "is_null" and not (self.value is None or isinstance(self.value, bool)):
             raise ValueError("is_null accepts only true, false, or null")
         return self
 
