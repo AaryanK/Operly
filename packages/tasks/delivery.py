@@ -13,6 +13,7 @@ from packages.database.db import session_scope
 from packages.database.models import AppUser
 from packages.database.principal_models import Principal, PrincipalConversation, PrincipalMessage
 from packages.model_runtime.trace_events import RuntimeTraceEvent
+from packages.security.execution_context import ExecutionContextError, resolve_execution_context
 
 
 class TaskDeliveryError(RuntimeError):
@@ -102,6 +103,38 @@ def delivery_target_from_origin(origin: dict[str, Any], delivery: str = "origin"
     }
 
 
+async def _reauthorize_delivery_target(target: dict[str, Any]) -> None:
+    """Re-evaluate delayed delivery authority instead of trusting creation-time state."""
+    scope = str(target.get("scope") or "workspace").strip().lower()
+    user_id = str(target.get("user_id") or "").strip()
+    if not user_id:
+        raise TaskDeliveryError("task_delivery_user_missing")
+
+    if scope == "personal":
+        async with session_scope() as db:
+            user = await db.get(AppUser, user_id)
+            if user is None or not user.active:
+                raise TaskDeliveryError("task_delivery_personal_authority_revoked")
+        return
+
+    tenant_id = str(target.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise TaskDeliveryError("task_delivery_workspace_missing")
+    try:
+        async with session_scope() as db:
+            await resolve_execution_context(
+                db,
+                workspace_id=tenant_id,
+                user_id=user_id,
+                channel=f"task_delivery:{str(target.get('provider') or 'unknown')}",
+                conversation_id=str(target.get("external_conversation_id") or "") or None,
+                metadata={"scheduled_delivery": True},
+                require_membership=True,
+            )
+    except ExecutionContextError as error:
+        raise TaskDeliveryError("task_delivery_workspace_authority_revoked") from error
+
+
 async def _record_workspace_delivery_event(
     target: dict[str, Any],
     event_type: RuntimeTraceEvent,
@@ -136,6 +169,17 @@ async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str,
     provider = str(target.get("provider") or "").strip().lower()
     if not provider:
         raise TaskDeliveryError("task_delivery_provider_missing")
+
+    try:
+        await _reauthorize_delivery_target(target)
+    except Exception as error:
+        await _record_workspace_delivery_event(
+            target,
+            RuntimeTraceEvent.DELIVERY_FAILED,
+            {"status": "FAILED", "reason": type(error).__name__, "authority_recheck": True},
+        )
+        raise
+
     from packages.plugins import default_plugin_runtime
 
     adapter = default_plugin_runtime().task_delivery_adapter(provider)
