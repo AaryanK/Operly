@@ -15,7 +15,10 @@ def _runner_preview_origins() -> tuple[str, ...]:
 def _permissions_policy(solution_studio: bool) -> str:
     if not solution_studio:
         return "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
-    delegated=" ".join(["self",*(f'"{origin}"' for origin in _runner_preview_origins())])
+    origins=_runner_preview_origins()
+    if not origins:
+        return "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    delegated=" ".join(f'"{origin}"' for origin in origins)
     return f"camera=({delegated}), microphone=({delegated}), geolocation=({delegated}), payment=({delegated}), usb=({delegated})"
 
 
