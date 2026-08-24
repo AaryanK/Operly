@@ -113,10 +113,14 @@ class UniversalTaskProvider(RegistryWorkflowTaskProvider):
             return CapabilityResult(False, False, {"reason": "workspace_required"})
 
         discord_origin = origin.get("provider") == "discord"
+        if discord_origin and (
+            not origin.get("external_user_id") or not origin.get("external_conversation_id")
+        ):
+            return CapabilityResult(False, False, {"reason": "discord_origin_not_resolved"})
         try:
             guild_id = int(origin["external_space_id"]) if discord_origin and origin.get("external_space_id") else None
-            channel_id = int(origin["external_conversation_id"]) if discord_origin and origin.get("external_conversation_id") else 0
-            creator_id = int(origin["external_user_id"]) if discord_origin and origin.get("external_user_id") else None
+            channel_id = int(origin["external_conversation_id"]) if discord_origin else 0
+            creator_id = int(origin["external_user_id"]) if discord_origin else None
             legacy_user_id = creator_id or 0
         except (TypeError, ValueError):
             return CapabilityResult(False, False, {"reason": "invalid_discord_origin"})
@@ -175,6 +179,21 @@ class UniversalTaskProvider(RegistryWorkflowTaskProvider):
     async def execute(self, context, capability_name, arguments):
         if capability_name == "task.create":
             return await self._create_universal(context, arguments)
+
+        if capability_name == "task.cancel":
+            task = await self._authorized_task(context, str(arguments.get("task_id") or ""))
+            if task is not None:
+                job = await self._job(context, task.id)
+                task.status = "cancelled"
+                if job is not None and job.status not in {"completed", "cancelled"}:
+                    job.status = "cancelled"
+                await context.db.flush()
+                return CapabilityResult(
+                    True,
+                    True,
+                    {"task": self._task_view(task, job)},
+                    task.id,
+                )
 
         result = await super().execute(context, capability_name, arguments)
         if (
