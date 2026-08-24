@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AccountSettings } from "../account/AccountSettings";
 import { PersonalHome } from "../account/PersonalHome";
 import { ScopeRail } from "../account/ScopeRail";
+import { LegalLinks } from "../ui/LegalLinks";
 import { OperlyMark } from "../ui/OperlyMark";
 import { useThemePreference } from "../ui/theme";
 import { WorkspaceShell } from "../workspace/WorkspaceShell";
@@ -39,11 +40,11 @@ export function App() {
 
   if (route.kind === "personal") {
     if (profile?.current_workspace_id || transitioning) return <BrandedBoot message="Switching to your private Operly…" />;
-    return <div className="authenticated-shell">{rail(true)}<PersonalHome profile={profile} />{settings}</div>;
+    return <div className="authenticated-shell">{rail(true)}<PersonalHome profile={profile} />{settings}<LegalLinks /></div>;
   }
 
-  if (!workspace) return <div className="authenticated-shell">{rail(false)}<main className="workspace-page missing-workspace"><h1>Workspace unavailable</h1><p>This account is not authorized for the requested workspace.</p><button onClick={() => activatePersonal().catch(() => undefined)}>Return to Personal Operly</button></main>{settings}</div>;
+  if (!workspace) return <div className="authenticated-shell">{rail(false)}<main className="workspace-page missing-workspace"><h1>Workspace unavailable</h1><p>This account is not authorized for the requested workspace.</p><button onClick={() => activatePersonal().catch(() => undefined)}>Return to Personal Operly</button></main>{settings}<LegalLinks /></div>;
   if (profile?.current_workspace_id !== workspace.id || transitioning) return <BrandedBoot message={`Entering ${workspace.name}…`} />;
 
-  return <div className="authenticated-shell">{rail(false, workspace.id)}<WorkspaceShell workspace={workspace} section={route.section} onScopeRefresh={refresh} />{settings}</div>;
+  return <div className="authenticated-shell">{rail(false, workspace.id)}<WorkspaceShell workspace={workspace} section={route.section} onScopeRefresh={refresh} />{settings}<LegalLinks /></div>;
 }
