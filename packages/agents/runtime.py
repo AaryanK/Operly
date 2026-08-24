@@ -8,9 +8,11 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from packages.database.model_trace import ensure_model_trace_sink
+from packages.database.runtime_trace_events import emit_runtime_trace_event
 from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.conversation_policy import is_trivial_conversation
 from packages.model_runtime.trace_context import runtime_trace_scope
+from packages.model_runtime.trace_events import RuntimeTraceEvent
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -124,6 +126,18 @@ def _ensure_tool_call_ids(message: dict[str, Any]) -> None:
             call["id"] = f"operly-call-{uuid4()}"
 
 
+def _tool_ids(tools: list[dict[str, Any]]) -> list[str]:
+    output: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        name = str(function.get("name") or "").strip()
+        if name:
+            output.append(name)
+    return output
+
+
 class AgentRuntime:
     """Stable orchestration loop over Model + capability callbacks.
 
@@ -234,8 +248,31 @@ class AgentRuntime:
                     "runtime_component": "agent",
                     "runtime_step": model_call_index,
                 }
+                suppressed = is_trivial_conversation(_last_user_text(messages))
                 with runtime_trace_scope(model_metadata):
+                    await emit_runtime_trace_event(
+                        RuntimeTraceEvent.MODEL_REQUEST,
+                        {
+                            "message_count": len(messages),
+                            "candidate_tool_count": len(tools),
+                            "candidate_tool_ids": _tool_ids(tools),
+                            "tool_surface_suppressed": suppressed,
+                        },
+                        metadata=model_metadata,
+                        component="agent",
+                        step=model_call_index,
+                    )
                     message = await self._infer(model, messages, tools, metadata=model_metadata)
+                    await emit_runtime_trace_event(
+                        RuntimeTraceEvent.MODEL_RESPONSE,
+                        {
+                            "has_content": bool(str(message.get("content") or "").strip()),
+                            "tool_call_count": len(message.get("tool_calls") or []),
+                        },
+                        metadata=model_metadata,
+                        component="agent",
+                        step=model_call_index,
+                    )
                 _ensure_tool_call_ids(message)
                 messages.append(message)
                 steps_used += 1
@@ -273,6 +310,19 @@ class AgentRuntime:
                         "tool_call_id": call_id,
                     }
                     with runtime_trace_scope(capability_metadata):
+                        await emit_runtime_trace_event(
+                            RuntimeTraceEvent.CAPABILITY_REQUESTED,
+                            {
+                                "capability_id": name or None,
+                                "call_id": call_id,
+                                "argument_keys": sorted(arguments),
+                                "argument_parse_errors": list(argument_errors),
+                            },
+                            metadata=capability_metadata,
+                            component=f"capability:{name or 'unknown'}",
+                            step=model_call_index,
+                            resource_id=name or "unnamed-capability",
+                        )
                         if not name:
                             observation = {
                                 "ok": False,
@@ -291,6 +341,26 @@ class AgentRuntime:
                             }
                         else:
                             observation = dict(await _resolve(invoke(name, dict(arguments), call_id)) or {})
+                        if str(observation.get("status") or "").upper() in {
+                            "INVALID_ARGUMENTS",
+                            "DENIED",
+                        }:
+                            await emit_runtime_trace_event(
+                                RuntimeTraceEvent.CAPABILITY_REJECTED,
+                                {
+                                    "capability_id": name or None,
+                                    "call_id": call_id,
+                                    "status": observation.get("status"),
+                                    "error": observation.get("error"),
+                                    "errors": observation.get("errors") or [],
+                                },
+                                metadata=capability_metadata,
+                                component=f"capability:{name or 'unknown'}",
+                                step=model_call_index,
+                                resource_id=name or "unnamed-capability",
+                                classification=str(observation.get("status") or "").lower() or None,
+                                retryable=bool(observation.get("retryable")),
+                            )
                     tool_calls += 1
                     last_step_progress = last_step_progress or _made_progress(observation)
                     entry = AgentTraceEntry(
