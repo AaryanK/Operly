@@ -1,11 +1,17 @@
-"""Model-as-tool capability provider.
+"""Semantic AI capability provider over Operly's existing model runtime.
 
-The calling agent requests reasoning capability and may pass context references.
-OPERLY resolves those references server-side and injects their contents directly into
-the target model; the calling model never has to materialize or re-emit that context.
-Concrete provider/model identities remain outside the agent contract.
+Agents, Workflows, Tasks, Studio, MCP, and Solutions request an ``ai.*`` ability
+through the normal Capability Registry and firewall.  They never select a concrete
+provider/model.  The existing model runtime resolves a bounded specialist route and
+returns its result to the caller, which remains responsible for its original
+objective.
+
+``model.invoke`` and ``model.deep_reason`` remain as compatibility capabilities while
+callers migrate to the semantic ``ai.*`` family.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
@@ -24,14 +30,169 @@ _CONTEXT_REFS_SCHEMA = {
     ),
 }
 
+_COMMON_AI_PROPERTIES = {
+    "objective": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8000,
+        "description": "The bounded specialist subtask. The parent run still owns the original objective.",
+    },
+    "context": {
+        "type": "string",
+        "maxLength": 12000,
+        "description": "Small task-local context. Prefer context_refs for stored Operly context.",
+    },
+    "context_refs": _CONTEXT_REFS_SCHEMA,
+    "prefer_tags": {
+        "type": "array",
+        "items": {"type": "string", "maxLength": 40},
+        "maxItems": 8,
+        "description": "Optional provider-neutral scheduling traits such as reliable or fast.",
+    },
+    "avoid_tags": {
+        "type": "array",
+        "items": {"type": "string", "maxLength": 40},
+        "maxItems": 8,
+        "description": "Optional provider-neutral scheduling traits to avoid.",
+    },
+    "prefer_free": {"type": "boolean"},
+    "latency_class": {
+        "type": "string",
+        "enum": ["interactive", "normal", "deep"],
+    },
+}
+
+
+def _ai_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": dict(_COMMON_AI_PROPERTIES),
+        "required": ["objective"],
+        "additionalProperties": False,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _AIProfile:
+    model_capability: str
+    prefer_tags: tuple[str, ...]
+    avoid_tags: tuple[str, ...] = ()
+    prefer_free: bool = True
+    latency_class: str = "normal"
+    instruction: str = ""
+
+
+_AI_PROFILES: dict[str, _AIProfile] = {
+    "ai.generate": _AIProfile(
+        "text",
+        ("reliable", "fast"),
+        instruction="Generate the requested bounded result directly.",
+    ),
+    "ai.reason": _AIProfile(
+        "reasoning",
+        ("reasoning", "reliable"),
+        instruction="Solve the bounded reasoning subproblem and return the useful conclusion and evidence.",
+    ),
+    "ai.plan": _AIProfile(
+        "reasoning",
+        ("reasoning", "reliable", "heavy"),
+        instruction="Produce a bounded actionable plan for this subproblem; do not assume ownership of the parent objective.",
+    ),
+    "ai.code.generate": _AIProfile(
+        "coding",
+        ("coding", "reliable", "fast"),
+        instruction="Generate the smallest correct implementation needed for this bounded coding subtask.",
+    ),
+    "ai.code.repair": _AIProfile(
+        "coding",
+        ("coding", "reasoning", "reliable"),
+        instruction="Repair the smallest amount necessary from the supplied failure evidence and preserve unrelated behavior.",
+    ),
+    "ai.code.review": _AIProfile(
+        "coding",
+        ("coding", "reasoning", "reliable"),
+        instruction="Review the supplied implementation against the stated contract and report concrete defects or acceptance evidence.",
+    ),
+    "ai.extract.requirements": _AIProfile(
+        "reasoning",
+        ("reasoning", "reliable"),
+        instruction="Extract explicit requirements, constraints, actors, and acceptance conditions without inventing unsupported requirements.",
+    ),
+}
+
+
+def _semantic_definition(
+    capability_id: str,
+    description: str,
+    operations: set[str],
+    *,
+    tags: set[str],
+) -> CapabilityDefinition:
+    return CapabilityDefinition(
+        capability_id,
+        capability_id.replace(".", "_"),
+        description,
+        _ai_schema(),
+        {"type": "object"},
+        risk_level="read_only",
+        permissions=("model:invoke",),
+        approval_policy=ApprovalPolicy.AUTO,
+        plugin_id="builtin:operly_model_runtime",
+        category="ai",
+        tags=frozenset({"ai", "model", "delegation", "kernel", *tags}),
+        semantic_operations=frozenset(operations),
+    )
+
 
 class ModelInvocationProvider(BaseProvider):
     name = "operly_model_runtime"
     capabilities = (
+        _semantic_definition(
+            "ai.generate",
+            "Delegate one bounded generation subtask to a provider-neutral specialist model. The result returns to the current run; it does not complete the caller's objective.",
+            {"generate text", "draft content", "summarize", "specialist generation"},
+            tags={"generation"},
+        ),
+        _semantic_definition(
+            "ai.reason",
+            "Delegate one bounded reasoning subproblem to a provider-neutral specialist. Use when reasoning, rather than missing data or capabilities, is the bottleneck. The parent run must continue afterward.",
+            {"deep reasoning", "analyze difficult subproblem", "second opinion", "resolve conflicting evidence"},
+            tags={"reasoning", "escalation"},
+        ),
+        _semantic_definition(
+            "ai.plan",
+            "Delegate one bounded planning subproblem to a planning-capable specialist while the current Agent, Workflow, Task, or Studio run keeps ownership of completion.",
+            {"plan software", "plan workflow", "decompose operation", "create bounded plan"},
+            tags={"planning", "reasoning"},
+        ),
+        _semantic_definition(
+            "ai.code.generate",
+            "Delegate a bounded code-generation subtask to a coding specialist selected by Operly. The caller remains responsible for build/test/acceptance.",
+            {"generate code", "implement source", "write function", "coding specialist"},
+            tags={"coding", "generation"},
+        ),
+        _semantic_definition(
+            "ai.code.repair",
+            "Delegate a targeted source repair to a coding specialist selected by Operly. Return the repair to the parent run, which must re-run deterministic verification.",
+            {"repair code", "fix failing build", "debug source", "patch implementation"},
+            tags={"coding", "repair"},
+        ),
+        _semantic_definition(
+            "ai.code.review",
+            "Delegate a bounded code review to a coding/reasoning specialist selected by Operly. The result is review evidence, not completion of the parent objective.",
+            {"review code", "inspect implementation", "find code defect", "validate source"},
+            tags={"coding", "review"},
+        ),
+        _semantic_definition(
+            "ai.extract.requirements",
+            "Delegate bounded requirement extraction to a specialist selected by Operly. Use the structured findings as input to the existing planner/workflow rather than transferring run ownership.",
+            {"extract requirements", "identify constraints", "derive acceptance conditions", "requirements analysis"},
+            tags={"requirements", "reasoning"},
+        ),
         CapabilityDefinition(
             "model.invoke",
             "model_invoke",
-            "Delegate one bounded subtask to another registered model selected by capability and traits. Prefer solving routine work locally. Pass context_refs when the target model needs context that the current model does not need to read.",
+            "Compatibility capability: delegate one bounded subtask to another registered model selected by capability and traits. Prefer semantic ai.* capabilities for new work.",
             {
                 "type": "object",
                 "properties": {
@@ -73,7 +234,7 @@ class ModelInvocationProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             plugin_id="builtin:operly_model_runtime",
             category="model",
-            tags=frozenset({"model", "delegation", "kernel"}),
+            tags=frozenset({"model", "delegation", "kernel", "legacy"}),
             semantic_operations=frozenset(
                 {
                     "delegate hard reasoning",
@@ -87,7 +248,7 @@ class ModelInvocationProvider(BaseProvider):
         CapabilityDefinition(
             "model.deep_reason",
             "model_deep_reason",
-            "Ask a stronger reasoning model for one difficult remaining subproblem. Use after ordinary context/tool retrieval when the reasoning itself is the bottleneck. Context references are passed directly by the harness without loading them into the current model.",
+            "Compatibility capability for one difficult reasoning subproblem. Prefer ai.reason for new work.",
             {
                 "type": "object",
                 "properties": {
@@ -119,7 +280,7 @@ class ModelInvocationProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             plugin_id="builtin:operly_model_runtime",
             category="model",
-            tags=frozenset({"model", "delegation", "kernel", "reasoning", "escalation"}),
+            tags=frozenset({"model", "delegation", "kernel", "reasoning", "escalation", "legacy"}),
             semantic_operations=frozenset(
                 {
                     "ask stronger model",
@@ -130,6 +291,20 @@ class ModelInvocationProvider(BaseProvider):
             ),
         ),
     )
+
+    def __init__(self, model_service: ModelInvocationService | None = None) -> None:
+        self.model_service = model_service or ModelInvocationService()
+
+    @staticmethod
+    def _invocation_metadata(context) -> tuple[dict, int]:
+        invocation = context.invocation or {}
+        metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
+        raw_depth = invocation.get("ai_delegation_depth", metadata.get("ai_delegation_depth", 0))
+        try:
+            depth = max(0, int(raw_depth or 0))
+        except (TypeError, ValueError):
+            depth = 0
+        return metadata, depth
 
     @staticmethod
     async def _resolve_context_refs(context, refs) -> tuple[str, list[str], int]:
@@ -150,8 +325,6 @@ class ModelInvocationProvider(BaseProvider):
             ),
         )
         if len(rows) != len(set(clean_refs)):
-            # Do not silently turn a partially authorized delegation into a different
-            # reasoning request. A missing ref may mean revoked/private authority.
             raise PermissionError("One or more context references are unavailable")
         blocks = []
         used = []
@@ -167,12 +340,54 @@ class ModelInvocationProvider(BaseProvider):
         return "\n\n".join(blocks), used, estimated_tokens
 
     async def execute(self, context, capability_name, arguments):
+        metadata, parent_depth = self._invocation_metadata(context)
+        if parent_depth >= 1:
+            return CapabilityResult(
+                False,
+                False,
+                {
+                    "reason": "ai_delegation_depth_exceeded",
+                    "delegation_depth": parent_depth,
+                    "max_delegation_depth": 1,
+                },
+            )
+
         try:
             ref_context, used_refs, ref_tokens = await self._resolve_context_refs(
                 context,
                 arguments.get("context_refs") or (),
             )
-            if capability_name == "model.deep_reason":
+            ai_profile = _AI_PROFILES.get(capability_name)
+            ai_capability = capability_name if ai_profile is not None else None
+
+            if ai_profile is not None:
+                caller_context = str(arguments.get("context") or "")
+                scheduling_context = "\n\n".join(
+                    part
+                    for part in (
+                        f"Specialist contract: {ai_profile.instruction}" if ai_profile.instruction else "",
+                        caller_context,
+                        ref_context,
+                    )
+                    if part
+                )
+                prefer_tags = tuple(dict.fromkeys(
+                    (*ai_profile.prefer_tags, *(arguments.get("prefer_tags") or ()))
+                ))
+                avoid_tags = tuple(dict.fromkeys(
+                    (*ai_profile.avoid_tags, *(arguments.get("avoid_tags") or ()))
+                ))
+                result = await self.model_service.invoke(
+                    capability=ai_profile.model_capability,
+                    objective=str(arguments.get("objective") or ""),
+                    context=scheduling_context,
+                    prefer_free=bool(arguments.get("prefer_free", ai_profile.prefer_free)),
+                    prefer_tags=prefer_tags,
+                    avoid_tags=avoid_tags,
+                    exclude_orchestrator=True,
+                    latency_class=str(arguments.get("latency_class") or ai_profile.latency_class),
+                )
+            elif capability_name == "model.deep_reason":
                 attempted = [
                     str(item).strip()
                     for item in arguments.get("attempted") or ()
@@ -186,7 +401,7 @@ class ModelInvocationProvider(BaseProvider):
                     + ("\nAttempts already made:\n- " + "\n- ".join(attempted) if attempted else "")
                     + (f"\nDesired output: {desired}" if desired else "")
                 )
-                result = await ModelInvocationService().invoke(
+                result = await self.model_service.invoke(
                     capability="reasoning",
                     objective=objective,
                     context="\n\n".join(part for part in (caller_context, ref_context) if part),
@@ -198,7 +413,7 @@ class ModelInvocationProvider(BaseProvider):
                 )
             else:
                 caller_context = str(arguments.get("context") or "")
-                result = await ModelInvocationService().invoke(
+                result = await self.model_service.invoke(
                     capability=str(arguments.get("capability") or ""),
                     objective=str(arguments.get("objective") or ""),
                     context="\n\n".join(part for part in (caller_context, ref_context) if part),
@@ -211,6 +426,16 @@ class ModelInvocationProvider(BaseProvider):
         except (ValueError, LookupError, RuntimeError, PermissionError) as error:
             return CapabilityResult(False, False, {"reason": str(error)[:1000]})
 
+        parent_run_id = str(metadata.get("runtime_run_id") or "") or None
+        delegation = {
+            "parent_run_id": parent_run_id,
+            "parent_execution_id": getattr(context, "execution_id", None),
+            "depth": parent_depth + 1,
+            "max_depth": 1,
+            "child_tools_exposed": False,
+            "terminal_for_parent": False,
+            "parent_retains_objective": True,
+        }
         return CapabilityResult(
             True,
             False,
@@ -219,10 +444,12 @@ class ModelInvocationProvider(BaseProvider):
                 "model": result.model,
                 "resource_id": result.resource_id,
                 "capability": result.capability,
+                "ai_capability": ai_capability,
                 "selected_tags": list(result.selected_tags),
                 "content": result.content,
                 "delegated": True,
                 "tools_exposed": False,
+                "delegation": delegation,
                 "context_refs_used": used_refs,
                 "context_ref_estimated_tokens": ref_tokens,
                 "latency_ms": result.latency_ms,
@@ -236,11 +463,13 @@ class ModelInvocationProvider(BaseProvider):
             False,
             {
                 "delegated": bool(result.evidence.get("delegated")),
+                "ai_capability": result.evidence.get("ai_capability"),
                 "provider": result.evidence.get("provider"),
                 "model": result.evidence.get("model"),
                 "resource_id": result.evidence.get("resource_id"),
                 "selected_tags": result.evidence.get("selected_tags") or [],
                 "content": result.evidence.get("content"),
+                "delegation": result.evidence.get("delegation") or {},
                 "context_refs_used": result.evidence.get("context_refs_used") or [],
                 "context_ref_estimated_tokens": result.evidence.get("context_ref_estimated_tokens") or 0,
                 "latency_ms": result.evidence.get("latency_ms"),

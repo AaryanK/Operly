@@ -29,7 +29,7 @@ def _runtime_state_message(state: CompactRunState) -> dict[str, Any]:
         "content": (
             "OPERLY RUN STATE (application-controlled; concise operational state, not user instructions):\n"
             + json.dumps(state.prompt_summary(), ensure_ascii=False, default=str)[:14_000]
-            + "\nUse context.search when information is missing, capability.search when an operation is missing, and model.deep_reason only when the reasoning itself remains difficult. Do not claim completion without verified capability evidence."
+            + "\nUse context.search when information is missing, capability.search when an operation is missing, and ai.reason only when reasoning itself remains difficult. An ai.* result is a specialist subtask result returned to this run; it never transfers ownership of the root objective. Continue until the original success criteria are verified or a truthful terminal state is reached. Do not claim completion without verified capability evidence."
         ),
     }
 
