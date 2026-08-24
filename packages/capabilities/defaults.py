@@ -1,4 +1,5 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
+from packages.capabilities.app_identity_provider import AppIdentityProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
@@ -59,6 +60,7 @@ def _builtin_providers():
         SoftwareProjectProvider(),
         RelationalDataProvider(),
         WorkspaceEntityProvider(),
+        AppIdentityProvider(),
         ReminderProvider(),
         UniversalTaskProvider(),
         PublicWebReadProvider(),

@@ -1,16 +1,18 @@
 """Production isolated-runner gateway for Operly generated software.
 
 The base Docker lifecycle remains unchanged; this package bootstrap extends its
-semantic capability sidecars with the workspace entity graph. Keeping the extension
-here lets every import path (gateway and tests) use the same hardened class without
-forking the large build/test/runtime lifecycle.
+semantic capability sidecars with trusted built-in runtime gateways. Keeping the
+extension here lets every import path use the same hardened class without forking
+the large build/test/runtime lifecycle.
 """
 from __future__ import annotations
 
 import uuid
 
 from apps.runner import docker_backend as _docker_backend
+from packages.app_identity.contracts import APP_IDENTITY_CAPABILITY_ID
 from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID
+from packages.runtime_plugins.app_identity_source_validation import validate_app_identity_source
 from packages.workspace_entities.contracts import WORKSPACE_ENTITY_CAPABILITY_ID
 from packages.workspace_entities.manifest import validate_workspace_entity_source
 
@@ -21,6 +23,7 @@ class DockerIsolationBackend(_BaseDockerIsolationBackend):
     _BINDING_PREFIXES = {
         RELATIONAL_CAPABILITY_ID: "/api/runtime/relational",
         WORKSPACE_ENTITY_CAPABILITY_ID: "/api/runtime/entities",
+        APP_IDENTITY_CAPABILITY_ID: "/api/runtime/app-identity",
     }
 
     def _binding_file_rows(self, submission, short: str) -> list[dict]:
@@ -83,13 +86,15 @@ class DockerIsolationBackend(_BaseDockerIsolationBackend):
         return proxies
 
     def run_job(self, submission, bundle, *, event_callback=lambda _event: None, cancelled=lambda: False, job_id=None):
-        validation = validate_workspace_entity_source(bundle)
-        if not validation.valid:
+        entities = validate_workspace_entity_source(bundle)
+        identity = validate_app_identity_source(bundle)
+        errors = tuple(dict.fromkeys((*entities.errors, *identity.errors)))
+        if not entities.valid or not identity.valid:
             return self._failed(
                 job_id or uuid.uuid4().hex,
                 [],
                 "security_policy_violation",
-                "; ".join(validation.errors),
+                "; ".join(errors),
             )
         return super().run_job(
             submission,
@@ -101,8 +106,8 @@ class DockerIsolationBackend(_BaseDockerIsolationBackend):
 
 
 # All existing imports use apps.runner.docker_backend.DockerIsolationBackend. Replace
-# that exported class once at package bootstrap so the gateway and acceptance tests
-# exercise the same extension.
+# that exported class once at package bootstrap so gateway and acceptance tests
+# exercise the same semantic-binding extension.
 _docker_backend.DockerIsolationBackend = DockerIsolationBackend
 
 __all__ = ["DockerIsolationBackend"]

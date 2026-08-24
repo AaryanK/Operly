@@ -13,7 +13,7 @@ from packages.workspace_entities.contracts import (
 )
 from packages.workspace_entities.store import WorkspaceEntityError, WorkspaceEntityStore
 
-router = APIRouter(prefix="/runtime/entities", tags=["runtime-workspace-entities"])
+router = APIRouter(prefix="/api/runtime/entities", tags=["runtime-workspace-entities"])
 _store: WorkspaceEntityStore | None = None
 
 
