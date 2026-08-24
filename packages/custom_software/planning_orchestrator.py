@@ -6,7 +6,13 @@ are extracted once, OPERLY compiles the baseline graph deterministically, and mo
 calls are reserved for whole-graph semantic review plus bounded unresolved repair.
 """
 from packages.custom_software.compiler_planning import CompilerGuidedPlanningOrchestrator
-from packages.custom_software.graph_planning import PlanningNeedsUserInput, material_user_questions
+from packages.custom_software.graph_coverage import semantic_claim_errors
+from packages.custom_software.graph_planning import (
+    PlanningNeedsUserInput,
+    _graph_errors,
+    _unique,
+    material_user_questions,
+)
 
 
 def _is_operly_internal_question(question: str) -> bool:
@@ -29,4 +35,15 @@ class RecursiveRepairPlanningOrchestrator(CompilerGuidedPlanningOrchestrator):
     is used only for any semantic delta that remains unresolved.
     """
 
-    pass
+    @staticmethod
+    def _deterministic_findings(graph, analysis):
+        # Compiler-owned ``operly_*`` nodes are intentional cross-cutting obligations:
+        # they may support several requirements without lexically restating each one.
+        # The ordinary stale-coverage heuristic is still authoritative for model-owned
+        # nodes, but must not reject these canonical compiler nodes as false coverage.
+        semantic = [
+            finding
+            for finding in semantic_claim_errors(graph, analysis)
+            if not str(finding).startswith("operly_")
+        ]
+        return _unique([*_graph_errors(graph, analysis), *semantic])
