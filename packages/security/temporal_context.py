@@ -118,9 +118,9 @@ async def resolve_temporal_context(
     db: AsyncSession,
     *,
     user_id: str | None,
-    tenant_id: str,
+    tenant_id: str | None,
 ) -> TemporalContext:
-    tenant = await db.get(Tenant, tenant_id)
+    tenant = await db.get(Tenant, tenant_id) if tenant_id else None
     workspace_tz = validate_timezone(tenant.timezone if tenant else "UTC")
     actor_tz = await user_timezone(db, user_id) or workspace_tz
     now = datetime.now(timezone.utc)

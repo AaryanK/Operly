@@ -1,0 +1,47 @@
+name: task-workflow-contracts
+
+on:
+  pull_request:
+    paths:
+      - "packages/capabilities/**"
+      - "packages/company/events/**"
+      - "packages/connectors/discord/**"
+      - "packages/plugins/**"
+      - "packages/tasks/**"
+      - "tests/test_harness_native_tasks.py"
+      - "tests/test_workflow_tasks.py"
+      - ".github/workflows/task-workflow-contracts.yml"
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile task workflow surface
+        run: >-
+          python -m py_compile
+          packages/plugins/manifest.py
+          packages/capabilities/event_provider.py
+          packages/capabilities/workflow_task_provider.py
+          packages/capabilities/registry_workflow_task_provider.py
+          packages/capabilities/model_provider.py
+          packages/tasks/workflow.py
+          packages/tasks/safe_workflow.py
+          packages/tasks/events.py
+          packages/tasks/personal_workflow.py
+          packages/company/events/service.py
+          packages/connectors/discord/runtime.py
+          packages/connectors/discord/scheduled_tasks.py
+      - name: Run durable task contracts
+        env:
+          OPERLY_ENV: test
+          ADMIN_PASSWORD: test-admin-password-1234
+          SESSION_SECRET: test-session-secret-that-is-long-enough
+          AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
+        run: python -m pytest -q tests/test_harness_native_tasks.py tests/test_workflow_tasks.py
