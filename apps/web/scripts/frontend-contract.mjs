@@ -10,11 +10,15 @@ async function text(path) {
   return readFile(resolve(webRoot, path), "utf8");
 }
 
+async function repoText(path) {
+  return readFile(resolve(repoRoot, path), "utf8");
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const [publicShell, auth, runtime, main, convergence, theme, brand, personal, workspace, emailBase] = await Promise.all([
+const [publicShell, auth, runtime, main, convergence, theme, brand, personal, workspace, emailBase, ...emailBodies] = await Promise.all([
   text("static/index.html"),
   text("static/auth.js"),
   text("static/auth-runtime.js"),
@@ -24,7 +28,12 @@ const [publicShell, auth, runtime, main, convergence, theme, brand, personal, wo
   text("src/ui/brand.css"),
   text("src/account/PersonalHome.tsx"),
   text("src/workspace/WorkspaceShell.tsx"),
-  readFile(resolve(repoRoot, "packages/email/templates/base.html"), "utf8"),
+  repoText("packages/email/templates/base.html"),
+  repoText("packages/email/templates/verify_email.html"),
+  repoText("packages/email/templates/password_reset.html"),
+  repoText("packages/email/templates/welcome.html"),
+  repoText("packages/email/templates/password_changed.html"),
+  repoText("packages/email/templates/security_alert.html"),
 ]);
 
 const forbiddenLegacyPayload = [
@@ -75,6 +84,12 @@ assert(workspace.includes("workspace-more-sheet"), "Workspace secondary destinat
 assert(personal.includes("mobile-history-button"), "Personal conversation history must stay reachable on phones");
 assert(personal.includes("history-mobile-close"), "Personal history drawer must have an explicit close control");
 
-assert(emailBase.includes("#12392b") || emailBase.includes("#176c4a"), "Transactional email brand should remain in the Operly green family");
+for (const token of ["#f3f5f1", "#13231c", "#dfe6df", "#102f24"]) {
+  assert(emailBase.toLowerCase().includes(token), `Transactional email shell is missing canonical Operly token: ${token}`);
+}
+for (const emailBody of emailBodies) {
+  assert(emailBody.toLowerCase().includes("#185d43") || !emailBody.includes("$action_url"), "Transactional email CTA/link must use canonical Operly green #185d43");
+  assert(!emailBody.toLowerCase().includes("#176c4a"), "Legacy email green #176c4a must not return");
+}
 
 console.log("Frontend convergence contracts passed.");
