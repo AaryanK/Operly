@@ -170,20 +170,27 @@ def assert_min_target(page: Page, selector: str, minimum: float, label: str) -> 
     if not boxes:
         raise AssertionError(f"{label}: expected visible touch target {selector}")
     for box in boxes:
-        if box["width" if "width" in box else "w"] < minimum or box["height" if "height" in box else "h"] < minimum:
+        if box["w"] < minimum or box["h"] < minimum:
             raise AssertionError(f"{label}: {selector} target below {minimum}px: {box}")
 
 
 def open_page(page: Page, base_url: str, route: str, expected: str, viewport: tuple[int, int]) -> None:
     failures: list[str] = []
-    page.once("pageerror", lambda error: failures.append(str(error)))
-    response = page.goto(f"{base_url}{route}", wait_until="networkidle")
-    if response is None or response.status >= 400:
-        raise AssertionError(f"{route} at {viewport}: HTTP {None if response is None else response.status}")
-    page.get_by_text(expected, exact=False).first.wait_for(state="visible")
-    assert_no_horizontal_overflow(page, f"{route} at {viewport}")
-    if failures:
-        raise AssertionError(f"{route} at {viewport}: page error(s): {failures}")
+
+    def on_page_error(error: object) -> None:
+        failures.append(str(error))
+
+    page.on("pageerror", on_page_error)
+    try:
+        response = page.goto(f"{base_url}{route}", wait_until="networkidle")
+        if response is None or response.status >= 400:
+            raise AssertionError(f"{route} at {viewport}: HTTP {None if response is None else response.status}")
+        page.get_by_text(expected, exact=False).first.wait_for(state="visible")
+        assert_no_horizontal_overflow(page, f"{route} at {viewport}")
+        if failures:
+            raise AssertionError(f"{route} at {viewport}: page error(s): {failures}")
+    finally:
+        page.remove_listener("pageerror", on_page_error)
 
 
 def run() -> None:
@@ -206,18 +213,20 @@ def run() -> None:
                         for route, expected in PUBLIC_ROUTES.items():
                             open_page(page, base_url, route, expected, viewport)
 
-                        open_page(page, base_url, "/channels/@me", "Personal Operly", viewport)
+                        open_page(page, base_url, "/channels/@me", "Your account-level AI", viewport)
                         if width <= 680:
                             history = page.locator(".mobile-history-button")
                             history.wait_for(state="visible")
                             assert_min_target(page, ".mobile-history-button", 44, f"Personal at {viewport}")
                             history.click()
                             drawer = page.locator("#personal-conversation-history")
-                            drawer.wait_for(state="visible")
                             drawer_box = drawer.bounding_box()
                             if not drawer_box or drawer_box["x"] < -1:
                                 raise AssertionError(f"Personal at {viewport}: history drawer did not enter the viewport")
                             page.locator(".history-mobile-close").click()
+                            legal = page.locator(".operly-legal-links")
+                            if legal.evaluate("el => getComputedStyle(el).position") != "static":
+                                raise AssertionError(f"Personal at {viewport}: legal links must not float over the composer")
 
                         open_page(page, base_url, "/channels/workspace-1", "Demo Workspace", viewport)
                         if width <= 680:
@@ -228,8 +237,14 @@ def run() -> None:
                                 raise AssertionError(f"Workspace at {viewport}: expected 5 mobile nav actions, got {buttons.count()}")
                             assert_min_target(page, ".workspace-mobile-nav button", 44, f"Workspace at {viewport}")
                             buttons.last.click()
-                            page.locator(".workspace-more-sheet").wait_for(state="visible")
-                            legal_box = page.locator(".operly-legal-links").bounding_box()
+                            shell_class = page.locator(".workspace-shell").get_attribute("class") or ""
+                            if "workspace-more-open" not in shell_class:
+                                raise AssertionError(f"Workspace at {viewport}: More sheet did not open")
+                            legal = page.locator(".operly-legal-links")
+                            if legal.evaluate("el => getComputedStyle(el).position") != "static":
+                                raise AssertionError(f"Workspace at {viewport}: legal links must not float over bottom navigation")
+                            legal.scroll_into_view_if_needed()
+                            legal_box = legal.bounding_box()
                             nav_box = nav.bounding_box()
                             if legal_box and nav_box and legal_box["y"] + legal_box["height"] > nav_box["y"] + 1:
                                 raise AssertionError(f"Workspace at {viewport}: legal links overlap bottom navigation")
