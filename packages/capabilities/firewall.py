@@ -16,6 +16,7 @@ from packages.actions.service import ActionService
 from packages.capabilities.validation import PluginSchemaError, validate_arguments
 from packages.database.db import session_scope
 from packages.security.execution_context import ExecutionContext
+from packages.security.surfaces import capability_surface_allowed
 from packages.security.temporal_context import resolve_temporal_context
 
 
@@ -82,12 +83,13 @@ class ActionBackedCapabilityFirewall:
     @staticmethod
     def _authority(execution_context: ExecutionContext) -> dict[str, Any]:
         # This boundary is workspace-scoped. Personal connectors must be resolved by
-        # the personal runtime or by a future explicit delegation resolver; request
-        # metadata alone is never enough to manufacture personal authority here.
+        # the personal runtime or explicit delegation resolver; request metadata alone
+        # is never enough to manufacture personal authority here.
         return {
             "owner_type": "workspace",
             "owner_id": execution_context.workspace_id,
             "delegation_id": None,
+            "surface": execution_context.surface.value,
         }
 
     async def evaluate(
@@ -98,6 +100,8 @@ class ActionBackedCapabilityFirewall:
         try:
             definition = self.registry.definition(request.capability_id)
         except LookupError:
+            return CapabilityDecision.DENY
+        if not capability_surface_allowed(definition.id, execution_context.surface):
             return CapabilityDecision.DENY
         if not set(definition.permissions).issubset(set(execution_context.permissions)):
             return CapabilityDecision.DENY
@@ -115,6 +119,8 @@ class ActionBackedCapabilityFirewall:
         authority_source = self._authority(execution_context)
         try:
             definition = self.registry.definition(request.capability_id)
+            if not capability_surface_allowed(definition.id, execution_context.surface):
+                raise PermissionError("Capability is unavailable on this surface")
             self.registry.resolve(
                 execution_context.workspace_id,
                 request.capability_id,
@@ -151,6 +157,10 @@ class ActionBackedCapabilityFirewall:
         metadata.setdefault("client_id", request.channel or "operly")
         metadata["authority"] = sorted(authority)
         metadata["authority_source"] = authority_source
+        # Surface is canonical execution state. Always overwrite any caller-supplied
+        # metadata so providers cannot be tricked into widening private visibility.
+        metadata["_surface_kind"] = execution_context.surface.value
+        metadata["surface"] = execution_context.surface.value
 
         async with session_scope() as db:
             temporal = await resolve_temporal_context(
