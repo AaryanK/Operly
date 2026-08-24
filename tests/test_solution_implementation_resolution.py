@@ -18,7 +18,9 @@ def test_camera_qr_clock_routes_to_generated_fullstack():
         "workflow.state_machine",
         "server.http_api",
     }.issubset(set(decision.required_capabilities))
-    assert {"device.camera", "tokens.qr"}.issubset(set(decision.generated_capabilities))
+    assert {"device.camera", "tokens.qr", "workflow.state_machine"}.issubset(
+        set(decision.generated_capabilities)
+    )
 
 
 def test_simple_customer_notebook_keeps_managed_fast_path():
@@ -58,3 +60,16 @@ def test_capabilities_outside_declarative_catalog_route_to_generated_source():
         assert decision.runtime_type == RuntimeType.GENERATED_PROJECT, (name, decision.as_dict())
         assert decision.implementation_mode == "generated_fullstack"
         assert decision.generated_capabilities
+
+
+def test_unrecognized_application_behavior_defaults_to_generated_source():
+    cases = [
+        ("Physics Sandbox", "Build an interactive projectile-motion simulator with draggable launch controls."),
+        ("Sketch Pad", "Build a drawing application where users draw freehand on a canvas and undo strokes."),
+        ("Puzzle Game", "Create a browser puzzle game with a timer, score, keyboard controls, and multiple levels."),
+    ]
+
+    for name, objective in cases:
+        decision = classify_solution_intent(name, objective)
+        assert decision.runtime_type == RuntimeType.GENERATED_PROJECT, (name, decision.as_dict())
+        assert "implementation.generated_logic" in decision.generated_capabilities
