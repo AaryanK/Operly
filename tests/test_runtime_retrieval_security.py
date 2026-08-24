@@ -1,6 +1,14 @@
+import asyncio
+
 from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.firewall import (
+    ActionBackedCapabilityFirewall,
+    CapabilityDecision,
+    CapabilityInvocation,
+)
 from packages.capabilities.search_index import CapabilitySearchIndex
+from packages.security.execution_context import ExecutionContext
 from packages.security.surfaces import (
     SurfaceKind,
     capability_surface_allowed,
@@ -107,3 +115,34 @@ def test_semantic_search_candidate_set_cannot_add_unauthorized_tools():
     candidate_ids = {definition.id for definition in definitions}
     assert all(hit.capability_id in candidate_ids for hit in hits)
     assert "gmail.send_draft" not in candidate_ids
+
+
+def test_firewall_rechecks_surface_even_if_caller_knows_private_capability_id():
+    registry = default_registry(None)
+    firewall = ActionBackedCapabilityFirewall(registry)
+    request = CapabilityInvocation(
+        capability_id="account.list_workspaces",
+        arguments={},
+        objective="list my workspaces",
+    )
+    shared = ExecutionContext(
+        workspace_id="workspace-1",
+        user_id="user-1",
+        membership_id="member-1",
+        role="owner",
+        permissions=frozenset({"workspace:read"}),
+        channel="web",
+        surface=SurfaceKind.WORKSPACE_SHARED,
+    )
+    private = ExecutionContext(
+        workspace_id="workspace-1",
+        user_id="user-1",
+        membership_id="member-1",
+        role="owner",
+        permissions=frozenset({"workspace:read"}),
+        channel="web",
+        surface=SurfaceKind.PERSONAL_PRIVATE,
+    )
+
+    assert asyncio.run(firewall.evaluate(request, shared)) is CapabilityDecision.DENY
+    assert asyncio.run(firewall.evaluate(request, private)) is CapabilityDecision.ALLOW
