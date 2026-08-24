@@ -2,8 +2,10 @@ from sqlalchemy import select
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
+from packages.context.broker import ContextBroker
 from packages.context.service import ContextScopeError, ContextService
 from packages.database.channel_models import ContextRecord
+from packages.security.surfaces import SurfaceKind, capability_surface_allowed
 
 
 def _read_definition(capability_id: str, name: str, description: str, permission: str):
@@ -48,28 +50,72 @@ def _remember_definition(capability_id: str, name: str, description: str, permis
 class ContextProvider(BaseProvider):
     name = "operly_context"
     capabilities = (
+        CapabilityDefinition(
+            "context.search",
+            "context_search",
+            "Search context available to this authenticated surface and return compact references. Use context.get only for references whose contents you need in this model.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "maxLength": 1000},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            approval_policy=ApprovalPolicy.AUTO,
+            category="context",
+            tags=frozenset({"kernel", "context", "retrieval"}),
+            semantic_operations=frozenset({"find context", "find memory", "retrieve knowledge"}),
+        ),
+        CapabilityDefinition(
+            "context.get",
+            "context_get",
+            "Materialize the exact contents of authorized context references into the current model. References are re-authorized on every read.",
+            {
+                "type": "object",
+                "properties": {
+                    "refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 12,
+                    }
+                },
+                "required": ["refs"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            approval_policy=ApprovalPolicy.AUTO,
+            category="context",
+            tags=frozenset({"kernel", "context", "retrieval"}),
+            semantic_operations=frozenset({"read context ref", "materialize context", "expand memory"}),
+        ),
         _read_definition(
             "context.human.search",
             "context_human_search",
-            "Search global private context belonging only to the current linked human. This follows the human across authorized workspaces and surfaces.",
+            "Search global private context belonging only to the current linked human.",
             "context:human:read",
         ),
         _remember_definition(
             "context.human.remember",
             "context_human_remember",
-            "Remember a global private fact or preference for the current linked human. Use for person-level facts that should follow them across workspaces and surfaces.",
+            "Remember a global private fact or preference for the current linked human.",
             "context:human:write",
         ),
         _read_definition(
             "context.private_workspace_search",
             "context_private_workspace_search",
-            "Search private context for the current human that is intentionally associated only with the current workspace.",
+            "Search private context for the current human associated only with the current workspace.",
             "context:human:read",
         ),
         _remember_definition(
             "context.private_workspace_remember",
             "context_private_workspace_remember",
-            "Remember a private fact for the current human that should apply only inside the current workspace.",
+            "Remember a private fact for the current human that applies only inside the current workspace.",
             "context:human:write",
         ),
         _read_definition(
@@ -87,7 +133,7 @@ class ContextProvider(BaseProvider):
         _read_definition(
             "context.conversation.search",
             "context_conversation_search",
-            "Search scoped context for the current conversation.",
+            "Search context for the current conversation; private rows are included only on a private surface.",
             "context:conversation:read",
         ),
         _remember_definition(
@@ -112,6 +158,8 @@ class ContextProvider(BaseProvider):
 
     async def execute(self, context, capability_name, arguments):
         invocation, metadata = self._runtime(context)
+        authority = set(invocation.get("authority") or [])
+        surface = SurfaceKind.coerce(metadata.get("_surface_kind"))
         query = str(arguments.get("query") or "")
         content = str(arguments.get("content") or "")
         kind = str(arguments.get("kind") or "fact")[:50]
@@ -121,7 +169,56 @@ class ContextProvider(BaseProvider):
         space_id = metadata.get("external_space_id")
         source_message_id = metadata.get("external_message_id")
 
+        # Defense in depth for direct/non-model callers: the capability harness also
+        # hides these operations before discovery, but provider execution must never
+        # trust visibility as authorization.
+        if not capability_surface_allowed(capability_name, surface):
+            return CapabilityResult(False, False, {"reason": "surface_hidden"})
+
         try:
+            if capability_name == "context.search":
+                refs = await ContextBroker.search(
+                    context.db,
+                    tenant_id=context.tenant_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id or None,
+                    authority=authority,
+                    surface=surface,
+                    query=query,
+                    limit=int(arguments.get("limit") or 8),
+                )
+                return CapabilityResult(
+                    True,
+                    False,
+                    {
+                        "refs": [item.as_dict() for item in refs],
+                        "count": len(refs),
+                        "surface": surface.value,
+                        "contents_materialized": False,
+                    },
+                )
+
+            if capability_name == "context.get":
+                rows = await ContextBroker.materialize(
+                    context.db,
+                    refs=arguments.get("refs") or (),
+                    tenant_id=context.tenant_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id or None,
+                    authority=authority,
+                    surface=surface,
+                )
+                return CapabilityResult(
+                    True,
+                    False,
+                    {
+                        "contexts": rows,
+                        "count": len(rows),
+                        "surface": surface.value,
+                        "references_reauthorized": True,
+                    },
+                )
+
             if capability_name == "context.human.search":
                 rows = await ContextService.search_human(
                     context.db,
@@ -209,6 +306,7 @@ class ContextProvider(BaseProvider):
                     conversation_id=conversation_id,
                     user_id=user_id,
                     query=query,
+                    include_private=surface.allows_private_conversation,
                 )
                 return CapabilityResult(
                     True,
@@ -223,6 +321,8 @@ class ContextProvider(BaseProvider):
                 if not conversation_id:
                     return CapabilityResult(False, False, {"reason": "conversation_context_unavailable"})
                 private = capability_name.endswith("_private")
+                if private and not surface.allows_private_conversation:
+                    return CapabilityResult(False, False, {"reason": "surface_hidden"})
                 row = await ContextService.remember_conversation(
                     context.db,
                     tenant_id=context.tenant_id,
@@ -249,7 +349,7 @@ class ContextProvider(BaseProvider):
     async def verify(self, context, capability_name, arguments, result):
         if not result.success:
             return CapabilityResult(False, result.changed, result.evidence, result.external_reference)
-        if capability_name.endswith(".search") or capability_name.endswith("_search"):
+        if capability_name.endswith(".search") or capability_name.endswith("_search") or capability_name == "context.get":
             return CapabilityResult(True, False, {"observation_available": True, **result.evidence})
         row = await context.db.scalar(
             select(ContextRecord).where(ContextRecord.id == result.external_reference)
