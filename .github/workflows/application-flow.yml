@@ -197,19 +197,10 @@ jobs:
           packages/studio/model_latency_policy.py
           packages/studio/model_provenance.py
           packages/studio/tool_hardening.py
-      - name: Check browser JavaScript syntax
+      - name: Check current browser JavaScript syntax
         run: |
-          node --check apps/web/static/app.js
-          node --check apps/web/static/ai-assistant.js
-          node --check apps/web/static/ai-assistant-bridge.js
-          node --check apps/web/static/studio-ui-bridge.js
-          node --check apps/web/static/workspace-shell.js
-          node --check apps/web/static/operly-modern.js
-          node --check apps/web/static/operly-cosmic.js
-          node --check apps/web/static/personal.js
-          node --check apps/web/static/unified-solution-studio.js
-          node --check apps/web/static/settings-scopes.js
-          node --check apps/web/static/time-sync.js
+          set -euo pipefail
+          find apps/web/static -maxdepth 1 -type f -name '*.js' -print0 | sort -z | xargs -0 -r -n1 node --check
       - name: Run application-flow tests
         env:
           ADMIN_PASSWORD: test-admin-password-1234

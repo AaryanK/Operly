@@ -1,6 +1,8 @@
 import json
+import os
 from datetime import datetime
 from enum import StrEnum
+from urllib.parse import urlparse
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,12 +38,40 @@ def _generation_payload(row):
     initial=_context_payload(row).get("initialGeneration")
     if not isinstance(initial,dict):return None
     result={}
-    for key in ("status","stage","jobId","attempt","changeSetId","versionId","bootstrapVersionId"):
+    for key in (
+        "status","stage","jobId","attempt","changeSetId","versionId","bootstrapVersionId",
+        "softwarePlanId","softwarePlanVersion","sourceBundleId","sourceVersion","buildId","repairCount",
+    ):
         value=initial.get(key)
         if value is not None:result[key]=value
     if initial.get("error"):
         result["error"]=" ".join(str(initial.get("error")).split())[:1000]
     return result or None
+
+
+def _approved_runner_preview_target(value: str) -> bool:
+    try:
+        parsed=urlparse(value)
+        port=parsed.port
+    except ValueError:
+        return False
+    if not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
+        return False
+    environment=os.getenv("OPERLY_ENV",os.getenv("APP_ENV","development")).strip().lower()
+    local_test=(
+        environment in {"test","development","dev"}
+        and os.getenv("OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER","").strip()=="1"
+        and parsed.hostname=="127.0.0.1"
+        and parsed.scheme in {"http","https"}
+    )
+    if local_test:
+        return True
+    allowed={
+        host.strip().lower()
+        for host in os.getenv("OPERLY_SANDBOX_PREVIEW_HOSTS","").split(",")
+        if host.strip()
+    }
+    return parsed.scheme=="https" and port in {None,443} and parsed.hostname.lower() in allowed
 
 
 def solution_json(row):
@@ -64,7 +94,7 @@ class SolutionService:
 
     async def active_generated_preview(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
         if not plan_id or not plan_version:return None
-        return await db.scalar(
+        preview=await db.scalar(
             select(RunnerPreviewRecord)
             .join(RunnerBuildRecord,RunnerPreviewRecord.build_id==RunnerBuildRecord.id)
             .join(GeneratedSourceBundle,RunnerBuildRecord.source_bundle_id==GeneratedSourceBundle.id)
@@ -82,6 +112,9 @@ class SolutionService:
             .order_by(desc(RunnerPreviewRecord.created_at))
             .limit(1)
         )
+        if preview and not _approved_runner_preview_target(preview.target_url):
+            return None
+        return preview
 
     async def latest_generated_source(self,db:AsyncSession,tenant_id:str,plan_id:str|None,plan_version:int|None):
         if not plan_id or not plan_version:return None
@@ -114,11 +147,6 @@ class SolutionService:
         for app in apps:
             existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.MANAGED_APP,SolutionRecord.runtime_reference==app.id))
             active=await db.get(ApplicationVersion,app.active_version_id) if app.active_version_id else None
-            # ApplicationBuilderService.create() persists a specifically labeled
-            # blank bootstrap v1 so the editor has a schema to target. That
-            # bootstrap is runtime state, not evidence that owner-requested
-            # generation succeeded. Preserve genuinely generated/legacy v1
-            # records that are not the canonical blank bootstrap.
             bootstrap_only=bool(active and active.version_number==1 and active.summary=="Blank application")
             generated_ready=bool(active and not bootstrap_only)
             initial=(_context_payload(existing).get("initialGeneration") if existing else None) or {}
@@ -128,10 +156,42 @@ class SolutionService:
 
         projects=(await db.scalars(select(GeneratedProject).where(GeneratedProject.tenant_id==tenant_id))).all()
         for p in projects:
+            existing=await db.scalar(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.runtime_type==RuntimeType.GENERATED_PROJECT,SolutionRecord.runtime_reference==p.id))
             preview=await self.active_generated_preview(db,tenant_id,p.plan_id,p.approved_plan_version)
             source=await self.latest_generated_source(db,tenant_id,p.plan_id,p.approved_plan_version)
-            current=str(source.source_version) if source else str(p.version)
-            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=p.name,description=p.prompt[:4000],solution_type=SolutionType.CUSTOM_SOLUTION,lifecycle_status=LifecycleStatus.PREVIEW_READY if preview else LifecycleStatus.APPROVED,current_version_reference=current,preview_state="ready" if preview else "available",preview_url=f"/api/solutions/{{solution_id}}/preview",production_state="offline",production_url=None,visibility="private",context_json="{}")
+            context=_context_payload(existing) if existing else {}
+            initial=context.get("initialGeneration") if isinstance(context.get("initialGeneration"),dict) else None
+            generation_failed=bool(initial and initial.get("status") in {"retryable","failed"})
+            generation_building=bool(initial and initial.get("status") in {"pending","queued","running"})
+            generation_verified=bool(initial and initial.get("status")=="applied")
+
+            if preview:
+                lifecycle=LifecycleStatus.PREVIEW_READY
+                current=str(source.source_version) if source else str(p.version)
+                preview_state="ready"
+                preview_url=f"/api/solutions/{{solution_id}}/preview"
+            elif generation_failed:
+                lifecycle=LifecycleStatus.FAILED
+                current=None
+                preview_state="unavailable"
+                preview_url=None
+            elif generation_building:
+                lifecycle=LifecycleStatus.BUILDING
+                current=None
+                preview_state="unavailable"
+                preview_url=None
+            elif generation_verified:
+                lifecycle=LifecycleStatus.APPROVED
+                current=str(source.source_version) if source else None
+                preview_state="unavailable"
+                preview_url=None
+            else:
+                lifecycle=LifecycleStatus.APPROVED
+                current=str(source.source_version) if source else str(p.version)
+                preview_state="available"
+                preview_url=f"/api/solutions/{{solution_id}}/preview"
+
+            await self._record(db,tenant_id,RuntimeType.GENERATED_PROJECT,p.id,name=existing.name if existing else p.name,description=existing.description if existing else p.prompt[:4000],solution_type=existing.solution_type if existing else SolutionType.CUSTOM_SOLUTION,lifecycle_status=lifecycle,current_version_reference=current,preview_state=preview_state,preview_url=preview_url,production_state=existing.production_state if existing else "offline",production_url=existing.production_url if existing else None,visibility=existing.visibility if existing else "private",context_json=existing.context_json if existing else "{}")
         await db.flush()
 
     async def list(self,db,tenant_id):
@@ -159,7 +219,10 @@ class SolutionService:
             if row.preview_state!="ready":raise LookupError("Solution preview is not ready")
             return f"/apps/{runtime.id}/preview"
         preview=await self.active_generated_preview(db,tenant_id,runtime.plan_id,runtime.approved_plan_version)
-        if preview:return f"/api/custom-software/previews/{preview.id}/"
+        if preview:
+            return preview.target_url
+        initial=_context_payload(row).get("initialGeneration")
+        if isinstance(initial,dict):raise LookupError("Solution preview is not ready")
         return f"/api/custom-software/projects/{runtime.id}/preview"
 
     async def versions(self,db,tenant_id,solution_id):
@@ -192,8 +255,6 @@ class SolutionService:
         workspace_name=(tenant.name if tenant else "").strip()
         business=(name or profile.get("display_name") or profile.get("business_name") or profile.get("legal_name") or workspace_name or "Untitled Website").strip()[:200]
         description=str(profile.get("description") or "")[:500]
-        # Preserve one tiny legacy compatibility snapshot so old routes and
-        # rollback remain safe. The source agent becomes primary immediately.
         p=await StudioService.create_project(db,tenant_id,user_id,business,description)
         context={"company_profile":profile,"source_engine":"studio_source_agent_v1","planning_request":{"objective":"Create the business website","business_identity":business,"description":description,"products_services":profile.get("products_services"),"contact":profile.get("contact"),"brand":profile.get("brand",{}),"target_customers":profile.get("target_customers"),"service_areas":profile.get("service_areas")}}
         row=await self._record(db,tenant_id,RuntimeType.STUDIO,p.id,name=business,description=description,solution_type=SolutionType.DIGITAL_PRESENCE,lifecycle_status=LifecycleStatus.PREVIEW_READY,current_version_reference=p.active_draft_version_id,preview_state="ready",preview_url="/api/solutions/{solution_id}/preview",production_state="offline",production_url=None,visibility="private",context_json=json.dumps(context,sort_keys=True,default=str))

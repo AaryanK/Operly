@@ -6,16 +6,38 @@ the same coding model for the smallest source-only repair.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from typing import Any
 
 from packages.coding_harness.build_service import RunnerProfileUnsupported, submit_source_build
 from packages.coding_harness.source_service import generate_source_for_plan, latest_source, repair_source_for_plan
+from packages.custom_software.runner_service import refresh_build
 from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
 
 
 REPAIRABLE_FAILURES = {"build_failure", "test_failure", "runtime_crash", "health_check_failure", "acceptance_test_failure"}
+SETTLED_BUILD_STATES = {
+    "preview_ready",
+    "failed",
+    "build_failed",
+    "tests_failed",
+    "start_failed",
+    "health_check_failed",
+    "acceptance_failed",
+    "provision_failed",
+    "dependency_failed",
+    "static_analysis_failed",
+    "repair_failed",
+    "cancelled",
+    "timed_out",
+    "security_blocked",
+    "resource_exceeded",
+    "cleaned",
+    "completed",
+}
 
 
 def _failure_evidence(build) -> dict[str, Any]:
@@ -32,6 +54,40 @@ def _failure_evidence(build) -> dict[str, Any]:
 def _repair_budget(value: int | None = None) -> int:
     configured = int(os.getenv("OPERLY_CODING_REPAIR_ATTEMPTS", "2")) if value is None else int(value)
     return max(0, min(configured, 4))
+
+
+def _runner_poll_interval() -> float:
+    try:
+        return max(0.25, min(float(os.getenv("OPERLY_RUNNER_POLL_INTERVAL_SECONDS", "1")), 10.0))
+    except ValueError:
+        return 1.0
+
+
+def _runner_poll_timeout() -> float:
+    try:
+        return max(30.0, min(float(os.getenv("OPERLY_RUNNER_POLL_TIMEOUT_SECONDS", "900")), 3600.0))
+    except ValueError:
+        return 900.0
+
+
+async def _await_runner_build(db, build, adapter):
+    """Poll an asynchronous runner until it reaches an evidence-bearing state.
+
+    The production runner returns HTTP 202/queued immediately. Treating that
+    transport acknowledgement as a failed build would make every real isolated
+    build fail before it starts, so the coding loop owns bounded polling.
+    """
+    if build.state in SETTLED_BUILD_STATES:
+        return build
+    deadline = time.monotonic() + _runner_poll_timeout()
+    while build.state not in SETTLED_BUILD_STATES:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Isolated runner build {build.id} did not settle before the orchestration deadline"
+            )
+        await asyncio.sleep(_runner_poll_interval())
+        build = await refresh_build(db, build, adapter=adapter)
+    return build
 
 
 async def _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, client, repairs, repair_number, failed_build_id=None):
@@ -89,6 +145,7 @@ async def build_with_repair(
                 adapter=adapter,
                 attempt=used_repairs + 1,
             )
+            build = await _await_runner_build(db, build, adapter)
         except RunnerProfileUnsupported as error:
             # Missing full-stack executor support is infrastructure truth, not a
             # source defect. Never ask the coding model to silently collapse a

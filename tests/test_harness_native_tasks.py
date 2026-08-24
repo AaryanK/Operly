@@ -62,7 +62,7 @@ def test_task_and_web_are_builtin_plugins():
     assert "task.update" in ids
     assert "task.check_url_change" in ids
     assert "web.read_url" in ids
-    assert ALEMBIC_HEAD == "0037_harness_native_tasks"
+    assert ALEMBIC_HEAD == "0038_solution_generation_leases"
 
 
 def test_recurring_schedule_helpers_and_monitor_prompt():

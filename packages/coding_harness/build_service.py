@@ -187,67 +187,22 @@ async def _record_binding_unavailable(db, row, submission: BuildSubmission, erro
     await db.refresh(row)
 
 
-async def submit_source_build(
+async def _submit_persisted_build(
     db,
-    tenant_id: str,
-    user_id: str,
-    plan_row,
-    plan,
-    source: GeneratedSourceBundle,
-    idempotency_key: str,
-    adapter: RunnerAdapter | None = None,
-    attempt: int = 1,
+    row: RunnerBuildRecord,
+    submission: BuildSubmission,
+    bundle,
+    adapter: RunnerAdapter,
 ):
-    existing = await db.scalar(
-        select(RunnerBuildRecord).where(
-            RunnerBuildRecord.tenant_id == tenant_id,
-            RunnerBuildRecord.idempotency_key == idempotency_key,
-        )
-    )
-    if existing:
-        return existing
-    if source.tenant_id != tenant_id or source.plan_id != plan_row.id:
-        raise SourceRecordError("Source bundle does not belong to this approved plan")
-    if source.plan_version != plan_row.approved_version:
-        raise SourceRecordError("Source bundle is not based on the approved plan version")
+    """Submit or re-submit one persisted build using runner idempotency.
 
-    bundle = source_bundle_from_record(source)
-    submission = _submission_for_source(source, bundle, idempotency_key)
-    adapter = adapter or ExternalRunnerAdapter()
-
-    # Persist only the semantic, credential-free submission. Short-lived transport
-    # grants are attached later and exist only while crossing the trusted runner boundary.
-    row = RunnerBuildRecord(
-        tenant_id=tenant_id,
-        plan_id=plan_row.id,
-        source_bundle_id=source.id,
-        idempotency_key=idempotency_key,
-        state="created",
-        runner_implementation=adapter.implementation,
-        isolation_profile=adapter.isolation_profile,
-        submission_json=submission.model_dump_json(),
-        attempt=max(1, int(attempt)),
-        created_by=user_id,
-    )
-    db.add(row)
-    await db.flush()
-    await _event(
-        db,
-        row,
-        "created",
-        message=f"Coding harness build record created for attempt {row.attempt}",
-    )
-    await _event(
-        db,
-        row,
-        "queued",
-        message=(
-            f"Harness-authored source submitted with runtime plugin "
-            f"{submission.stackId}@{submission.stackVersion}"
-        ),
-    )
-    await db.commit()
-
+    A worker can die after the remote runner accepts the request but before the
+    response (including runner job id) is committed locally. In that ambiguous
+    window, a local ``queued`` row with no ``runner_job_id`` is not evidence that
+    submission never happened. Re-sending the exact durable idempotency key is
+    the only safe recovery operation: the runner returns the existing remote job
+    if it already accepted it, or creates it if the first request never arrived.
+    """
     try:
         await _check_runner_profile(adapter, submission.stackId, submission.stackVersion)
     except RunnerProfileUnsupported as error:
@@ -293,3 +248,81 @@ async def submit_source_build(
         return row
 
     return await apply_runner_response(db, row, response, submission)
+
+
+async def submit_source_build(
+    db,
+    tenant_id: str,
+    user_id: str,
+    plan_row,
+    plan,
+    source: GeneratedSourceBundle,
+    idempotency_key: str,
+    adapter: RunnerAdapter | None = None,
+    attempt: int = 1,
+):
+    if source.tenant_id != tenant_id or source.plan_id != plan_row.id:
+        raise SourceRecordError("Source bundle does not belong to this approved plan")
+    if source.plan_version != plan_row.approved_version:
+        raise SourceRecordError("Source bundle is not based on the approved plan version")
+
+    adapter = adapter or ExternalRunnerAdapter()
+    existing = await db.scalar(
+        select(RunnerBuildRecord).where(
+            RunnerBuildRecord.tenant_id == tenant_id,
+            RunnerBuildRecord.idempotency_key == idempotency_key,
+        )
+    )
+    if existing:
+        if existing.plan_id != plan_row.id or existing.source_bundle_id != source.id:
+            raise SourceRecordError("Build idempotency key is already bound to different immutable source")
+        if existing.runner_job_id or existing.state not in {"created", "queued"}:
+            return existing
+        try:
+            submission = BuildSubmission.model_validate_json(existing.submission_json)
+        except Exception as error:
+            raise SourceRecordError("Persisted build submission is invalid") from error
+        if submission.idempotencyKey != idempotency_key:
+            raise SourceRecordError("Persisted build submission idempotency key is inconsistent")
+        bundle = source_bundle_from_record(source)
+        if submission.sourceBundleDigest != bundle.digest:
+            raise SourceRecordError("Persisted build submission no longer matches immutable source")
+        return await _submit_persisted_build(db, existing, submission, bundle, adapter)
+
+    bundle = source_bundle_from_record(source)
+    submission = _submission_for_source(source, bundle, idempotency_key)
+
+    # Persist only the semantic, credential-free submission. Short-lived transport
+    # grants are attached later and exist only while crossing the trusted runner boundary.
+    row = RunnerBuildRecord(
+        tenant_id=tenant_id,
+        plan_id=plan_row.id,
+        source_bundle_id=source.id,
+        idempotency_key=idempotency_key,
+        state="created",
+        runner_implementation=adapter.implementation,
+        isolation_profile=adapter.isolation_profile,
+        submission_json=submission.model_dump_json(),
+        attempt=max(1, int(attempt)),
+        created_by=user_id,
+    )
+    db.add(row)
+    await db.flush()
+    await _event(
+        db,
+        row,
+        "created",
+        message=f"Coding harness build record created for attempt {row.attempt}",
+    )
+    await _event(
+        db,
+        row,
+        "queued",
+        message=(
+            f"Harness-authored source submitted with runtime plugin "
+            f"{submission.stackId}@{submission.stackVersion}"
+        ),
+    )
+    await db.commit()
+
+    return await _submit_persisted_build(db, row, submission, bundle, adapter)

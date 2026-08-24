@@ -1,8 +1,10 @@
 """Capability-first Solution creation shared by UI and agent surfaces.
 
-Owner intent is decomposed into a runtime-neutral SolutionManifest before any
-legacy runtime is selected. Studio/managed-app are compatibility implementations
-while Operly converges on one general Solution runtime.
+Owner intent is decomposed into a runtime-neutral SolutionManifest before an
+implementation target is selected. Studio and managed-app are fast declarative
+compiler targets; requests outside their finite envelope are queued for the
+durable generated full-stack worker and must earn preview readiness through a
+real build/test/health/acceptance path.
 """
 from __future__ import annotations
 
@@ -17,6 +19,12 @@ from packages.application_builder.schema import BuilderContext, ProposalRequest
 from packages.application_builder.service import ApplicationBuilderService
 from packages.database.application_builder_models import ApplicationVersion
 from packages.database.product_models import SolutionJob
+from packages.solutions.generation_worker import (
+    GENERATED_JOB_TYPE,
+    create_generated_placeholder,
+    queue_generated_generation,
+)
+from packages.solutions.implementation import resolve_solution_implementation
 from packages.solutions.manifest import SolutionManifest, derive_solution_manifest
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, SolutionType
 from packages.studio.service import StudioService
@@ -24,45 +32,54 @@ from packages.studio.service import StudioService
 
 @dataclass(frozen=True, slots=True)
 class SolutionIntent:
-    """Compatibility projection of a capability-first SolutionManifest.
-
-    `solution_type` and `runtime_type` are retained for existing API/UI consumers.
-    New orchestration should use the manifest stored on the Solution record.
-    """
+    """Compatibility projection plus truthful implementation selection."""
 
     solution_type: str
     runtime_type: str
     reason: str
     confidence: str
+    implementation_mode: str = "compatibility"
+    required_capabilities: tuple[str, ...] = ()
+    generated_capabilities: tuple[str, ...] = ()
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "solutionType": self.solution_type,
             "runtimeType": self.runtime_type,
             "reason": self.reason,
             "confidence": self.confidence,
+            "implementationMode": self.implementation_mode,
+            "requiredCapabilities": list(self.required_capabilities),
+            "generatedCapabilities": list(self.generated_capabilities),
         }
 
 
-def _compatibility_intent(manifest: SolutionManifest) -> SolutionIntent:
-    if manifest.compatibility_runtime == "studio":
-        return SolutionIntent(
-            SolutionType.DIGITAL_PRESENCE,
-            RuntimeType.STUDIO,
-            manifest.compatibility_reason,
-            "high",
-        )
+def _implementation_intent(
+    manifest: SolutionManifest,
+    *,
+    name: str | None = None,
+    objective: str | None = None,
+) -> SolutionIntent:
+    resolution = resolve_solution_implementation(
+        manifest,
+        name=name or manifest.name,
+        objective=objective or manifest.objective,
+    )
     return SolutionIntent(
-        SolutionType.BUSINESS_APP,
-        RuntimeType.MANAGED_APP,
-        manifest.compatibility_reason,
-        "high" if manifest.stateful else "medium",
+        solution_type=SolutionType(resolution.solution_type),
+        runtime_type=RuntimeType(resolution.runtime_type),
+        reason=resolution.reason,
+        confidence=resolution.confidence,
+        implementation_mode=resolution.implementation_mode,
+        required_capabilities=resolution.required_capabilities,
+        generated_capabilities=resolution.generated_capabilities,
     )
 
 
 def classify_solution_intent(name: str, objective: str) -> SolutionIntent:
-    """Compatibility API backed by capability decomposition, not product keywords."""
-    return _compatibility_intent(derive_solution_manifest(name, objective))
+    """Compatibility API backed by capability decomposition and coverage truth."""
+    manifest = derive_solution_manifest(name, objective)
+    return _implementation_intent(manifest, name=name, objective=objective)
 
 
 def _context(row) -> dict[str, Any]:
@@ -86,7 +103,7 @@ async def _next_generation_attempt(db, tenant_id: str, solution_id: str) -> int:
         .where(
             SolutionJob.tenant_id == tenant_id,
             SolutionJob.solution_id == solution_id,
-            SolutionJob.job_type == "initial_generation",
+            SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
         )
         .order_by(desc(SolutionJob.attempt))
         .limit(1)
@@ -95,11 +112,7 @@ async def _next_generation_attempt(db, tenant_id: str, solution_id: str) -> int:
 
 
 def _builder_message(objective: str, context: dict[str, Any]) -> str:
-    """Supply current builders with the minimum capability contract.
-
-    The manifest is architectural truth. The builder may add implementation
-    details, but must not satisfy stateful requirements with a static mock.
-    """
+    """Supply declarative builders with the minimum capability contract."""
     manifest = context.get("solutionManifest")
     if not isinstance(manifest, dict):
         return objective
@@ -146,6 +159,7 @@ async def _run_managed_generation(
         job_type="initial_generation",
         status="running",
         attempt=attempt,
+        created_by=user_id,
         started_at=datetime.utcnow(),
         log_json=json.dumps(logs, ensure_ascii=False),
         evidence_json=json.dumps(evidence, ensure_ascii=False),
@@ -271,23 +285,29 @@ async def retry_solution_initial_generation(
 ):
     service = service or SolutionService()
     row, runtime = await service.resolve(db, tenant_id, solution_id)
-    if row.runtime_type != RuntimeType.MANAGED_APP:
-        raise ValueError("Only Solutions using the managed compatibility runtime have this generation lifecycle")
     if row.preview_state == "ready" and row.lifecycle_status == LifecycleStatus.PREVIEW_READY:
         raise ValueError("This Solution already has a generated preview-ready version")
-    if not runtime.active_version_id:
-        raise ValueError("The managed application bootstrap version is missing")
-    base_version = await db.get(ApplicationVersion, runtime.active_version_id)
-    if not base_version or base_version.application_id != runtime.id or base_version.tenant_id != tenant_id:
-        raise ValueError("The managed application bootstrap version could not be resolved")
-    return await _run_managed_generation(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        row=row,
-        app=runtime,
-        base_version=base_version,
-    )
+
+    if row.runtime_type == RuntimeType.MANAGED_APP:
+        if not runtime.active_version_id:
+            raise ValueError("The managed application bootstrap version is missing")
+        base_version = await db.get(ApplicationVersion, runtime.active_version_id)
+        if not base_version or base_version.application_id != runtime.id or base_version.tenant_id != tenant_id:
+            raise ValueError("The managed application bootstrap version could not be resolved")
+        return await _run_managed_generation(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            row=row,
+            app=runtime,
+            base_version=base_version,
+        )
+
+    if row.runtime_type == RuntimeType.GENERATED_PROJECT:
+        row, _ = await queue_generated_generation(db, row=row, user_id=user_id)
+        return row
+
+    raise ValueError("This Solution runtime does not have an initial generation retry lifecycle")
 
 
 async def create_solution_from_intent(
@@ -299,10 +319,10 @@ async def create_solution_from_intent(
     objective: str,
     service: SolutionService | None = None,
 ):
-    """Create a Solution from its capability graph, then bind a compatibility runtime."""
+    """Create a Solution from capability truth, queueing arbitrary generation durably."""
     service = service or SolutionService()
     manifest = derive_solution_manifest(name, objective)
-    decision = _compatibility_intent(manifest)
+    decision = _implementation_intent(manifest, name=name, objective=objective)
     clean_name = manifest.name
     clean_objective = manifest.objective
     manifest_payload = manifest.as_dict()
@@ -311,13 +331,20 @@ async def create_solution_from_intent(
     context: dict[str, Any] = {
         "ownerIntent": {"name": clean_name, "objective": clean_objective},
         "solutionManifest": manifest_payload,
+        "implementationResolution": decision.as_dict(),
         "creationIntent": {
             "name": clean_name,
             "objective": clean_objective,
             "classification": decision.as_dict(),
-            "compatibilityOnly": True,
+            "compatibilityOnly": False,
         },
-        "contextAuthority": ["ownerIntent", "solutionManifest", "solution", "workspaceInherited"],
+        "contextAuthority": [
+            "ownerIntent",
+            "solutionManifest",
+            "implementationResolution",
+            "solution",
+            "workspaceInherited",
+        ],
     }
 
     if decision.runtime_type == RuntimeType.STUDIO:
@@ -346,6 +373,38 @@ async def create_solution_from_intent(
             visibility="private",
             context_json=json.dumps(context, ensure_ascii=False, sort_keys=True),
         )
+        return row, decision
+
+    if decision.runtime_type == RuntimeType.GENERATED_PROJECT:
+        project = await create_generated_placeholder(
+            db,
+            tenant_id,
+            user_id,
+            clean_name,
+            clean_objective,
+        )
+        context["initialGeneration"] = {
+            "status": "pending",
+            "stage": "queue",
+        }
+        row = await service._record(
+            db,
+            tenant_id,
+            RuntimeType.GENERATED_PROJECT,
+            project.id,
+            name=clean_name,
+            description=clean_objective,
+            solution_type=SolutionType.CUSTOM_SOLUTION,
+            lifecycle_status=LifecycleStatus.BUILDING,
+            current_version_reference=None,
+            preview_state="unavailable",
+            preview_url=None,
+            production_state="offline",
+            production_url=None,
+            visibility="private",
+            context_json=json.dumps(context, ensure_ascii=False, sort_keys=True),
+        )
+        row, _ = await queue_generated_generation(db, row=row, user_id=user_id)
         return row, decision
 
     app, version = await ApplicationBuilderService.create(
