@@ -31,22 +31,38 @@ jobs:
       - run: pip install -r requirements.txt -r apps/runner/requirements.txt pytest pytest-asyncio
       - name: Compile identity runtime
         run: python -m compileall -q packages/app_identity packages/capabilities/app_identity_provider.py packages/coding_harness/source_service.py packages/runtime_plugins/app_identity_source_validation.py apps/api/app_identity_router.py apps/api/main.py apps/api/workspace_entities_router.py apps/runner
-      - name: Verify production API route assembly in a fresh interpreter
+      - name: Diagnose production API route assembly in a fresh interpreter
         run: |
           SESSION_SECRET=identity-ci-session-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
           OPERLY_RUNTIME_BINDING_SECRET=app-identity-ci-runtime-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
           OPERLY_APP_IDENTITY_SECRET=app-identity-ci-session-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
           python - <<'PY'
+          from apps.api.app_identity_router import admin_router, runtime_router
           from apps.api.main import app
-          paths = {getattr(route, "path", "") for route in app.routes}
+          from apps.api.workspace_entities_router import router as entity_router
+
           expected = {
               "/api/runtime/app-identity/register",
               "/api/runtime/app-identity/login",
               "/api/app-identities/{application_id}/invitations",
               "/api/runtime/entities/schema",
           }
-          missing = sorted(expected - paths)
-          assert not missing, {"missing": missing, "matching": sorted(path for path in paths if "identity" in path or "entities" in path)}
+          before = {getattr(route, "path", "") for route in app.routes}
+          missing_before = sorted(expected - before)
+          if missing_before:
+              app.include_router(runtime_router)
+              app.include_router(admin_router)
+              app.include_router(entity_router)
+          after = {getattr(route, "path", "") for route in app.routes}
+          missing_after = sorted(expected - after)
+          assert not missing_before, {
+              "missing_before": missing_before,
+              "manual_include_fixed_it": not missing_after,
+              "missing_after_manual_include": missing_after,
+              "runtime_router": sorted(getattr(route, "path", "") for route in runtime_router.routes),
+              "admin_router": sorted(getattr(route, "path", "") for route in admin_router.routes),
+              "entity_router": sorted(getattr(route, "path", "") for route in entity_router.routes),
+          }
           PY
       - name: Run identity and shared-data acceptance tests
         env:
