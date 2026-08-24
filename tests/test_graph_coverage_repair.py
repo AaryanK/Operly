@@ -1,6 +1,7 @@
 import asyncio
 
-from packages.custom_software.live_planning import StructuredModelResult
+from packages.custom_software.graph_coverage import CoverageAwareGraphPlanningOrchestrator
+from packages.custom_software.live_planning import FailureClass, StructuredModelResult
 from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 
 
@@ -81,6 +82,46 @@ APPROVED_REVIEW = {
 }
 
 
+ATTENDANCE_REQUIREMENTS = {
+    "root_objective": "Build an employee QR attendance system.",
+    "requirements": [
+        {
+            "requirement_id": "R-001",
+            "source_excerpt": "Employees clock in",
+            "normalized_requirement": "Allow an employee to clock in.",
+            "category": "behavior",
+            "priority": "mandatory",
+            "acceptance_criteria": ["A valid employee can clock in once for the active attendance period."],
+        },
+        {
+            "requirement_id": "R-002",
+            "source_excerpt": "Employees clock out",
+            "normalized_requirement": "Allow an employee to clock out after clocking in.",
+            "category": "behavior",
+            "priority": "mandatory",
+            "acceptance_criteria": ["A clocked-in employee can clock out and the transition is recorded."],
+        },
+        {
+            "requirement_id": "R-003",
+            "source_excerpt": "scan a QR code using the camera",
+            "normalized_requirement": "Use a camera QR scan to select the intended attendance action.",
+            "category": "interface",
+            "priority": "mandatory",
+            "acceptance_criteria": ["Invalid QR scans do not change attendance state."],
+        },
+        {
+            "requirement_id": "R-004",
+            "source_excerpt": "private admin attendance view",
+            "normalized_requirement": "Provide an authenticated private admin view of attendance records.",
+            "category": "interface",
+            "priority": "mandatory",
+            "acceptance_criteria": ["Unauthorized users cannot read private attendance records."],
+        },
+    ],
+    "questions_requiring_user_input": [],
+}
+
+
 class CoverageClient:
     provider = "fake"
     model_id = "fake-coverage"
@@ -123,9 +164,61 @@ class CoverageClient:
         )
 
 
+class CompilerClient:
+    provider = "fake"
+    model_id = "fake-compiler"
+
+    def __init__(self, reviews=None, malformed_reviews=0):
+        self.calls = []
+        self.reviews = list(reviews or [APPROVED_REVIEW])
+        self.malformed_reviews = malformed_reviews
+
+    async def generate_structured(self, *, role, context, output_schema, request_id, timeout_seconds, attempt=1):
+        schema_name = output_schema.__name__
+        self.calls.append((role, schema_name))
+        if role == "requirements_analyst":
+            payload = ATTENDANCE_REQUIREMENTS
+        elif role == "global_validator":
+            if self.malformed_reviews:
+                self.malformed_reviews -= 1
+                return StructuredModelResult(
+                    provider=self.provider,
+                    model_id=self.model_id,
+                    request_id=request_id,
+                    attempt=attempt,
+                    latency_ms=1,
+                    input_tokens=25,
+                    output_tokens=5,
+                    structured_output=None,
+                    raw_response="{not-json",
+                    validation_errors=["invalid structured JSON"],
+                    failure_classification=FailureClass.MALFORMED_OUTPUT,
+                    context_digest=context.digest(),
+                )
+            payload = self.reviews.pop(0)
+        elif role == "planner":
+            raise AssertionError("normal compiler path must not spend a graph-planner call")
+        else:
+            raise AssertionError(f"unexpected call: {role} {schema_name}")
+
+        validated = output_schema.model_validate(payload)
+        return StructuredModelResult(
+            provider=self.provider,
+            model_id=self.model_id,
+            request_id=request_id,
+            attempt=attempt,
+            latency_ms=1,
+            input_tokens=50,
+            output_tokens=50,
+            structured_output=validated.model_dump(mode="json"),
+            raw_response="{}",
+            context_digest=context.digest(),
+        )
+
+
 def test_missing_requirement_links_use_small_coverage_patch_not_graph_regeneration():
     client = CoverageClient()
-    orchestrator = RecursiveRepairPlanningOrchestrator(client)
+    orchestrator = CoverageAwareGraphPlanningOrchestrator(client)
 
     outcome = asyncio.run(orchestrator.run("Build Scenario Forge."))
 
@@ -142,3 +235,69 @@ def test_missing_requirement_links_use_small_coverage_patch_not_graph_regenerati
     assert nodes["SCENARIOS"].linked_requirement_ids == ["R-001", "R-003"]
     assert nodes["COMPARE"].linked_requirement_ids == ["R-002"]
     assert nodes["COMPARE"].dependencies == ["SCENARIOS"]
+
+
+def test_compiler_guided_attendance_plan_skips_initial_graph_model_call():
+    client = CompilerClient()
+    orchestrator = RecursiveRepairPlanningOrchestrator(client)
+
+    outcome = asyncio.run(orchestrator.run("Build employee QR attendance."))
+
+    assert client.calls == [
+        ("requirements_analyst", "RequirementsAnalysis"),
+        ("global_validator", "GraphReview"),
+    ]
+    assert outcome["planning_engine"] == "compiled_capability_graph_v2"
+    assert outcome["expected_normal_model_calls"] == 2
+    assert orchestrator.budget.calls == 2
+    nodes = {node.node_id: node for node in outcome["nodes"]}
+    assert "requirement_r_001" in nodes
+    assert "requirement_r_002" in nodes
+    assert "requirement_r_003" in nodes
+    assert "requirement_r_004" in nodes
+    assert "operly_interaction_verification" in nodes
+    assert "operly_subject_identity" in nodes
+    assert "operly_state_transition" in nodes
+    assert "operly_durable_state" in nodes
+    assert "operly_access_boundary" in nodes
+
+
+def test_compiler_resolves_review_gap_before_spending_graph_repair_call():
+    failed_review = {
+        "approved": False,
+        "missing_requirement_ids": [],
+        "dependency_issues": [],
+        "semantic_gaps": ["QR scan validation must explicitly reject invalid scans."],
+        "unnecessary_implementation_details": [],
+        "user_questions": [],
+        "reasoning_summary": "QR rejection needs an explicit owner.",
+    }
+    client = CompilerClient(reviews=[failed_review, APPROVED_REVIEW])
+    orchestrator = RecursiveRepairPlanningOrchestrator(client)
+
+    outcome = asyncio.run(orchestrator.run("Build employee QR attendance."))
+
+    assert all(role != "planner" for role, _ in client.calls)
+    assert client.calls == [
+        ("requirements_analyst", "RequirementsAnalysis"),
+        ("global_validator", "GraphReview"),
+        ("global_validator", "GraphReview"),
+    ]
+    assert outcome["compiler_repair_rounds"] == 1
+    assert outcome["model_graph_repair_rounds"] == 0
+
+
+def test_compiler_review_fallback_prevents_malformed_reviewer_json_from_killing_plan():
+    client = CompilerClient(malformed_reviews=2)
+    orchestrator = RecursiveRepairPlanningOrchestrator(client)
+
+    outcome = asyncio.run(orchestrator.run("Build employee QR attendance."))
+
+    assert outcome["global"].approved is True
+    assert outcome["compiler_review_fallbacks"] == 1
+    assert all(role != "planner" for role, _ in client.calls)
+    assert client.calls == [
+        ("requirements_analyst", "RequirementsAnalysis"),
+        ("global_validator", "GraphReview"),
+        ("global_validator", "GraphReview"),
+    ]

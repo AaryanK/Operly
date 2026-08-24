@@ -1,7 +1,7 @@
 import asyncio
 
+from packages.custom_software.graph_coverage import CoverageAwareGraphPlanningOrchestrator
 from packages.custom_software.live_planning import StructuredModelResult
-from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 
 
 REQUIREMENTS = {
@@ -172,7 +172,7 @@ class SemanticRepairClient:
 def test_semantic_repair_can_remove_false_requirement_links_instead_of_readding_them():
     client = SemanticRepairClient(CORRECT_REPAIR)
     outcome = asyncio.run(
-        RecursiveRepairPlanningOrchestrator(client).run("Build employee attendance.")
+        CoverageAwareGraphPlanningOrchestrator(client).run("Build employee attendance.")
     )
 
     nodes = {node.node_id: node for node in outcome["nodes"]}
@@ -194,7 +194,7 @@ def test_semantic_repair_restores_dropped_mandatory_requirement_as_explicit_leaf
     }
     client = SemanticRepairClient(repair_without_dashboard)
     outcome = asyncio.run(
-        RecursiveRepairPlanningOrchestrator(client).run("Build employee attendance.")
+        CoverageAwareGraphPlanningOrchestrator(client).run("Build employee attendance.")
     )
 
     owners = [

@@ -1,11 +1,18 @@
 """Live planning compatibility entrypoint.
 
 The historical class name is retained so existing API/service imports keep working,
-but the implementation is now the compact dynamic capability-graph planner with
-targeted requirement-coverage repair.
+but the implementation is now the compiler-guided capability planner: model semantics
+are extracted once, OPERLY compiles the baseline graph deterministically, and model
+calls are reserved for whole-graph semantic review plus bounded unresolved repair.
 """
-from packages.custom_software.graph_coverage import CoverageAwareGraphPlanningOrchestrator
-from packages.custom_software.graph_planning import PlanningNeedsUserInput, material_user_questions
+from packages.custom_software.compiler_planning import CompilerGuidedPlanningOrchestrator
+from packages.custom_software.graph_coverage import semantic_claim_errors
+from packages.custom_software.graph_planning import (
+    PlanningNeedsUserInput,
+    _graph_errors,
+    _unique,
+    material_user_questions,
+)
 
 
 def _is_operly_internal_question(question: str) -> bool:
@@ -19,13 +26,24 @@ def _material_user_questions(analysis):
     return material_user_questions(list(getattr(analysis, "questions_requiring_user_input", []) or []))
 
 
-class RecursiveRepairPlanningOrchestrator(CoverageAwareGraphPlanningOrchestrator):
-    """Compatibility name for the dynamic capability-graph planner.
+class RecursiveRepairPlanningOrchestrator(CompilerGuidedPlanningOrchestrator):
+    """Compatibility name for compiler-guided Studio planning.
 
-    Normal path: requirements -> capability graph -> whole-graph review.
-    Missing requirement links are repaired with a small assignment patch instead
-    of regenerating the architecture. A failed semantic review still receives one
-    bounded graph-level repair and one re-review.
+    Normal path: requirements -> deterministic capability compilation -> whole-graph
+    semantic review. OPERLY inserts known platform obligations without another graph
+    generation call. Review gaps are repaired deterministically first; a planner model
+    is used only for any semantic delta that remains unresolved.
     """
 
-    pass
+    @staticmethod
+    def _deterministic_findings(graph, analysis):
+        # Compiler-owned ``operly_*`` nodes are intentional cross-cutting obligations:
+        # they may support several requirements without lexically restating each one.
+        # The ordinary stale-coverage heuristic is still authoritative for model-owned
+        # nodes, but must not reject these canonical compiler nodes as false coverage.
+        semantic = [
+            finding
+            for finding in semantic_claim_errors(graph, analysis)
+            if not str(finding).startswith("operly_")
+        ]
+        return _unique([*_graph_errors(graph, analysis), *semantic])
