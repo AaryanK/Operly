@@ -1,0 +1,1 @@
+Token-efficiency invariant: boot context is small; capabilities/context are discovered and materialized progressively; delegated models receive context references resolved directly by the harness rather than copied through caller prompts.
