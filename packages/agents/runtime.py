@@ -138,6 +138,90 @@ def _tool_ids(tools: list[dict[str, Any]]) -> list[str]:
     return output
 
 
+def _execution_truth(trace: list[AgentTraceEntry]) -> dict[str, Any] | None:
+    """Derive final user-facing execution truth from actual capability results.
+
+    Pending approvals remain unresolved even if the model performs additional read
+    operations afterwards. Other failure/running states guard the final response
+    only when they are the latest action-lifecycle result, allowing a later verified
+    retry to truthfully supersede an earlier failed attempt.
+    """
+    lifecycle_states = {
+        "WAITING_APPROVAL",
+        "RUNNING",
+        "VERIFIED",
+        "FAILED",
+        "UNVERIFIED",
+        "CANCELLED",
+        "EXPIRED",
+    }
+    pending = [
+        entry
+        for entry in trace
+        if str(entry.observation.get("status") or "").upper() == "WAITING_APPROVAL"
+    ]
+    if pending:
+        entry = pending[-1]
+        return {
+            "status": "WAITING_APPROVAL",
+            "completed": False,
+            "verified": False,
+            "capability_id": entry.capability_id,
+            "action_id": entry.observation.get("action_id"),
+            "approval_id": entry.observation.get("approval_id"),
+        }
+
+    for entry in reversed(trace):
+        status = str(entry.observation.get("status") or "").upper()
+        if status not in lifecycle_states:
+            continue
+        lifecycle = entry.observation.get("lifecycle")
+        completed = (
+            bool(lifecycle.get("completed"))
+            if isinstance(lifecycle, dict)
+            else status == "VERIFIED"
+        )
+        verified = (
+            bool(lifecycle.get("verified"))
+            if isinstance(lifecycle, dict)
+            else status == "VERIFIED"
+        )
+        return {
+            "status": status,
+            "completed": completed,
+            "verified": verified,
+            "capability_id": entry.capability_id,
+            "action_id": entry.observation.get("action_id"),
+            "approval_id": entry.observation.get("approval_id"),
+        }
+    return None
+
+
+def _truthful_final_message(model_message: str, truth: dict[str, Any] | None) -> str:
+    """Prevent model prose from claiming a lifecycle transition that did not occur."""
+    if not truth or truth.get("verified") is True:
+        return model_message or "Done."
+
+    status = str(truth.get("status") or "").upper()
+    capability = str(truth.get("capability_id") or "the operation")
+    if status == "WAITING_APPROVAL":
+        return (
+            f"Approval is required before {capability} can run. "
+            "The approval-gated operation has not been completed yet."
+        )
+    if status == "RUNNING":
+        return f"{capability} is still running and has not been verified complete."
+    if status == "FAILED":
+        return f"{capability} failed and was not completed."
+    if status == "UNVERIFIED":
+        return f"{capability} ran, but Operly could not verify that it completed successfully."
+    if status == "CANCELLED":
+        return f"{capability} was cancelled and was not completed."
+    if status == "EXPIRED":
+        return f"{capability} expired and was not completed."
+    return model_message or "Done."
+
+
 class AgentRuntime:
     """Stable orchestration loop over Model + capability callbacks.
 
@@ -278,8 +362,13 @@ class AgentRuntime:
                 steps_used += 1
                 calls = message.get("tool_calls") or []
                 if not calls:
+                    truth = _execution_truth(trace)
                     return {
-                        "message": message.get("content") or "Done.",
+                        "message": _truthful_final_message(
+                            str(message.get("content") or ""),
+                            truth,
+                        ),
+                        "execution_truth": truth,
                         "trace": trace,
                         "messages": messages,
                         "stopped": False,
@@ -396,6 +485,7 @@ class AgentRuntime:
                 "Stopped after exhausting the bounded execution budget. "
                 "The run trace includes the exact stop reason and can be resumed safely."
             ),
+            "execution_truth": _execution_truth(trace),
             "trace": trace,
             "messages": messages,
             "stopped": True,
