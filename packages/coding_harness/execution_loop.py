@@ -121,6 +121,20 @@ async def _trace(event_type: str, payload: Any = None, *, phase: str = "event", 
     )
 
 
+def _trace_items(value: Any) -> list[Any]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    rows = []
+    for item in value[-400:]:
+        if isinstance(item, dict):
+            rows.append(item)
+        elif hasattr(item, "__dict__"):
+            rows.append(dict(item.__dict__))
+        else:
+            rows.append(str(item))
+    return rows
+
+
 def _source_trace_payload(source, result=None) -> dict[str, Any]:
     try:
         manifest = json.loads(getattr(source, "manifest_json", "") or "{}")
@@ -147,18 +161,18 @@ def _source_trace_payload(source, result=None) -> dict[str, Any]:
                 "summary": provenance.get("summary"),
                 "changedPaths": provenance.get("changedPaths") or [],
                 "verification": provenance.get("verificationIntent") or [],
-                "toolTrace": (provenance.get("toolTrace") or [])[-400:],
+                "toolTrace": _trace_items(provenance.get("toolTrace") or []),
             }
         )
     if result is not None:
         payload.update(
             {
-                "modelProvider": result.model_provider,
-                "modelId": result.model_id,
-                "summary": result.summary,
-                "changedPaths": result.changed_paths,
-                "verification": result.verification,
-                "toolTrace": [item.__dict__ for item in result.trace[-400:]],
+                "modelProvider": getattr(result, "model_provider", None),
+                "modelId": getattr(result, "model_id", None),
+                "summary": getattr(result, "summary", None),
+                "changedPaths": getattr(result, "changed_paths", []) or [],
+                "verification": getattr(result, "verification", []) or [],
+                "toolTrace": _trace_items(getattr(result, "trace", []) or []),
             }
         )
     return payload
@@ -214,8 +228,8 @@ async def _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, clie
         "failedBuildId": failed_build_id,
         "fromSourceVersion": getattr(previous_source, "source_version", None),
         "toSourceVersion": getattr(source, "source_version", None),
-        "changedPaths": result.changed_paths,
-        "summary": result.summary,
+        "changedPaths": getattr(result, "changed_paths", []) or [],
+        "summary": getattr(result, "summary", None),
     })
     await _trace("coding_agent.repair.completed", _source_trace_payload(source, result), resource_id="coding_agent")
     return source
