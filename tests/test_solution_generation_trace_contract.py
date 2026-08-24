@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.api.runtime_trace_router import _WORKSPACE_TRACE_SURFACES
 from packages.coding_harness.execution_loop import _trace_metadata
 from packages.custom_software import runner_adapters
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter, _safe_runner_payload
@@ -83,6 +84,10 @@ def test_solution_attempt_uses_one_correlation_id_across_worker_and_harness():
     assert harness["runtime_run_id"] == worker["runtime_run_id"]
     assert harness["runtime_run_id"].endswith(":attempt:4")
     assert harness["surface"] == worker["surface"] == "solution_generation"
+
+
+def test_solution_generation_surface_is_workspace_owner_debug_visible():
+    assert "solution_generation" in _WORKSPACE_TRACE_SURFACES
 
 
 def test_trace_redaction_covers_runner_grant_key_shapes():
