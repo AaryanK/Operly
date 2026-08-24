@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -180,6 +181,26 @@ def _assign(target: str, value: Any, env: dict[str, Any]) -> None:
     current[parts[-1]] = value
 
 
+def _stable_call_id(run_key: str, node_path: str, capability: str) -> str:
+    """Produce a compact deterministic call id for ActionService idempotency."""
+    digest = hashlib.sha256(
+        f"{run_key}|{node_path}|{capability}".encode("utf-8")
+    ).hexdigest()[:48]
+    return f"wf:{digest}"
+
+
+def _json_from_model(value: str) -> Any:
+    text = str(value or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return json.loads(text)
+
+
 @dataclass(slots=True)
 class WorkflowResult:
     output: Any
@@ -265,6 +286,10 @@ class WorkflowExecutor:
         spec = validate_workflow(workflow)
         if spec is None:
             raise WorkflowExecutionError("workflow_required")
+        metadata = getattr(context, "metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        run_key = str(metadata.get("workflow_run_key") or uuid4().hex)
         env: dict[str, Any] = {
             "trigger": dict(trigger or {}),
             "state": dict(state or {}),
@@ -273,27 +298,35 @@ class WorkflowExecutor:
         output: Any = None
         stopped = False
 
-        async def run_steps(nodes: list[dict], *, local_env: dict[str, Any]) -> None:
+        async def run_steps(
+            nodes: list[dict],
+            *,
+            local_env: dict[str, Any],
+            path_prefix: str,
+        ) -> None:
             nonlocal output, stopped
-            for node in nodes:
+            for position, node in enumerate(nodes):
                 if stopped:
                     return
                 node_type = str(node.get("type"))
                 node_id = str(node.get("id") or "")
+                label = node_id or f"{node_type}-{position}"
+                node_path = f"{path_prefix}.{label}" if path_prefix else label
                 if node_type == "invoke":
+                    capability = str(node.get("capability"))
                     args = resolve_value(node.get("args") or {}, local_env)
                     result = await self._invoke_workspace(
-                        str(node.get("capability")),
+                        capability,
                         args,
                         context,
-                        call_id=f"workflow:{uuid4()}",
+                        call_id=_stable_call_id(run_key, node_path, capability),
                     )
                     if not result.get("ok"):
                         if bool(node.get("continue_on_error")):
                             local_env[node_id] = result
                             continue
                         raise WorkflowExecutionError(
-                            f"capability_failed:{node.get('capability')}:{result.get('error') or 'unknown'}"
+                            f"capability_failed:{capability}:{result.get('error') or 'unknown'}"
                         )
                     local_env[node_id] = result.get("observation", result)
                 elif node_type == "model":
@@ -313,7 +346,7 @@ class WorkflowExecutor:
                         "model.invoke",
                         model_args,
                         context,
-                        call_id=f"workflow:{uuid4()}",
+                        call_id=_stable_call_id(run_key, node_path, "model.invoke"),
                     )
                     if not result.get("ok"):
                         raise WorkflowExecutionError(
@@ -323,13 +356,18 @@ class WorkflowExecutor:
                     content = observation.get("content") if isinstance(observation, dict) else observation
                     if bool(node.get("parse_json")) and isinstance(content, str):
                         try:
-                            content = json.loads(content)
+                            content = _json_from_model(content)
                         except json.JSONDecodeError as error:
                             raise WorkflowExecutionError("model_output_not_json") from error
                     local_env[node_id] = content
                 elif node_type == "if":
-                    branch = node.get("then") if _condition(node.get("condition") or {}, local_env) else node.get("else")
-                    await run_steps(list(branch or []), local_env=local_env)
+                    take_then = _condition(node.get("condition") or {}, local_env)
+                    branch = node.get("then") if take_then else node.get("else")
+                    await run_steps(
+                        list(branch or []),
+                        local_env=local_env,
+                        path_prefix=f"{node_path}.{'then' if take_then else 'else'}",
+                    )
                 elif node_type == "foreach":
                     items = resolve_value(node.get("items"), local_env)
                     if not isinstance(items, (list, tuple)):
@@ -340,7 +378,11 @@ class WorkflowExecutor:
                         child = dict(local_env)
                         child[alias] = item
                         child["index"] = index
-                        await run_steps(list(node.get("steps") or []), local_env=child)
+                        await run_steps(
+                            list(node.get("steps") or []),
+                            local_env=child,
+                            path_prefix=f"{node_path}.item-{index}",
+                        )
                         local_env["state"] = child.get("state", local_env.get("state", {}))
                         local_env["vars"] = child.get("vars", local_env.get("vars", {}))
                 elif node_type == "set":
@@ -354,7 +396,7 @@ class WorkflowExecutor:
                     stopped = True
                     return
 
-        await run_steps(spec["steps"], local_env=env)
+        await run_steps(spec["steps"], local_env=env, path_prefix="")
         values = {
             key: value
             for key, value in env.items()
