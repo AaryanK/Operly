@@ -5,6 +5,8 @@ capability and never upgrades the caller's authority.
 """
 from __future__ import annotations
 
+import asyncio
+
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
 from packages.capabilities.search_index import CapabilitySearchIndex
@@ -85,7 +87,11 @@ class CapabilityDiscoveryProvider(BaseProvider):
         eligible_by_id = {definition.id: definition for definition in eligible}
 
         if capability_name == "capability.search":
-            hits = self.search_index.search(
+            # The eligible set is established synchronously from canonical authority
+            # before ranking. Only the CPU-bound embedding/ranking work leaves the
+            # event loop; the semantic worker receives no authority of its own.
+            hits = await asyncio.to_thread(
+                self.search_index.search,
                 eligible,
                 str(arguments.get("query") or ""),
                 limit=int(arguments.get("limit") or 8),
