@@ -19,7 +19,8 @@ from packages.channels.service import ChannelService
 from packages.database.db import session_scope
 from packages.database.models import ScheduledJob, Task
 from packages.tasks.personal_workflow import PersonalWorkflowExecutor
-from packages.tasks.workflow import WorkflowExecutionError, WorkflowExecutor
+from packages.tasks.safe_workflow import ApprovalAwareWorkflowExecutor
+from packages.tasks.workflow import WorkflowExecutionError
 
 
 Runner = Callable[[str], Awaitable[None]]
@@ -93,7 +94,7 @@ async def _run_declared_workflow(task: Task, job: ScheduledJob, payload: dict) -
         "kind": str((payload.get("trigger") or {}).get("kind") or "schedule"),
         "scheduled_for": job.run_at.isoformat(),
     }
-    executor = WorkflowExecutor() if task.tenant_id else PersonalWorkflowExecutor()
+    executor = ApprovalAwareWorkflowExecutor() if task.tenant_id else PersonalWorkflowExecutor()
     result = await executor.execute(
         workflow,
         context=_workflow_context(task, job, payload),
@@ -255,6 +256,22 @@ async def run_harness_task_job(
             id=job_id,
             replace_existing=True,
         )
+    except WorkflowExecutionError as error:
+        message = str(error)
+        async with session_scope() as db:
+            job = await db.get(ScheduledJob, job_id)
+            if job is not None:
+                payload = load_task_payload(job.content)
+                if "workflow_waiting_approval:" in message:
+                    job.status = "waiting_approval"
+                    payload["waiting_approval"] = message.split("workflow_waiting_approval:", 1)[1][:200]
+                    job.content = dump_task_payload(payload)
+                else:
+                    trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+                    job.status = "waiting_event" if str(trigger.get("kind") or "") == "event" else "failed"
+        if "workflow_waiting_approval:" in message:
+            return
+        raise
     except Exception:
         async with session_scope() as db:
             job = await db.get(ScheduledJob, job_id)
