@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Awaitable, Callable
 
 import discord
+from sqlalchemy import select
 
 from packages.capabilities.agent_harness import PluginInvocationContext
 from packages.capabilities.task_provider import (
@@ -79,6 +80,8 @@ def _workflow_context(task: Task, job: ScheduledJob, payload: dict) -> PluginInv
             "scheduled_task_id": task.id,
             "scheduled_job_id": job.id,
             "scheduled_run": True,
+            "workflow_run_key": payload.get("active_run_key"),
+            "client_id": f"task:{task.id}",
             "_conversation_id": f"task:{task.id}",
             "allow_tenant_context": bool(task.tenant_id),
             "personal_scope": task.tenant_id is None,
@@ -86,10 +89,32 @@ def _workflow_context(task: Task, job: ScheduledJob, payload: dict) -> PluginInv
     )
 
 
+def _ensure_run_key(task: Task, job: ScheduledJob, payload: dict) -> str:
+    existing = str(payload.get("active_run_key") or "").strip()
+    if existing:
+        return existing
+    event_context = payload.get("event_context") if isinstance(payload.get("event_context"), dict) else {}
+    event_id = str(event_context.get("id") or "").strip()
+    if event_id:
+        run_key = f"{task.id}:event:{event_id}"
+    else:
+        run_key = f"{task.id}:schedule:{job.run_at.isoformat()}"
+    payload["active_run_key"] = run_key
+    payload["active_run_started_at"] = datetime.utcnow().isoformat()
+    return run_key
+
+
+def _clear_active_run(payload: dict) -> None:
+    payload.pop("active_run_key", None)
+    payload.pop("active_run_started_at", None)
+    payload.pop("waiting_approval", None)
+
+
 async def _run_declared_workflow(task: Task, job: ScheduledJob, payload: dict) -> str:
     workflow = payload.get("workflow")
     if not isinstance(workflow, dict):
         raise WorkflowExecutionError("workflow_required")
+    _ensure_run_key(task, job, payload)
     trigger_context = payload.get("event_context") if isinstance(payload.get("event_context"), dict) else {
         "kind": str((payload.get("trigger") or {}).get("kind") or "schedule"),
         "scheduled_for": job.run_at.isoformat(),
@@ -108,6 +133,87 @@ async def _run_declared_workflow(task: Task, job: ScheduledJob, payload: dict) -
     if isinstance(result.output, str):
         return result.output
     return json.dumps(result.output, ensure_ascii=False, default=str)
+
+
+async def resolve_workflow_approval(
+    db,
+    *,
+    tenant_id: str,
+    approval_id: str,
+    approved: bool,
+    action_status: str,
+) -> int:
+    """Resume or settle Task runs suspended on an existing Action approval.
+
+    Approved/verified actions resume the same deterministic run. Rejected or failed
+    approvals never fall through as success: recurring/event tasks settle this run
+    and remain subscribed; one-shot tasks pause for explicit human intervention.
+    """
+    rows = (
+        await db.scalars(
+            select(ScheduledJob).where(
+                ScheduledJob.tenant_id == tenant_id,
+                ScheduledJob.status == "waiting_approval",
+            )
+        )
+    ).all()
+    resumed = 0
+    for job in rows:
+        payload = load_task_payload(job.content)
+        if str(payload.get("waiting_approval") or "") != str(approval_id):
+            continue
+        task = await db.get(Task, job.task_id) if job.task_id else None
+        if task is None:
+            job.status = "cancelled"
+            continue
+        payload["last_approval_result"] = {
+            "approval_id": str(approval_id),
+            "approved": bool(approved),
+            "action_status": str(action_status),
+            "resolved_at": datetime.utcnow().isoformat(),
+        }
+        payload.pop("waiting_approval", None)
+
+        if approved and str(action_status) == "VERIFIED":
+            # Keep active_run_key: deterministic node call IDs make replay idempotent
+            # and the approved node resolves to the already VERIFIED BusinessAction.
+            job.status = "pending"
+            job.run_at = datetime.utcnow()
+            job.content = dump_task_payload(payload)
+            resumed += 1
+            continue
+
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        kind = str(trigger.get("kind") or "once")
+        _clear_active_run(payload)
+        if kind == "event":
+            queue = payload.get("event_queue") if isinstance(payload.get("event_queue"), list) else []
+            if queue:
+                payload["event_context"] = queue.pop(0)
+                payload["event_queue"] = queue
+                job.status = "pending"
+                job.run_at = datetime.utcnow()
+                resumed += 1
+            else:
+                payload.pop("event_context", None)
+                job.status = "waiting_event"
+            task.due_at = None
+        elif kind in {"daily", "interval", "monitor"}:
+            next_run = next_task_run(payload, job.run_at)
+            if next_run is None:
+                job.status = "paused"
+                task.status = "paused"
+            else:
+                job.run_at = next_run
+                job.status = "pending"
+                task.due_at = next_run
+                resumed += 1
+        else:
+            job.status = "paused"
+            task.status = "paused"
+        job.content = dump_task_payload(payload)
+    await db.flush()
+    return resumed
 
 
 async def run_harness_task_job(
@@ -135,6 +241,9 @@ async def run_harness_task_job(
         current_run = job.run_at
         workflow = payload.get("workflow") if isinstance(payload.get("workflow"), dict) else None
         event_context = payload.get("event_context") if isinstance(payload.get("event_context"), dict) else None
+        if workflow is not None:
+            _ensure_run_key(task, job, payload)
+            job.content = dump_task_payload(payload)
         execution_prompt = (
             scheduled_task_prompt(task, payload)
             + (
@@ -205,6 +314,7 @@ async def run_harness_task_job(
             payload = load_task_payload(job.content)
             trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
             trigger_kind = str(trigger.get("kind") or "once")
+            _clear_active_run(payload)
 
             if trigger_kind == "event":
                 queue = payload.get("event_queue") if isinstance(payload.get("event_queue"), list) else []
@@ -226,6 +336,7 @@ async def run_harness_task_job(
             else:
                 next_event_run = False
                 next_run = next_task_run(payload, current_run)
+                job.content = dump_task_payload(payload)
                 if next_run is None:
                     job.status = "completed"
                     task.status = "completed"
