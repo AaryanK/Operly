@@ -145,6 +145,7 @@ def test_workspace_and_personal_task_creation_and_crud():
                 assert job is not None and job.job_type == "task"
                 assert job.delivery == "channel"
                 assert load_task_payload(job.content)["trigger"]["kind"] == "daily"
+                original_job_id = job.id
 
                 listing = await provider.execute(workspace, "task.list", {})
                 assert listing.success and listing.evidence["count"] == 1
@@ -168,7 +169,30 @@ def test_workspace_and_personal_task_creation_and_crud():
                     {"task_id": task_id, "status": "open"},
                 )
                 assert resumed.success
-                assert job.status == "pending"
+                resumed_job = await db.scalar(
+                    select(ScheduledJob).where(ScheduledJob.task_id == task_id)
+                )
+                assert resumed_job is not None
+                assert resumed_job.status == "pending"
+                assert resumed_job.id != original_job_id
+                assert load_task_payload(resumed_job.content)["objective"].startswith("Write a funny")
+
+                rescheduled_for = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+                rescheduled = await provider.execute(
+                    workspace,
+                    "task.update",
+                    {
+                        "task_id": task_id,
+                        "trigger": {"kind": "daily", "run_at": rescheduled_for},
+                    },
+                )
+                assert rescheduled.success
+                rescheduled_job = await db.scalar(
+                    select(ScheduledJob).where(ScheduledJob.task_id == task_id)
+                )
+                assert rescheduled_job is not None
+                assert rescheduled_job.id != resumed_job.id
+                assert rescheduled_job.run_at > resumed_job.run_at
 
                 personal = _context(
                     db,
