@@ -13,6 +13,7 @@ from packages.app_identity.contracts import (
     RegisterRequest,
 )
 from packages.app_identity.store import AppIdentityError, AppIdentityStore
+from packages.coding_harness.source_service import _plan_specification
 from packages.custom_software.runner_contracts import (
     BuildSubmission,
     HealthCheck,
@@ -233,3 +234,21 @@ def test_identity_runtime_routes_are_mounted_under_single_api_prefix():
     assert "/api/app-identities/{application_id}/invitations" in paths
     assert "/api/runtime/entities/schema" in paths
     assert "/api/api/runtime/app-identity/register" not in paths
+
+
+def test_coding_specification_teaches_generated_apps_the_identity_binding():
+    specification = json.loads(
+        _plan_specification(
+            {
+                "projectName": "Customer Portal",
+                "summary": "Customers can sign in to view their orders.",
+                "requirementLedger": [],
+                "planTree": [],
+            }
+        )
+    )
+    guidance = specification["operlyExecutionContract"]["appIdentity"]
+    assert "identity.app_users" in guidance
+    assert "semanticName: identity" in guidance
+    assert "/login" in guidance and "/session" in guidance
+    assert "Operly account" in guidance
