@@ -223,6 +223,14 @@ def test_workflow_promotion_and_proposal_validation():
 @pytest.mark.asyncio
 async def test_delivery_layer_requires_verified_receipt(monkeypatch):
     import packages.plugins as plugins
+    import packages.tasks.delivery as delivery
+
+    # This test isolates receipt truthfulness. Delayed-authority rechecks have their
+    # own coverage and must not be weakened just to exercise adapter receipt logic.
+    async def reauthorize(_target):
+        return None
+
+    monkeypatch.setattr(delivery, "_reauthorize_delivery_target", reauthorize)
 
     class Adapter:
         async def deliver(self, target, message):
