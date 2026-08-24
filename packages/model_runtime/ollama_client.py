@@ -72,6 +72,80 @@ def _retry_after_seconds(value: str | None) -> float | None:
         return None
 
 
+def _ollama_tool_arguments(value: Any) -> dict[str, Any]:
+    """Translate canonical/OpenAI-style tool arguments into Ollama's object form."""
+    if isinstance(value, dict):
+        return copy.deepcopy(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            # AgentRuntime also treats malformed generated argument strings as an
+            # empty object. Replaying the same effective arguments keeps failover
+            # deterministic instead of sending invalid Ollama wire JSON.
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Encode shared model history into Ollama's native message schema.
+
+    Provider-specific continuation metadata is intentionally not copied. Ollama owns
+    only its wire representation; the shared AgentRuntime history remains unchanged.
+    Tool call ids from OpenAI/Gemini are not meaningful to Ollama, while function
+    arguments must be JSON objects and tool observations use ``tool_name``.
+    """
+    output: list[dict[str, Any]] = []
+    for original in messages:
+        if not isinstance(original, dict):
+            continue
+        role = str(original.get("role") or "user")
+        message: dict[str, Any] = {"role": role}
+
+        if "content" in original:
+            message["content"] = original.get("content")
+        if role == "assistant" and original.get("thinking") is not None:
+            message["thinking"] = original.get("thinking")
+        if role == "user" and isinstance(original.get("images"), list):
+            message["images"] = copy.deepcopy(original["images"])
+        if role == "tool":
+            tool_name = str(original.get("tool_name") or original.get("name") or "").strip()
+            if tool_name:
+                message["tool_name"] = tool_name
+
+        calls = original.get("tool_calls")
+        if isinstance(calls, list):
+            normalized_calls: list[dict[str, Any]] = []
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = str(function.get("name") or "").strip()
+                if not name:
+                    continue
+                normalized_function: dict[str, Any] = {
+                    "name": name,
+                    "arguments": _ollama_tool_arguments(function.get("arguments")),
+                }
+                index = function.get("index")
+                if isinstance(index, int):
+                    normalized_function["index"] = index
+                normalized_calls.append(
+                    {
+                        "type": "function",
+                        "function": normalized_function,
+                    }
+                )
+            if normalized_calls:
+                message["tool_calls"] = normalized_calls
+
+        output.append(message)
+    return output
+
+
 class OllamaError(RuntimeError):
     """A sanitized upstream provider failure safe to surface to OPERLY users."""
 
@@ -246,7 +320,7 @@ class OllamaClient:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": _ollama_messages(messages),
             "stream": False,
             "options": {"temperature": 0.2},
         }
