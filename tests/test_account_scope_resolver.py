@@ -65,6 +65,19 @@ class AccountScopeResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolution.resolved.kind, ResolvedScopeKind.PERSONAL)
         self.assertEqual(resolution.resolved.id, f"personal:{self.user_id}")
 
+    async def test_foreign_personal_scope_id_does_not_alias_current_user(self):
+        async with self.sessions() as db:
+            resolution = await resolve_authorized_scope(
+                db,
+                user_id=self.user_id,
+                reference="personal:someone-else",
+                focus_workspace_id=self.anhitra_id,
+            )
+
+        self.assertEqual(resolution.status, "missing")
+        self.assertIsNone(resolution.resolved)
+        self.assertEqual(resolution.matches, ())
+
     async def test_explicit_workspace_name_resolves_regardless_of_other_focus(self):
         async with self.sessions() as db:
             resolution = await resolve_authorized_scope(
