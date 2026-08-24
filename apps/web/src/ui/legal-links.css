@@ -32,11 +32,12 @@
 
 @media (max-width: 680px) {
   .operly-legal-links {
-    right: 10px;
-    bottom: calc(10px + env(safe-area-inset-bottom));
+    position: static;
+    width: max-content;
+    margin: 10px 10px calc(10px + env(safe-area-inset-bottom)) auto;
   }
 
   .workspace-shell ~ .operly-legal-links {
-    bottom: calc(76px + env(safe-area-inset-bottom));
+    margin-bottom: calc(76px + env(safe-area-inset-bottom));
   }
 }
