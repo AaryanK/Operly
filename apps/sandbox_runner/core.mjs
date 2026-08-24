@@ -204,8 +204,15 @@ export function shellQuote(value) {
 
 export function publicBaseUrl(value) {
   const parsed = new URL(value);
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error("runner public base URL must be a clean HTTPS origin");
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname === "invalid.invalid" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("runner public base URL must be a configured clean HTTPS origin");
   }
   return `${parsed.protocol}//${parsed.host}`.replace(/\/$/, "");
 }
