@@ -133,7 +133,7 @@ export function PersonalHome({ profile }: Props) {
   return (
     <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileHistoryOpen ? "mobile-history-open" : ""}`}>
       <button className="personal-history-backdrop" type="button" aria-label="Close conversation history" onClick={() => setMobileHistoryOpen(false)} />
-      <aside className="personal-history" aria-label="Conversation history">
+      <aside id="personal-conversation-history" className="personal-history" aria-label="Conversation history">
         <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><div className="history-head-actions"><button onClick={newConversation} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button><button className="history-mobile-close" onClick={() => setMobileHistoryOpen(false)} aria-label="Close conversation history">×</button></div></div>
         <div className="history-list">
           {conversations.length === 0 && <p className="empty-copy">Your private conversations will appear here.</p>}
