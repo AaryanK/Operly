@@ -1,6 +1,9 @@
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -11,8 +14,9 @@ from packages.database.custom_software_models import (
 )
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant
-from packages.database.product_models import SolutionRecord
+from packages.database.product_models import SolutionJob, SolutionRecord
 from packages.database.schema import import_all_models
+from packages.solutions.composer import _run_generated_generation
 from packages.solutions.service import (
     LifecycleStatus,
     RuntimeType,
@@ -116,6 +120,57 @@ class GeneratedSolutionLifecycleTruthTests(unittest.IsolatedAsyncioTestCase):
         self.db.add(solution)
         await self.db.commit()
         return solution, project
+
+    async def test_generated_job_persists_plan_reference_before_source_exists(self):
+        solution = SolutionRecord(
+            tenant_id=self.tenant.id,
+            name="Pending Camera Attendance",
+            description="Employees scan QR codes with their cameras to clock in and out.",
+            solution_type=SolutionType.CUSTOM_SOLUTION,
+            lifecycle_status=LifecycleStatus.BUILDING,
+            current_version_reference=None,
+            preview_state="unavailable",
+            preview_url=None,
+            production_state="offline",
+            production_url=None,
+            visibility="private",
+            runtime_type=RuntimeType.GENERATED_PROJECT,
+            runtime_reference="pending-project",
+            context_json=json.dumps(
+                {
+                    "ownerIntent": {
+                        "objective": "Employees scan QR codes with their cameras to clock in and out."
+                    }
+                }
+            ),
+        )
+        self.db.add(solution)
+        await self.db.flush()
+        plan_row = SimpleNamespace(id="plan-pending", approved_version=1)
+
+        with patch(
+            "packages.solutions.composer.build_with_repair",
+            new=AsyncMock(side_effect=RuntimeError("runner unavailable")),
+        ):
+            returned = await _run_generated_generation(
+                self.db,
+                tenant_id=self.tenant.id,
+                user_id=self.user.id,
+                row=solution,
+                project=SimpleNamespace(id="pending-project"),
+                software_plan_row=plan_row,
+                software_plan=SimpleNamespace(),
+            )
+        await self.db.commit()
+
+        job = await self.db.scalar(
+            select(SolutionJob).where(SolutionJob.solution_id == solution.id)
+        )
+        self.assertIsNotNone(job)
+        self.assertEqual(job.source_version_reference, "software-plan:plan-pending:1")
+        self.assertEqual(job.status, "failed")
+        self.assertEqual(returned.lifecycle_status, LifecycleStatus.FAILED)
+        self.assertEqual(returned.preview_state, "unavailable")
 
     async def test_failed_build_is_not_resurrected_by_solution_sync(self):
         solution, project = await self._fixture("retryable")
