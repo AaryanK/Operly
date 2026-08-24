@@ -13,6 +13,7 @@ services:
       OPERLY_RUNNER_PROXY_IMAGE: operly-runner-proxy:1
       OPERLY_RUNNER_CONTROL_NETWORK: operly-runner-control
       OPERLY_RUNNER_EGRESS_NETWORK: bridge
+      OPERLY_RUNNER_BINDING_HOSTS: ${OPERLY_RUNNER_BINDING_HOSTS:-}
       OPERLY_RUNNER_STATE_DIR: /var/lib/operly-runner
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
