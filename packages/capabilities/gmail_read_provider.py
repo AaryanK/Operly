@@ -5,9 +5,6 @@ import base64
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from packages.business_brain.attachments.detector import detect_type
-from packages.business_brain.attachments.models import AttachmentInput
-from packages.business_brain.attachments.parsers import parse_attachment
 from packages.capabilities.contracts import (
     ApprovalPolicy,
     CapabilityDefinition,
@@ -206,14 +203,15 @@ class GmailReadProvider(BaseProvider):
                 token,
                 params={"format": "full"},
             )
-            attachments = _attachment_parts(detail.get("payload") or {})[:50]
+            attachment_rows = _attachment_parts(detail.get("payload") or {})
+            attachments = attachment_rows[:50]
             return CapabilityResult(
                 True,
                 False,
                 {
                     "message_id": detail.get("id") or message_id,
                     "attachments": attachments,
-                    "truncated": len(_attachment_parts(detail.get("payload") or {})) > 50,
+                    "truncated": len(attachment_rows) > 50,
                     "evidence_refs": [
                         _evidence_ref("message", message_id, ["attachment_metadata"])
                     ],
@@ -222,6 +220,13 @@ class GmailReadProvider(BaseProvider):
             )
 
         if capability_name == "gmail.read_attachment":
+            # Import the document gateway lazily. Importing the business-brain
+            # attachment package while the capability registry itself is importing
+            # creates a business_brain -> harness -> defaults -> attachment cycle.
+            from packages.business_brain.attachments.detector import detect_type
+            from packages.business_brain.attachments.models import AttachmentInput
+            from packages.business_brain.attachments.parsers import parse_attachment
+
             message_id = str(arguments["message_id"])
             attachment_id = str(arguments["attachment_id"])
             body = await request_json(
