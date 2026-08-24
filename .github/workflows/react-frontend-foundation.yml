@@ -7,11 +7,16 @@ on:
       - "apps/api/main.py"
       - "apps/api/personal_agent_router.py"
       - "packages/business_brain/personal_agent.py"
+      - "packages/email/templates/**"
       - "apps/web/index.html"
       - "apps/web/package.json"
       - "apps/web/package-lock.json"
       - "apps/web/vite.config.ts"
       - "apps/web/src/**"
+      - "apps/web/static/index.html"
+      - "apps/web/static/auth.js"
+      - "apps/web/static/auth-runtime.js"
+      - "apps/web/scripts/**"
       - "apps/web/FRONTEND_MIGRATION.md"
       - ".github/workflows/react-frontend-foundation.yml"
   workflow_dispatch:
@@ -29,6 +34,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/web
         run: npm ci
+      - name: Verify frontend convergence contracts
+        working-directory: apps/web
+        run: npm run test:contracts
       - name: Build canonical React frontend
         working-directory: apps/web
         run: npm run build
@@ -50,5 +58,7 @@ jobs:
           grep -q 'WorkspaceOperly' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
+          grep -q '/channels/@me' apps/web/static/auth.js
+          ! grep -q 'id="dashboard"' apps/web/static/index.html
       - name: Build Railway-style production image
         run: docker build --tag operly-frontend-pr .
