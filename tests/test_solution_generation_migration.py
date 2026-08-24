@@ -20,8 +20,11 @@ def test_solution_generation_lease_migration_upgrades_fresh_database():
 
         command.upgrade(config(url), "head")
 
+        # This test owns the 0038 Solution lease columns, not the repository's global
+        # migration head. Future additive migrations must not require editing this
+        # fixture merely because they extend the same linear Alembic chain.
         current, head = revisions(url)
-        assert current == ALEMBIC_HEAD == "0038_solution_generation_leases"
+        assert current == ALEMBIC_HEAD
         assert head == ALEMBIC_HEAD
         with closing(sqlite3.connect(path)) as db:
             columns = {row[1] for row in db.execute("PRAGMA table_info(solution_jobs)")}
