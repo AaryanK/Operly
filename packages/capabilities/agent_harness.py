@@ -24,6 +24,9 @@ ROLE_AUTHORITY = DEFAULT_ROLE_AUTHORITY
 _PRIVATE_CONNECTOR_AUTHORITY = {
     "gmail.search": "gmail:read",
     "gmail.read_message": "gmail:read",
+    "gmail.read_thread": "gmail:read",
+    "gmail.list_attachments": "gmail:read",
+    "gmail.read_attachment": "gmail:read",
     "gmail.modify_labels": "gmail:write",
     "gmail.create_draft": "gmail:draft",
     "gmail.list_drafts": "gmail:draft",
@@ -151,7 +154,13 @@ class PluginAgentHarness:
             if definition.id in {"messaging.send", "gmail.send_email"}:
                 satisfied = bool(union_scopes & {GMAIL_SEND, GMAIL_MODIFY})
                 required = {GMAIL_SEND}
-            elif definition.id in {"gmail.search", "gmail.read_message"}:
+            elif definition.id in {
+                "gmail.search",
+                "gmail.read_message",
+                "gmail.read_thread",
+                "gmail.list_attachments",
+                "gmail.read_attachment",
+            }:
                 satisfied = bool(union_scopes & {GMAIL_READONLY, GMAIL_MODIFY})
                 required = {GMAIL_READONLY}
             missing_scopes = [] if satisfied else sorted(required - union_scopes or required)
