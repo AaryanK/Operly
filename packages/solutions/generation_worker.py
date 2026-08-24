@@ -41,6 +41,15 @@ from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionTyp
 GENERATED_JOB_TYPE = "generated_generation"
 
 
+def worker_enabled() -> bool:
+    return os.getenv("OPERLY_SOLUTION_WORKER_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _lease_seconds() -> int:
     try:
         return max(30, min(int(os.getenv("OPERLY_SOLUTION_WORKER_LEASE_SECONDS", "120")), 900))
@@ -547,6 +556,12 @@ async def work_once(worker_id: str) -> bool:
 
 
 async def run_forever() -> None:
+    # This lets the trusted Railway worker service be provisioned before the
+    # isolated runner rollout. Disabled workers intentionally do not touch the DB
+    # or consume queued attempts; enabling the variable requires a redeploy.
+    if not worker_enabled():
+        while True:
+            await asyncio.sleep(3600)
     await init_db()
     worker_id = worker_identity()
     while True:
