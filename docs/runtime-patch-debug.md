@@ -1,0 +1,1 @@
+AI Debug should report surface, capability eligibility counts, semantic candidates/scores, exposed schemas, context refs/materialization, model routing/latency, token counts, and compaction deltas without logging filtered private content.
