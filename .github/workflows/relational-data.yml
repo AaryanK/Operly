@@ -1,0 +1,52 @@
+name: relational-data
+
+on:
+  push:
+    branches:
+      - main
+      - "platform/**"
+    paths:
+      - "apps/api/relational_data_router.py"
+      - "apps/runner/**"
+      - "packages/relational_data/**"
+      - "packages/runtime_plugins/**"
+      - "packages/custom_software/runner_contracts.py"
+      - "packages/coding_harness/build_service.py"
+      - "packages/capabilities/**"
+      - "tests/test_relational_data_primitive.py"
+      - "tests/test_relational_runner_binding.py"
+      - ".github/workflows/relational-data.yml"
+  pull_request:
+    paths:
+      - "apps/api/relational_data_router.py"
+      - "apps/runner/**"
+      - "packages/relational_data/**"
+      - "packages/runtime_plugins/**"
+      - "packages/custom_software/runner_contracts.py"
+      - "packages/coding_harness/build_service.py"
+      - "packages/capabilities/**"
+      - "tests/test_relational_data_primitive.py"
+      - "tests/test_relational_runner_binding.py"
+      - ".github/workflows/relational-data.yml"
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile relational runtime
+        run: >-
+          python -m compileall -q
+          apps/api/relational_data_router.py
+          apps/runner/docker_backend.py
+          apps/runner/egress_proxy.py
+          packages/relational_data
+          packages/runtime_plugins/relational_source_validation.py
+      - name: Run relational contract tests
+        run: python -m pytest -q tests/test_relational_data_primitive.py tests/test_relational_runner_binding.py
