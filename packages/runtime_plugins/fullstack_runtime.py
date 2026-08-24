@@ -11,6 +11,7 @@ from packages.custom_software.runner_contracts import (
     ResourcePolicy,
     ServiceBindingRequest,
 )
+from packages.runtime_plugins.app_identity_source_validation import validate_app_identity_source
 from packages.runtime_plugins.contracts import (
     DependencyPolicy,
     RuntimeMatch,
@@ -91,10 +92,11 @@ class FullStackRuntime:
             return base
         relational = validate_relational_source(source)
         entities = validate_workspace_entity_source(source)
+        identity = validate_app_identity_source(source)
         return RuntimeValidation(
-            base.valid and relational.valid and entities.valid,
-            tuple(dict.fromkeys((*base.errors, *relational.errors, *entities.errors))),
-            tuple(dict.fromkeys((*base.warnings, *relational.warnings, *entities.warnings))),
+            base.valid and relational.valid and entities.valid and identity.valid,
+            tuple(dict.fromkeys((*base.errors, *relational.errors, *entities.errors, *identity.errors))),
+            tuple(dict.fromkeys((*base.warnings, *relational.warnings, *entities.warnings, *identity.warnings))),
         )
 
     def build_submission_from_record(self, source_record, source_bundle, idempotency_key: str) -> BuildSubmission:
