@@ -19,6 +19,7 @@ on:
       - "packages/capabilities/discovery_provider.py"
       - "packages/capabilities/firewall.py"
       - "packages/capabilities/gmail_read_provider.py"
+      - "packages/capabilities/scope_provider.py"
       - "packages/capabilities/search_index.py"
       - "packages/capabilities/session_view.py"
       - "packages/capabilities/validation.py"
@@ -33,6 +34,7 @@ on:
       - "packages/model_runtime/**"
       - "packages/retrieval/**"
       - "packages/security/execution_context.py"
+      - "packages/security/scope_resolver.py"
       - "packages/security/surfaces.py"
       - "packages/tasks/delivery.py"
       - "packages/tasks/runtime.py"
@@ -52,6 +54,8 @@ on:
       - "tests/test_runtime_trace_access.py"
       - "tests/test_semantic_runtime_foundations.py"
       - "tests/test_truthful_execution_response.py"
+      - "tests/test_personal_execution_scope.py"
+      - "tests/test_account_scope_resolver.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -87,6 +91,7 @@ jobs:
           packages/capabilities/discovery_provider.py
           packages/capabilities/firewall.py
           packages/capabilities/gmail_read_provider.py
+          packages/capabilities/scope_provider.py
           packages/capabilities/search_index.py
           packages/capabilities/session_view.py
           packages/capabilities/validation.py
@@ -112,6 +117,7 @@ jobs:
           packages/model_runtime/openai_compatible_client.py
           packages/retrieval/semantic.py
           packages/security/execution_context.py
+          packages/security/scope_resolver.py
           packages/security/surfaces.py
           packages/tasks/delivery.py
           packages/tasks/runtime.py
@@ -140,6 +146,8 @@ jobs:
           tests/test_runtime_trace_access.py
           tests/test_semantic_runtime_foundations.py
           tests/test_truthful_execution_response.py
+          tests/test_personal_execution_scope.py
+          tests/test_account_scope_resolver.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db
