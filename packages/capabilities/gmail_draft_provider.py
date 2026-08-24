@@ -8,9 +8,11 @@ from packages.connectors.google_provider import (
     _headers,
     _message_bodies,
     _raw_message,
-    access_token,
-    google_connector,
     request_json,
+)
+from packages.connectors.google_scope import (
+    google_access_token_for_context,
+    google_connector_for_context,
 )
 
 
@@ -20,7 +22,7 @@ class GmailDraftLifecycleProvider(BaseProvider):
         CapabilityDefinition(
             "gmail.list_drafts",
             "gmail_list_drafts",
-            "List recent Gmail drafts in the current workspace connector. Use this to resolve references such as 'that draft' instead of guessing a draft ID.",
+            "List recent Gmail drafts in the connected Google account. Use this to resolve references such as 'that draft' instead of guessing a draft ID.",
             {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}}, "additionalProperties": False},
             {"type": "object"},
             risk_level="read_only",
@@ -129,8 +131,8 @@ class GmailDraftLifecycleProvider(BaseProvider):
         }
 
     async def _connector(self, context):
-        connector = await google_connector(context.db, context.tenant_id, GMAIL_MODIFY)
-        return connector, await access_token(context.db, connector)
+        connector = await google_connector_for_context(context, GMAIL_MODIFY)
+        return connector, await google_access_token_for_context(context, connector)
 
     async def _get(self, context, draft_id: str) -> dict:
         _, token = await self._connector(context)
