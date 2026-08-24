@@ -156,7 +156,7 @@ def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model()
     assert selected.id == small.id
 
 
-def test_real_catalog_requirements_route_starts_with_small_tool_model_when_available():
+def test_real_catalog_requirements_route_stays_small_and_non_heavy_through_failover():
     """Inspect the worker pool behind TaskRoutedBusinessModel, not its proxy tags."""
     provider_env = {
         "OPEN_ROUTER_API": "test-openrouter",
@@ -186,15 +186,17 @@ def test_real_catalog_requirements_route_starts_with_small_tool_model_when_avail
         reason="test routine primary-worker route",
     )
     requirements = requirements_for_task(decision, request)
+    assert "heavy" in requirements.avoid_tags
 
     with patch.dict(os.environ, provider_env, clear=False):
         selected = model_for_requirements(requirements, fallback_role="business_agent")
 
-    first = selected.models[0] if isinstance(selected, ModelPool) else selected
-    assert "tools" in first.capabilities
-    assert "small" in first.tags
-    assert "heavy" not in first.tags
-    assert first.provider_model_id != "stealth/ox-alpha"
+    pool = list(selected.models) if isinstance(selected, ModelPool) else [selected]
+    assert pool
+    assert "tools" in pool[0].capabilities
+    assert "small" in pool[0].tags
+    assert all("heavy" not in model.tags for model in pool)
+    assert all(model.provider_model_id != "stealth/ox-alpha" for model in pool)
 
 
 def test_deep_reasoning_selector_prefers_heavy_and_excludes_small():
