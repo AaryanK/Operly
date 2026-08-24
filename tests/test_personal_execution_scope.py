@@ -64,7 +64,7 @@ class PersonalExecutionScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.scope_kind, ScopeKind.PERSONAL)
         self.assertTrue(context.is_personal)
         self.assertFalse(context.is_workspace)
-        self.assertEqual(context.scope_id, self.user_id)
+        self.assertEqual(context.scope_id, f"personal:{self.user_id}")
         self.assertIsNone(context.workspace_id)
         self.assertIsNone(context.focus_workspace_id)
         self.assertIsNone(context.membership_id)
