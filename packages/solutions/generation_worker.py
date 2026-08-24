@@ -23,13 +23,7 @@ from packages.coding_harness.execution_loop import build_with_repair
 from packages.custom_software.compiler_planning import PLANNING_ENGINE_VERSION as PLANNING_ENGINE
 from packages.custom_software.live_planning import PlanningBlocked, PlanningMode, PlannerUnavailable
 from packages.custom_software.model_planning_client import planning_mode
-from packages.custom_software.plan_service import (
-    _persist_first_version,
-    _run_live_plan,
-    _store_clarification,
-    approve,
-    plan_version,
-)
+from packages.custom_software.plan_service import _persist_first_version, _run_live_plan, _store_clarification, approve, plan_version
 from packages.custom_software.planner import build_software_plan
 from packages.custom_software.planning_orchestrator import PlanningNeedsUserInput
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter
@@ -38,18 +32,13 @@ from packages.custom_software.service import plan_artifact_graph, slugify
 from packages.database.custom_software_models import GeneratedProject, SoftwarePlanRecord, SoftwarePlanVersion
 from packages.database.db import SessionFactory, init_db
 from packages.database.product_models import SolutionJob, SolutionRecord
-from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionType
+from packages.solutions.service import LifecycleStatus, RuntimeType
 
 GENERATED_JOB_TYPE = "generated_generation"
 
 
 def worker_enabled() -> bool:
-    return os.getenv("OPERLY_SOLUTION_WORKER_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return os.getenv("OPERLY_SOLUTION_WORKER_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _lease_seconds() -> int:
@@ -101,11 +90,7 @@ def _logs(job: SolutionJob) -> list[dict[str, Any]]:
 
 def _append_log(job: SolutionJob, stage: str, status: str, detail: str | None = None) -> None:
     rows = _logs(job)
-    item: dict[str, Any] = {
-        "at": datetime.utcnow().isoformat() + "Z",
-        "stage": stage,
-        "status": status,
-    }
+    item: dict[str, Any] = {"at": datetime.utcnow().isoformat() + "Z", "stage": stage, "status": status}
     if detail:
         item["detail"] = " ".join(str(detail).split())[:1000]
     rows.append(item)
@@ -125,15 +110,10 @@ def _planning_prompt(name: str, objective: str, context: dict[str, Any]) -> str:
             "The first preview must remain private; creation does not authorize publishing or external side effects.",
         ],
     }
-    return (
-        f"Build the Solution named {name!r}.\n\nOwner objective:\n{objective}\n\n"
-        "OPERLY SOLUTION CONTRACT:\n"
-        + json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    )[:20000]
+    return (f"Build the Solution named {name!r}.\n\nOwner objective:\n{objective}\n\nOPERLY SOLUTION CONTRACT:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True))[:20000]
 
 
 def _planning_input_digest(name: str, objective: str, context: dict[str, Any]) -> str:
-    """Fingerprint only inputs that are allowed to make an approved plan reusable."""
     payload = {
         "planningEngine": PLANNING_ENGINE,
         "name": " ".join(str(name or "").split()),
@@ -141,52 +121,28 @@ def _planning_input_digest(name: str, objective: str, context: dict[str, Any]) -
         "solutionManifest": context.get("solutionManifest", {}),
         "implementationResolution": context.get("implementationResolution", {}),
     }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-async def _reusable_approved_plan(
-    db,
-    row: SolutionRecord,
-    planning_input_digest: str,
-) -> SoftwarePlanRecord | None:
-    """Return a prior approved plan only when its semantic inputs still match.
-
-    Retries should resume from completed work instead of paying the planner again.
-    Older jobs that predate checkpoint fingerprints are intentionally not reused;
-    the first run on a new planning engine establishes a fresh trustworthy checkpoint.
-    """
-    prior_jobs = (
-        await db.scalars(
-            select(SolutionJob)
-            .where(
-                SolutionJob.tenant_id == row.tenant_id,
-                SolutionJob.solution_id == row.id,
-                SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
-                SolutionJob.plan_id.is_not(None),
-            )
-            .order_by(desc(SolutionJob.attempt), desc(SolutionJob.created_at))
-            .limit(20)
+async def _reusable_approved_plan(db, row: SolutionRecord, planning_input_digest: str) -> SoftwarePlanRecord | None:
+    prior_jobs = (await db.scalars(
+        select(SolutionJob)
+        .where(
+            SolutionJob.tenant_id == row.tenant_id,
+            SolutionJob.solution_id == row.id,
+            SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
+            SolutionJob.plan_id.is_not(None),
         )
-    ).all()
+        .order_by(desc(SolutionJob.attempt), desc(SolutionJob.created_at))
+        .limit(20)
+    )).all()
     for prior in prior_jobs:
         evidence = _evidence(prior)
-        if evidence.get("planningEngine") != PLANNING_ENGINE:
-            continue
-        if evidence.get("planningInputDigest") != planning_input_digest:
+        if evidence.get("planningEngine") != PLANNING_ENGINE or evidence.get("planningInputDigest") != planning_input_digest:
             continue
         plan = await db.get(SoftwarePlanRecord, prior.plan_id)
-        if (
-            plan is not None
-            and plan.tenant_id == row.tenant_id
-            and plan.approved_version is not None
-        ):
+        if plan is not None and plan.tenant_id == row.tenant_id and plan.approved_version is not None:
             return plan
     return None
 
@@ -199,8 +155,7 @@ async def _next_attempt(db, tenant_id: str, solution_id: str) -> int:
             SolutionJob.solution_id == solution_id,
             SolutionJob.job_type.in_(("initial_generation", GENERATED_JOB_TYPE)),
         )
-        .order_by(desc(SolutionJob.attempt))
-        .limit(1)
+        .order_by(desc(SolutionJob.attempt)).limit(1)
     )
     return int(previous.attempt) + 1 if previous else 1
 
@@ -213,27 +168,15 @@ async def create_generated_placeholder(db, tenant_id: str, user_id: str, name: s
         slug = f"{base}-{suffix}"
         suffix += 1
     project = GeneratedProject(
-        tenant_id=tenant_id,
-        slug=slug,
-        name=name[:200],
-        vertical="custom",
-        prompt=objective,
-        brand_json="{}",
-        artifact_graph_json="{}",
-        created_by=user_id,
-        architecture_pack="custom",
+        tenant_id=tenant_id, slug=slug, name=name[:200], vertical="custom", prompt=objective,
+        brand_json="{}", artifact_graph_json="{}", created_by=user_id, architecture_pack="custom",
     )
     db.add(project)
     await db.flush()
     return project
 
 
-async def queue_generated_generation(
-    db,
-    *,
-    row: SolutionRecord,
-    user_id: str,
-) -> tuple[SolutionRecord, SolutionJob]:
+async def queue_generated_generation(db, *, row: SolutionRecord, user_id: str) -> tuple[SolutionRecord, SolutionJob]:
     active = await db.scalar(
         select(SolutionJob)
         .where(
@@ -242,8 +185,7 @@ async def queue_generated_generation(
             SolutionJob.job_type == GENERATED_JOB_TYPE,
             SolutionJob.status.in_(("queued", "running")),
         )
-        .order_by(desc(SolutionJob.attempt))
-        .limit(1)
+        .order_by(desc(SolutionJob.attempt)).limit(1)
     )
     if active:
         return row, active
@@ -254,11 +196,7 @@ async def queue_generated_generation(
     objective = " ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000]
     planning_input_digest = _planning_input_digest(row.name, objective, context)
     reusable_plan = await _reusable_approved_plan(db, row, planning_input_digest)
-    source_reference = (
-        f"software-plan:{reusable_plan.id}:{reusable_plan.approved_version}"
-        if reusable_plan is not None
-        else f"owner-intent:{row.id}"
-    )
+    source_reference = f"software-plan:{reusable_plan.id}:{reusable_plan.approved_version}" if reusable_plan is not None else f"owner-intent:{row.id}"
     evidence: dict[str, Any] = {
         "objective": objective,
         "createdBy": user_id,
@@ -267,46 +205,23 @@ async def queue_generated_generation(
         "planningInputDigest": planning_input_digest,
     }
     if reusable_plan is not None:
-        evidence.update(
-            {
-                "reusedSoftwarePlanId": reusable_plan.id,
-                "reusedSoftwarePlanVersion": reusable_plan.approved_version,
-            }
-        )
+        evidence.update({"reusedSoftwarePlanId": reusable_plan.id, "reusedSoftwarePlanVersion": reusable_plan.approved_version})
     job = SolutionJob(
-        tenant_id=row.tenant_id,
-        solution_id=row.id,
-        source_version_reference=source_reference,
-        job_type=GENERATED_JOB_TYPE,
-        status="queued",
-        attempt=attempt,
-        created_by=user_id,
-        plan_id=reusable_plan.id if reusable_plan is not None else None,
-        log_json="[]",
+        tenant_id=row.tenant_id, solution_id=row.id, source_version_reference=source_reference,
+        job_type=GENERATED_JOB_TYPE, status="queued", attempt=attempt, created_by=user_id,
+        plan_id=reusable_plan.id if reusable_plan is not None else None, log_json="[]",
         evidence_json=json.dumps(evidence, ensure_ascii=False),
         idempotency_key=f"solution:{row.id}:generated-build:{attempt}",
     )
     _append_log(job, "queue", "queued", "Generated Solution queued for durable worker execution")
     if reusable_plan is not None:
-        _append_log(
-            job,
-            "planning",
-            "reused",
-            f"Reusing approved SoftwarePlan v{reusable_plan.approved_version}; retry resumes at source generation",
-        )
+        _append_log(job, "planning", "reused", f"Reusing approved SoftwarePlan v{reusable_plan.approved_version}; retry resumes at source generation")
     db.add(job)
     await db.flush()
 
-    initial: dict[str, Any] = {
-        "status": "queued",
-        "stage": "source_generation" if reusable_plan is not None else "planning",
-        "jobId": job.id,
-        "attempt": attempt,
-    }
+    initial: dict[str, Any] = {"status": "queued", "stage": "source_generation" if reusable_plan is not None else "planning", "jobId": job.id, "attempt": attempt}
     if reusable_plan is not None:
-        initial["softwarePlanId"] = reusable_plan.id
-        initial["softwarePlanVersion"] = reusable_plan.approved_version
-        initial["resumedFromCheckpoint"] = "planning"
+        initial.update({"softwarePlanId": reusable_plan.id, "softwarePlanVersion": reusable_plan.approved_version, "resumedFromCheckpoint": "planning"})
     context["initialGeneration"] = initial
     row.lifecycle_status = LifecycleStatus.BUILDING
     row.current_version_reference = None
@@ -321,12 +236,7 @@ async def _create_plan_record(db, job: SolutionJob, row: SolutionRecord, user_id
     context = _context(row)
     owner = context.get("ownerIntent") if isinstance(context.get("ownerIntent"), dict) else {}
     objective = " ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000]
-    plan = SoftwarePlanRecord(
-        tenant_id=row.tenant_id,
-        prompt=_planning_prompt(row.name, objective, context),
-        created_by=user_id,
-        status="planning",
-    )
+    plan = SoftwarePlanRecord(tenant_id=row.tenant_id, prompt=_planning_prompt(row.name, objective, context), created_by=user_id, status="planning")
     db.add(plan)
     await db.flush()
     job.plan_id = plan.id
@@ -335,13 +245,7 @@ async def _create_plan_record(db, job: SolutionJob, row: SolutionRecord, user_id
     evidence["softwarePlanId"] = plan.id
     job.evidence_json = json.dumps(evidence, ensure_ascii=False)
     _append_log(job, "planning", "running", f"SoftwarePlan {plan.id} persisted before model planning")
-    context["initialGeneration"] = {
-        "status": "running",
-        "stage": "planning",
-        "jobId": job.id,
-        "attempt": job.attempt,
-        "softwarePlanId": plan.id,
-    }
+    context["initialGeneration"] = {"status": "running", "stage": "planning", "jobId": job.id, "attempt": job.attempt, "softwarePlanId": plan.id}
     row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
     await db.commit()
     await db.refresh(job)
@@ -365,18 +269,15 @@ async def _ensure_plan(db, job: SolutionJob, row: SolutionRecord, user_id: str):
     plan_row = await db.get(SoftwarePlanRecord, job.plan_id) if job.plan_id else None
     if plan_row is None:
         plan_row = await _create_plan_record(db, job, row, user_id)
-
     if plan_row.approved_version:
         _, plan = await plan_version(db, plan_row, plan_row.approved_version)
         return plan_row, plan
 
-    existing_version = await db.scalar(
-        select(SoftwarePlanVersion).where(
-            SoftwarePlanVersion.plan_id == plan_row.id,
-            SoftwarePlanVersion.tenant_id == plan_row.tenant_id,
-            SoftwarePlanVersion.version == plan_row.current_version,
-        )
-    )
+    existing_version = await db.scalar(select(SoftwarePlanVersion).where(
+        SoftwarePlanVersion.plan_id == plan_row.id,
+        SoftwarePlanVersion.tenant_id == plan_row.tenant_id,
+        SoftwarePlanVersion.version == plan_row.current_version,
+    ))
     if existing_version:
         plan = SoftwarePlan.model_validate_json(existing_version.plan_json)
     else:
@@ -393,10 +294,7 @@ async def _ensure_plan(db, job: SolutionJob, row: SolutionRecord, user_id: str):
             except ValidationError as error:
                 plan_row.status = "planning_blocked"
                 await db.commit()
-                details = "; ".join(
-                    f"{'.'.join(str(part) for part in item.get('loc', []))}: {item.get('msg', 'invalid')}"
-                    for item in error.errors()[:8]
-                )
+                details = "; ".join(f"{'.'.join(str(part) for part in item.get('loc', []))}: {item.get('msg', 'invalid')}" for item in error.errors()[:8])
                 raise PlanningBlocked(f"live plan projection failed schema validation: {details}") from error
             except Exception:
                 plan_row.status = "planning_blocked"
@@ -412,8 +310,7 @@ async def _ensure_plan(db, job: SolutionJob, row: SolutionRecord, user_id: str):
     job.plan_id = plan_row.id
     job.source_version_reference = f"software-plan:{plan_row.id}:{plan_row.approved_version}"
     evidence = _evidence(job)
-    evidence["softwarePlanId"] = plan_row.id
-    evidence["softwarePlanVersion"] = plan_row.approved_version
+    evidence.update({"softwarePlanId": plan_row.id, "softwarePlanVersion": plan_row.approved_version})
     job.evidence_json = json.dumps(evidence, ensure_ascii=False)
     _append_log(job, "planning", "succeeded", f"SoftwarePlan v{plan_row.approved_version} validated and approved")
     await db.commit()
@@ -428,15 +325,7 @@ async def _bind_project(db, project: GeneratedProject, plan_row: SoftwarePlanRec
     design = plan.design.model_dump() if getattr(plan, "design", None) else {}
     design.update({"name": project.name, "vertical": "custom"})
     project.brand_json = json.dumps(design, ensure_ascii=False)
-    project.artifact_graph_json = json.dumps(
-        plan_artifact_graph(
-            plan.model_dump(),
-            project.id,
-            int(project.version or 1),
-            int(plan_row.approved_version or plan_row.current_version),
-        ),
-        ensure_ascii=False,
-    )
+    project.artifact_graph_json = json.dumps(plan_artifact_graph(plan.model_dump(), project.id, int(project.version or 1), int(plan_row.approved_version or plan_row.current_version)), ensure_ascii=False)
     await db.flush()
 
 
@@ -444,13 +333,7 @@ async def _mark_failed(db, job: SolutionJob, row: SolutionRecord, stage: str, er
     safe_error = " ".join(str(error).split())[:1000] or type(error).__name__
     _append_log(job, stage, "failed", safe_error)
     context = _context(row)
-    initial = {
-        "status": "retryable",
-        "stage": stage,
-        "error": safe_error,
-        "jobId": job.id,
-        "attempt": job.attempt,
-    }
+    initial = {"status": "retryable", "stage": stage, "error": safe_error, "jobId": job.id, "attempt": job.attempt}
     if job.plan_id:
         initial["softwarePlanId"] = job.plan_id
     context["initialGeneration"] = initial
@@ -466,8 +349,7 @@ async def _mark_failed(db, job: SolutionJob, row: SolutionRecord, stage: str, er
     job.lease_expires_at = None
     job.heartbeat_at = None
     evidence = _evidence(job)
-    evidence["failedStage"] = stage
-    evidence["error"] = safe_error
+    evidence.update({"failedStage": stage, "error": safe_error})
     job.evidence_json = json.dumps(evidence, ensure_ascii=False)
     await db.commit()
 
@@ -490,33 +372,57 @@ async def process_generation_job(db, job: SolutionJob) -> None:
         plan_row, plan = await _ensure_plan(db, job, row, user_id)
         await _bind_project(db, project, plan_row, plan)
         context = _context(row)
-        context["softwarePlan"] = {
-            "id": plan_row.id,
-            "version": plan_row.approved_version,
-            "status": plan_row.status,
-        }
+        context["softwarePlan"] = {"id": plan_row.id, "version": plan_row.approved_version, "status": plan_row.status}
         context["initialGeneration"] = {
-            "status": "running",
-            "stage": "source_generation",
-            "jobId": job.id,
-            "attempt": job.attempt,
-            "softwarePlanId": plan_row.id,
+            "status": "running", "stage": "source_generation", "jobId": job.id,
+            "attempt": job.attempt, "softwarePlanId": plan_row.id,
             "softwarePlanVersion": plan_row.approved_version,
         }
         row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
         job.status = "running"
         _append_log(job, "source_generation", "running", "Generating executable source from the approved requirement ledger")
         await db.commit()
-
         stage = "source_generation"
+
+        last_progress: tuple[str, str] | None = None
+
+        async def generation_progress(next_stage: str, status: str, payload: dict[str, Any]) -> None:
+            """Persist live coding/runner stages without claiming the objective is complete."""
+            nonlocal stage, last_progress
+            clean_stage = str(next_stage or "source_generation")[:80]
+            clean_status = str(status or "running")[:40]
+            stage = clean_stage
+            current = _context(row)
+            previous = current.get("initialGeneration") if isinstance(current.get("initialGeneration"), dict) else {}
+            initial = dict(previous)
+            initial.update({
+                "status": "running",
+                "stage": clean_stage,
+                "stageStatus": clean_status,
+                "jobId": job.id,
+                "attempt": job.attempt,
+                "softwarePlanId": plan_row.id,
+                "softwarePlanVersion": plan_row.approved_version,
+            })
+            for source_key, target_key in (
+                ("buildId", "buildId"), ("sourceBundleId", "sourceBundleId"),
+                ("sourceVersion", "sourceVersion"), ("repairNumber", "repairNumber"),
+                ("classification", "failureClassification"),
+            ):
+                if payload.get(source_key) is not None:
+                    initial[target_key] = payload.get(source_key)
+            current["initialGeneration"] = initial
+            row.context_json = json.dumps(current, ensure_ascii=False, sort_keys=True)
+            signature = (clean_stage, clean_status)
+            if signature != last_progress:
+                detail = payload.get("classification") or payload.get("state") or payload.get("to") or payload.get("message")
+                _append_log(job, clean_stage, clean_status, str(detail) if detail else None)
+                last_progress = signature
+            await db.commit()
+
         build, source, repairs = await build_with_repair(
-            db,
-            row.tenant_id,
-            user_id,
-            plan_row,
-            plan,
-            job.idempotency_key,
-            adapter=ExternalRunnerAdapter(),
+            db, row.tenant_id, user_id, plan_row, plan, job.idempotency_key,
+            adapter=ExternalRunnerAdapter(), progress_callback=generation_progress,
         )
         job.source_version_reference = str(source.source_version)
         if build.state != "preview_ready":
@@ -529,16 +435,10 @@ async def process_generation_job(db, job: SolutionJob) -> None:
         _append_log(job, stage, "succeeded", "Verified isolated preview is active")
         context = _context(row)
         context["initialGeneration"] = {
-            "status": "applied",
-            "stage": stage,
-            "jobId": job.id,
-            "attempt": job.attempt,
-            "softwarePlanId": plan_row.id,
-            "softwarePlanVersion": plan_row.approved_version,
-            "sourceBundleId": source.id,
-            "sourceVersion": source.source_version,
-            "buildId": build.id,
-            "repairCount": len(repairs),
+            "status": "applied", "stage": stage, "jobId": job.id, "attempt": job.attempt,
+            "softwarePlanId": plan_row.id, "softwarePlanVersion": plan_row.approved_version,
+            "sourceBundleId": source.id, "sourceVersion": source.source_version,
+            "buildId": build.id, "repairCount": len(repairs),
         }
         row.lifecycle_status = LifecycleStatus.PREVIEW_READY
         row.current_version_reference = str(source.source_version)
@@ -552,17 +452,11 @@ async def process_generation_job(db, job: SolutionJob) -> None:
         job.lease_expires_at = None
         job.heartbeat_at = None
         evidence = _evidence(job)
-        evidence.update(
-            {
-                "softwarePlanId": plan_row.id,
-                "softwarePlanVersion": plan_row.approved_version,
-                "sourceBundleId": source.id,
-                "sourceVersion": source.source_version,
-                "buildId": build.id,
-                "buildState": build.state,
-                "repairs": repairs,
-            }
-        )
+        evidence.update({
+            "softwarePlanId": plan_row.id, "softwarePlanVersion": plan_row.approved_version,
+            "sourceBundleId": source.id, "sourceVersion": source.source_version,
+            "buildId": build.id, "buildState": build.state, "repairs": repairs,
+        })
         job.evidence_json = json.dumps(evidence, ensure_ascii=False)
         await db.commit()
     except Exception as error:
@@ -580,11 +474,7 @@ async def claim_next_generation_job(worker_id: str) -> str | None:
                 SolutionJob.cancellation_requested.is_(False),
                 or_(
                     SolutionJob.status == "queued",
-                    and_(
-                        SolutionJob.status == "running",
-                        SolutionJob.lease_expires_at.is_not(None),
-                        SolutionJob.lease_expires_at < now,
-                    ),
+                    and_(SolutionJob.status == "running", SolutionJob.lease_expires_at.is_not(None), SolutionJob.lease_expires_at < now),
                 ),
             )
             .order_by(SolutionJob.queued_at, SolutionJob.created_at)
@@ -600,10 +490,7 @@ async def claim_next_generation_job(worker_id: str) -> str | None:
         job.locked_by = worker_id
         job.heartbeat_at = now
         job.lease_expires_at = lease_until
-        if reclaimed:
-            _append_log(job, "worker_lease", "reclaimed", "Expired worker lease reclaimed after interruption")
-        else:
-            _append_log(job, "worker_lease", "claimed", f"Claimed by {worker_id}")
+        _append_log(job, "worker_lease", "reclaimed" if reclaimed else "claimed", "Expired worker lease reclaimed after interruption" if reclaimed else f"Claimed by {worker_id}")
         await db.commit()
         return job.id
 
@@ -644,9 +531,6 @@ async def work_once(worker_id: str) -> bool:
 
 
 async def run_forever() -> None:
-    # This lets the trusted Railway worker service be provisioned before the
-    # isolated runner rollout. Disabled workers intentionally do not touch the DB
-    # or consume queued attempts; enabling the variable requires a redeploy.
     if not worker_enabled():
         while True:
             await asyncio.sleep(3600)
