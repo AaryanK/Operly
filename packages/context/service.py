@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.channel_models import ContextRecord
 from packages.database.models import AppUser, Tenant, TenantMember
+from packages.security.surfaces import SurfaceKind
 from packages.security.temporal_context import resolve_temporal_context
 
 
@@ -61,6 +62,7 @@ class ContextService:
 
     The caller never supplies arbitrary scope identifiers through model-visible
     arguments. Providers bind tenant/user/conversation values from runtime context.
+    Private context is additionally gated by the trusted interaction surface.
     """
 
     @staticmethod
@@ -241,9 +243,10 @@ class ContextService:
         user_id: str | None,
         query: str,
         limit: int = 12,
+        include_private: bool = True,
     ) -> list[ContextRecord]:
         privacy_filter = ContextRecord.visibility == "shared"
-        if user_id:
+        if include_private and user_id:
             privacy_filter = or_(
                 ContextRecord.visibility == "shared",
                 and_(
@@ -270,15 +273,17 @@ class ContextService:
         user_id: str | None,
         conversation_id: str,
         allow_tenant_context: bool,
+        surface: SurfaceKind | str | None = None,
         query: str = "",
         per_scope: int = 8,
     ) -> LoadedContext:
-        """Load only query-relevant records plus trusted session identity and time.
+        """Load a tiny query-relevant prompt slice under explicit surface policy.
 
-        Recent records are deliberately not preloaded. If the model needs broader
-        memory or workspace history it must use the authorized context tools,
-        keeping retrieval behind the harness instead of prompt stuffing.
+        Missing/unknown surfaces never preload personal-human or private conversation
+        context. Broader memory/history belongs behind context retrieval rather than
+        being automatically stuffed into every model prompt.
         """
+        surface_kind = SurfaceKind.coerce(surface)
         user = await db.get(AppUser, user_id) if user_id else None
         tenant_row = await db.get(Tenant, tenant_id)
         membership = None
@@ -298,7 +303,7 @@ class ContextService:
         has_query = bool(cls._query_terms(query))
         limit = max(1, min(per_scope, 12))
 
-        if has_query and user_id:
+        if has_query and user_id and surface_kind.allows_personal_global:
             human = await cls.search_human(
                 db,
                 user_id=user_id,
@@ -327,6 +332,7 @@ class ContextService:
                 user_id=user_id,
                 query=query,
                 limit=limit,
+                include_private=surface_kind.allows_private_conversation,
             )
         else:
             conversation = []
