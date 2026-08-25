@@ -14,7 +14,7 @@ from packages.artifacts.delivery import (
 )
 from packages.artifacts.service import ArtifactScope, ArtifactService
 from packages.database.agent_models import AgentConversation, AgentMessage
-from packages.database.artifact_models import AgentRunRecord, ArtifactRecord
+from packages.database.artifact_models import AgentRunEventRecord, AgentRunRecord, ArtifactRecord
 from packages.database.db import Base
 from packages.database.models import Tenant
 
@@ -30,6 +30,7 @@ async def delivery_db():
                     Tenant.__table__,
                     ArtifactRecord.__table__,
                     AgentRunRecord.__table__,
+                    AgentRunEventRecord.__table__,
                     AgentConversation.__table__,
                     AgentMessage.__table__,
                 ],
@@ -93,6 +94,52 @@ async def test_project_agent_result_resolves_scope_and_replaces_generic_done(del
         {"message": "Done.", "runtime_run_id": "run-1"},
     )
     assert foreign["artifacts"] == []
+
+
+@pytest.mark.asyncio
+async def test_generic_done_without_capability_observation_is_not_execution_proof(delivery_db):
+    db = delivery_db
+    scope = ArtifactScope("workspace", "tenant-a", tenant_id="tenant-a")
+    db.add(
+        AgentRunRecord(
+            id="run-no-evidence",
+            scope_kind="workspace",
+            scope_id="tenant-a",
+            tenant_id="tenant-a",
+            objective="Perform the requested operation",
+            state="completed",
+            artifact_refs_json="[]",
+        )
+    )
+    await db.commit()
+
+    result = await project_agent_result(
+        db,
+        scope,
+        {"message": "Done.", "runtime_run_id": "run-no-evidence"},
+    )
+    assert result["artifacts"] == []
+    assert result["message"] == (
+        "I don't have verified execution evidence that the requested operation completed."
+    )
+
+    # Once a real capability observation exists, delivery does not second-guess a
+    # non-artifact operation; the capability/runtime verifier owns that truth.
+    db.add(
+        AgentRunEventRecord(
+            run_id="run-no-evidence",
+            sequence=1,
+            event_type="capability.observed",
+            payload_json=json.dumps({"capability_id": "calendar.list_events"}),
+        )
+    )
+    await db.commit()
+    observed = await project_agent_result(
+        db,
+        scope,
+        {"message": "Done.", "runtime_run_id": "run-no-evidence"},
+    )
+    assert observed["message"] == "Done."
 
 
 @pytest.mark.asyncio
