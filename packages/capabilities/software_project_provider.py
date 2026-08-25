@@ -37,12 +37,32 @@ def _binding_json(binding) -> dict:
     }
 
 
+def _plugin_context(context, objective: str):
+    # Import lazily: agent_harness imports the default registry, which registers this
+    # provider. A module-level import would form defaults -> provider -> harness ->
+    # defaults and make the entire capability/task surface fail during collection.
+    from packages.capabilities.agent_harness import PluginInvocationContext
+
+    invocation = context.invocation if isinstance(context.invocation, dict) else {}
+    metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
+    return PluginInvocationContext(
+        tenant_id=str(context.tenant_id or ""),
+        user_id=context.actor_id,
+        role="member",
+        objective=objective[:12000],
+        channel=str(invocation.get("channel") or "software"),
+        metadata=dict(metadata),
+        surface=metadata.get("_surface_kind") or metadata.get("surface"),
+    )
+
+
 class SoftwareProjectProvider(BaseProvider):
     """Model-visible facade over canonical SoftwareProject and ServiceBinding state.
 
-    Binding writes deliberately retain the existing ``solution:generate`` authority
-    and require approval. The dedicated authorization pass may later redefine that
-    policy without changing these project/binding contracts.
+    Projects are the durable identity shared by conversational Operly AI and Studio.
+    A binding is configuration, not authority: creation is approval-gated and its
+    target must be currently available to the configuring actor; runtime invocation is
+    independently re-authorized through CapabilityGateway -> CapabilityFirewall.
     """
 
     name = "operly_software_projects"
@@ -60,6 +80,29 @@ class SoftwareProjectProvider(BaseProvider):
             category="software",
             tags=frozenset({"software", "studio", "project"}),
             semantic_operations=frozenset({"list software projects", "inspect studio projects"}),
+        ),
+        CapabilityDefinition(
+            "software.project.create",
+            "software_project_create",
+            "Create a canonical draft SoftwareProject that can be edited from Operly AI or opened in Studio. This does not deploy or publish software.",
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "description": {"type": "string", "maxLength": 8000},
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="low",
+            permissions=("solution:generate",),
+            approval_policy=ApprovalPolicy.AUTO,
+            reversible=True,
+            plugin_id="operly.software",
+            category="software",
+            tags=frozenset({"software", "studio", "project", "create"}),
+            semantic_operations=frozenset({"create software project", "start app project", "start studio project"}),
         ),
         CapabilityDefinition(
             "software.project.inspect",
@@ -102,7 +145,7 @@ class SoftwareProjectProvider(BaseProvider):
         CapabilityDefinition(
             "software.binding.create",
             "software_binding_create",
-            "Attach a semantic project operation to an installed Operly capability. This stores no provider credential and does not invoke the target capability.",
+            "Attach one semantic project operation to a currently authorized/configured Operly capability. This stores no provider credential and does not invoke the target capability.",
             {
                 "type": "object",
                 "properties": {
@@ -110,8 +153,8 @@ class SoftwareProjectProvider(BaseProvider):
                     "semantic_name": {"type": "string"},
                     "capability_id": {"type": "string"},
                     "capability_version": {"type": "string"},
-                    "binding_mode": {"type": "string"},
-                    "principal_scope": {"type": "string"},
+                    "binding_mode": {"type": "string", "enum": ["capability_gateway"]},
+                    "principal_scope": {"type": "string", "enum": ["project_runtime"]},
                     "configuration": {"type": "object"},
                 },
                 "required": ["project_id", "semantic_name", "capability_id"],
@@ -151,15 +194,28 @@ class SoftwareProjectProvider(BaseProvider):
 
     def __init__(self) -> None:
         self.projects = SoftwareProjectService()
-        # Exact capability validation may be performed by the configuration UI or
-        # planner before creating the binding. Runtime authority is always checked
-        # later by CapabilityGateway -> CapabilityFirewall.
         self.bindings = ServiceBindingStore()
 
     async def execute(self, context, capability_name, arguments):
         if capability_name == "software.project.list":
             projects = await self.projects.list(context.db, context.tenant_id)
             return CapabilityResult(True, False, {"projects": [_project_json(project) for project in projects]})
+
+        if capability_name == "software.project.create":
+            if not context.actor_id:
+                return CapabilityResult(False, False, {"reason": "authenticated_actor_required"})
+            try:
+                project = await self.projects.create(
+                    context.db,
+                    workspace_id=str(context.tenant_id or ""),
+                    user_id=context.actor_id,
+                    name=str(arguments.get("name") or ""),
+                    description=str(arguments.get("description") or ""),
+                    metadata={"created_surface": "agent_runtime"},
+                )
+            except ValueError as error:
+                return CapabilityResult(False, False, {"reason": str(error)})
+            return CapabilityResult(True, True, {"project": _project_json(project)}, project.id)
 
         if capability_name == "software.project.inspect":
             try:
@@ -185,6 +241,25 @@ class SoftwareProjectProvider(BaseProvider):
             )
 
         if capability_name == "software.binding.create":
+            # Availability uses the canonical harness, but import it only at runtime
+            # so provider registration itself remains acyclic.
+            from packages.capabilities.agent_harness import PluginAgentHarness
+
+            target = str(arguments.get("capability_id") or "").strip()
+            availability = await PluginAgentHarness().availability(
+                target,
+                _plugin_context(context, f"Authorize project binding to {target}"),
+            )
+            if not bool(availability.get("available")):
+                return CapabilityResult(
+                    False,
+                    False,
+                    {
+                        "reason": "binding_target_unavailable",
+                        "capability_id": target,
+                        "availability": availability,
+                    },
+                )
             try:
                 project = await self.projects.get(context.db, context.tenant_id, str(arguments["project_id"]))
                 binding = await self.bindings.create(
@@ -193,7 +268,7 @@ class SoftwareProjectProvider(BaseProvider):
                     project_id=project.id,
                     user_id=context.actor_id or "OPERLY",
                     semantic_name=str(arguments["semantic_name"]),
-                    capability_id=str(arguments["capability_id"]),
+                    capability_id=target,
                     capability_version=str(arguments.get("capability_version") or "1.0.0"),
                     binding_mode=str(arguments.get("binding_mode") or "capability_gateway"),
                     principal_scope=str(arguments.get("principal_scope") or "project_runtime"),
@@ -204,7 +279,7 @@ class SoftwareProjectProvider(BaseProvider):
             return CapabilityResult(
                 True,
                 True,
-                {"binding": _binding_json(binding), "target_invoked": False},
+                {"binding": _binding_json(binding), "target_invoked": False, "target_availability": availability},
                 binding.id,
             )
 
@@ -231,6 +306,21 @@ class SoftwareProjectProvider(BaseProvider):
             return CapabilityResult(False, result.changed, result.evidence, result.external_reference)
         if capability_name in {"software.project.list", "software.project.inspect", "software.binding.list"}:
             return CapabilityResult(True, False, {"observed": True, **result.evidence}, result.external_reference)
+        if capability_name == "software.project.create":
+            try:
+                project = await self.projects.get(
+                    context.db,
+                    str(context.tenant_id or ""),
+                    str(result.external_reference or ""),
+                )
+            except LookupError:
+                return CapabilityResult(False, result.changed, {"persisted": False})
+            return CapabilityResult(
+                True,
+                result.changed,
+                {"persisted": True, "project_id": project.id, **result.evidence},
+                project.id,
+            )
         if capability_name == "software.binding.create":
             try:
                 binding = await self.bindings.get(

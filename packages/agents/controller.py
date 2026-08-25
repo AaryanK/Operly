@@ -92,12 +92,17 @@ def _resumable_state(value: str) -> bool:
 
 
 class AgentRunController:
-    """Plan only when useful, run the micro-loop, compact state, verify, and replan.
+    """Run direct first, verify capability evidence, then semantically replan if needed.
 
     The controller owns operational state rather than hidden model reasoning. It does
     not widen authority: capability/context access remains entirely in the supplied
     harness callbacks and canonical firewall. Durable checkpoints use the same
     runtime_run_id for Operly AI, Studio, MCP and workflow-triggered runs.
+
+    Initial decomposition is deliberately not selected by lexical prompt heuristics.
+    Informational turns can answer directly without planner/verifier cost. As soon as
+    real capability evidence exists, the literal root objective becomes a verification
+    criterion. Incomplete evidence triggers the bounded semantic replanner.
     """
 
     def __init__(
@@ -270,17 +275,26 @@ class AgentRunController:
                 goal_verification = None
                 truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
                 waiting_approval = str(truth.get("status") or "").upper() == "WAITING_APPROVAL"
+                execution_evidence = has_execution_evidence(combined_trace)
+                verification_criteria: tuple[str, ...] = ()
+                if state.plan is not None and state.plan.planning_required:
+                    verification_criteria = tuple(state.plan.success_criteria) or (objective[:700],)
+                elif execution_evidence:
+                    # Direct-first operational turns still get strict root verification.
+                    # This catches a model that completes one valid action and then
+                    # incorrectly declares a multi-part user objective finished.
+                    verification_criteria = (objective[:700],)
+
                 if (
-                    state.plan is not None
-                    and state.plan.planning_required
+                    verification_criteria
                     and not bool(result.get("stopped"))
                     and not waiting_approval
                 ):
                     goal_verification = await self.verifier.verify(
                         objective=objective,
-                        success_criteria=state.plan.success_criteria,
+                        success_criteria=verification_criteria,
                         trace=combined_trace,
-                        metadata=metadata,
+                        metadata={**metadata, "verification_strategy": "evidence_triggered"},
                     )
                     result["goal_verification"] = goal_verification.as_dict()
                     if not goal_verification.satisfied:
@@ -305,6 +319,7 @@ class AgentRunController:
                         "goal_verification": goal_verification.as_dict() if goal_verification else None,
                         "budget": result.get("budget") or {},
                         "capability_rescues": capability_rescues,
+                        "execution_evidence": execution_evidence,
                     }
                 )
 

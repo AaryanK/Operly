@@ -9,6 +9,7 @@ from packages.agents.capability_rescue import (
 )
 from packages.agents.controller import AgentRunController
 from packages.agents.runtime import AgentTraceEntry
+from packages.agents.verification import RunGoalVerification
 
 
 _SEARCH_TOOL = {
@@ -97,6 +98,18 @@ class _DocxRescueModel:
         return {"role": "assistant", "content": "Created the DOCX and attached it."}
 
 
+class _SatisfiedVerifier:
+    """The rescue test owns discovery behavior, not requirements-model availability."""
+
+    async def verify(self, **kwargs):
+        del kwargs
+        return RunGoalVerification(
+            True,
+            verified=("A provider-verified DOCX artifact exists.",),
+            reason="test_verified_artifact",
+        )
+
+
 @pytest.mark.asyncio
 async def test_discord_docx_request_rescues_hidden_file_authoring_capability(monkeypatch):
     async def no_resume(*, objective, metadata):
@@ -183,7 +196,10 @@ async def test_discord_docx_request_rescues_hidden_file_authoring_capability(mon
         {"role": "user", "content": "wrap this to a docx and give that to me"},
     ]
     model = _DocxRescueModel()
-    result = await AgentRunController(max_replans=0).run(
+    result = await AgentRunController(
+        max_replans=0,
+        verifier=_SatisfiedVerifier(),
+    ).run(
         objective="wrap this to a docx and give that to me",
         model=model,
         messages=messages,

@@ -125,6 +125,17 @@ class SoftwareProjectPersistenceTests(unittest.IsolatedAsyncioTestCase):
         registry.register(DemoProvider())
         store = ServiceBindingStore(registry)
 
+        with self.assertRaisesRegex(PermissionError, "explicit current authority"):
+            await store.create(
+                self.db,
+                workspace_id=self.tenant.id,
+                project_id=project.id,
+                user_id="owner-a",
+                semantic_name="business.lookup",
+                capability_id="demo.lookup",
+                configuration={"allowed_argument_fields": ["query"]},
+            )
+
         binding = await store.create(
             self.db,
             workspace_id=self.tenant.id,
@@ -133,6 +144,7 @@ class SoftwareProjectPersistenceTests(unittest.IsolatedAsyncioTestCase):
             semantic_name="business.lookup",
             capability_id="demo.lookup",
             configuration={"allowed_argument_fields": ["query"]},
+            authority=set(),
         )
         await self.db.commit()
 

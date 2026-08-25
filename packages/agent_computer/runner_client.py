@@ -17,14 +17,16 @@ class AgentComputerRunnerClient:
         self.url = (url or os.getenv("OPERLY_SANDBOX_RUNNER_URL", "")).rstrip("/")
         self.token = token or os.getenv("OPERLY_SANDBOX_RUNNER_TOKEN", "")
 
-    async def execute(self, payload: dict) -> dict:
+    def _endpoint(self, path: str) -> str:
         if not self.url or not self.token:
             raise SandboxUnavailable("External isolated runner is not configured")
-        url = validate_runner_url(self.url) + "/v1/computer/execute"
+        return validate_runner_url(self.url) + path
+
+    async def _post(self, path: str, payload: dict, *, timeout_seconds: int) -> dict:
+        url = self._endpoint(path)
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         signature = hmac.new(self.token.encode(), raw, hashlib.sha256).hexdigest()
-        timeout_seconds = max(10, min(int(payload.get("timeoutSeconds") or 120) + 30, 660))
-        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        timeout = aiohttp.ClientTimeout(total=max(10, min(int(timeout_seconds), 690)))
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
@@ -56,3 +58,17 @@ class AgentComputerRunnerClient:
             raise
         except (aiohttp.ClientError, TimeoutError) as error:
             raise SandboxFailure("Agent computer runner communication failed") from error
+
+    async def execute(self, payload: dict) -> dict:
+        timeout_seconds = max(10, min(int(payload.get("timeoutSeconds") or 120) + 45, 675))
+        return await self._post("/v1/computer/execute", payload, timeout_seconds=timeout_seconds)
+
+    async def destroy(self, sandbox_id: str) -> dict:
+        clean = str(sandbox_id or "").strip()
+        if not clean:
+            return {"ok": True, "destroyed": False, "reason": "no_session"}
+        return await self._post(
+            "/v1/computer/destroy",
+            {"sandboxId": clean},
+            timeout_seconds=45,
+        )

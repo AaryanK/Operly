@@ -38,9 +38,29 @@ def _loaded(row: AgentRunRecord) -> dict[str, Any]:
         "state": row.state,
         "objective": row.objective,
         "checkpoint": checkpoint,
+        "computer_session_active": bool(row.computer_session_id),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
     }
+
+
+async def _destroy_computer_after_commit(sandbox_id: str | None) -> None:
+    """Best-effort cleanup; Railway idle expiry is the secondary failsafe."""
+    clean = str(sandbox_id or "").strip()
+    if not clean:
+        return
+    try:
+        from packages.agent_computer.runner_client import AgentComputerRunnerClient
+        from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
+
+        try:
+            await AgentComputerRunnerClient().destroy(clean)
+        except (SandboxFailure, SandboxUnavailable):
+            return
+    except Exception:
+        # Cleanup telemetry/runner availability must never rewrite already committed
+        # execution truth. The sandbox remains credential-free and has a short idle TTL.
+        return
 
 
 async def checkpoint_agent_run(
@@ -62,6 +82,7 @@ async def checkpoint_agent_run(
         return
     run_id = str(runtime_run_id)[:120]
     now = datetime.utcnow()
+    computer_to_destroy: str | None = None
     async with session_scope() as db:
         row = await db.get(AgentRunRecord, run_id)
         if row is None:
@@ -100,6 +121,13 @@ async def checkpoint_agent_run(
         else:
             row.completed_at = None
 
+        # Failed/waiting runs are resumable and may reuse their scratch computer until
+        # Railway idle expiry. Successful/cancelled runs relinquish it immediately.
+        if lifecycle_state in {"completed", "cancelled"} and row.computer_session_id:
+            computer_to_destroy = str(row.computer_session_id)
+            row.computer_session_id = None
+            row.computer_session_updated_at = now
+
         sequence = int(
             await db.scalar(
                 select(func.coalesce(func.max(AgentRunEventRecord.sequence), 0)).where(
@@ -116,6 +144,8 @@ async def checkpoint_agent_run(
                 payload_json=_json(payload or compact),
             )
         )
+
+    await _destroy_computer_after_commit(computer_to_destroy)
 
 
 async def load_agent_run(

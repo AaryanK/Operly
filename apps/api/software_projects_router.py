@@ -182,7 +182,7 @@ async def create_binding(
     db: AsyncSession = Depends(get_db),
 ):
     _owner(auth)
-    registry, _ = await _registry(auth)
+    registry, authority = await _registry(auth)
     store = ServiceBindingStore(registry)
     try:
         row = await store.create(
@@ -195,6 +195,7 @@ async def create_binding(
             binding_mode=payload.binding_mode,
             principal_scope=payload.principal_scope,
             configuration=payload.configuration,
+            authority=authority,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

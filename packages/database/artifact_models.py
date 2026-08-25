@@ -58,7 +58,13 @@ class ArtifactRecord(Base):
 
 
 class AgentRunRecord(Base):
-    """Durable checkpoint for the shared Operly/Studio/workflow agent runtime."""
+    """Durable checkpoint for the shared Operly/Studio/workflow agent runtime.
+
+    ``computer_session_id`` is only a reconnect handle for a disposable Railway
+    sandbox. It is not durable project/file state and conveys no authority by itself.
+    The sandbox is still isolated, credential-free and explicitly destroyed after a
+    successfully completed AgentRun (or by Railway idle expiry).
+    """
 
     __tablename__ = "agent_runs"
 
@@ -78,6 +84,8 @@ class AgentRunRecord(Base):
     checkpoint_json: Mapped[str] = mapped_column(Text, default="{}")
     artifact_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     pending_approval_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    computer_session_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    computer_session_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

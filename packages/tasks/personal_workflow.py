@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from packages.business_brain.personal_agent import get_personal_agent_service
+from packages.business_brain.personal_capability_runtime import invoke_personal_capability
 from packages.capabilities.agent_harness import PluginInvocationContext
-from packages.database.db import session_scope
 from packages.tasks.workflow import WorkflowExecutor
 
 
 class PersonalWorkflowExecutor(WorkflowExecutor):
-    """Run declarative personal workflows through Personal AI's provider set.
+    """Run declarative personal workflows through Personal AI's governed capability set.
 
-    This deliberately reuses PersonalAgentService's live provider registry instead of
-    maintaining a second personal-tool list. Adding a provider to Personal AI therefore
-    makes it available to personal workflows without changing this executor.
+    Scheduled execution must use the same ActionService/CapabilityFirewall boundary as
+    interactive Personal AI. Provider existence is not authority; account connector
+    state, OAuth scopes, surface policy and result verification are resolved again on
+    every invocation.
     """
 
     async def _invoke_workspace(
@@ -24,34 +23,19 @@ class PersonalWorkflowExecutor(WorkflowExecutor):
         *,
         call_id: str,
     ) -> dict:
-        service = get_personal_agent_service()
-        resolved = service._definitions.get(capability)
-        if resolved is None:
-            return {"ok": False, "error": "personal_workflow_capability_not_available"}
-        provider, _definition = resolved
-        async with session_scope() as db:
-            provider_context = SimpleNamespace(
-                tenant_id=None,
-                actor_id=context.user_id,
-                db=db,
-                invocation={
-                    "channel": context.channel,
-                    "temporal_context": context.metadata.get("temporal_context"),
-                    "metadata": {
-                        **context.metadata,
-                        "personal_scope": True,
-                        "shared_surface": False,
-                        "is_direct": True,
-                        "call_id": call_id,
-                    },
-                },
-            )
-            result = await provider.execute(provider_context, capability, dict(args))
-            verified = await provider.verify(provider_context, capability, dict(args), result)
-            await db.commit()
-            return {
-                "ok": bool(verified.success),
-                "status": "VERIFIED" if verified.success else "FAILED",
-                "observation": verified.evidence,
-                "changed": bool(verified.changed),
-            }
+        metadata = context.metadata if isinstance(context.metadata, dict) else {}
+        return await invoke_personal_capability(
+            get_personal_agent_service(),
+            user_id=str(context.user_id or ""),
+            capability_id=capability,
+            arguments=dict(args),
+            objective=str(context.objective or "Personal scheduled workflow"),
+            call_id=call_id,
+            channel=str(context.channel or "personal_workflow"),
+            conversation_id=str(metadata.get("_conversation_id") or "") or None,
+            metadata={
+                **metadata,
+                "scheduled_workflow": True,
+            },
+            focus_workspace_id=str(metadata.get("focus_workspace_id") or "") or None,
+        )

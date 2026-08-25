@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import desc, select
 
 from packages.database.application_builder_models import ManagedApplication
-from packages.database.custom_software_models import GeneratedProject, GeneratedSourceBundle
+from packages.database.custom_software_models import GeneratedProject, GeneratedSourceBundle, RunnerBuildRecord
 from packages.database.software_project_models import ServiceBindingRecord, SoftwareProjectRecord
 from packages.database.studio_models import StudioProject
 from packages.database.studio_source_models import StudioSourceVersion
@@ -24,6 +24,22 @@ _LEGACY_SOURCES = (
     ("managed_app", ManagedApplication, from_managed_application),
     ("generated_project", GeneratedProject, from_generated_project),
 )
+_FAILED_BUILD_STATES = {
+    "failed",
+    "build_failed",
+    "tests_failed",
+    "start_failed",
+    "health_check_failed",
+    "acceptance_failed",
+    "provision_failed",
+    "dependency_failed",
+    "static_analysis_failed",
+    "repair_failed",
+    "cancelled",
+    "timed_out",
+    "security_blocked",
+    "resource_exceeded",
+}
 
 
 def _json(value: str | None) -> dict:
@@ -124,7 +140,29 @@ class SoftwareProjectService:
                     projected.active_runtime_id = (
                         str(provenance.get("detectedRuntimeProfile") or "generated-runtime")
                     )
-                    projected.state = ProjectState.PREVIEW_READY
+                    build = await db.scalar(
+                        select(RunnerBuildRecord)
+                        .where(
+                            RunnerBuildRecord.tenant_id == projected.workspace_id,
+                            RunnerBuildRecord.source_bundle_id == source.id,
+                        )
+                        .order_by(desc(RunnerBuildRecord.created_at))
+                    )
+                    if build is None:
+                        projected.state = ProjectState.BUILDING
+                    elif str(build.state) == "preview_ready":
+                        projected.state = ProjectState.PREVIEW_READY
+                    elif str(build.state) in _FAILED_BUILD_STATES:
+                        projected.state = ProjectState.FAILED
+                    else:
+                        projected.state = ProjectState.BUILDING
+                    projected.metadata.update(
+                        {
+                            "latest_build_id": getattr(build, "id", None) if build is not None else None,
+                            "latest_build_state": getattr(build, "state", None) if build is not None else None,
+                            "source_bundle_digest": getattr(source, "bundle_digest", None),
+                        }
+                    )
             return projected
 
         return projected
