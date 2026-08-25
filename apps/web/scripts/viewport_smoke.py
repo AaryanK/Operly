@@ -14,7 +14,7 @@ STATIC_ROOT = WEB_ROOT / "static"
 DIST_ROOT = WEB_ROOT / "dist"
 
 PUBLIC_ROUTES = {
-    "/": "One AI layer for",
+    "/": "AI shouldn't just answer",
     "/login": "Welcome back",
     "/signup": "Create your OPERLY account",
     "/verify-email": "Verify your email",
