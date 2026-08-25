@@ -20,7 +20,13 @@ TRACE_ID_LENGTH = 160
 class BusinessEventRecord(Base):
     __tablename__ = "business_events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    scope_kind: Mapped[str] = mapped_column(
+        String(20), default="workspace", server_default="workspace", nullable=False, index=True
+    )
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id"), nullable=True, index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     actor_type: Mapped[str] = mapped_column(String(40), default="system", nullable=False)
@@ -30,7 +36,15 @@ class BusinessEventRecord(Base):
     correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     causation_id: Mapped[str | None] = mapped_column(String(TRACE_ID_LENGTH), nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
-    __table_args__ = (Index("ix_business_events_tenant_type_time", "tenant_id", "event_type", "occurred_at"),)
+    __table_args__ = (
+        CheckConstraint(
+            "(scope_kind = 'workspace' AND tenant_id IS NOT NULL AND owner_user_id IS NULL) "
+            "OR (scope_kind = 'personal' AND tenant_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_business_events_scope_owner",
+        ),
+        Index("ix_business_events_tenant_type_time", "tenant_id", "event_type", "occurred_at"),
+        Index("ix_business_events_owner_type_time", "owner_user_id", "event_type", "occurred_at"),
+    )
 
 
 class BusinessActionRecord(Base):
