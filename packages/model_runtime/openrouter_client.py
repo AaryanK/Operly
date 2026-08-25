@@ -318,11 +318,17 @@ class OpenRouterClient:
                 raise OllamaError(
                     "OpenRouter response did not contain choices", retryable=True
                 )
-            message = (
-                choices[0].get("message") if isinstance(choices[0], dict) else None
-            )
+            choice = choices[0] if isinstance(choices[0], dict) else None
+            message = choice.get("message") if isinstance(choice, dict) else None
             if not isinstance(message, dict):
                 raise OllamaError(
                     "OpenRouter response did not contain a message", retryable=True
                 )
-            return message
+            result = dict(message)
+            usage = body.get("usage")
+            if isinstance(usage, dict):
+                result["usage"] = {str(key): value for key, value in usage.items()}
+            finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+            if isinstance(finish_reason, str):
+                result["finish_reason"] = finish_reason
+            return result
