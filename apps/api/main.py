@@ -159,8 +159,6 @@ async def warm_model_discovery() -> None:
             timeout=max(1.0, min(timeout, 10.0)),
         )
     except (asyncio.TimeoutError, RuntimeError):
-        # Static verified/configured resources remain available. Discovery is an
-        # optimization for better model selection, never a startup dependency.
         return
 
 
@@ -246,8 +244,6 @@ for router in (
 ):
     app.include_router(router)
 
-# Runtime capability gateways own their complete /api paths so route ownership stays
-# explicit and does not depend on nested-router prefix composition.
 app.include_router(workspace_entities_router)
 app.include_router(app_identity_runtime_router)
 app.include_router(app_identity_admin_router)
@@ -276,6 +272,9 @@ def frontend_shell() -> HTMLResponse:
         "/static/time-sync.js",
         f"/static/time-sync.js?v={WEB_ASSET_REVISION}",
     )
+    footer = '<p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a></p>'
+    footer_with_legal = '<p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a> · <a href="/privacy" style="color:inherit">Privacy</a> · <a href="/terms" style="color:inherit">Terms</a></p>'
+    html = html.replace(footer, footer_with_legal)
     return HTMLResponse(
         html,
         headers={
@@ -288,9 +287,6 @@ def frontend_shell() -> HTMLResponse:
 def canonical_frontend_shell() -> HTMLResponse:
     index = WEB_DIST / "index.html"
     if not index.is_file():
-        # Local Python-only development can keep using the legacy shell until
-        # `npm run build` creates the canonical bundle. Production Docker builds
-        # always include dist via the web-build stage.
         return frontend_shell()
     return HTMLResponse(
         index.read_text(encoding="utf-8"),
@@ -301,13 +297,26 @@ def canonical_frontend_shell() -> HTMLResponse:
     )
 
 
+def legal_page(name: str) -> HTMLResponse:
+    page = WEB_STATIC / name
+    if not page.is_file():
+        return frontend_shell()
+    return HTMLResponse(
+        page.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
-    # Authenticated account/workspace routes have one renderer: the canonical
-    # React application. Public/auth flows remain on the legacy shell while their
-    # separate in-flight account-home PR settles, which keeps this PR merge-safe.
     if path == "channels" or path.startswith("channels/"):
         return canonical_frontend_shell()
+
+    if path in {"privacy", "terms"}:
+        return legal_page(path)
 
     built_asset = WEB_DIST / path
     if path and built_asset.is_file():
