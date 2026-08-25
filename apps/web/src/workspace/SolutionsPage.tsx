@@ -159,13 +159,14 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
         const solutionName = text(solution.name, "Untitled Solution");
         const failed = text(solution.status).toLowerCase() === "failed";
         const runtimeKind = text(runtime.kind).toLowerCase();
-        const canInspectSource = runtimeKind === "generated" || runtimeKind === "software";
-        const canRetryGeneration = failed && (runtimeKind === "generated" || runtimeKind === "app");
+        const isSoftware = runtimeKind === "software";
+        const canInspectSource = isSoftware;
+        const canRetryGeneration = failed && isSoftware;
         return <article className="solution-card" key={solutionId}>
           <div className="solution-card-top"><span>{title(solution.solution_type || solution.type || "Solution")}</span><span className={`status-chip status-${text(solution.status, "unknown").replaceAll("_", "-")}`}>{title(solution.status || "unknown")}</span></div>
           <h3>{solutionName}</h3>
           <p>{text(solution.objective || solution.description, "Workspace Solution")}</p>
-          <div className="solution-meta"><span>Runtime: {runtimeKind === "software" ? "AgentRuntime software" : title(runtimeKind || "unknown")}</span><span>Preview: {text(preview.state || (preview.url ? "available" : "not ready"), "not ready")}</span><span>Production: {text(production.state, "not published")}</span>{generation.stage && <span>Generation stage: {title(generation.stage)}</span>}{generation.attempt && <span>Attempt: {text(generation.attempt)}</span>}{generation.sourceVersion && <span>Source version: {text(generation.sourceVersion)}</span>}{generation.deliveryStatus && <span>Source delivery: {title(generation.deliveryStatus)}</span>}</div>
+          <div className="solution-meta"><span>Runtime: {isSoftware ? "AgentRuntime software" : title(runtimeKind || "unknown")}</span><span>Preview: {text(preview.state || (preview.url ? "available" : "not ready"), "not ready")}</span><span>Production: {text(production.state, "not published")}</span>{generation.stage && <span>Generation stage: {title(generation.stage)}</span>}{generation.attempt && <span>Attempt: {text(generation.attempt)}</span>}{generation.sourceVersion && <span>Source version: {text(generation.sourceVersion)}</span>}{generation.deliveryStatus && <span>Source delivery: {title(generation.deliveryStatus)}</span>}</div>
           {failed && generation.error && <div className="inline-error"><strong>Generation failed at {title(generation.stage || "generation")}</strong><div>{text(generation.error)}</div></div>}
           <div className="page-actions">
             {canInspectSource && <button className="secondary-button" type="button" onClick={() => inspectGeneratedSource(solutionId, solutionName)}>View source</button>}
