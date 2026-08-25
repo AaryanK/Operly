@@ -1,9 +1,6 @@
 import json
 import unittest
 
-from packages.application_builder.routing import route_application_request
-from packages.application_builder.schema import ApplicationManifest, BuilderContext, ProposalRequest
-from packages.application_builder.service import plan_request
 from packages.model_runtime.semantic_router import SemanticRouter, SemanticRoutingError
 
 
@@ -23,66 +20,51 @@ class SemanticRouterTests(unittest.IsolatedAsyncioTestCase):
             json.dumps({
                 "domainMatch": True,
                 "known": True,
-                "route": "secure_login",
-                "reason": "The request is fully covered by the existing authentication capability.",
+                "route": "software_build",
+                "reason": "The request is fully covered by the supplied software capability.",
             })
         ])
-        decision = await route_application_request(
-            "Give staff a protected sign-in experience before they can use the portal.",
-            client=client,
-            context={"surface": "test"},
+        decision = await SemanticRouter(client).decide(
+            request="Give staff a protected attendance portal.",
+            domain="software operations",
+            routes={"software_build": "build a governed software project"},
         )
         self.assertTrue(decision.domain_match)
         self.assertTrue(decision.known)
-        self.assertEqual(decision.route_id, "secure_login")
+        self.assertEqual(decision.route_id, "software_build")
         self.assertEqual(client.calls, 1)
 
-        request = ProposalRequest(
-            message="Give staff a protected sign-in experience before they can use the portal.",
-            context=BuilderContext(
-                workspaceId="t",
-                applicationId="a",
-                activeVersionId="v",
-                selectionScope="application",
-                userRole="owner",
-            ),
-        )
-        plan = plan_request(
-            request,
-            ApplicationManifest(application={"id": "a", "name": "A"}),
-            routed_intent=decision.route_id,
-        )
-        self.assertTrue(any(page["id"] == "login" for page in plan["after"]["pages"]))
-
-    async def test_model_can_mark_in_domain_request_unknown_for_synthesis(self):
+    async def test_model_can_mark_in_domain_request_unknown_for_capability_discovery(self):
         client = FakeClient([
             json.dumps({
                 "domainMatch": True,
                 "known": False,
                 "route": None,
-                "reason": "The requested veterinary workflow is not fully covered by an existing capability.",
+                "reason": "No supplied route fully covers the requested workflow.",
             })
         ])
-        decision = await route_application_request(
-            "Build a veterinary appointment system with treatment plans.",
-            client=client,
+        decision = await SemanticRouter(client).decide(
+            request="Build a veterinary workflow with treatment plans.",
+            domain="software operations",
+            routes={"software_build": "build a governed software project"},
         )
         self.assertTrue(decision.domain_match)
         self.assertFalse(decision.known)
         self.assertIsNone(decision.route_id)
 
-    async def test_model_can_reject_other_business_work_as_outside_builder_domain(self):
+    async def test_model_can_reject_out_of_domain_business_work(self):
         client = FakeClient([
             json.dumps({
                 "domainMatch": False,
                 "known": False,
                 "route": None,
-                "reason": "This is a business task rather than an application-building request.",
+                "reason": "This is CRM retrieval rather than software construction.",
             })
         ])
-        decision = await route_application_request(
-            "Show me my open sales leads.",
-            client=client,
+        decision = await SemanticRouter(client).decide(
+            request="Show me my open sales leads.",
+            domain="software operations",
+            routes={"software_build": "build a governed software project"},
         )
         self.assertFalse(decision.domain_match)
         self.assertFalse(decision.known)
@@ -104,8 +86,8 @@ class SemanticRouterTests(unittest.IsolatedAsyncioTestCase):
         ])
         decision = await SemanticRouter(client).decide(
             request="Build something outside the bounded capabilities.",
-            domain="application building",
-            routes={"secure_login": "standard login"},
+            domain="software operations",
+            routes={"software_build": "build a governed software project"},
         )
         self.assertFalse(decision.known)
         self.assertEqual(client.calls, 2)
@@ -115,8 +97,8 @@ class SemanticRouterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SemanticRoutingError):
             await SemanticRouter(client).decide(
                 request="Build a portal",
-                domain="application building",
-                routes={"secure_login": "standard login"},
+                domain="software operations",
+                routes={"software_build": "build a governed software project"},
             )
         self.assertEqual(client.calls, 2)
 
