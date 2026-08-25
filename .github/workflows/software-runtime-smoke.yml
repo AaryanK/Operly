@@ -22,7 +22,7 @@ on:
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
-      - "tests/test_generated_solution_worker.py"
+      - "tests/test_software_solution_worker.py"
       - "tests/test_general_software_construction.py"
       - "tests/test_fullstack_runtime_contract.py"
       - "tests/test_generation_stage_truth.py"
@@ -54,7 +54,7 @@ on:
       - "tests/test_coding_semantic_failover.py"
       - "tests/test_coding_context_window.py"
       - "tests/test_coding_context_working_set.py"
-      - "tests/test_generated_solution_worker.py"
+      - "tests/test_software_solution_worker.py"
       - "tests/test_general_software_construction.py"
       - "tests/test_fullstack_runtime_contract.py"
       - "tests/test_generation_stage_truth.py"
@@ -114,7 +114,7 @@ jobs:
           tests/test_coding_semantic_failover.py
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
-          tests/test_generated_solution_worker.py
+          tests/test_software_solution_worker.py
           tests/test_general_software_construction.py
           tests/test_fullstack_runtime_contract.py
           tests/test_generation_stage_truth.py
