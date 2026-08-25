@@ -1,8 +1,9 @@
 """Bounded build-test-diagnose-repair loop for harness-authored source.
 
-Generated code never executes in the OPERLY control plane. Each attempt is sent
-to the isolated runner; structured capability or failure evidence is returned to
-the same coding model for the smallest source-only repair.
+Generated code never executes in the OPERLY control plane. Ordinary harness callers
+retain the bounded source-repair loop below. Real Studio Solution attempts are
+owned by the shared durable AgentRunController so worker restarts, runner repairs,
+and objective verification all share one resumable run state.
 """
 from __future__ import annotations
 
@@ -222,6 +223,10 @@ async def _repair(db, tenant_id, user_id, plan_row, plan, source, evidence, clie
     return source
 
 
+def _is_solution_generation(metadata: dict[str, Any]) -> bool:
+    return bool(str(metadata.get("solution_id") or "").strip())
+
+
 async def build_with_repair(
     db, tenant_id: str, user_id: str, plan_row, plan, idempotency_key: str, *,
     adapter=None, client=None, max_repairs: int | None = None,
@@ -230,6 +235,29 @@ async def build_with_repair(
     """Return final build, final source, and immutable repair-attempt metadata."""
     ensure_model_trace_sink()
     metadata = _trace_metadata(tenant_id, user_id, plan_row, idempotency_key)
+
+    # Studio Solution jobs get the same durable objective-owning runtime as Operly AI
+    # and workflow surfaces. Generic harness callers keep the legacy bounded helper
+    # below so tests/tools without a Solution identity retain their existing contract.
+    if _is_solution_generation(metadata):
+        from packages.coding_harness.studio_controller import run_studio_generation
+
+        return await run_studio_generation(
+            db,
+            tenant_id,
+            user_id,
+            plan_row,
+            plan,
+            idempotency_key,
+            adapter=adapter,
+            client=client,
+            max_repairs=_repair_budget(max_repairs),
+            progress_callback=progress_callback,
+            metadata=metadata,
+            await_runner_build=_await_runner_build,
+            failure_evidence=_failure_evidence,
+        )
+
     with runtime_trace_scope(metadata):
         await _trace("coding_harness.started", {"idempotencyKey": idempotency_key, "planId": getattr(plan_row, "id", None), "planVersion": getattr(plan_row, "approved_version", None)})
         try:
