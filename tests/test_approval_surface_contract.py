@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_personal_surface_exposes_approval_controls_and_payload():
     source = (ROOT / "apps/web/src/account/PersonalHome.tsx").read_text(encoding="utf-8")
     assert 'api<Approval[]>("/approvals/personal")' in source
-    assert '"/approvals/personal/${encodeURIComponent(id)}"' not in source  # template literal stays executable, not quoted text
+    assert "/approvals/personal/${encodeURIComponent(id)}" in source
     assert "Full action payload" in source
     assert "Approve" in source and "Reject" in source
 
