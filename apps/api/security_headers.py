@@ -1,5 +1,21 @@
 import os
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import HTMLResponse
+
+
+_FRONTEND_SHELL_PATHS = {
+    "/",
+    "/login",
+    "/signup",
+    "/verify-email",
+    "/forgot-password",
+    "/reset-password",
+    "/onboarding",
+    "/privacy",
+    "/terms",
+    "/admin",
+    "/channels",
+}
 
 
 def _runner_preview_origins() -> tuple[str, ...]:
@@ -22,9 +38,44 @@ def _permissions_policy(solution_studio: bool) -> str:
     return f"camera=({delegated}), microphone=({delegated}), geolocation=({delegated}), payment=({delegated}), usb=({delegated})"
 
 
+def _is_known_frontend_fallback(path: str) -> bool:
+    normalized=path.rstrip("/") or "/"
+    if normalized in _FRONTEND_SHELL_PATHS:
+        return True
+    if normalized.startswith("/channels/"):
+        return True
+    if normalized.startswith("/assets/"):
+        return True
+    segment=normalized.rsplit("/",1)[-1]
+    return "." in segment and not segment.startswith(".")
+
+
+def _unknown_frontend_fallback(request) -> bool:
+    route=request.scope.get("route")
+    if getattr(route,"name",None)!="frontend":
+        return False
+    return not _is_known_frontend_fallback(request.url.path)
+
+
+def _not_found_response(path: str) -> HTMLResponse:
+    safe_path=(
+        path.replace("&","&amp;")
+        .replace("<","&lt;")
+        .replace(">","&gt;")
+        .replace('"',"&quot;")
+    )
+    return HTMLResponse(
+        f"""<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Page not found · OPERLY</title><style>html{{color-scheme:dark}}*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 18% 10%,#342d63 0,transparent 34%),linear-gradient(145deg,#12111d,#19172a);color:#f5f2ff;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}}main{{width:min(680px,100%);padding:38px;border:1px solid #39334f;border-radius:24px;background:rgba(29,26,43,.92);box-shadow:0 28px 90px rgba(0,0,0,.32)}}span{{display:inline-block;padding:6px 10px;border-radius:999px;background:#2d2847;color:#c9c0ff;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}}h1{{margin:18px 0 10px;font-size:clamp(38px,8vw,70px);letter-spacing:-.055em}}p{{margin:0;color:#aaa3bc;line-height:1.65}}code{{display:block;margin:20px 0;padding:12px 14px;border:1px solid #3b3650;border-radius:12px;background:#15131f;color:#d9d3ee;overflow-wrap:anywhere}}a{{display:inline-flex;margin-top:10px;padding:11px 16px;border-radius:11px;background:#7667f5;color:#fff;text-decoration:none;font-weight:800}}</style></head><body><main><span>404 · Not found</span><h1>This page isn’t here.</h1><p>The address does not match an Operly route. Nothing was loaded behind this URL.</p><code>{safe_path}</code><a href=\"/\">Go to Operly</a></main></body></html>""",
+        status_code=404,
+        headers={"Cache-Control":"no-store, max-age=0","X-Robots-Tag":"noindex"},
+    )
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request,call_next):
         response=await call_next(request)
+        if request.method in {"GET","HEAD"} and _unknown_frontend_fallback(request):
+            response=_not_found_response(request.url.path)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
         path=request.url.path
