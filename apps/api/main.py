@@ -19,18 +19,13 @@ from apps.api.agent_router import router as agent_router
 from apps.api.analytics_router import router as analytics_router
 from apps.api.app_identity_router import admin_router as app_identity_admin_router
 from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
-from apps.api.application_builder_router import router as application_builder_router
 from apps.api.approvals_router import router as approvals_router
-from apps.api.architecture_pack_router import router as architecture_pack_router
 from apps.api.business import router as business_router
 from apps.api.capability_diagnostics_router import router as capability_diagnostics_router
 from apps.api.channel_identity_router import router as channel_identity_router
-from apps.api.coding_harness_router import router as coding_harness_router
 from apps.api.company_router import router as company_router
 from apps.api.connectors_router import router as connectors_router
 from apps.api.csrf import CSRFMiddleware
-from apps.api.custom_software_router import router as custom_software_router
-from apps.api.dashboard_studio_router import router as dashboard_studio_router
 from apps.api.integrations_router import router as integrations_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.operations_router import router as operations_router
@@ -47,9 +42,7 @@ from apps.api.software_projects_router import router as software_projects_router
 from apps.api.solution_generation_router import router as solution_generation_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
-from apps.api.studio_debug_router import router as studio_debug_router
 from apps.api.studio_router import router as studio_router
-from apps.api.studio_run_history_router import router as studio_run_history_router
 from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_entities_router import router as workspace_entities_router
@@ -60,7 +53,6 @@ from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 from packages.model_runtime.catalog import provider_is_configured
 from packages.model_runtime.discovery import refresh_model_discovery
 from packages.plugins import default_plugin_runtime
-from packages.studio.agent_resume import resume_interrupted_studio_runs
 
 load_dotenv(override=False)
 
@@ -182,7 +174,6 @@ async def lifespan(app: FastAPI):
     await warm_model_discovery()
     plugin_runtime = default_plugin_runtime()
     await plugin_runtime.start()
-    await resume_interrupted_studio_runs()
     try:
         yield
     finally:
@@ -243,13 +234,6 @@ for router in (
     operations_router,
     studio_router,
     studio_source_router,
-    studio_run_history_router,
-    studio_debug_router,
-    dashboard_studio_router,
-    application_builder_router,
-    custom_software_router,
-    architecture_pack_router,
-    coding_harness_router,
     software_projects_router,
     solutions_router,
     solution_generation_router,
