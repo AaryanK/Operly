@@ -52,6 +52,9 @@ on:
       - "tests/test_general_software_construction.py"
       - "tests/test_isolated_runner.py"
       - "tests/test_fullstack_runtime_contract.py"
+      - "tests/test_studio_agent_generation.py"
+      - "tests/test_studio_agent_controller.py"
+      - "tests/test_studio_real_capability_contracts.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
@@ -103,6 +106,9 @@ on:
       - "tests/test_general_software_construction.py"
       - "tests/test_isolated_runner.py"
       - "tests/test_fullstack_runtime_contract.py"
+      - "tests/test_studio_agent_generation.py"
+      - "tests/test_studio_agent_controller.py"
+      - "tests/test_studio_real_capability_contracts.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -123,6 +129,8 @@ jobs:
         run: >-
           python -m py_compile
           packages/coding_harness/context_window.py
+          packages/coding_harness/contract_guidance.py
+          packages/coding_harness/objective_audit.py
           packages/coding_harness/source_service.py
           packages/coding_harness/execution_loop.py
           packages/solutions/generation_worker.py
@@ -160,3 +168,6 @@ jobs:
           tests/test_general_software_construction.py
           tests/test_isolated_runner.py
           tests/test_fullstack_runtime_contract.py
+          tests/test_studio_agent_generation.py
+          tests/test_studio_agent_controller.py
+          tests/test_studio_real_capability_contracts.py
