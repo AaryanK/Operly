@@ -1,16 +1,21 @@
-import { useState } from "react";
+import { lazy, ReactNode, Suspense, useEffect, useState } from "react";
 
 import { navigate, WorkspaceSection, workspacePath, workspaceSections } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
-import { AccessPage } from "./AccessPage";
-import { AIDebugPage } from "./AIDebugPage";
-import { ActivityPage, ConnectionsPage, CRMPage, OperationsPage, PresencePage } from "./DataPages";
-import { MembersPage } from "./MembersPage";
-import { PluginsPage } from "./PluginsPage";
-import { SolutionsPage } from "./SolutionsPage";
 import { WorkspaceHome } from "./WorkspaceHome";
-import { WorkspaceOperly } from "./WorkspaceOperly";
-import { WorkspaceSettings } from "./WorkspaceSettings";
+
+const AccessPage = lazy(() => import("./AccessPage").then((module) => ({ default: module.AccessPage })));
+const AIDebugPage = lazy(() => import("./AIDebugPage").then((module) => ({ default: module.AIDebugPage })));
+const CRMPage = lazy(() => import("./DataPages").then((module) => ({ default: module.CRMPage })));
+const OperationsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.OperationsPage })));
+const ActivityPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ActivityPage })));
+const PresencePage = lazy(() => import("./DataPages").then((module) => ({ default: module.PresencePage })));
+const ConnectionsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ConnectionsPage })));
+const MembersPage = lazy(() => import("./MembersPage").then((module) => ({ default: module.MembersPage })));
+const PluginsPage = lazy(() => import("./PluginsPage").then((module) => ({ default: module.PluginsPage })));
+const SolutionsPage = lazy(() => import("./SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
+const WorkspaceOperly = lazy(() => import("./WorkspaceOperly").then((module) => ({ default: module.WorkspaceOperly })));
+const WorkspaceSettings = lazy(() => import("./WorkspaceSettings").then((module) => ({ default: module.WorkspaceSettings })));
 
 type Props = {
   workspace: WorkspaceSummary;
@@ -43,25 +48,32 @@ const navGlyphs: Record<WorkspaceSection, string> = {
   settings: "⚙",
 };
 
+const mobilePrimarySections: WorkspaceSection[] = ["home", "operly", "activity", "solutions"];
+
+function DeferredPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<main className="workspace-page"><div className="loading-panel">Loading workspace section…</div></main>}>{children}</Suspense>;
+}
+
 function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
   switch (section) {
     case "home": return <WorkspaceHome workspace={workspace} />;
-    case "operly": return <WorkspaceOperly workspace={workspace} />;
-    case "crm": return <CRMPage workspace={workspace} />;
-    case "operations": return <OperationsPage workspace={workspace} />;
-    case "activity": return <ActivityPage workspace={workspace} />;
-    case "presence": return <PresencePage workspace={workspace} />;
-    case "solutions": return <SolutionsPage workspace={workspace} />;
-    case "connections": return <ConnectionsPage workspace={workspace} />;
-    case "plugins": return <PluginsPage workspace={workspace} />;
-    case "members": return <MembersPage workspace={workspace} />;
-    case "access": return <AccessPage workspace={workspace} />;
-    case "ai-debug": return <AIDebugPage workspace={workspace} />;
-    case "settings": return <WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} />;
+    case "operly": return <DeferredPage><WorkspaceOperly workspace={workspace} /></DeferredPage>;
+    case "crm": return <DeferredPage><CRMPage workspace={workspace} /></DeferredPage>;
+    case "operations": return <DeferredPage><OperationsPage workspace={workspace} /></DeferredPage>;
+    case "activity": return <DeferredPage><ActivityPage workspace={workspace} /></DeferredPage>;
+    case "presence": return <DeferredPage><PresencePage workspace={workspace} /></DeferredPage>;
+    case "solutions": return <DeferredPage><SolutionsPage workspace={workspace} /></DeferredPage>;
+    case "connections": return <DeferredPage><ConnectionsPage workspace={workspace} /></DeferredPage>;
+    case "plugins": return <DeferredPage><PluginsPage workspace={workspace} /></DeferredPage>;
+    case "members": return <DeferredPage><MembersPage workspace={workspace} /></DeferredPage>;
+    case "access": return <DeferredPage><AccessPage workspace={workspace} /></DeferredPage>;
+    case "ai-debug": return <DeferredPage><AIDebugPage workspace={workspace} /></DeferredPage>;
+    case "settings": return <DeferredPage><WorkspaceSettings workspace={workspace} onRefresh={onScopeRefresh} /></DeferredPage>;
   }
 }
 
 export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
     try { return window.localStorage.getItem("operly.workspace-nav-collapsed") === "true"; }
     catch { return false; }
@@ -71,6 +83,21 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
     (result[item.group] ||= []).push(item);
     return result;
   }, {});
+  const mobileSecondarySections = visibleSections.filter((item) => !mobilePrimarySections.includes(item.id));
+  const secondaryActive = mobileSecondarySections.some((item) => item.id === section);
+
+  useEffect(() => {
+    setMobileMoreOpen(false);
+  }, [workspace.id, section]);
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMoreOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileMoreOpen]);
 
   function toggleCollapsed() {
     setCollapsed((current) => {
@@ -80,8 +107,13 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
     });
   }
 
+  function goTo(nextSection: WorkspaceSection) {
+    setMobileMoreOpen(false);
+    navigate(workspacePath(workspace.id, nextSection));
+  }
+
   return (
-    <div className={`workspace-shell ${collapsed ? "workspace-nav-collapsed" : ""}`}>
+    <div className={`workspace-shell ${collapsed ? "workspace-nav-collapsed" : ""} ${mobileMoreOpen ? "workspace-more-open" : ""}`}>
       <aside className="workspace-nav">
         <div className="workspace-nav-head">
           <header className="workspace-identity" onClick={() => navigate(workspacePath(workspace.id, "settings"))} title="Open workspace settings">
@@ -101,7 +133,25 @@ export function WorkspaceShell({ workspace, section, onScopeRefresh }: Props) {
           ))}
         </nav>
       </aside>
+
       <WorkspaceContent workspace={workspace} section={section} onScopeRefresh={onScopeRefresh} />
+
+      <button className="workspace-more-backdrop" type="button" aria-label="Close workspace navigation" onClick={() => setMobileMoreOpen(false)} />
+      <aside className="workspace-more-sheet" aria-label="More workspace sections">
+        <header><div><small>{workspace.name}</small><strong>More</strong></div><button type="button" aria-label="Close more navigation" onClick={() => setMobileMoreOpen(false)}>×</button></header>
+        <div className="workspace-more-list">
+          {mobileSecondarySections.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => goTo(item.id)}><span aria-hidden="true">{navGlyphs[item.id]}</span><span><strong>{item.label}</strong><small>{groupLabels[item.group]}</small></span></button>)}
+        </div>
+      </aside>
+
+      <nav className="workspace-mobile-nav" aria-label={`${workspace.name} primary sections`}>
+        {mobilePrimarySections.map((id) => {
+          const item = visibleSections.find((candidate) => candidate.id === id);
+          if (!item) return null;
+          return <button key={id} className={section === id ? "active" : ""} onClick={() => goTo(id)}><span aria-hidden="true">{navGlyphs[id]}</span><small>{item.label}</small></button>;
+        })}
+        <button className={secondaryActive || mobileMoreOpen ? "active" : ""} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((current) => !current)}><span aria-hidden="true">•••</span><small>More</small></button>
+      </nav>
     </div>
   );
 }

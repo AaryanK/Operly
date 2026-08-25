@@ -5,8 +5,7 @@ const AUTH_ROUTES = {
   "/verify-email": "#verify-email",
   "/forgot-password": "#forgot-password",
   "/reset-password": "#reset-password",
-  "/onboarding": "#onboarding",
-  "/personal": "#personal"
+  "/onboarding": "#onboarding"
 };
 
 const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);
@@ -26,63 +25,34 @@ function setFormBusy(form, busy, label) {
   button.textContent = busy ? label : button.dataset.label;
 }
 
-function commitAuthenticatedScreen() {
-  $$(".screen").forEach((element) => element.classList.add("hidden"));
-  $("#dashboard")?.classList.remove("hidden");
-  document.title = "OPERLY";
+function canonicalPersonalPath() {
+  return "/channels/@me";
 }
 
-function commitPersonalScreen() {
-  $$(".screen").forEach((element) => element.classList.add("hidden"));
-  $("#personal")?.classList.remove("hidden");
-  document.title = "Personal AI · OPERLY";
+function canonicalWorkspacePath(workspaceId, section = "home") {
+  const base = `/channels/${encodeURIComponent(workspaceId)}`;
+  return section === "home" ? base : `${base}/${section}`;
 }
 
-function dashboardBootError(error) {
-  console.error("OPERLY dashboard boot failed after authentication", error);
-  const content = $("#content");
-  if (!content) return;
-  content.innerHTML = `<div class="error" role="alert">Signed in successfully, but the workspace UI could not finish loading. Refresh this page to retry. ${String(error?.message || "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char])}</div>`;
+function handoff(path) {
+  window.location.replace(path);
 }
 
 async function enterAuthenticatedWorkspace() {
-  const params = new URLSearchParams(location.search);
-  state.pendingIdentityLink = params.get("identity_link") || state.pendingIdentityLink;
-
-  state.me = await api("/me");
-  $("#workspace-name").textContent = state.me.tenant.name;
-  $("#workspace-avatar").textContent = state.me.tenant.name.slice(0, 1).toUpperCase();
-  $("#workspace-role").textContent = state.me.role;
-  $("#tenant-kicker").textContent = state.me.tenant.name;
-  commitAuthenticatedScreen();
-  if (location.pathname !== "/app" && !state.pendingIdentityLink) history.replaceState({}, "", "/app");
-
-  setTimeout(() => {
-    Promise.resolve()
-      .then(() => typeof loadWorkspaces === "function" ? loadWorkspaces() : null)
-      .catch(dashboardBootError);
-
-    setTimeout(() => {
-      const content = $("#content");
-      if (!content || content.childElementCount) return;
-      const render = state.pendingIdentityLink
-        ? (typeof renderPage === "function" ? () => renderPage("settings") : null)
-        : (typeof window.operlySimpleHome === "function"
-          ? () => window.operlySimpleHome()
-          : (typeof renderPage === "function" ? () => renderPage("overview") : null));
-      if (render) Promise.resolve(render()).catch(dashboardBootError);
-    }, 0);
-  }, 0);
+  const me = await api("/me");
+  state.me = me;
+  const identityLink = new URLSearchParams(location.search).get("identity_link");
+  const target = canonicalWorkspacePath(me.tenant.id, identityLink ? "settings" : "home");
+  const query = identityLink ? `?identity_link=${encodeURIComponent(identityLink)}` : "";
+  handoff(`${target}${query}`);
 }
 
 async function enterAuthenticatedPersonal() {
-  // Account-scoped endpoint proves the session is valid without manufacturing a
-  // workspace. The Personal AI itself remains private to this account.
+  // This account-scoped read proves that the session is valid without inventing
+  // a workspace. The canonical React application owns all signed-in rendering.
   await api("/auth/workspaces");
   state.me = null;
-  commitPersonalScreen();
-  if (location.pathname !== "/personal") history.replaceState({}, "", "/personal");
-  await window.operlyPersonal?.mount?.();
+  handoff(canonicalPersonalPath());
 }
 
 async function enterAuthenticatedScope(preferredScope = null) {
@@ -111,7 +81,7 @@ function extractLinkToken() {
 }
 
 function showRoute(path = location.pathname) {
-  const target = AUTH_ROUTES[path] || (path === "/app" ? "#dashboard" : "#landing");
+  const target = AUTH_ROUTES[path] || "#landing";
   state.workflow = history.state?.workflow || state.workflow || {};
   show(target);
   if (target === "#verify-email" && state.workflow.email) {
@@ -119,9 +89,7 @@ function showRoute(path = location.pathname) {
   }
   if (target === "#reset-password" && state.workflow.email) $("#reset-email").value = state.workflow.email;
   if (target === "#reset-password") $("#reset-code-fields").classList.toggle("hidden", Boolean(state.linkToken));
-  document.title = target === "#landing" || target === "#dashboard"
-    ? "OPERLY"
-    : target === "#personal" ? "Personal AI · OPERLY" : `${target.slice(1).replaceAll("-", " ")} · OPERLY`;
+  document.title = target === "#landing" ? "OPERLY" : `${target.slice(1).replaceAll("-", " ")} · OPERLY`;
 }
 
 function navigate(path, workflow = {}) {
@@ -207,7 +175,7 @@ async function handleGoogleCredential(result) {
     state.me = null;
     if (response.new_account) {
       state.workflow = { scope: response.scope || "personal" };
-      history.replaceState({workflow:state.workflow}, "", "/onboarding");
+      history.replaceState({ workflow: state.workflow }, "", "/onboarding");
       showRoute("/onboarding");
     } else {
       await enterAuthenticatedScope(response.scope);
@@ -244,28 +212,12 @@ window.addEventListener("popstate", async () => {
   state.linkToken = null;
   extractLinkToken();
   if (location.pathname === "/personal") {
-    try { await enterAuthenticatedPersonal(); return; } catch { state.me = null; }
+    try { await enterAuthenticatedPersonal(); return; } catch { history.replaceState({}, "", "/login"); }
   }
-  if (state.me && SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
-    try {
-      await enterAuthenticatedScope();
-      return;
-    } catch {
-      state.me = null;
-    }
+  if (location.pathname === "/app") {
+    try { await enterAuthenticatedScope(); return; } catch { history.replaceState({}, "", "/login"); }
   }
   showRoute();
-});
-
-$("#logout").addEventListener("click", async () => {
-  try {
-    await api("/auth/logout", { method: "POST", body: "{}" });
-    state.me = null;
-    navigate("/login");
-    await refreshAuthBootstrap();
-  } catch (error) {
-    alert(`We couldn't sign you out: ${error.message}`);
-  }
 });
 
 $("#login-form").addEventListener("submit", async (event) => {
@@ -343,8 +295,8 @@ $("#verify-form").addEventListener("submit", async (event) => {
         };
     const response = await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
     state.linkToken = null;
-    state.workflow = {...state.workflow, scope:response.scope||"personal"};
-    history.replaceState({workflow:state.workflow}, "", "/onboarding");
+    state.workflow = { ...state.workflow, scope: response.scope || "personal" };
+    history.replaceState({ workflow: state.workflow }, "", "/onboarding");
     showRoute("/onboarding");
   } catch (error) {
     setFormMessage("#verify-error", error.message);
@@ -451,6 +403,19 @@ async function initializeAuth() {
     }
   }
 
+  if (location.pathname === "/app") {
+    try {
+      await enterAuthenticatedScope();
+      return;
+    } catch {
+      state.me = null;
+      history.replaceState({}, "", "/login");
+      await refreshAuthBootstrap().catch(() => {});
+      showRoute("/login");
+      return;
+    }
+  }
+
   if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
       await enterAuthenticatedScope();
@@ -469,14 +434,9 @@ async function initializeAuth() {
     return;
   }
 
-  try {
-    await enterAuthenticatedScope();
-  } catch {
-    state.me = null;
-    history.replaceState({}, "", "/");
-    await refreshAuthBootstrap().catch(() => {});
-    showRoute("/");
-  }
+  history.replaceState({}, "", "/");
+  await refreshAuthBootstrap().catch(() => {});
+  showRoute("/");
 }
 
 initializeAuth();

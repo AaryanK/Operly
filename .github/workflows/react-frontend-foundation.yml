@@ -7,12 +7,21 @@ on:
       - "apps/api/main.py"
       - "apps/api/personal_agent_router.py"
       - "packages/business_brain/personal_agent.py"
+      - "packages/email/templates/**"
       - "apps/web/index.html"
       - "apps/web/package.json"
       - "apps/web/package-lock.json"
       - "apps/web/vite.config.ts"
       - "apps/web/src/**"
+      - "apps/web/static/index.html"
+      - "apps/web/static/auth.js"
+      - "apps/web/static/auth-runtime.js"
+      - "apps/web/static/legal.css"
+      - "apps/web/static/privacy"
+      - "apps/web/static/terms"
+      - "apps/web/scripts/**"
       - "apps/web/FRONTEND_MIGRATION.md"
+      - "docs/legal/**"
       - ".github/workflows/react-frontend-foundation.yml"
   workflow_dispatch:
 
@@ -29,18 +38,32 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/web
         run: npm ci
+      - name: Verify frontend convergence contracts
+        working-directory: apps/web
+        run: npm run test:contracts
       - name: Build canonical React frontend
         working-directory: apps/web
         run: npm run build
+      - name: Verify authenticated route splitting
+        working-directory: apps/web
+        run: npm run test:bundle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile changed Python serving and Personal AI modules
-        run: python -m py_compile apps/api/main.py apps/api/personal_agent_router.py packages/business_brain/personal_agent.py
+      - name: Compile changed Python serving and frontend build helpers
+        run: python -m py_compile apps/api/main.py apps/api/personal_agent_router.py packages/business_brain/personal_agent.py apps/web/scripts/optimize_logo.py apps/web/scripts/viewport_smoke.py
+      - name: Install Chromium viewport smoke dependency
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Verify responsive surfaces in Chromium
+        working-directory: apps/web
+        run: python scripts/viewport_smoke.py
       - name: Assert production image includes the frontend build stage
         run: |
           grep -q 'FROM node:22-alpine AS web-build' Dockerfile
           grep -q 'COPY --from=web-build /web/dist /app/apps/web/dist' Dockerfile
+          grep -q 'optimize_logo.py' Dockerfile
           grep -q 'path.startswith("channels/")' apps/api/main.py
       - name: Verify canonical route ownership has no migration placeholders
         run: |
@@ -50,5 +73,9 @@ jobs:
           grep -q 'WorkspaceOperly' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
+          grep -q '/channels/@me' apps/web/static/auth.js
+          grep -q 'href="/privacy"' apps/web/static/index.html
+          grep -q 'href="/terms"' apps/web/static/index.html
+          ! grep -q 'id="dashboard"' apps/web/static/index.html
       - name: Build Railway-style production image
         run: docker build --tag operly-frontend-pr .
