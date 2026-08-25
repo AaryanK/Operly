@@ -37,7 +37,6 @@ def _chunks(text: str, limit: int = 1900) -> list[str]:
 
 
 async def _current_discord_user_id(target: dict) -> int:
-    """Re-resolve the linked Discord identity at delivery time."""
     operly_user_id = str(target.get("user_id") or "").strip()
     if operly_user_id:
         async with session_scope() as db:
@@ -50,7 +49,6 @@ async def _current_discord_user_id(target: dict) -> int:
         if identity is None:
             raise TaskDeliveryError("discord_delivery_identity_unlinked")
         return int(identity.provider_subject)
-
     raw_user_id = target.get("external_user_id")
     if raw_user_id is None:
         raise TaskDeliveryError("discord_delivery_user_missing")
@@ -77,13 +75,13 @@ async def _validate_workspace_installation(target: dict) -> None:
 
 
 def _artifact_scope(target: dict) -> ArtifactScope:
-    scope = str(target.get("scope") or "workspace").strip().lower()
+    scope = str(target.get("artifact_scope") or target.get("scope") or "workspace").strip().lower()
     if scope == "personal":
         user_id = str(target.get("user_id") or "").strip()
         if not user_id:
             raise TaskDeliveryError("discord_artifact_personal_user_missing")
         return ArtifactScope("personal", f"personal:{user_id}", owner_user_id=user_id)
-    tenant_id = str(target.get("tenant_id") or "").strip()
+    tenant_id = str(target.get("artifact_tenant_id") or target.get("tenant_id") or "").strip()
     if not tenant_id:
         raise TaskDeliveryError("discord_artifact_workspace_missing")
     return ArtifactScope("workspace", tenant_id, tenant_id=tenant_id)
@@ -103,6 +101,7 @@ async def _send_artifacts(destination, target: dict, message_ids: list[str]) -> 
     scope = _artifact_scope(target)
     fallback: list[str] = []
     upload_limit = _upload_limit(destination)
+    delivered: list[str] = []
     async with session_scope() as db:
         resolved = await resolve_delivery_artifacts(db, scope, ids, limit=20)
         service = ArtifactService(db)
@@ -115,18 +114,21 @@ async def _send_artifacts(destination, target: dict, message_ids: list[str]) -> 
             if native_count >= MAX_NATIVE_ARTIFACTS or size_bytes > upload_limit:
                 if url:
                     fallback.append(f"• {filename}: {url}")
+                    delivered.append(artifact_id)
                 continue
             try:
                 raw = await service.read_bytes(scope, artifact_id)
             except (LookupError, ValueError):
                 if url:
                     fallback.append(f"• {filename}: {url}")
+                    delivered.append(artifact_id)
                 continue
             kwargs = {"file": discord.File(BytesIO(raw), filename=filename)}
             if not isinstance(destination, discord.User):
                 kwargs["allowed_mentions"] = discord.AllowedMentions.none()
             sent = await destination.send(**kwargs)
             message_ids.append(str(sent.id))
+            delivered.append(artifact_id)
             native_count += 1
     if fallback:
         text = "Files available from Operly:\n" + "\n".join(fallback)
@@ -136,7 +138,7 @@ async def _send_artifacts(destination, target: dict, message_ids: list[str]) -> 
                 kwargs["allowed_mentions"] = discord.AllowedMentions.none()
             sent = await destination.send(chunk, **kwargs)
             message_ids.append(str(sent.id))
-    return ids
+    return delivered
 
 
 @dataclass(slots=True)
