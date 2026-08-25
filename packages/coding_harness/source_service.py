@@ -76,6 +76,15 @@ def _plan_specification(plan) -> str:
         "capabilityGraph": graph,
         "globalValidation": data.get("globalValidation"),
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
+        "completionPolicy": {
+            "objectiveAuditRequired": True,
+            "rule": "The coding session may not finish until deterministic objective/capability audit verifies the current workspace.",
+        },
+        "implementationOrder": [
+            "Implement the owner's literal end-to-end product behavior first; placeholders, mocks, comments about future implementation, hard-coded stand-ins, and no-op success responses do not count.",
+            "Then connect required Operly capabilities as real authoritative runtime services and persistence/identity paths.",
+            "Only after product behavior exists, complete manifests, interaction metadata, runtime mechanics, and executable tests without weakening the product behavior.",
+        ],
         "operlyExecutionContract": {
             "tests": "Critical acceptance tests run non-interactively in the isolated runner and exercise generated application code.",
             "staticWeb": "For browser HTML/CSS/vanilla JavaScript, keep domain logic importable from tests and use Node built-ins only for runner verification.",
@@ -206,6 +215,10 @@ def _repair_specification(plan, failure_evidence: dict | None) -> str:
         "requirements": [_compact_requirement(item) for item in selected_requirements],
         "capabilityGraph": [_compact_node(item) for item in selected_nodes],
         "unsupportedRequirements": data.get("unsupportedRequirements") or [],
+        "completionPolicy": {
+            "objectiveAuditRequired": True,
+            "rule": "Repair/edit sessions must also satisfy the deterministic owner-objective audit before finishing.",
+        },
         "operlyExecutionContract": execution_contract,
     }
     return json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -387,7 +400,8 @@ async def edit_source_for_plan(
     edit_kind: str = "source_edit",
     context: dict | None = None,
 ):
-    agent = OpenCodeStyleCodingAgent(client=client or coding_model_client("coding"))
+    model_role = "repair" if edit_kind == "objective_repair" else "coding"
+    agent = OpenCodeStyleCodingAgent(client=client or coding_model_client(model_role))
     task = str(instruction or "").strip()
     result = await agent.edit(
         _plan_specification(plan),
