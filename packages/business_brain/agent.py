@@ -1,12 +1,7 @@
 import json
 from uuid import uuid4
 
-from sqlalchemy import select
-
 from packages.agents.controller import AgentRunController
-from packages.application_builder.routing import route_application_request
-from packages.application_builder.schema import BuilderContext, ProposalRequest
-from packages.application_builder.service import ApplicationBuilderService
 from packages.business_brain.context_loader import (
     load_business_context,
     load_conversation_messages,
@@ -22,9 +17,8 @@ from packages.business_brain.types import AgentInput
 from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.context.service import ContextService
 from packages.database.agent_models import AgentConversation, AgentMessage
-from packages.database.application_builder_models import ManagedApplication
 from packages.database.db import session_scope
-from packages.model_runtime import ModelChatAdapter, model_for_role
+from packages.model_runtime import model_for_role
 from packages.security.execution_context import (
     ExecutionContextError,
     resolve_execution_context,
@@ -90,9 +84,6 @@ class AgentService:
         # The role profile prefers small/fast models. Heavy reasoning remains an
         # explicit model.deep_reason escalation rather than the default executor.
         self.model = model_for_role("business_agent")
-        # Managed Application routing is compatibility code that still expects the
-        # old chat-shaped interface. It receives an adapter over the same Model.
-        self.client = ModelChatAdapter(self.model)
         self.plugin_harness = PluginAgentHarness()
         self.rate_limiter = SlidingWindowRateLimiter(limit=20, window_seconds=60)
         self.max_steps = 6
@@ -170,30 +161,6 @@ class AgentService:
         request.metadata["allow_tenant_context"] = allow_tenant_context
         request.metadata["_surface_kind"] = surface_kind.value
         request.metadata["shared_surface"] = surface_kind.is_shared
-
-        # Managed-application routing is now an explicit compatibility mode.
-        builder_selected = bool(
-            request.metadata.get("application_id")
-            or request.metadata.get("builder_mode")
-        )
-        if builder_selected and user_text and user_id:
-            decision = await route_application_request(
-                user_text,
-                client=self.client,
-                context={
-                    "surface": surface_kind.value,
-                    "applicationId": request.metadata.get("application_id"),
-                    "role": trusted_role,
-                },
-            )
-            if decision.domain_match:
-                return await self._run_builder_request(
-                    request,
-                    conversation,
-                    user_text,
-                    decision.route_id if decision.known else None,
-                    decision.reason,
-                )
 
         attachment_label = ""
         if request.attachment_names:
@@ -375,112 +342,6 @@ class AgentService:
             "runtime_run_id": run.get("runtime_run_id"),
             "replans": run.get("replans", 0),
             "run_plan": run.get("run_plan"),
-        }
-
-    async def _run_builder_request(
-        self,
-        request,
-        conversation,
-        user_text,
-        intent,
-        routing_reason,
-    ):
-        """Compatibility path for managed-application proposal generation."""
-        requested_id = str(request.metadata.get("application_id") or "").strip()
-        user_id = str(request.metadata.get("user_id") or "").strip()
-        role = str(request.metadata.get("role") or "guest")
-
-        async with session_scope() as db:
-            query = select(ManagedApplication).where(
-                ManagedApplication.tenant_id == request.tenant_id
-            )
-            if requested_id:
-                query = query.where(ManagedApplication.id == requested_id)
-            else:
-                query = query.order_by(ManagedApplication.created_at.desc()).limit(1)
-            application = await db.scalar(query)
-
-            if application is None:
-                answer = "Create or select a managed application in Studio before changing the application."
-                db.add(
-                    AgentMessage(
-                        tenant_id=request.tenant_id,
-                        conversation_id=conversation.id,
-                        role="user",
-                        content=user_text,
-                    )
-                )
-                db.add(
-                    AgentMessage(
-                        tenant_id=request.tenant_id,
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer,
-                    )
-                )
-                return {
-                    "conversation_id": conversation.id,
-                    "message": answer,
-                    "routing_authority": "model",
-                    "intent": intent,
-                }
-
-            payload = ProposalRequest(
-                message=user_text,
-                context=BuilderContext(
-                    workspaceId=request.tenant_id,
-                    applicationId=application.id,
-                    activeVersionId=application.active_version_id,
-                    selectionScope="application",
-                    userRole=role,
-                ),
-            )
-            change = await ApplicationBuilderService.propose(
-                db,
-                request.tenant_id,
-                user_id,
-                role,
-                payload,
-                routed_intent=intent,
-                model_routed=True,
-                routing_reason=routing_reason,
-            )
-            operations = json.loads(change.operations_json)
-            planner = (
-                "model_synthesis"
-                if any(item.get("operation") == "synthesize_application" for item in operations)
-                else "model_routed_deterministic"
-            )
-            answer = (
-                f"Created a validated application proposal for {application.name}. "
-                "Preview and apply it in Studio."
-            )
-
-        async with session_scope() as db:
-            db.add(
-                AgentMessage(
-                    tenant_id=request.tenant_id,
-                    conversation_id=conversation.id,
-                    role="user",
-                    content=user_text,
-                )
-            )
-            db.add(
-                AgentMessage(
-                    tenant_id=request.tenant_id,
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=answer,
-                )
-            )
-        return {
-            "conversation_id": conversation.id,
-            "message": answer,
-            "planner": planner,
-            "routing_authority": "model",
-            "intent": intent,
-            "application_id": application.id,
-            "change_set_id": change.id,
         }
 
     async def _get_or_create_conversation(self, request: AgentInput) -> AgentConversation:
