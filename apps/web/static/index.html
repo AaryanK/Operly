@@ -3,44 +3,113 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="OPERLY business operating platform">
+  <meta name="description" content="OPERLY is an AI operating layer for persistent context, connected capabilities, business operations and software construction.">
   <link rel="icon" type="image/png" href="/static/operly-logo.png">
   <link rel="apple-touch-icon" href="/static/operly-logo.png">
   <meta property="og:image" content="/static/operly-logo.png">
   <meta name="twitter:image" content="/static/operly-logo.png">
-  <title>OPERLY</title>
+  <title>OPERLY — AI that can operate</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260824-auth-convergence-v1">
   <link rel="stylesheet" href="/static/regression.css?v=20260825-admin-public-v1">
+  <link rel="stylesheet" href="/static/landing-operly.css?v=20260825-operly-positioning-v1">
 </head>
 <body>
   <div id="landing" class="screen">
     <header class="landing-header">
       <div class="brand dark"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"><b>OPERLY</b></div>
+      <nav class="landing-nav" aria-label="Product"><a href="#capabilities">Capabilities</a><a href="#studio">Studio</a><a href="#control">Control</a><a href="#use-cases">Use cases</a></nav>
       <div class="landing-actions"><button class="button secondary" data-route="/login">Sign in</button><button class="button primary" data-route="/signup">Get started</button></div>
     </header>
 
-    <main class="hero">
-      <section>
-        <span class="kicker">Business, operating intelligently.</span>
-        <h1>One AI layer for <em>your entire business.</em></h1>
-        <p>Your account starts with a private Personal AI. Create or join workspaces when you want shared business context, tools and operations.</p>
-        <button class="button lime large" data-route="/signup">Get started →</button>
+    <main class="hero operly-hero">
+      <section class="hero-copy">
+        <span class="kicker">AI that can actually operate.</span>
+        <h1>AI shouldn't just answer. <em>It should operate.</em></h1>
+        <p>OPERLY gives AI persistent context, authorized tools, connected services and a real software workspace—so it can move from understanding work to actually getting it done.</p>
+        <div class="hero-actions"><button class="button lime large" data-route="/signup">Start using OPERLY →</button><p class="hero-note">Start privately. Add workspaces when you need shared context.</p></div>
+        <div class="hero-proof" aria-label="Core capabilities"><span>Persistent context</span><span>Connected tools</span><span>Business operations</span><span>Software construction</span><span>Human approvals</span></div>
       </section>
-      <section class="product-preview">
+
+      <section class="operation-preview" aria-label="Example Operly workflow">
         <div class="preview-sidebar"><div class="brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"></div><i></i><i></i><i></i><i></i></div>
-        <div class="preview-main">
-          <h3>Good morning</h3>
-          <div class="preview-stats"><article><b>128</b><span>Messages</span></article><article><b>12</b><span>Tasks</span></article><article><b>4</b><span>Approvals</span></article></div>
-          <div class="preview-card"><b>Unified business activity</b><p>Discord inquiry received</p><p>OPERLY captured a task</p><p>Owner approval requested</p></div>
+        <div class="operation-main">
+          <span class="kicker green">One request. Real work.</span>
+          <h3>OPERLY Runtime</h3>
+          <div class="operation-prompt">“Look through the new leads, find who needs a follow-up, draft the emails and show me anything that needs approval.”</div>
+          <div class="operation-steps">
+            <div class="operation-step"><span class="operation-check">✓</span><b>Read CRM context</b><small>Authorized</small></div>
+            <div class="operation-step"><span class="operation-check">✓</span><b>Checked prior conversations</b><small>Context</small></div>
+            <div class="operation-step"><span class="operation-check">✓</span><b>Prepared Gmail drafts</b><small>Capability</small></div>
+            <div class="operation-step"><span class="operation-check">◉</span><b>2 actions need approval</b><small>Human control</small></div>
+          </div>
+          <div class="operation-flow"><b>CRM</b><span>→</span><b>Context</b><span>→</span><b>AI</b><span>→</span><b>Gmail</b><span>→</span><b>Approval</b></div>
         </div>
       </section>
     </main>
 
-    <section class="features">
-      <article><span>01</span><h2>Private by default</h2><p>Personal AI belongs to the account. Workspaces never inherit it implicitly.</p></article>
-      <article><span>02</span><h2>Turn language into action</h2><p>Tasks, memory and approvals from natural language inside authorized workspaces.</p></article>
-      <article><span>03</span><h2>Keep the owner in control</h2><p>Visible and auditable business operations with explicit delegation.</p></article>
+    <section id="capabilities" class="landing-section">
+      <div class="section-intro"><span class="kicker">The capability layer</span><h2>Give AI more than a chat box. <em>Give it capabilities.</em></h2><p>OPERLY puts context, tools, business services and software projects behind one operating layer. The model can discover what is available, use what it is authorized to use and stay inside the boundaries of the current person or workspace.</p></div>
+      <div class="capability-grid">
+        <article class="capability-card"><span class="cap-num">01 / CONNECT</span><h3>Work across connected services</h3><p>Bring Gmail, calendar, Discord, CRM data, business records, reminders and other services into the same authorized capability environment.</p><div class="capability-tags"><span>Google Workspace</span><span>Discord</span><span>CRM</span><span>Channels</span></div></article>
+        <article class="capability-card"><span class="cap-num">02 / CONTEXT</span><h3>Persistent memory and business state</h3><p>OPERLY reconstructs useful context from conversations, activity, company state, projects and workspace history instead of treating every request as a blank session.</p><div class="capability-tags"><span>Conversations</span><span>Company state</span><span>History</span><span>Projects</span></div></article>
+        <article class="capability-card"><span class="cap-num">03 / ACT</span><h3>Turn language into real operations</h3><p>Agents can discover capabilities semantically, invoke authorized tools and move through approval flows when a consequential operation needs explicit authority.</p><div class="capability-tags"><span>Actions</span><span>Approvals</span><span>Capability discovery</span><span>Agent runtime</span></div></article>
+        <article class="capability-card"><span class="cap-num">04 / ACCESS</span><h3>Use the same capabilities from multiple interfaces</h3><p>The underlying business logic can be reached from OPERLY itself, connected channels, APIs and compatible external AI clients through MCP without rebuilding it for every interface.</p><div class="capability-tags"><span>OPERLY AI</span><span>MCP</span><span>API</span><span>External AI</span></div></article>
+      </div>
     </section>
+
+    <section id="studio" class="operating-band">
+      <div class="operating-band-grid">
+        <div><span class="kicker">OPERLY Studio</span><h2>Don't just ask AI to write code. Ask it to build the thing.</h2><p>Studio gives agents a persistent software workspace. They can work against real source, validate builds, repair failures, version projects and move toward previewable software instead of stopping at a code block in chat.</p></div>
+        <div class="operating-list">
+          <article><b>Plan & understand</b><span>Analyze requirements, dependencies and acceptance criteria before construction.</span></article>
+          <article><b>Create & edit real source</b><span>Generate, inspect and change durable software projects instead of disposable snippets.</span></article>
+          <article><b>Run, validate & repair</b><span>Use isolated runtime boundaries for supported generated projects, then diagnose and iterate when validation fails.</span></article>
+          <article><b>Preview & version</b><span>Keep project state and source versions so software remains something OPERLY can continue working on.</span></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="landing-section">
+      <div class="section-intro"><span class="kicker">Persistent business context</span><h2>Your business becomes context. <em>Not another prompt.</em></h2><p>Contacts, leads, products, inventory, orders, quotations, appointments, documents, conversations, activity and software projects can participate in the operating context. The model gets what is relevant to the current job instead of blindly receiving everything.</p></div>
+      <div class="runtime-strip"><span>Contacts</span><span>Leads</span><span>Products</span><span>Inventory</span><span>Orders</span><span>Quotations</span><span>Appointments</span><span>Documents</span><span>Conversations</span><span>Projects</span></div>
+    </section>
+
+    <section class="operating-band">
+      <div class="operating-band-grid">
+        <div><span class="kicker">Model agnostic by design</span><h2>The model isn't the operating system. OPERLY is.</h2><p>Different jobs can use different configured models without rebuilding your context, permissions, tools or business around one provider.</p><div class="runtime-strip"><span>Reasoning</span><span>Planning</span><span>Coding</span><span>Validation</span><span>Repair</span><span>Specialist work</span></div></div>
+        <div class="operating-list"><article><b>Provider-neutral runtime</b><span>Model selection and failover sit below the higher-level OPERLY contracts.</span></article><article><b>Role-based model selection</b><span>Use models suited to planning, coding, repair, validation or bounded specialist work.</span></article><article><b>Your operating layer stays</b><span>Models can change while your persistent context, capability registry and authority boundaries remain.</span></article></div>
+      </div>
+    </section>
+
+    <section id="control" class="landing-section">
+      <div class="section-intro"><span class="kicker">Explicit authority</span><h2>Powerful doesn't mean <em>unrestricted.</em></h2><p>OPERLY separates what an AI can understand from what it is allowed to do. Capabilities remain scoped to the current identity and workspace, with the capability firewall and approval lifecycle sitting between reasoning and consequential execution.</p></div>
+      <div class="capability-grid">
+        <article class="capability-card"><span class="cap-num">IDENTITY</span><h3>Scoped context</h3><p>Personal AI, workspace identity and connected channels keep authority attached to the right person and operating context.</p></article>
+        <article class="capability-card"><span class="cap-num">FIREWALL</span><h3>Authorized capabilities</h3><p>Discovering that a capability exists is not the same thing as receiving permission to execute it.</p></article>
+        <article class="capability-card"><span class="cap-num">APPROVAL</span><h3>Human control when needed</h3><p>Consequential operations can enter explicit approval and verification flows rather than silently executing.</p></article>
+        <article class="capability-card"><span class="cap-num">PROVENANCE</span><h3>Actions remain visible</h3><p>Operational activity and provenance are part of the system instead of disappearing into an opaque agent conversation.</p></article>
+      </div>
+    </section>
+
+    <section id="use-cases" class="landing-section">
+      <div class="section-intro"><span class="kicker">Think in jobs, not AI products</span><h2>Ask OPERLY to <em>do the work.</em></h2><p>The point of the operating layer is that these jobs do not need separate AI products. They can use the same context, capability and authorization foundation.</p></div>
+      <div class="request-grid">
+        <div class="request-card">Read this attachment, understand the customer and update their record.</div>
+        <div class="request-card">Check my calendar and emails and tell me what actually needs my attention.</div>
+        <div class="request-card">Build a website for this business and let me keep editing it with you.</div>
+        <div class="request-card">Look through our leads and prepare the follow-ups.</div>
+        <div class="request-card">Use the tools available in this workspace to finish this task.</div>
+        <div class="request-card">Take this project, find the bug, fix it and validate the build.</div>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <span class="kicker">OPERLY</span>
+      <h2>Stop giving AI isolated prompts. <em>Give it somewhere to operate.</em></h2>
+      <p>Bring together your context, models, tools, business and software inside one authorized AI operating layer.</p>
+      <button class="button lime large" data-route="/signup">Get started with OPERLY →</button>
+    </section>
+
     <footer class="public-footer">
       <img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo">
       <p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a></p>
