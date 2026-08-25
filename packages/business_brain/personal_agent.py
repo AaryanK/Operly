@@ -13,6 +13,8 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from packages.agents.controller import AgentRunController
+from packages.capabilities.artifact_provider import ArtifactProvider
+from packages.capabilities.computer_provider import AgentComputerProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.firewall import (
@@ -46,11 +48,12 @@ AUTHORITY MODEL:
 - A selected/focused workspace is only a disambiguation hint. It never changes this conversation into workspace scope and never grants authority.
 - A workspace can never read this private conversation merely because the person belongs to it.
 - You may inspect only account/workspace data that application tools authorize for this person.
-- The tool list is intentionally tiny. Use capability.search to find account, scope, task, web, context, Google or model operations that are not currently exposed, then capability.describe before invoking them.
+- The tool list is intentionally tiny. Use capability.search to find account, scope, task, web, context, Google, file, computer or model operations that are not currently exposed, then capability.describe before invoking them.
 - Resolve the target namespace before assuming where a resource lives. Use scope.resolve for explicit references such as Personal, ANHITRA, or NaySchool; scope resolution grants no execution authority.
 - The person may ask you to act in any workspace they belong to. Discover/use account.workspace_capabilities when workspace capability names or availability are uncertain, then account.workspace_execute for the chosen workspace capability.
 - account.workspace_execute is not a bypass. The application re-checks membership, resolved role permissions, plugin availability, connector scopes, approvals, audit and verification on every delegated execution.
 - Personal Gmail and Calendar operations use the account-owned Google connector when authorized. They still cross Operly's canonical action firewall; Gmail sends, calendar writes, label mutations and destructive draft operations can require approval.
+- Personal artifacts and Agent Computer operations remain in this person's Personal scope. The Agent Computer receives only explicitly selected artifact bytes, no production credentials, and no outbound network access.
 - If an underlying action returns a pending/approval state, say that approval is required or pending. Never claim the side effect happened until the tool result verifies it.
 - Personal connectors are private to the account. Discover account.list_personal_connectors when needed; never reveal credentials or tokens. Do not claim a personal connector must be linked to a workspace merely because a workspace capability uses a different connector.
 - Durable work is represented by task.* capabilities. Do not emulate future work in conversation memory.
@@ -75,6 +78,11 @@ class PersonalAgentService:
         self.model = model_for_role("business_agent")
         self.run_controller = AgentRunController(max_replans=1)
 
+        # FileRuntimeProvider imports the multimodal attachment stack which in turn
+        # imports channel presentation. Load it here instead of at module-import time
+        # so Personal AI and the canonical registry do not form an import cycle.
+        from packages.capabilities.file_runtime_provider import FileRuntimeProvider
+
         core_providers = (
             PersonalRuntimeProvider(),
             AccountScopeProvider(),
@@ -82,6 +90,9 @@ class PersonalAgentService:
             UniversalTaskProvider(),
             PublicWebReadProvider(),
             ContextProvider(),
+            ArtifactProvider(),
+            FileRuntimeProvider(),
+            AgentComputerProvider(),
             ModelInvocationProvider(),
         )
         registry = CapabilityRegistry()
@@ -313,8 +324,15 @@ class PersonalAgentService:
                     return payload
 
                 context = SimpleNamespace(
+                    # Keep legacy personal providers compatible with the historical
+                    # synthetic tenant value while explicitly declaring the true
+                    # artifact/compute ownership boundary below.
                     tenant_id=personal_scope_id,
                     actor_id=user_id,
+                    scope_kind="personal",
+                    scope_id=personal_scope_id,
+                    owner_user_id=user_id,
+                    execution_id=call_id,
                     db=db,
                     invocation={
                         "channel": channel,
