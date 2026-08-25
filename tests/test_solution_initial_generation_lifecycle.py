@@ -1,20 +1,22 @@
+import json
 import unittest
-from unittest.mock import AsyncMock, patch
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.application_builder.service import ApplicationBuilderService
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant
 from packages.database.product_models import SolutionJob
 from packages.database.schema import import_all_models
+from packages.database.software_project_models import SoftwareProjectRecord
 from packages.solutions.composer import (
     create_solution_from_intent,
     retry_solution_initial_generation,
 )
-from packages.solutions.service import LifecycleStatus, SolutionService, solution_json
+from packages.solutions.generation_worker import SOFTWARE_JOB_TYPE
+from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, solution_json
 
 
 class SolutionInitialGenerationLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -36,6 +38,18 @@ class SolutionInitialGenerationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         await self.engine.dispose()
 
+    async def _create(self):
+        row, decision = await create_solution_from_intent(
+            self.db,
+            tenant_id=self.tenant.id,
+            user_id=self.user.id,
+            name="Customer Notebook",
+            objective="Build a lightweight customer notebook.",
+            service=self.service,
+        )
+        await self.db.commit()
+        return row, decision
+
     async def _jobs(self, solution_id):
         return (
             await self.db.scalars(
@@ -45,82 +59,34 @@ class SolutionInitialGenerationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
         ).all()
 
-    async def test_failed_initial_generation_never_marks_bootstrap_preview_ready(self):
-        with patch.object(
-            ApplicationBuilderService,
-            "propose",
-            new=AsyncMock(side_effect=RuntimeError("provider temporarily unavailable")),
-        ):
-            row, _ = await create_solution_from_intent(
-                self.db,
-                tenant_id=self.tenant.id,
-                user_id=self.user.id,
-                name="Student Grades Recorder",
-                objective="Record student grades and save them for later review.",
-                service=self.service,
-            )
-        await self.db.commit()
+    async def test_initial_generation_is_durable_software_project_work(self):
+        row, decision = await self._create()
 
-        self.assertEqual(row.lifecycle_status, LifecycleStatus.FAILED)
+        self.assertEqual(decision.runtime_type, RuntimeType.SOFTWARE_PROJECT)
+        self.assertEqual(row.runtime_type, RuntimeType.SOFTWARE_PROJECT)
+        self.assertEqual(row.lifecycle_status, LifecycleStatus.BUILDING)
         self.assertEqual(row.preview_state, "unavailable")
         self.assertIsNone(row.current_version_reference)
-        payload = solution_json(row)
-        self.assertEqual(payload["generation"]["status"], "retryable")
-        self.assertEqual(payload["generation"]["stage"], "proposal")
-        self.assertIn("provider temporarily unavailable", payload["generation"]["error"])
+
+        project = await self.db.get(SoftwareProjectRecord, row.runtime_reference)
+        self.assertIsNotNone(project)
+        self.assertEqual(project.state, "building")
+        self.assertIsNone(project.active_source_version_id)
 
         jobs = await self._jobs(row.id)
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].status, "failed")
+        self.assertEqual(jobs[0].job_type, SOFTWARE_JOB_TYPE)
+        self.assertEqual(jobs[0].status, "queued")
         self.assertEqual(jobs[0].attempt, 1)
 
-        synced = await self.service.get(self.db, self.tenant.id, row.id)
-        self.assertEqual(synced.lifecycle_status, LifecycleStatus.FAILED)
-        self.assertEqual(synced.preview_state, "unavailable")
-        with self.assertRaisesRegex(LookupError, "not ready"):
-            _, runtime = await self.service.resolve(self.db, self.tenant.id, row.id)
-            await self.service.preview_target(self.db, self.tenant.id, synced, runtime)
-
-    async def test_success_requires_non_bootstrap_applied_version(self):
-        row, _ = await create_solution_from_intent(
-            self.db,
-            tenant_id=self.tenant.id,
-            user_id=self.user.id,
-            name="Customer Notebook",
-            objective="Build a lightweight customer notebook.",
-            service=self.service,
-        )
-        await self.db.commit()
-
         payload = solution_json(row)
-        self.assertEqual(row.lifecycle_status, LifecycleStatus.PREVIEW_READY)
-        self.assertEqual(row.preview_state, "ready")
-        self.assertIsNotNone(row.current_version_reference)
-        self.assertEqual(payload["generation"]["status"], "applied")
-        self.assertNotEqual(
-            payload["generation"]["versionId"],
-            payload["generation"]["bootstrapVersionId"],
-        )
-        jobs = await self._jobs(row.id)
-        self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].status, "succeeded")
+        self.assertEqual(payload["runtime"], {"kind": "software", "id": project.id})
+        self.assertEqual(payload["generation"]["status"], "queued")
+        self.assertEqual(payload["generation"]["stage"], "planning")
 
-    async def test_failed_generation_retries_from_stored_owner_objective(self):
-        with patch.object(
-            ApplicationBuilderService,
-            "propose",
-            new=AsyncMock(side_effect=RuntimeError("first provider path failed")),
-        ):
-            row, _ = await create_solution_from_intent(
-                self.db,
-                tenant_id=self.tenant.id,
-                user_id=self.user.id,
-                name="Customer Notebook",
-                objective="Build a lightweight customer notebook.",
-                service=self.service,
-            )
-        await self.db.commit()
-        self.assertEqual(row.lifecycle_status, LifecycleStatus.FAILED)
+    async def test_retry_while_generation_is_active_does_not_duplicate_work(self):
+        row, _ = await self._create()
+        first = (await self._jobs(row.id))[0]
 
         retried = await retry_solution_initial_generation(
             self.db,
@@ -131,14 +97,46 @@ class SolutionInitialGenerationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.db.commit()
 
-        self.assertEqual(retried.lifecycle_status, LifecycleStatus.PREVIEW_READY)
-        self.assertEqual(retried.preview_state, "ready")
-        payload = solution_json(retried)
-        self.assertEqual(payload["generation"]["attempt"], 2)
-        self.assertEqual(payload["generation"]["status"], "applied")
         jobs = await self._jobs(row.id)
-        self.assertEqual([job.status for job in jobs], ["failed", "succeeded"])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].id, first.id)
+        self.assertEqual(retried.lifecycle_status, LifecycleStatus.BUILDING)
+
+    async def test_failed_generation_retries_from_stored_owner_objective(self):
+        row, _ = await self._create()
+        first = (await self._jobs(row.id))[0]
+        first.status = "failed"
+        first.ended_at = datetime.utcnow()
+        row.lifecycle_status = LifecycleStatus.FAILED
+        context = json.loads(row.context_json)
+        context["initialGeneration"] = {
+            "status": "retryable",
+            "stage": "source_generation",
+            "jobId": first.id,
+            "attempt": 1,
+            "error": "first build failed",
+        }
+        row.context_json = json.dumps(context)
+        project = await self.db.get(SoftwareProjectRecord, row.runtime_reference)
+        project.state = "failed"
+        await self.db.commit()
+
+        retried = await retry_solution_initial_generation(
+            self.db,
+            tenant_id=self.tenant.id,
+            user_id=self.user.id,
+            solution_id=row.id,
+            service=self.service,
+        )
+        await self.db.commit()
+
+        jobs = await self._jobs(row.id)
         self.assertEqual([job.attempt for job in jobs], [1, 2])
+        self.assertEqual([job.status for job in jobs], ["failed", "queued"])
+        evidence = json.loads(jobs[1].evidence_json)
+        self.assertEqual(evidence["objective"], "Build a lightweight customer notebook.")
+        self.assertEqual(retried.lifecycle_status, LifecycleStatus.BUILDING)
+        self.assertEqual(solution_json(retried)["generation"]["attempt"], 2)
 
 
 if __name__ == "__main__":
