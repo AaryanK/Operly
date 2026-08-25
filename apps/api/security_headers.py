@@ -50,7 +50,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             runner_frames=" ".join(_runner_preview_origins()) if solution_studio else ""
             frame_sources=f"'self' https://accounts.google.com/gsi/ {runner_frames}".strip()
             response.headers["Content-Security-Policy"]=f"default-src 'self'; img-src {image_sources}; style-src 'self' 'unsafe-inline'; script-src {script_sources}{google_script}; connect-src 'self' https://accounts.google.com/gsi/; frame-src {frame_sources}; frame-ancestors {frame_ancestors}; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests"
-        if path.startswith("/api/auth/") or path in {"/api/me","/login","/signup","/verify-email","/forgot-password","/reset-password","/onboarding"}:
+        if path.startswith("/api/auth/") or path.startswith("/api/admin/") or path in {"/api/me","/login","/signup","/verify-email","/forgot-password","/reset-password","/onboarding","/admin"}:
             response.headers["Cache-Control"]="no-store, max-age=0"
             response.headers["Pragma"]="no-cache"
         environment=os.getenv("OPERLY_ENV",os.getenv("APP_ENV","development")).lower()
