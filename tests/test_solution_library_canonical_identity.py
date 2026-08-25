@@ -3,11 +3,13 @@ import unittest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from apps.api.solution_generation_router import _canonical_source_inspector_json
 from packages.database.db import Base
 from packages.database.models import Tenant
 from packages.database.product_models import SolutionRecord
 from packages.database.schema import import_all_models
 from packages.database.software_project_models import SoftwareProjectRecord
+from packages.software_projects.source_service import SoftwareSourceService
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, SolutionType
 
 
@@ -74,6 +76,42 @@ class SolutionLibraryCanonicalIdentityTests(unittest.IsolatedAsyncioTestCase):
             resolved_legacy = await service.get(db, tenant.id, legacy.id)
             self.assertEqual(resolved_legacy.id, legacy.id)
             self.assertEqual(resolved_legacy.runtime_type, RuntimeType.STUDIO)
+
+    async def test_canonical_software_source_projects_into_solution_inspector_shape(self):
+        async with self.sessions() as db:
+            tenant = Tenant(name="Canonical Source", slug="canonical-source")
+            db.add(tenant)
+            await db.flush()
+            project = SoftwareProjectRecord(
+                tenant_id=tenant.id,
+                name="Canonical App",
+                description="Inspect the authoritative source, not a legacy bundle.",
+            )
+            db.add(project)
+            await db.flush()
+
+            source = await SoftwareSourceService().persist(
+                db,
+                tenant_id=tenant.id,
+                project_id=project.id,
+                user_id="owner-user",
+                files={"index.html": "<h1>Operly</h1>", "app.js": "console.log('ready')"},
+                runtime_profile="static-web-js",
+                provenance={"sourceOperation": "build"},
+                change_summary="Initial canonical build",
+                originating_run_id="agent-run-1",
+            )
+
+            payload = _canonical_source_inspector_json(source)
+
+            self.assertEqual(payload["projectId"], project.id)
+            self.assertEqual(payload["sourceVersion"], 1)
+            self.assertEqual(payload["sourceAuthority"], "software_source_versions")
+            self.assertEqual(payload["runtimeProfile"], "static-web-js")
+            self.assertEqual(payload["originatingRunId"], "agent-run-1")
+            self.assertEqual(payload["fileCount"], 2)
+            self.assertEqual([item["path"] for item in payload["files"]], ["app.js", "index.html"])
+            self.assertEqual(payload["files"][1]["content"], "<h1>Operly</h1>")
 
 
 if __name__ == "__main__":
