@@ -4,7 +4,8 @@ on:
   pull_request:
     paths:
       - "apps/api/**"
-      - "apps/web/static/**"
+      - "apps/runner/**"
+      - "apps/web/**"
       - "alembic/versions/**"
       - "packages/actions/**"
       - "packages/agents/**"
@@ -15,8 +16,6 @@ on:
       - "packages/company/**"
       - "packages/connectors/**"
       - "packages/context/**"
-      - "packages/coding_harness/**"
-      - "packages/custom_software/**"
       - "packages/database/**"
       - "packages/mcp/**"
       - "packages/model_runtime/**"
@@ -24,42 +23,24 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/service_bindings/**"
       - "packages/security/**"
+      - "packages/software_projects/**"
       - "packages/solutions/**"
-      - "packages/studio/**"
       - "packages/workspace/**"
+      - "packages/workspace_entities/**"
+      - "tests/test_canonical_software_architecture.py"
+      - "tests/test_software_project_persistence.py"
+      - "tests/test_software_build_capability.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_fullstack_runtime_contract.py"
+      - "tests/test_solution_source_inspector.py"
+      - "tests/test_solution_production.py"
+      - "tests/test_solutions.py"
+      - "tests/test_unified_agent_runtime_foundation.py"
+      - "tests/test_plugin_first_runtime.py"
+      - "tests/test_runtime_trace_contract.py"
+      - ".github/workflows/application-flow.yml"
       - "requirements.txt"
       - "Dockerfile"
-      - "tests/test_account_scope_workspace_creation.py"
-      - "tests/test_authentication.py"
-      - "tests/test_railway_auth_origin.py"
-      - "tests/test_capability_harness_journey.py"
-      - "tests/test_capability_exposure_reliability.py"
-      - "tests/test_capability_surface_parity.py"
-      - "tests/test_channel_context.py"
-      - "tests/test_dm_workspace_switch.py"
-      - "tests/test_space_binding_transfer.py"
-      - "tests/test_connector_runtime.py"
-      - "tests/test_company_intelligence.py"
-      - "tests/test_company_operating_system.py"
-      - "tests/test_company_evidence_provenance_resolution.py"
-      - "tests/test_google_workspace_capabilities.py"
-      - "tests/test_solutions.py"
-      - "tests/test_studio.py"
-      - "tests/test_studio_design_quality.py"
-      - "tests/test_studio_source_agent.py"
-      - "tests/test_studio_context_rich_harness.py"
-      - "tests/test_studio_model_latency_policy.py"
-      - "tests/test_unified_application_flow.py"
-      - "tests/test_unified_studio_regressions.py"
-      - "tests/test_workspace_security_boundary.py"
-      - "tests/test_principal_access_architecture.py"
-      - "tests/test_unified_runtime_context.py"
-      - "tests/test_durable_runtime_state.py"
-      - "tests/test_plugin_first_runtime.py"
-      - "tests/test_multi_provider_model_portfolio.py"
-      - "tests/test_openai_compatible_tool_arguments.py"
-      - "tests/test_harness_native_tasks.py"
-      - ".github/workflows/application-flow.yml"
   workflow_dispatch:
 
 jobs:
@@ -72,136 +53,43 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
-      - name: Compile application flow
+
+      - name: Enforce canonical software architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d packages/custom_software
+          test ! -d packages/coding_harness
+          test ! -d packages/studio
+          test ! -d packages/application_builder
+          test ! -d packages/dashboard_studio
+          if grep -R --line-number --include='*.py' -E 'packages\.(custom_software|coding_harness|studio|application_builder|dashboard_studio)(\.| import )' apps packages; then
+            echo "Historical implementation namespace remains in executable source" >&2
+            exit 1
+          fi
+          test -d packages/software_projects/planning
+          test -d packages/software_projects/coding
+          test -f packages/runtime_plugins/runner_contracts.py
+          test -f packages/runtime_plugins/interaction_contracts.py
+
+      - name: Compile canonical application runtime
         run: >-
-          python -m py_compile
-          apps/api/main.py
-          apps/api/access_router.py
-          apps/api/agent_router.py
-          apps/api/capability_diagnostics_router.py
-          apps/api/csrf.py
-          apps/api/business.py
-          apps/api/channel_identity_router.py
-          apps/api/company_router.py
-          apps/api/connectors_router.py
-          apps/api/personal_agent_router.py
-          apps/api/personal_connectors_router.py
-          apps/api/solutions_router.py
-          apps/api/studio_router.py
-          apps/api/studio_run_history_router.py
-          apps/api/studio_source_router.py
-          apps/api/workspace_router.py
-          apps/api/approvals_router.py
-          apps/api/integrations_router.py
-          apps/api/system_router.py
-          alembic/versions/0022_channel_identity_context.py
-          alembic/versions/0023_workspace_rbac.py
-          alembic/versions/0024_principals_clients_mcp.py
-          alembic/versions/0025_principal_conversations.py
-          alembic/versions/0026_action_provenance.py
-          alembic/versions/0027_global_human_memory.py
-          alembic/versions/0028_studio_source_agent.py
-          alembic/versions/0029_studio_agent_runs.py
-          alembic/versions/0032_scope_boundaries.py
-          alembic/versions/0033_personal_connectors.py
-          alembic/versions/0037_harness_native_tasks.py
-          packages/agents/runtime.py
-          packages/capabilities/registry.py
-          packages/capabilities/firewall.py
-          packages/coding_harness/runtime_resolution.py
-          packages/custom_software/planner.py
-          packages/custom_software/runner_service.py
-          packages/runtime_plugins/fullstack_contract.py
-          packages/model_runtime/openai_compatible_client.py
-          packages/model_runtime/portfolio.py
-          packages/model_runtime/routing_policy.py
-          packages/model_runtime/task_routing.py
-          packages/business/service.py
-          packages/company/intelligence.py
-          packages/company/provenance.py
-          packages/workspace/service.py
-          packages/database/db.py
-          packages/database/account_connector_models.py
-          packages/database/channel_models.py
-          packages/database/workspace_security_models.py
-          packages/database/principal_models.py
-          packages/database/company_models.py
-          packages/database/scope_models.py
-          packages/database/studio_source_models.py
-          packages/database/schema.py
-          packages/business_brain/types.py
-          packages/business_brain/agent.py
-          packages/business_brain/context_loader.py
-          packages/business_brain/conversation_artifacts.py
-          packages/business_brain/personal_agent.py
-          packages/business_brain/attachments/plugin.py
-          packages/business_brain/attachments/multimodal_processor.py
-          packages/actions/service.py
-          packages/channels/envelope.py
-          packages/channels/identity.py
-          packages/channels/linking.py
-          packages/channels/guest_chat.py
-          packages/channels/space_bindings.py
-          packages/channels/service.py
-          packages/context/service.py
-          packages/security/delegation_context.py
-          packages/security/execution_context.py
-          packages/security/permissions.py
-          packages/security/personal_delegation.py
-          packages/security/principals.py
-          packages/security/temporal_context.py
-          packages/plugins/manifest.py
-          packages/mcp/policy.py
-          packages/mcp/gateway.py
-          packages/connectors/account_google.py
-          packages/connectors/account_secrets.py
-          packages/connectors/runtime.py
-          packages/connectors/google_provider.py
-          packages/connectors/discord/runtime.py
-          packages/connectors/discord/secure_runtime.py
-          packages/connectors/discord/slash_commands.py
-          packages/connectors/discord/bot_shared.py
-          packages/connectors/discord/provider.py
-          packages/connectors/discord/scheduled_tasks.py
-          packages/capabilities/agent_harness.py
-          packages/capabilities/defaults.py
-          packages/capabilities/context_provider.py
-          packages/capabilities/action_provider.py
-          packages/capabilities/history_provider.py
-          packages/capabilities/gmail_draft_provider.py
-          packages/capabilities/runtime_context.py
-          packages/capabilities/personal_provider.py
-          packages/capabilities/business_provider.py
-          packages/capabilities/crm_read_provider.py
-          packages/capabilities/workspace_provider.py
-          packages/capabilities/operations_provider.py
-          packages/capabilities/studio_provider.py
-          packages/capabilities/reminder_provider.py
-          packages/capabilities/task_provider.py
-          packages/capabilities/web_read_provider.py
-          packages/capabilities/solution_provider.py
-          packages/capabilities/surface_contract.py
-          packages/capabilities/website_provider.py
-          packages/solutions/composer.py
-          packages/solutions/service.py
-          packages/solutions/production.py
-          packages/studio/schema.py
-          packages/studio/design.py
-          packages/studio/renderer.py
-          packages/studio/ai.py
-          packages/studio/source_agent.py
-          packages/studio/agent_runs.py
-          packages/studio/context_hardening.py
-          packages/studio/hardening_policy.py
-          packages/studio/hardening_policy_v2.py
-          packages/studio/model_latency_policy.py
-          packages/studio/model_provenance.py
-          packages/studio/tool_hardening.py
+          python -m compileall -q
+          apps/api
+          apps/runner
+          packages/agents
+          packages/capabilities
+          packages/model_runtime
+          packages/runtime_plugins
+          packages/software_projects
+          packages/solutions
+
       - name: Check current browser JavaScript syntax
         run: |
           set -euo pipefail
           find apps/web/static -maxdepth 1 -type f -name '*.js' -print0 | sort -z | xargs -0 -r -n1 node --check
-      - name: Run application-flow tests
+
+      - name: Run canonical application-flow contracts
         env:
           ADMIN_PASSWORD: test-admin-password-1234
           SESSION_SECRET: test-session-secret-that-is-long-enough
@@ -209,36 +97,20 @@ jobs:
           OPERLY_ENV: test
         run: >-
           python -m pytest -q
-          tests/test_account_scope_workspace_creation.py
-          tests/test_authentication.py
-          tests/test_railway_auth_origin.py
-          tests/test_capability_harness_journey.py
-          tests/test_capability_exposure_reliability.py
-          tests/test_capability_surface_parity.py
-          tests/test_channel_context.py
-          tests/test_dm_workspace_switch.py
-          tests/test_space_binding_transfer.py
-          tests/test_connector_runtime.py
-          tests/test_company_intelligence.py
-          tests/test_company_operating_system.py
-          tests/test_company_evidence_provenance_resolution.py
-          tests/test_google_workspace_capabilities.py
+          tests/test_canonical_software_architecture.py
+          tests/test_software_project_persistence.py
+          tests/test_software_build_capability.py
+          tests/test_generated_solution_worker.py
+          tests/test_fullstack_runtime_contract.py
+          tests/test_solution_source_inspector.py
+          tests/test_solution_production.py
           tests/test_solutions.py
-          tests/test_studio.py
-          tests/test_studio_design_quality.py
-          tests/test_studio_source_agent.py
-          tests/test_studio_context_rich_harness.py
-          tests/test_studio_model_latency_policy.py
-          tests/test_unified_application_flow.py
-          tests/test_unified_studio_regressions.py
-          tests/test_workspace_security_boundary.py
-          tests/test_principal_access_architecture.py
-          tests/test_unified_runtime_context.py
-          tests/test_durable_runtime_state.py
+          tests/test_unified_agent_runtime_foundation.py
           tests/test_plugin_first_runtime.py
-          tests/test_multi_provider_model_portfolio.py
-          tests/test_openai_compatible_tool_arguments.py
-          tests/test_harness_native_tasks.py
+          tests/test_runtime_trace_contract.py
+          tests/test_capability_surface_parity.py
+          tests/test_workspace_security_boundary.py
+
       - name: Smoke Railway-style production startup
         env:
           OPERLY_ENV: production
