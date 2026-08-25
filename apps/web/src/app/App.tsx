@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
+import { api } from "../api";
 import { ScopeRail } from "../account/ScopeRail";
 import { LegalLinks } from "../ui/LegalLinks";
 import { OperlyMark } from "../ui/OperlyMark";
@@ -22,6 +23,16 @@ function RouteFallback() {
   return <BrandedBoot message="Opening your operating layer…" />;
 }
 
+function recordProductPageView() {
+  return api<{ ok: boolean; recorded: boolean }>("/analytics/event", {
+    method: "POST",
+    body: JSON.stringify({
+      event_name: "page_view",
+      path: window.location.pathname,
+    }),
+  });
+}
+
 export function App() {
   const route = useRoute();
   const [accountSettingsTab, setAccountSettingsTab] = useState<AccountSettingsTab | null>(null);
@@ -35,6 +46,11 @@ export function App() {
     if (route.kind === "personal" && profile.current_workspace_id) { activatePersonal(personalPath()).catch(() => undefined); return; }
     if (route.kind === "workspace" && workspace && profile.current_workspace_id !== workspace.id) activateWorkspace(workspace.id, workspacePath(workspace.id, route.section)).catch(() => undefined);
   }, [activatePersonal, activateWorkspace, loading, profile, route, transitioning, workspace]);
+
+  useEffect(() => {
+    if (!profile || loading || transitioning || route.kind === "unknown") return;
+    recordProductPageView().catch(() => undefined);
+  }, [loading, profile?.email, profile?.id, route, transitioning]);
 
   if (loading && !profile) return <BrandedBoot message="Opening your operating layer…" />;
   if (error && !profile) return <div className="boot-screen branded-boot error-state"><OperlyMark className="boot-mark" /><strong>OPERLY</strong><h1>Operly could not open this account.</h1><p>{error}</p><a href="/login">Sign in</a></div>;
