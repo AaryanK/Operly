@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 from sqlalchemy import select
 
@@ -165,16 +165,45 @@ async def _record_workspace_delivery_event(
         return
 
 
-async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str, Any]:
-    provider = str(target.get("provider") or "").strip().lower()
+def _dedupe_artifact_ids(values: Iterable[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        output.append(item)
+    return output[:20]
+
+
+async def deliver_task_output(
+    target: dict[str, Any],
+    message: str,
+    *,
+    artifact_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Deliver delayed output after a fresh authority check.
+
+    Artifact IDs remain opaque scoped handles. They are passed to the adapter only
+    after authority is rechecked; adapters must resolve bytes/URLs through the
+    Artifact Store for the exact target scope rather than trusting model-authored
+    filenames or links.
+    """
+    delivery_target = dict(target)
+    ids = _dedupe_artifact_ids(artifact_ids)
+    if ids:
+        delivery_target["artifact_ids"] = ids
+
+    provider = str(delivery_target.get("provider") or "").strip().lower()
     if not provider:
         raise TaskDeliveryError("task_delivery_provider_missing")
 
     try:
-        await _reauthorize_delivery_target(target)
+        await _reauthorize_delivery_target(delivery_target)
     except Exception as error:
         await _record_workspace_delivery_event(
-            target,
+            delivery_target,
             RuntimeTraceEvent.DELIVERY_FAILED,
             {"status": "FAILED", "reason": type(error).__name__, "authority_recheck": True},
         )
@@ -186,17 +215,17 @@ async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str,
     if adapter is None:
         error = TaskDeliveryError(f"task_delivery_adapter_unavailable:{provider}")
         await _record_workspace_delivery_event(
-            target,
+            delivery_target,
             RuntimeTraceEvent.DELIVERY_FAILED,
             {"status": "FAILED", "reason": str(error)},
         )
         raise error
 
     try:
-        receipt = await adapter.deliver(dict(target), str(message or ""))
+        receipt = await adapter.deliver(delivery_target, str(message or ""))
     except Exception as error:
         await _record_workspace_delivery_event(
-            target,
+            delivery_target,
             RuntimeTraceEvent.DELIVERY_FAILED,
             {"status": "FAILED", "reason": type(error).__name__},
         )
@@ -205,20 +234,22 @@ async def deliver_task_output(target: dict[str, Any], message: str) -> dict[str,
     if not isinstance(receipt, dict) or str(receipt.get("status") or "").upper() != "VERIFIED":
         error = TaskDeliveryError(f"task_delivery_unverified:{provider}")
         await _record_workspace_delivery_event(
-            target,
+            delivery_target,
             RuntimeTraceEvent.DELIVERY_FAILED,
             {"status": "FAILED", "reason": str(error)},
         )
         raise error
 
     receipt.setdefault("provider", provider)
+    receipt.setdefault("artifact_ids", ids)
     receipt.setdefault("verified_at", datetime.now(timezone.utc).isoformat())
     await _record_workspace_delivery_event(
-        target,
+        delivery_target,
         RuntimeTraceEvent.DELIVERY_VERIFIED,
         {
             "status": "VERIFIED",
             "message_ids": list(receipt.get("message_ids") or []),
+            "artifact_ids": ids,
             "verified_at": receipt["verified_at"],
             "authority": receipt.get("authority"),
         },
@@ -270,6 +301,7 @@ class OperlyConversationDeliveryAdapter:
                     "provider": "operly",
                     "message_ids": [row.id],
                     "conversation_id": conversation.id,
+                    "artifact_ids": list(target.get("artifact_ids") or []),
                     "authority": {"owner_type": "personal", "owner_id": user_id},
                 }
 
@@ -294,5 +326,6 @@ class OperlyConversationDeliveryAdapter:
                 "provider": "operly",
                 "message_ids": [row.id],
                 "conversation_id": conversation.id,
+                "artifact_ids": list(target.get("artifact_ids") or []),
                 "authority": {"owner_type": "workspace", "owner_id": tenant_id},
             }
