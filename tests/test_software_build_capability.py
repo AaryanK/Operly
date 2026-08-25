@@ -7,10 +7,7 @@ from zipfile import ZipFile
 
 from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.search_index import CapabilitySearchIndex
-from packages.capabilities.software_build_provider import (
-    SoftwareBuildProvider,
-    _generated_runner_verified,
-)
+from packages.capabilities.software_build_provider import SoftwareBuildProvider, _runner_verified
 from packages.custom_software.source_bundles import SourceBundle, SourceFile
 from packages.software_projects import delivery as delivery_module
 
@@ -45,23 +42,39 @@ def test_qr_codebase_objective_discovers_project_build_before_loose_text_file():
     assert any(item.capability_id == "artifact.create_text" for item in hits)
 
 
-def test_software_build_surface_does_not_expose_coding_subtools():
-    ids = {definition.id for definition in SoftwareBuildProvider.capabilities}
-    assert ids == {"software.build", "software.build.status", "software.source.export"}
-    assert not ids & {"filesystem", "terminal", "browser", "studio.advance"}
+def test_software_surface_exposes_only_high_level_unified_operations():
+    definitions = {definition.id: definition for definition in SoftwareBuildProvider.capabilities}
+    assert set(definitions) == {
+        "software.build",
+        "software.edit",
+        "software.build.status",
+        "software.source.export",
+    }
+    assert not set(definitions) & {"filesystem", "terminal", "browser", "studio.advance"}
+    assert "project_id" in definitions["software.build"].input_schema["properties"]
+    assert definitions["software.edit"].input_schema["required"] == ["project_id", "instruction"]
+
+
+def test_existing_project_build_is_an_explicit_capability_contract():
+    build = next(item for item in SoftwareBuildProvider.capabilities if item.id == "software.build")
+    schema = build.input_schema
+    assert "project_id" in schema["properties"]
+    assert "project_id" not in schema["required"]
+    assert schema["properties"]["project_id"]["maxLength"] == 36
+    assert "existing project" in build.description.lower()
 
 
 def test_runner_verification_requires_durable_source_and_build_evidence():
     queued = SimpleNamespace(status="queued", evidence_json=json.dumps({"buildState": "queued"}))
-    assert _generated_runner_verified(queued) is False
+    assert _runner_verified(queued) is False
 
     incomplete = SimpleNamespace(
         status="succeeded",
         evidence_json=json.dumps({"buildState": "preview_ready", "buildId": "build-1"}),
     )
-    assert _generated_runner_verified(incomplete) is False
+    assert _runner_verified(incomplete) is False
 
-    verified = SimpleNamespace(
+    legacy_verified = SimpleNamespace(
         status="succeeded",
         evidence_json=json.dumps(
             {
@@ -72,7 +85,19 @@ def test_runner_verification_requires_durable_source_and_build_evidence():
             }
         ),
     )
-    assert _generated_runner_verified(verified) is True
+    assert _runner_verified(legacy_verified) is True
+
+    canonical_verified = SimpleNamespace(
+        status="succeeded",
+        evidence_json=json.dumps(
+            {
+                "buildState": "preview_ready",
+                "buildId": "build-2",
+                "canonicalSourceVersionId": "canonical-source-4",
+            }
+        ),
+    )
+    assert _runner_verified(canonical_verified) is True
 
 
 def test_source_zip_is_projection_of_verified_bundle(monkeypatch):

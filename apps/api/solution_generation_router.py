@@ -7,12 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.coding_harness.source_service import source_record_json
 from packages.database.custom_software_models import GeneratedProject, GeneratedSourceBundle
+from packages.software_projects.source_service import SoftwareSourceError, SoftwareSourceService, files_from_row
 from packages.solutions.composer import retry_solution_initial_generation
 from packages.solutions.service import RuntimeType, SolutionService, solution_json
 
 
 router = APIRouter(prefix="/api/solutions", tags=["solutions"])
 service = SolutionService()
+software_source_service = SoftwareSourceService()
 
 
 async def _latest_generated_source(
@@ -20,13 +22,7 @@ async def _latest_generated_source(
     tenant_id: str,
     solution,
 ) -> GeneratedSourceBundle | None:
-    """Resolve the newest persisted source bundle behind one generated Solution.
-
-    Source bundles are immutable and repairs create a new source_version, so this
-    remains useful while generation is running, after a failed attempt, and after
-    a successful preview.  The GeneratedProject is the durable bridge from the
-    user-facing Solution identity to its approved software plan.
-    """
+    """Resolve the newest persisted source bundle behind one legacy generated Solution."""
     if solution.runtime_type != RuntimeType.GENERATED_PROJECT:
         return None
     project = await db.get(GeneratedProject, solution.runtime_reference)
@@ -45,7 +41,7 @@ async def _latest_generated_source(
 
 
 def _source_inspector_json(source: GeneratedSourceBundle) -> dict:
-    """Return source text for an authenticated workspace inspector, never execution."""
+    """Return legacy generated source text for an authenticated workspace inspector."""
     try:
         records = json.loads(source.files_json or "[]")
     except Exception as error:
@@ -72,12 +68,39 @@ def _source_inspector_json(source: GeneratedSourceBundle) -> dict:
     files.sort(key=lambda item: item["path"])
 
     result = source_record_json(source)
-    # source_record_json exposes manifest file metadata.  The inspector endpoint
+    # source_record_json exposes manifest file metadata. The inspector endpoint
     # intentionally replaces that list with the authenticated owner's persisted
-    # UTF-8 source text so Studio can render a read-only file explorer.
+    # UTF-8 source text so Studio/Solutions can render a read-only file explorer.
     result["files"] = files
     result["fileCount"] = len(files)
     return result
+
+
+def _canonical_source_inspector_json(source) -> dict:
+    """Project canonical SoftwareProject source into the same read-only inspector shape."""
+    files_by_path = files_from_row(source)
+    files = [
+        {
+            "path": path,
+            "content": content,
+            "generatedBy": "agent_runtime",
+            "sizeBytes": len(content.encode("utf-8")),
+        }
+        for path, content in sorted(files_by_path.items())
+    ]
+    return {
+        "id": source.id,
+        "projectId": source.project_id,
+        "sourceVersion": source.source_version,
+        "bundleDigest": source.bundle_digest,
+        "runtimeProfile": source.runtime_profile,
+        "summary": source.change_summary,
+        "originatingRunId": source.originating_run_id,
+        "files": files,
+        "fileCount": len(files),
+        "totalBytes": sum(item["sizeBytes"] for item in files),
+        "sourceAuthority": "software_source_versions",
+    }
 
 
 @router.get("/{solution_id}/architecture")
@@ -110,11 +133,23 @@ async def solution_source(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Inspect the newest immutable generated source without executing it."""
+    """Inspect the newest immutable authoritative source without executing it."""
     try:
         row = await service.get(db, auth.tenant.id, solution_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+    if row.runtime_type == RuntimeType.SOFTWARE_PROJECT:
+        source = await software_source_service.latest(db, auth.tenant.id, row.runtime_reference)
+        if source is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Canonical source is not available for this Solution yet",
+            )
+        try:
+            return _canonical_source_inspector_json(source)
+        except SoftwareSourceError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
 
     source = await _latest_generated_source(db, auth.tenant.id, row)
     if source is None:

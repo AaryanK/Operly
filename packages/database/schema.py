@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0042_agent_computer_sessions"
+ALEMBIC_HEAD = "0043_canonical_software_source_versions"
 
 
 def import_all_models() -> None:

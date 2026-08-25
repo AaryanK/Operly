@@ -17,6 +17,7 @@ from packages.software_projects.adapters import (
     from_studio_project,
 )
 from packages.software_projects.contracts import ProjectState, SoftwareProject
+from packages.software_projects.source_service import SoftwareSourceService
 
 
 _LEGACY_SOURCES = (
@@ -53,10 +54,13 @@ def _json(value: str | None) -> dict:
 class SoftwareProjectService:
     """Canonical project identity with non-destructive legacy synchronization.
 
-    Existing runtime tables keep owning implementation-specific behavior during
-    migration. This service creates/updates stable ``software_projects`` identities
-    and projects their latest real source/runtime state into the canonical record.
+    Legacy runtime rows are read/migration adapters only.  When they contain source,
+    it is imported into ``software_source_versions`` and the canonical source id is
+    projected onto SoftwareProject. New software paths should write canonical state.
     """
+
+    def __init__(self) -> None:
+        self.sources = SoftwareSourceService()
 
     async def _binding_ids(self, db, project_id: str) -> tuple[str, ...]:
         rows = (
@@ -102,6 +106,7 @@ class SoftwareProjectService:
         runtime_type: str,
         legacy_row,
         projected: SoftwareProject,
+        canonical_project_id: str | None = None,
     ) -> SoftwareProject:
         if runtime_type == "studio":
             source = await db.scalar(
@@ -113,7 +118,14 @@ class SoftwareProjectService:
                 .order_by(desc(StudioSourceVersion.source_version))
             )
             if source is not None:
-                projected.active_source_version_id = source.id
+                if canonical_project_id:
+                    canonical = await self.sources.import_studio(
+                        db,
+                        tenant_id=projected.workspace_id,
+                        project_id=canonical_project_id,
+                        source=source,
+                    )
+                    projected.active_source_version_id = canonical.id
                 projected.active_runtime_id = "static-web-js"
                 if source.status == "published" or str(getattr(legacy_row, "status", "")).lower() == "published":
                     projected.state = ProjectState.LIVE
@@ -135,11 +147,16 @@ class SoftwareProjectService:
                     .order_by(desc(GeneratedSourceBundle.source_version))
                 )
                 if source is not None:
-                    projected.active_source_version_id = source.id
                     provenance = _json(source.provenance_json)
-                    projected.active_runtime_id = (
-                        str(provenance.get("detectedRuntimeProfile") or "generated-runtime")
-                    )
+                    projected.active_runtime_id = str(provenance.get("detectedRuntimeProfile") or "generated-runtime")
+                    if canonical_project_id:
+                        canonical = await self.sources.import_generated(
+                            db,
+                            tenant_id=projected.workspace_id,
+                            project_id=canonical_project_id,
+                            source=source,
+                        )
+                        projected.active_source_version_id = canonical.id
                     build = await db.scalar(
                         select(RunnerBuildRecord)
                         .where(
@@ -161,33 +178,41 @@ class SoftwareProjectService:
                             "latest_build_id": getattr(build, "id", None) if build is not None else None,
                             "latest_build_state": getattr(build, "state", None) if build is not None else None,
                             "source_bundle_digest": getattr(source, "bundle_digest", None),
+                            "legacy_source_bundle_id": source.id,
                         }
                     )
             return projected
 
         return projected
 
-    async def _ensure_legacy_record(
-        self,
-        db,
-        *,
-        runtime_type: str,
-        legacy_row,
-        adapter,
-    ) -> SoftwareProjectRecord:
+    async def _ensure_legacy_record(self, db, *, runtime_type: str, legacy_row, adapter) -> SoftwareProjectRecord:
         projected = adapter(legacy_row)
-        projected = await self._project_latest_runtime_state(
-            db,
-            runtime_type,
-            legacy_row,
-            projected,
-        )
         row = await db.scalar(
             select(SoftwareProjectRecord).where(
                 SoftwareProjectRecord.tenant_id == projected.workspace_id,
                 SoftwareProjectRecord.legacy_runtime_type == runtime_type,
                 SoftwareProjectRecord.legacy_runtime_reference == str(legacy_row.id),
             )
+        )
+        if row is None:
+            row = SoftwareProjectRecord(
+                tenant_id=projected.workspace_id,
+                name=projected.name,
+                description=projected.description,
+                state=projected.state.value,
+                active_source_version_id=None,
+                active_runtime_id=projected.active_runtime_id,
+                legacy_runtime_type=runtime_type,
+                legacy_runtime_reference=str(legacy_row.id),
+                metadata_json="{}",
+                created_by=projected.created_by,
+                created_at=projected.created_at or datetime.utcnow(),
+            )
+            db.add(row)
+            await db.flush()
+
+        projected = await self._project_latest_runtime_state(
+            db, runtime_type, legacy_row, projected, canonical_project_id=row.id
         )
         metadata = dict(projected.metadata)
         metadata["compatibility_runtime"] = runtime_type
@@ -201,20 +226,11 @@ class SoftwareProjectService:
             "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
             "created_by": projected.created_by,
         }
-        if row is None:
-            row = SoftwareProjectRecord(
-                tenant_id=projected.workspace_id,
-                legacy_runtime_type=runtime_type,
-                legacy_runtime_reference=str(legacy_row.id),
-                created_at=projected.created_at or datetime.utcnow(),
-                **values,
-            )
-            db.add(row)
-            await db.flush()
-        else:
-            for key, value in values.items():
-                setattr(row, key, value)
-            row.updated_at = projected.updated_at or datetime.utcnow()
+        for key, value in values.items():
+            if key == "active_source_version_id" and value is None and row.active_source_version_id:
+                continue
+            setattr(row, key, value)
+        row.updated_at = projected.updated_at or datetime.utcnow()
         return row
 
     async def sync_legacy(self, db, workspace_id: str) -> None:
@@ -224,12 +240,7 @@ class SoftwareProjectService:
                 statement = statement.where(StudioProject.status != "archived")
             rows = (await db.scalars(statement)).all()
             for legacy_row in rows:
-                await self._ensure_legacy_record(
-                    db,
-                    runtime_type=runtime_type,
-                    legacy_row=legacy_row,
-                    adapter=adapter,
-                )
+                await self._ensure_legacy_record(db, runtime_type=runtime_type, legacy_row=legacy_row, adapter=adapter)
         await db.flush()
 
     async def list(self, db, workspace_id: str) -> list[SoftwareProject]:
@@ -255,8 +266,6 @@ class SoftwareProjectService:
             )
         )
         if row is None:
-            # Compatibility lookup while UI/API surfaces are still migrating from
-            # legacy runtime ids to canonical project ids.
             row = await db.scalar(
                 select(SoftwareProjectRecord).where(
                     SoftwareProjectRecord.tenant_id == workspace_id,
@@ -268,21 +277,9 @@ class SoftwareProjectService:
         return row
 
     async def get(self, db, workspace_id: str, project_id: str) -> SoftwareProject:
-        return await self._as_project(
-            db,
-            await self.record(db, workspace_id, project_id),
-        )
+        return await self._as_project(db, await self.record(db, workspace_id, project_id))
 
-    async def create(
-        self,
-        db,
-        *,
-        workspace_id: str,
-        user_id: str,
-        name: str,
-        description: str = "",
-        metadata: dict | None = None,
-    ) -> SoftwareProject:
+    async def create(self, db, *, workspace_id: str, user_id: str, name: str, description: str = "", metadata: dict | None = None) -> SoftwareProject:
         clean_name = str(name or "").strip()
         if not clean_name:
             raise ValueError("Project name is required")
@@ -298,16 +295,7 @@ class SoftwareProjectService:
         await db.flush()
         return await self._as_project(db, row)
 
-    async def set_execution_state(
-        self,
-        db,
-        *,
-        workspace_id: str,
-        project_id: str,
-        source_version_id: str | None = None,
-        runtime_id: str | None = None,
-        state: ProjectState | None = None,
-    ) -> SoftwareProject:
+    async def set_execution_state(self, db, *, workspace_id: str, project_id: str, source_version_id: str | None = None, runtime_id: str | None = None, state: ProjectState | None = None) -> SoftwareProject:
         row = await self.record(db, workspace_id, project_id)
         if source_version_id is not None:
             row.active_source_version_id = source_version_id
@@ -319,12 +307,7 @@ class SoftwareProjectService:
         await db.flush()
         return await self._as_project(db, row)
 
-    async def legacy_target(
-        self,
-        db,
-        workspace_id: str,
-        project_id: str,
-    ) -> tuple[str, str] | None:
+    async def legacy_target(self, db, workspace_id: str, project_id: str) -> tuple[str, str] | None:
         row = await self.record(db, workspace_id, project_id)
         if not row.legacy_runtime_type or not row.legacy_runtime_reference:
             return None

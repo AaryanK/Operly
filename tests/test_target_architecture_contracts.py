@@ -278,12 +278,17 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
             "google-primary",
         )
 
-    def test_studio_capability_surface_is_source_first(self):
+    def test_studio_capability_surface_uses_canonical_software_runtime(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "packages/capabilities/studio_provider.py").read_text()
         self.assertNotIn("StudioAI", source)
         self.assertNotIn("SiteSchema", source)
-        self.assertIn("source_agent.edit_source", source)
+        self.assertNotIn("source_agent", source)
+        self.assertNotIn("generate_source(", source)
+        self.assertNotIn("edit_source(", source)
+        self.assertIn("SoftwareBuildProvider", source)
+        self.assertIn('delegated_name = "software.build"', source)
+        self.assertIn('delegated_name = "software.edit"', source)
 
     def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]

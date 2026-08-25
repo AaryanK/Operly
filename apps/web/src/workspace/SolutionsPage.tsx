@@ -16,6 +16,9 @@ type SourceBundle = Row & {
   sourceVersion?: number;
   bundleDigest?: string;
   summary?: string;
+  runtimeProfile?: string;
+  originatingRunId?: string;
+  sourceAuthority?: string;
 };
 type SourceInspectorState = {
   solutionId: string;
@@ -135,7 +138,7 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
       setSourceInspector((current) => current?.solutionId === solutionId ? {
         ...current,
         loading: false,
-        error: caught instanceof Error ? caught.message : "Generated source is unavailable",
+        error: caught instanceof Error ? caught.message : "Persisted source is unavailable",
       } : current);
     }
   }
@@ -155,32 +158,34 @@ export function SolutionsPage({ workspace }: { workspace: WorkspaceSummary }) {
         const solutionId = text(solution.id);
         const solutionName = text(solution.name, "Untitled Solution");
         const failed = text(solution.status).toLowerCase() === "failed";
-        const canInspectSource = text(runtime.kind).toLowerCase() === "generated" || text(solution.solution_type).toLowerCase() === "custom_solution";
+        const runtimeKind = text(runtime.kind).toLowerCase();
+        const canInspectSource = runtimeKind === "generated" || runtimeKind === "software";
+        const canRetryGeneration = failed && (runtimeKind === "generated" || runtimeKind === "app");
         return <article className="solution-card" key={solutionId}>
           <div className="solution-card-top"><span>{title(solution.solution_type || solution.type || "Solution")}</span><span className={`status-chip status-${text(solution.status, "unknown").replaceAll("_", "-")}`}>{title(solution.status || "unknown")}</span></div>
           <h3>{solutionName}</h3>
           <p>{text(solution.objective || solution.description, "Workspace Solution")}</p>
-          <div className="solution-meta"><span>Preview: {text(preview.state || (preview.url ? "available" : "not ready"), "not ready")}</span><span>Production: {text(production.state, "not published")}</span>{generation.stage && <span>Generation stage: {title(generation.stage)}</span>}{generation.attempt && <span>Attempt: {text(generation.attempt)}</span>}</div>
+          <div className="solution-meta"><span>Runtime: {runtimeKind === "software" ? "AgentRuntime software" : title(runtimeKind || "unknown")}</span><span>Preview: {text(preview.state || (preview.url ? "available" : "not ready"), "not ready")}</span><span>Production: {text(production.state, "not published")}</span>{generation.stage && <span>Generation stage: {title(generation.stage)}</span>}{generation.attempt && <span>Attempt: {text(generation.attempt)}</span>}{generation.sourceVersion && <span>Source version: {text(generation.sourceVersion)}</span>}{generation.deliveryStatus && <span>Source delivery: {title(generation.deliveryStatus)}</span>}</div>
           {failed && generation.error && <div className="inline-error"><strong>Generation failed at {title(generation.stage || "generation")}</strong><div>{text(generation.error)}</div></div>}
           <div className="page-actions">
-            {canInspectSource && <button className="secondary-button" type="button" onClick={() => inspectGeneratedSource(solutionId, solutionName)}>View generated files</button>}
-            {failed && <button className="secondary-button" type="button" disabled={Boolean(retryingId)} onClick={() => retryGeneration(solutionId)}>{retryingId === solutionId ? "Retrying…" : "Retry generation"}</button>}
+            {canInspectSource && <button className="secondary-button" type="button" onClick={() => inspectGeneratedSource(solutionId, solutionName)}>View source</button>}
+            {canRetryGeneration && <button className="secondary-button" type="button" disabled={Boolean(retryingId)} onClick={() => retryGeneration(solutionId)}>{retryingId === solutionId ? "Retrying…" : "Retry generation"}</button>}
             {text(preview.url) && <a className="secondary-button" href={text(preview.url)} target="_blank" rel="noreferrer">Preview</a>}
             {text(production.url) && <a className="primary-button" href={text(production.url)} target="_blank" rel="noreferrer">Live</a>}
           </div>
         </article>;
       })}</div> : <div className="empty-panel">No Solutions yet. Create one from the business objective above.</div>}</section>
-      <section className="info-banner"><strong>Studio migration boundary</strong><p>The existing deep Studio editor remains protected until PR #94’s final truthful generation contract lands. This React page owns Solution discovery and creation without modifying #94’s in-flight legacy Studio file.</p></section>
+      <section className="info-banner"><strong>Unified software lifecycle</strong><p>Studio and Operly AI converge on the same Workspace-owned software project and immutable backend source. Preview becomes available only after runner verification; source inspection reads durable source rather than disposable sandbox state.</p></section>
     </main>
 
     {sourceInspector && <div className="source-inspector-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSourceInspector(null); }}>
       <section className="source-inspector" role="dialog" aria-modal="true" aria-labelledby="source-inspector-title">
         <header className="source-inspector-header">
-          <div><span className="eyebrow">Generated source</span><h2 id="source-inspector-title">{sourceInspector.solutionName}</h2>{sourceInspector.bundle && <p>Source v{text(sourceInspector.bundle.sourceVersion)} · {text(sourceInspector.bundle.fileCount, sourceFiles.length)} files</p>}</div>
-          <button className="source-inspector-close" type="button" aria-label="Close generated source inspector" onClick={() => setSourceInspector(null)}>×</button>
+          <div><span className="eyebrow">{sourceInspector.bundle?.sourceAuthority === "software_source_versions" ? "Authoritative source" : "Generated source"}</span><h2 id="source-inspector-title">{sourceInspector.solutionName}</h2>{sourceInspector.bundle && <p>Source v{text(sourceInspector.bundle.sourceVersion)} · {text(sourceInspector.bundle.fileCount, sourceFiles.length)} files{sourceInspector.bundle.runtimeProfile ? ` · ${sourceInspector.bundle.runtimeProfile}` : ""}</p>}{sourceInspector.bundle?.originatingRunId && <small>AgentRuntime run {sourceInspector.bundle.originatingRunId}</small>}</div>
+          <button className="source-inspector-close" type="button" aria-label="Close source inspector" onClick={() => setSourceInspector(null)}>×</button>
         </header>
         {sourceInspector.loading ? <div className="source-inspector-state">Loading the latest persisted source bundle…</div> : sourceInspector.error ? <div className="source-inspector-state inline-error">{sourceInspector.error}</div> : sourceFiles.length ? <div className="source-inspector-body">
-          <nav className="source-file-list" aria-label="Generated files">
+          <nav className="source-file-list" aria-label="Source files">
             {sourceFiles.map((file) => <button key={file.path} type="button" className={file.path === selectedSourceFile?.path ? "active" : ""} aria-current={file.path === selectedSourceFile?.path ? "true" : undefined} onClick={() => setSourceInspector((current) => current ? { ...current, selectedPath: file.path } : current)}><span>{file.path}</span><small>{formatBytes(file.sizeBytes)}</small></button>)}
           </nav>
           <div className="source-file-viewer">
