@@ -81,7 +81,16 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
-WEB_ASSET_REVISION = "20260825-platform-admin-v1"
+WEB_ASSET_REVISION = "20260825-approval-surfaces-v1"
+PUBLIC_FRONTEND_ROUTES = {
+    "",
+    "login",
+    "signup",
+    "verify-email",
+    "forgot-password",
+    "reset-password",
+    "onboarding",
+}
 
 
 async def bootstrap_admin() -> None:
@@ -314,22 +323,41 @@ def legal_page(name: str) -> HTMLResponse:
     )
 
 
+def not_found_page() -> HTMLResponse:
+    page = WEB_STATIC / "404.html"
+    html = page.read_text(encoding="utf-8") if page.is_file() else "<h1>404 · Page not found</h1>"
+    return HTMLResponse(
+        html,
+        status_code=404,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Robots-Tag": "noindex, nofollow",
+        },
+    )
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
-    if path == "channels" or path.startswith("channels/"):
+    route = path.strip("/")
+    if route == "channels" or route.startswith("channels/"):
         return canonical_frontend_shell()
 
-    if path == "admin" or path.startswith("admin/"):
+    if route == "admin":
         return legal_page("admin.html")
 
-    if path in {"privacy", "terms"}:
-        return legal_page(path)
+    if route in {"privacy", "terms"}:
+        return legal_page(route)
 
-    built_asset = WEB_DIST / path
-    if path and built_asset.is_file():
+    built_asset = WEB_DIST / route
+    if route and built_asset.is_file():
         return FileResponse(built_asset)
 
-    requested = WEB_STATIC / path
-    if path and requested.is_file():
+    requested = WEB_STATIC / route
+    if route and requested.is_file():
         return FileResponse(requested)
-    return frontend_shell()
+
+    if route in PUBLIC_FRONTEND_ROUTES:
+        return frontend_shell()
+
+    return not_found_page()

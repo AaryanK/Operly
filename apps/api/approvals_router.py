@@ -4,16 +4,102 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.dependencies import (
+    AccountAuthContext,
+    AuthContext,
+    get_account_auth_context,
+    get_auth_context,
+    get_db,
+)
 from apps.api.schemas import ApprovalDecision
 from packages.actions.service import ActionService
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.personal_google_provider import PersonalGoogleCapabilityProvider
+from packages.database.company_models import BusinessActionRecord
 from packages.database.models import Approval
 from packages.database.product_models import SolutionImprovementProposal
+from packages.security.execution_context import PERSONAL_EXECUTION_PERMISSIONS
 from packages.tasks.runtime import resume_task_after_approval
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+
+
+def _json_object(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def _serialize_approval(db: AsyncSession, row: Approval) -> dict:
+    payload = _json_object(row.payload_json)
+    details = dict(payload)
+    action_id = str(payload.get("business_action_id") or "").strip()
+    action = await db.get(BusinessActionRecord, action_id) if action_id else None
+    if action and (
+        action.scope_kind == row.scope_kind
+        and action.tenant_id == row.tenant_id
+        and action.owner_user_id == row.owner_user_id
+    ):
+        details.update(
+            {
+                "business_action_id": action.id,
+                "objective": action.objective,
+                "capability": action.capability,
+                "arguments": _json_object(action.arguments_json),
+                "rationale": action.rationale,
+                "expected_outcome": action.expected_outcome,
+                "risk_level": action.risk_level,
+                "provider": action.provider,
+                "policy_decision": action.policy_decision,
+                "origin": action.origin,
+                "connector_id": action.connector_id,
+                "resource_type": action.resource_type,
+                "action_status": str(action.status),
+                "scope_kind": action.scope_kind,
+            }
+        )
+    return {
+        "id": row.id,
+        "action": row.action,
+        "status": row.status,
+        "scope_kind": row.scope_kind,
+        "details": details,
+        "payload": payload,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+async def _serialize_rows(db: AsyncSession, rows: list[Approval]) -> list[dict]:
+    return [await _serialize_approval(db, row) for row in rows]
+
+
+async def _personal_action_registry(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    capability: str,
+):
+    """Rebuild the same governed account-owned provider registry used at proposal time.
+
+    Personal approvals must never fall back to a workspace registry: doing so could
+    either make the approved action fail to resolve or, worse, select credentials from
+    the wrong ownership namespace. Today approval-backed Personal side effects are the
+    account-owned Google capabilities, so reconstruct that registry explicitly and
+    fail closed for anything else until another Personal provider gains approvals.
+    """
+    google = PersonalGoogleCapabilityProvider()
+    if google.supports(capability):
+        return await google.registry_for(db, user_id=user_id)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "PERSONAL_APPROVAL_PROVIDER_UNAVAILABLE",
+            "message": "This Personal approval cannot be resumed safely because its provider is unavailable.",
+        },
+    )
 
 
 @router.get("")
@@ -24,20 +110,98 @@ async def list_approvals(
     rows = (
         await db.scalars(
             select(Approval)
-            .where(Approval.tenant_id == auth.tenant.id)
+            .where(
+                Approval.scope_kind == "workspace",
+                Approval.tenant_id == auth.tenant.id,
+                Approval.owner_user_id.is_(None),
+            )
             .order_by(desc(Approval.created_at))
         )
     ).all()
-    return [
-        {
-            "id": row.id,
-            "action": row.action,
-            "status": row.status,
-            "details": json.loads(row.payload_json or "{}"),
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
+    return await _serialize_rows(db, list(rows))
+
+
+@router.get("/personal")
+async def list_personal_approvals(
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.scalars(
+            select(Approval)
+            .where(
+                Approval.scope_kind == "personal",
+                Approval.tenant_id.is_(None),
+                Approval.owner_user_id == auth.user.id,
+            )
+            .order_by(desc(Approval.created_at))
+        )
+    ).all()
+    return await _serialize_rows(db, list(rows))
+
+
+@router.patch("/personal/{approval_id}")
+async def decide_personal_approval(
+    approval_id: str,
+    payload: ApprovalDecision,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.status not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid decision")
+
+    row = await db.scalar(
+        select(Approval).where(
+            Approval.id == approval_id,
+            Approval.scope_kind == "personal",
+            Approval.tenant_id.is_(None),
+            Approval.owner_user_id == auth.user.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    details = _json_object(row.payload_json)
+    business_action_id = details.get("business_action_id")
+    task_resumed = 0
+    if business_action_id:
+        registry = await _personal_action_registry(
+            db,
+            user_id=auth.user.id,
+            capability=row.action,
+        )
+        service = ActionService(
+            db,
+            registry,
+            authority=set(PERSONAL_EXECUTION_PERMISSIONS),
+            actor_id=auth.user.id,
+        )
+        try:
+            if payload.status == "approved":
+                action = await service.approve_personal(auth.user.id, business_action_id)
+                task_resumed = await resume_task_after_approval(
+                    db,
+                    approval_id,
+                    approved=str(action.status) == "VERIFIED",
+                )
+            else:
+                await service.reject_personal(auth.user.id, business_action_id)
+                task_resumed = await resume_task_after_approval(
+                    db,
+                    approval_id,
+                    approved=False,
+                )
+        except (LookupError, ValueError, PermissionError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    else:
+        row.status = payload.status
+
+    await db.commit()
+    return {
+        "ok": True,
+        "business_action_id": business_action_id,
+        "task_resumed": task_resumed,
+    }
 
 
 @router.patch("/{approval_id}")
@@ -53,13 +217,15 @@ async def decide_approval(
     row = await db.scalar(
         select(Approval).where(
             Approval.id == approval_id,
+            Approval.scope_kind == "workspace",
             Approval.tenant_id == auth.tenant.id,
+            Approval.owner_user_id.is_(None),
         )
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Approval not found")
 
-    details = json.loads(row.payload_json or "{}")
+    details = _json_object(row.payload_json)
     business_action_id = details.get("business_action_id")
     task_resumed = 0
     if business_action_id:
@@ -80,7 +246,7 @@ async def decide_approval(
                 )
             else:
                 await service.reject(auth.tenant.id, business_action_id)
-                await resume_task_after_approval(
+                task_resumed = await resume_task_after_approval(
                     db,
                     approval_id,
                     approved=False,

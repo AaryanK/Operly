@@ -8,7 +8,7 @@ const AccessPage = lazy(() => import("./AccessPage").then((module) => ({ default
 const AIDebugPage = lazy(() => import("./AIDebugPage").then((module) => ({ default: module.AIDebugPage })));
 const CRMPage = lazy(() => import("./DataPages").then((module) => ({ default: module.CRMPage })));
 const OperationsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.OperationsPage })));
-const ActivityPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ActivityPage })));
+const ActivityPage = lazy(() => import("./ActivityPage").then((module) => ({ default: module.ActivityPage })));
 const PresencePage = lazy(() => import("./DataPages").then((module) => ({ default: module.PresencePage })));
 const ConnectionsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ConnectionsPage })));
 const MembersPage = lazy(() => import("./MembersPage").then((module) => ({ default: module.MembersPage })));
