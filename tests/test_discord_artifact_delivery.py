@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.artifacts.delivery import _strip_model_artifact_links
 from packages.channels.envelope import ChannelResponse
 from packages.connectors.discord.artifact_delivery import (
     response_artifact_scope,
@@ -62,6 +63,15 @@ class FakeArtifactService:
 @asynccontextmanager
 async def fake_session_scope():
     yield object()
+
+
+def test_model_artifact_uuid_is_not_treated_as_a_navigation_target():
+    message = "I exported it here: [contacts.xlsx](artifact-1)"
+    cleaned = _strip_model_artifact_links(
+        message,
+        [{"artifact_id": "artifact-1", "filename": "contacts.xlsx"}],
+    )
+    assert cleaned == "I exported it here: contacts.xlsx"
 
 
 def test_channel_response_keeps_base_message_for_rich_adapter():
