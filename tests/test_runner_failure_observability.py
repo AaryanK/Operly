@@ -152,6 +152,30 @@ class RunnerFailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.state, "acceptance_failed")
         self.assertIn("Acceptance gate stopped unexpectedly", row.result_json)
 
+    async def test_runner_reported_service_binding_classification_survives_phase_fallback(self):
+        self.build.state = "provisioning"
+        await self.db.commit()
+        response = {
+            "jobId": "remote-build-1",
+            "state": "failed",
+            "result": {
+                "failureEvidence": {
+                    "classification": "service_binding_failure",
+                    "message": "Relational migration gateway request failed",
+                }
+            },
+        }
+
+        row = await apply_runner_response(self.db, self.build, response, self.submission)
+
+        self.assertEqual(row.state, "provision_failed")
+        self.assertEqual(row.failure_classification, "service_binding_failure")
+        persisted = json.loads(row.result_json)
+        self.assertEqual(
+            persisted["failureEvidence"]["classification"],
+            "service_binding_failure",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
