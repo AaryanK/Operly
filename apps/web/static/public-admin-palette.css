@@ -1,0 +1,202 @@
+/*
+ * Public/auth palette convergence.
+ *
+ * Color, border and shadow overrides only. Layout, sizing, spacing, breakpoints,
+ * navigation and responsive behavior remain owned by the existing public CSS.
+ */
+:root {
+  --ink: #f7f3ff;
+  --green: #9b72ff;
+  --dark: #0d0a15;
+  --lime: #c4a7ff;
+  --muted: #a69bb8;
+  --line: rgba(212, 190, 255, .14);
+  --paper: #15111e;
+  --bg: #0d0a15;
+  --orange: #ff9f72;
+  color-scheme: dark;
+}
+
+html,
+body,
+#landing {
+  color: var(--ink) !important;
+  background: #0d0a15 !important;
+}
+
+.brand.dark,
+.landing-header,
+.features h2,
+.preview-main h3,
+.preview-stats b,
+.preview-card b {
+  color: var(--ink) !important;
+}
+
+.button.primary,
+.button.lime,
+.submit-button {
+  color: #fff !important;
+  background: linear-gradient(135deg, #8d63f4, #ac83ff) !important;
+  border-color: transparent !important;
+  box-shadow: 0 12px 30px rgba(132, 84, 238, .24) !important;
+}
+.button.primary:hover,
+.button.lime:hover,
+.submit-button:hover {
+  box-shadow: 0 14px 34px rgba(132, 84, 238, .30) !important;
+}
+.button.secondary {
+  color: var(--ink) !important;
+  background: #1b1627 !important;
+  border-color: var(--line) !important;
+}
+
+.hero {
+  color: var(--ink) !important;
+  background:
+    radial-gradient(circle at 85% 18%, rgba(155, 114, 255, .20), transparent 27%),
+    radial-gradient(circle at 15% 85%, rgba(232, 139, 220, .08), transparent 30%),
+    linear-gradient(135deg, #15111e, #221b31) !important;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .30) !important;
+}
+.kicker,
+.kicker.green,
+.features span {
+  color: #c4a7ff !important;
+}
+.hero h1 em {
+  color: #c4a7ff !important;
+}
+.hero p,
+.login-art p,
+.features p,
+.preview-stats span,
+.preview-card p,
+.public-footer {
+  color: var(--muted) !important;
+}
+
+.product-preview {
+  color: var(--ink) !important;
+  background: #15111e !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: 0 40px 80px rgba(0, 0, 0, .38) !important;
+}
+.preview-sidebar {
+  background: #0c0912 !important;
+  border-right: 1px solid var(--line) !important;
+}
+.preview-sidebar i {
+  background: rgba(212, 190, 255, .14) !important;
+}
+.preview-sidebar i:first-of-type {
+  background: #9b72ff !important;
+}
+.preview-main {
+  color: var(--ink) !important;
+  background: #15111e !important;
+}
+.preview-stats article,
+.preview-card {
+  color: var(--ink) !important;
+  background: #1b1627 !important;
+  border-color: var(--line) !important;
+}
+.preview-card p {
+  border-color: var(--line) !important;
+}
+.features article,
+.public-footer {
+  border-color: var(--line) !important;
+}
+.public-footer strong,
+.public-footer a:hover {
+  color: #c4a7ff !important;
+}
+
+.auth-screen,
+#login.auth-screen {
+  color: var(--ink) !important;
+  background:
+    radial-gradient(circle at 16% 8%, rgba(155, 114, 255, .15), transparent 28%),
+    radial-gradient(circle at 88% 88%, rgba(232, 139, 220, .07), transparent 30%),
+    #0d0a15 !important;
+}
+.auth-shell > .back,
+.back {
+  color: #c4a7ff !important;
+}
+.auth-card {
+  color: var(--ink) !important;
+  background: linear-gradient(155deg, rgba(27, 22, 39, .99), rgba(18, 14, 27, .99)) !important;
+  border-color: var(--line) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .32) !important;
+}
+.auth-card h1,
+.auth-card label,
+.auth-card strong {
+  color: var(--ink) !important;
+}
+.auth-card > p,
+.auth-switch,
+.field-help,
+.auth-card small {
+  color: var(--muted) !important;
+}
+.auth-card input,
+.auth-card textarea,
+.auth-card select {
+  color: var(--ink) !important;
+  background: #0e0b16 !important;
+  border-color: rgba(212, 190, 255, .22) !important;
+}
+.auth-card input::placeholder,
+.auth-card textarea::placeholder {
+  color: #766c88 !important;
+}
+.auth-card input:focus,
+.auth-card textarea:focus,
+.auth-card select:focus {
+  border-color: #9b72ff !important;
+  box-shadow: 0 0 0 4px rgba(155, 114, 255, .13) !important;
+}
+.auth-card input:focus-visible,
+.auth-card button:focus-visible,
+.landing-actions button:focus-visible {
+  outline-color: rgba(155, 114, 255, .48) !important;
+}
+.password-toggle,
+.text-link,
+.form-link,
+.auth-switch button,
+.auth-switch a,
+.centered {
+  color: #c4a7ff !important;
+}
+.auth-divider,
+.auth-divider span {
+  color: #766c88 !important;
+}
+.auth-divider::before,
+.auth-divider::after {
+  background: var(--line) !important;
+}
+.google-button {
+  color: var(--ink) !important;
+}
+.onboarding-check {
+  color: #0d0a15 !important;
+  background: #c4a7ff !important;
+}
+
+.error {
+  color: #ffb5bf !important;
+  background: rgba(255, 94, 116, .10) !important;
+  border-color: rgba(255, 143, 157, .28) !important;
+}
+.success {
+  color: #9de5b2 !important;
+  background: rgba(77, 190, 113, .10) !important;
+  border-color: rgba(104, 212, 137, .24) !important;
+}
