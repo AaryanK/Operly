@@ -14,6 +14,7 @@ from packages.channels.identity import IdentityService
 from packages.channels.linking import IdentityLinkService
 from packages.channels.service import ChannelService
 from packages.connectors.discord import bot_shared as legacy
+from packages.connectors.discord.artifact_delivery import send_discord_response
 from packages.database.channel_models import ChannelInstallation
 from packages.database.db import session_scope
 from packages.database.models import DiscordGuild
@@ -255,31 +256,39 @@ async def on_message(message: discord.Message):
                 )
                 return
             async with message.channel.typing():
-                await legacy.process_discord_attachments(
+                ingested = await legacy.process_discord_attachments(
                     message,
                     resolved.tenant_id,
                     prompt,
                     shared_message_store=message.guild is not None,
                 )
-            return
+            if not ingested:
+                return
+            # Attachment ingestion is perception only. Continue this same user turn
+            # through ChannelService so files.process/computer/workflows can act on
+            # the retained context instead of stopping at the parser boundary.
 
         async with message.channel.typing():
             response = await ChannelService.handle(envelope)
 
-        sent = await legacy.send_chunks(message, response.message)
+        sent = await send_discord_response(message, response)
         if message.guild is not None and response.tenant_id:
             await legacy.store_message(
                 sent,
                 response.tenant_id,
-                response.message,
+                response.base_message or response.message,
                 is_bot=True,
             )
         if response.status == "ok":
             await legacy.schedule_new_pending_jobs()
 
     except Exception as error:
-        print(f"OPERLY channel-agent error category: {type(error).__name__}")
+        # ChannelService already runs through the configured ModelPool, including
+        # cross-model/provider failover and cooldowns. Reaching this boundary means
+        # that portfolio (or another terminal runtime dependency) actually failed.
+        legacy._log_channel_error(error)
         await message.reply(
-            "The AI request failed safely. Check the server logs.",
+            "The AI request failed after Operly exhausted the available runtime path. Please retry once; the failure details are in the server trace.",
             mention_author=False,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
