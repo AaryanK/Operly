@@ -1,9 +1,9 @@
 """Durable control-plane orchestration for external isolated runners.
 
 Source authoring and repair deliberately live in ``packages.software_projects.coding``.
-This module owns only runner lifecycle state, durable events, result ingestion,
-preview access and cleanup. Keeping that boundary explicit prevents source-generation
-logic from becoming a second runtime architecture.
+This module owns only runner lifecycle state, durable events, result ingestion, preview
+access and cleanup. Keeping that boundary explicit prevents source-generation logic
+from becoming a second runtime architecture.
 """
 from __future__ import annotations
 
@@ -202,15 +202,7 @@ def _failure_classification(result):
 
 
 def _enrich_failure_evidence(result, response, classification):
-    """Promote bounded runner gate output when the result only has a generic error.
-
-    The isolated runner already returns bounded per-phase event messages. Older
-    runner builds summarized test/build failures as only ``Python tests failed`` or
-    similar, which left the coding repair loop without the assertion/trace it needs.
-    Preserve the canonical result shape while copying the last relevant gate event
-    into failureEvidence. Runner events remain the source of truth and are redacted
-    before they become durable/model-visible evidence.
-    """
+    """Promote bounded runner gate output when the result only has a generic error."""
     if not isinstance(result, dict) or not classification:
         return result
     evidence = result.get("failureEvidence")
@@ -220,177 +212,335 @@ def _enrich_failure_evidence(result, response, classification):
     states = FAILURE_EVENT_STATES.get(classification)
     if not generic or not states:
         return result
-    error = str(evidence.get("error") or "").strip()
-    if error and error not in generic:
+    current = str(evidence.get("message") or "").strip()
+    if current and current not in generic:
         return result
     events = response.get("events") if isinstance(response, dict) else None
     if not isinstance(events, list):
         return result
     for event in reversed(events):
-        if not isinstance(event, dict):
+        if not isinstance(event, dict) or str(event.get("state") or "") not in states:
             continue
-        if str(event.get("state") or "") not in states:
+        detail = _redact(event.get("message") or "").strip()
+        if not detail or detail in generic:
             continue
-        message = _redact(event.get("message") or "")
-        if not message or message in generic:
-            continue
-        evidence["error"] = message
-        evidence["runnerEventState"] = str(event.get("state") or "")[:80]
+        enriched_result = dict(result)
+        enriched_evidence = dict(evidence)
+        enriched_evidence["message"] = detail
+        enriched_evidence["runnerEventState"] = str(event.get("state"))
         if event.get("exitCode") is not None:
-            evidence["runnerExitCode"] = event.get("exitCode")
-        break
+            enriched_evidence["runnerExitCode"] = event.get("exitCode")
+        enriched_result["failureEvidence"] = enriched_evidence
+        return enriched_result
     return result
 
 
-def _failure_state_from_result(result):
-    classification = _failure_classification(result)
-    return CLASSIFICATION_FAILURE_STATE.get(classification, "failed")
+def _failure_state_for(current_state, classification):
+    classified = CLASSIFICATION_FAILURE_STATE.get(classification)
+    allowed = TRANSITIONS.get(current_state, set())
+    if classified and (classified == current_state or classified in allowed):
+        return classified
+    phase_failure = PHASE_FAILURE_STATE.get(current_state)
+    if phase_failure and phase_failure in allowed:
+        return phase_failure
+    if "failed" in allowed:
+        return "failed"
+    if classified:
+        return classified
+    return "failed"
 
 
-def _event_rank(state):
-    return RUNNER_PHASE_RANK.get(str(state or ""), -1)
-
-
-def _runner_failure_state(result, response, current_state):
-    classification = _failure_classification(result)
-    classified_state = CLASSIFICATION_FAILURE_STATE.get(classification)
-    events = response.get("events") if isinstance(response, dict) else None
-    observed_states = [
-        str(event.get("state") or "")
-        for event in events or []
-        if isinstance(event, dict) and event.get("state")
-    ]
-    if classified_state:
-        expected_phase = next(
-            (phase for phase, failure_state in PHASE_FAILURE_STATE.items() if failure_state == classified_state),
-            None,
+async def _event(db, row, state, event_type="lifecycle", message="", details=None):
+    if state not in STATES:
+        raise RunnerStateError("Unknown runner state")
+    if state != row.state and state not in TRANSITIONS.get(row.state, set()):
+        raise RunnerStateError(f"Invalid runner transition {row.state} -> {state}")
+    sequence = (
+        await db.scalar(
+            select(func.max(RunnerBuildEvent.sequence)).where(RunnerBuildEvent.build_id == row.id)
         )
-        if expected_phase and expected_phase in observed_states:
-            return classified_state
-    for state in reversed(observed_states):
-        if state in PHASE_FAILURE_STATE:
-            return PHASE_FAILURE_STATE[state]
-    if current_state in PHASE_FAILURE_STATE:
-        return PHASE_FAILURE_STATE[current_state]
-    return classified_state or "failed"
-
-
-def _result_has_phase_failure(result, *, current_state):
-    if not isinstance(result, dict):
-        return True
-    if bool(result.get("success")):
-        return False
-    return _failure_state_from_result(result) != "failed" or current_state not in {"running", "preview_ready"}
-
-
-async def create_build(db, *, tenant_id: str, plan_id: str, source_version: int, idempotency_key: str, submission: BuildSubmission):
-    existing = await db.scalar(
-        select(RunnerBuildRecord).where(
-            RunnerBuildRecord.tenant_id == tenant_id,
-            RunnerBuildRecord.idempotency_key == idempotency_key,
-        )
-    )
-    if existing:
-        return existing
-    row = RunnerBuildRecord(
-        tenant_id=tenant_id,
-        plan_id=plan_id,
-        source_version=source_version,
-        idempotency_key=idempotency_key,
-        state="created",
-        request_json=json.dumps(submission.model_dump(mode="json"), sort_keys=True),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    db.add(row)
-    await db.flush()
-    return row
-
-
-async def transition(db, row: RunnerBuildRecord, to_state: str, *, detail: dict | None = None):
-    current = row.state
-    if to_state == current:
-        return row
-    allowed = TRANSITIONS.get(current, set())
-    if to_state not in allowed:
-        raise RunnerStateError(f"Invalid runner transition {current} -> {to_state}")
-    row.state = to_state
-    row.updated_at = datetime.utcnow()
-    if to_state in FAILURE_EVENT_STATES.get(FAILURES.get(to_state, ""), set()):
-        row.failure_classification = FAILURES.get(to_state)
-    elif to_state in FAILURES:
-        row.failure_classification = FAILURES[to_state]
+        or 0
+    ) + 1
+    row.state = state
+    if state in FAILURES:
+        row.failure_classification = FAILURES[state]
+    safe = {key: _redact(value) for key, value in (details or {}).items()}
     db.add(
         RunnerBuildEvent(
             tenant_id=row.tenant_id,
             build_id=row.id,
-            state=to_state,
-            detail_json=json.dumps(detail or {}, ensure_ascii=False, sort_keys=True, default=str)[:32000],
+            sequence=sequence,
+            state=state,
+            event_type=event_type,
+            message=_redact(message or state),
+            details_json=json.dumps(safe),
         )
     )
-    await db.flush()
-    return row
 
 
-async def process_external_build(db, row: RunnerBuildRecord, *, adapter: ExternalRunnerAdapter | None = None):
-    adapter = adapter or ExternalRunnerAdapter()
-    submission = BuildSubmission.model_validate_json(row.request_json)
-    if row.state == "created":
-        await transition(db, row, "queued")
-    if row.state == "queued":
-        await transition(db, row, "provisioning")
-    response = await adapter.submit(submission)
-    result = response.get("result") if isinstance(response, dict) else None
-    result = result if isinstance(result, dict) else {}
-    classification = _failure_classification(result)
-    _enrich_failure_evidence(result, response, classification)
-    observed = [
-        str(event.get("state") or "")
-        for event in (response.get("events") or [])
-        if isinstance(event, dict) and event.get("state")
-    ]
-    for state in observed:
-        if state == row.state:
-            continue
-        if state in TRANSITIONS.get(row.state, set()):
-            await transition(db, row, state)
-    if bool(result.get("success")):
-        if row.state == "running":
-            await transition(db, row, "preview_ready")
-    else:
-        target = _runner_failure_state(result, response, row.state)
-        if target != row.state and target in TRANSITIONS.get(row.state, set()):
-            await transition(db, row, target, detail=_failure_evidence(result))
+async def _record_runner_failure_observation(db, row, state, result, classification):
+    """Persist remote failure evidence before lifecycle normalization can fail."""
+    evidence = _failure_evidence(result)
+    flags = {
+        key: result.get(key)
+        for key in (
+            "buildSuccess",
+            "testSuccess",
+            "processStartSuccess",
+            "healthCheckSuccess",
+            "acceptanceCheckSuccess",
+            "previewAvailable",
+        )
+        if key in result
+    }
+    row.result_json = json.dumps(result)
+    if classification:
         row.failure_classification = classification
-        row.result_json = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
-        await db.flush()
+    await _event(
+        db,
+        row,
+        row.state,
+        event_type="runner_failure_observed",
+        message="Runner returned failure evidence",
+        details={
+            "remoteState": state,
+            "localState": row.state,
+            "classification": classification,
+            "failureEvidence": json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+            "resultFlags": json.dumps(flags, ensure_ascii=False, sort_keys=True),
+        },
+    )
+    await db.commit()
+    await db.refresh(row)
+
+
+async def _advance_runner_path(db, row, path):
+    """Advance only forward from the durable local checkpoint."""
+    current_rank = RUNNER_PHASE_RANK.get(row.state, -1)
+    for phase in path:
+        phase_rank = RUNNER_PHASE_RANK.get(phase, -1)
+        if phase_rank <= current_rank:
+            continue
+        if phase not in TRANSITIONS.get(row.state, set()):
+            continue
+        await _event(db, row, phase, message=f"Runner phase: {phase}")
+        current_rank = phase_rank
+
+
+async def apply_runner_response(db, row, response, submission):
+    row.runner_job_id = response.get("jobId", row.runner_job_id)
+    result = response.get("result", {})
+    state = response.get("state", "failed")
+    if state in {
+        "created",
+        "queued",
+        "provisioning",
+        "source_staging",
+        "dependency_resolution",
+        "static_analysis",
+        "building",
+        "testing",
+        "starting",
+        "health_checking",
+        "acceptance_testing",
+        "running",
+    } and not result:
+        if state != row.state:
+            await _event(db, row, state, event_type="runner_poll", message=f"Runner state: {state}")
+        row.result_json = json.dumps({"remoteState": state})
+        await db.commit()
+        await db.refresh(row)
         return row
-    row.result_json = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
-    await db.flush()
-    return row
 
-
-async def latest_preview(db, *, tenant_id: str, build_id: str):
-    return await db.scalar(
-        select(RunnerPreviewRecord)
-        .where(
-            RunnerPreviewRecord.tenant_id == tenant_id,
-            RunnerPreviewRecord.build_id == build_id,
-            RunnerPreviewRecord.expires_at > datetime.utcnow(),
+    preview_ready = state == "preview_ready" and all(
+        result.get(key)
+        for key in (
+            "buildSuccess",
+            "testSuccess",
+            "processStartSuccess",
+            "healthCheckSuccess",
+            "acceptanceCheckSuccess",
+            "previewAvailable",
         )
-        .order_by(RunnerPreviewRecord.created_at.desc())
-        .limit(1)
+    )
+    classification = None if preview_ready else _failure_classification(result)
+    if classification:
+        result = _enrich_failure_evidence(result, response, classification)
+    phase_paths = {
+        "build_failure": ["provisioning", "source_staging", "static_analysis", "building"],
+        "test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing"],
+        "runtime_crash": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting"],
+        "health_check_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking"],
+        "acceptance_test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking", "acceptance_testing"],
+        "security_policy_violation": ["provisioning", "source_staging"],
+        "resource_violation": ["provisioning", "source_staging", "static_analysis", "building"],
+    }
+    success_path = [
+        "provisioning",
+        "source_staging",
+        "static_analysis",
+        "building",
+        "testing",
+        "starting",
+        "health_checking",
+        "acceptance_testing",
+    ]
+
+    if not preview_ready:
+        await _record_runner_failure_observation(db, row, state, result, classification)
+    await _advance_runner_path(
+        db,
+        row,
+        success_path if preview_ready else phase_paths.get(classification, []),
     )
 
+    if preview_ready:
+        await _event(db, row, "running", message="Generated application process is running")
+        await _event(db, row, "preview_ready", message="Health and acceptance checks passed")
+        preview = response["preview"]
+        existing = await db.scalar(
+            select(RunnerPreviewRecord).where(
+                RunnerPreviewRecord.build_id == row.id,
+                RunnerPreviewRecord.runner_preview_id == preview["id"],
+            )
+        )
+        if not existing:
+            db.add(
+                RunnerPreviewRecord(
+                    tenant_id=row.tenant_id,
+                    build_id=row.id,
+                    runner_preview_id=preview["id"],
+                    target_url=preview["targetUrl"],
+                    expires_at=datetime.utcnow()
+                    + timedelta(seconds=submission.resources.previewSeconds),
+                    created_by=row.created_by,
+                )
+            )
+    else:
+        failure_state = _failure_state_for(row.state, classification)
+        try:
+            await _event(
+                db,
+                row,
+                failure_state,
+                event_type="failure",
+                message="Runner quality gate failed",
+                details=_failure_evidence(result),
+            )
+            if classification:
+                row.failure_classification = classification
+        except RunnerStateError as error:
+            await _event(
+                db,
+                row,
+                row.state,
+                event_type="runner_orchestration_error",
+                message="Runner failure could not be normalized",
+                details={
+                    "classification": classification,
+                    "targetState": failure_state,
+                    "error": str(error),
+                },
+            )
+            await db.commit()
+            raise
 
-async def append_artifact(db, *, tenant_id: str, build_id: str, kind: str, reference: str, digest: str | None = None):
-    row = RunnerArtifactRecord(
-        tenant_id=tenant_id,
-        build_id=build_id,
-        kind=kind,
-        reference=reference,
-        digest=digest,
+    row.result_json = json.dumps(result)
+    row.started_at = row.started_at or row.created_at
+    row.completed_at = None if row.state == "preview_ready" else datetime.utcnow()
+    existing_artifacts = await db.scalar(
+        select(func.count(RunnerArtifactRecord.id)).where(RunnerArtifactRecord.build_id == row.id)
     )
-    db.add(row)
-    await db.flush()
+    if not existing_artifacts:
+        for artifact in result.get("artifacts", []):
+            db.add(
+                RunnerArtifactRecord(
+                    tenant_id=row.tenant_id,
+                    build_id=row.id,
+                    kind=artifact.get("kind", "output"),
+                    name=artifact.get("name", "artifact"),
+                    digest=artifact.get("digest", "sha256:" + "0" * 64),
+                    size_bytes=artifact.get("sizeBytes", 0),
+                    reference=artifact.get("reference", "runner"),
+                    metadata_json=json.dumps(artifact),
+                )
+            )
+    await db.commit()
+    await db.refresh(row)
     return row
+
+
+async def owned_build(db, tenant_id, build_id):
+    row = await db.get(RunnerBuildRecord, build_id)
+    if not row or row.tenant_id != tenant_id:
+        raise LookupError("Runner build not found")
+    return row
+
+
+async def refresh_build(db, row, adapter=None):
+    if not row.runner_job_id or row.state in TERMINAL | {"preview_ready"}:
+        return row
+    adapter = adapter or ExternalRunnerAdapter()
+    response = await adapter.status(row.runner_job_id)
+    submission = BuildSubmission.model_validate_json(row.submission_json)
+    return await apply_runner_response(db, row, response, submission)
+
+
+async def build_events(db, row):
+    return list(
+        (
+            await db.scalars(
+                select(RunnerBuildEvent)
+                .where(
+                    RunnerBuildEvent.build_id == row.id,
+                    RunnerBuildEvent.tenant_id == row.tenant_id,
+                )
+                .order_by(RunnerBuildEvent.sequence)
+            )
+        ).all()
+    )
+
+
+async def active_preview(db, tenant_id, preview_id):
+    row = await db.get(RunnerPreviewRecord, preview_id)
+    if (
+        not row
+        or row.tenant_id != tenant_id
+        or row.state != "active"
+        or row.expires_at <= datetime.utcnow()
+    ):
+        raise LookupError("Active preview not found")
+    build = await owned_build(db, tenant_id, row.build_id)
+    if build.state != "preview_ready":
+        raise LookupError("Preview build is not running")
+    return row, build
+
+
+async def stop_preview(db, row, build, adapter):
+    await adapter.stop_preview(row.runner_preview_id)
+    row.state = "stopped"
+    row.stopped_at = datetime.utcnow()
+    await _event(db, build, "cleaning", message="Preview termination requested")
+    await _event(db, build, "cleaned", message="Runner resources cleaned")
+    build.completed_at = datetime.utcnow()
+    await db.commit()
+
+
+def build_json(row):
+    submission = json.loads(row.submission_json)
+    return {
+        "id": row.id,
+        "planId": row.plan_id,
+        "sourceBundleId": row.source_bundle_id,
+        "sourceVersion": submission.get("sourceVersion"),
+        "runnerJobId": row.runner_job_id,
+        "state": row.state,
+        "runnerImplementation": row.runner_implementation,
+        "isolationProfile": row.isolation_profile,
+        "attempt": row.attempt,
+        "failureClassification": row.failure_classification,
+        "resourcePolicy": submission.get("resources"),
+        "networkPolicy": submission.get("network"),
+        "operations": submission.get("operations", []),
+        "result": json.loads(row.result_json),
+    }
