@@ -44,14 +44,19 @@ def test_python_source_and_tests_have_no_historical_implementation_imports():
     assert not offenders, "historical implementation imports remain:\n" + "\n".join(offenders)
 
 
-def test_workflows_do_not_reference_historical_package_paths():
+def test_workflows_do_not_reference_historical_package_paths_as_live_inputs():
     offenders = []
     for path in Path(".github/workflows").glob("*.yml"):
-        text = path.read_text(encoding="utf-8")
-        for token in HISTORICAL_PACKAGE_PATHS:
-            if token in text:
-                offenders.append(f"{path}: {token}")
-    assert not offenders, "historical CI package paths remain:\n" + "\n".join(offenders)
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            stripped = line.strip()
+            # Negative architecture assertions are allowed to name paths they prove
+            # absent; watched/compiled/executed paths must be canonical.
+            if stripped.startswith("test ! -d "):
+                continue
+            for token in HISTORICAL_PACKAGE_PATHS:
+                if token in line:
+                    offenders.append(f"{path}:{line_number}: {token}")
+    assert not offenders, "historical live CI package paths remain:\n" + "\n".join(offenders)
 
 
 def test_generation_worker_uses_canonical_owners():
