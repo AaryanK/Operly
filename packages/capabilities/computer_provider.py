@@ -47,7 +47,15 @@ _RICH_CLI = ("python", "node", "ffmpeg", "pdftotext", "pdftoppm")
 def _run_id(context) -> str | None:
     invocation = context.invocation if isinstance(context.invocation, dict) else {}
     metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
-    return str(metadata.get("runtime_run_id") or "").strip() or None
+    explicit = str(metadata.get("runtime_run_id") or "").strip()
+    if explicit:
+        return explicit
+    # AgentRuntime binds its run ID in trusted async trace context around every
+    # capability invocation. This avoids making each surface manually copy the ID
+    # through tool envelopes, and the ID is correlation only—not authorization.
+    from packages.model_runtime.trace_context import current_trace_metadata
+
+    return str(current_trace_metadata().get("runtime_run_id") or "").strip() or None
 
 
 class AgentComputerProvider(BaseProvider):
