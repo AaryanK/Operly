@@ -15,6 +15,7 @@ import "./ui/brand.css";
 import "./ui/surface-polish.css";
 import "./ui/legal-links.css";
 import "./ui/convergence.css";
+import "./ui/approvals.css";
 
 initializeTheme();
 
