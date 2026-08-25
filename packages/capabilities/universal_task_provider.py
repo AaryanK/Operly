@@ -3,13 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from packages.capabilities.contracts import CapabilityResult
-from packages.capabilities.registry_workflow_task_provider import (
-    RegistryWorkflowTaskProvider,
-    _invoke_capabilities,
-)
+from packages.capabilities.registry_workflow_task_provider import RegistryWorkflowTaskProvider
 from packages.capabilities.task_provider import dump_task_payload, load_task_payload
 from packages.database.models import ScheduledJob, Task
-from packages.plugins import default_plugin_runtime
 from packages.tasks.delivery import capture_task_origin, delivery_target_from_origin
 from packages.tasks.workflow import WorkflowValidationError, validate_workflow
 
@@ -27,25 +23,10 @@ class UniversalTaskProvider(RegistryWorkflowTaskProvider):
             spec = validate_workflow(workflow)
         except WorkflowValidationError as error:
             return None, CapabilityResult(False, False, {"reason": str(error)})
-        if spec is None or self._personal_scope(context):
+        if spec is None:
             return spec, None
-        registry = default_plugin_runtime().manifests
-        missing = sorted(
-            capability
-            for capability in _invoke_capabilities(spec)
-            if registry.owner_for_capability(capability) is None
-        )
-        if missing:
-            return None, CapabilityResult(
-                False,
-                False,
-                {
-                    "reason": "workflow_capabilities_not_registered",
-                    "capabilities": missing,
-                    "guidance": "Use capability.search/capability.describe and compile only registered plugin capabilities.",
-                },
-            )
-        return spec, None
+        validation = await self._validate_workflow_capabilities(context, spec)
+        return spec, validation
 
     async def _create_universal(self, context, arguments):
         title = " ".join(str(arguments.get("title") or "").split())[:500]
