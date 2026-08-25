@@ -361,10 +361,11 @@ async def test_400_invoice_north_star_runs_through_firewall_and_drafts_email(run
 
     assert draft_action.status == ActionStatus.VERIFIED
     draft = json.loads(draft_action.result_json)["evidence"]
+    verification = json.loads(draft_action.verification_json)["evidence"]
     assert draft["draft_id"] == "draft-400"
     assert draft["attachment_artifact_ids"] == [pdf["artifact_id"]]
     assert draft["delivery_status"] == "draft"
-    assert draft["attachments_persisted_by_provider"] is True
+    assert verification["attachments_persisted_by_provider"] is True
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/gmail/v1/users/me/drafts")
 
