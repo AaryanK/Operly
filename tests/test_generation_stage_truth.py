@@ -38,7 +38,7 @@ async def test_runner_test_failure_is_not_reported_as_source_generation():
                 service=service,
             )
             await db.commit()
-            job = next(item for item in row.jobs if item.job_type == "generated_generation") if getattr(row, "jobs", None) else None
+            job = next(item for item in row.jobs if item.job_type == "software_generation") if getattr(row, "jobs", None) else None
             if job is None:
                 from sqlalchemy import select
                 from packages.database.product_models import SolutionJob
@@ -79,9 +79,6 @@ async def test_runner_test_failure_is_not_reported_as_source_generation():
             with patch(
                 "packages.solutions.generation_worker._ensure_plan",
                 new=AsyncMock(return_value=(plan_row, plan)),
-            ), patch(
-                "packages.solutions.generation_worker._bind_project",
-                new=AsyncMock(),
             ), patch(
                 "packages.solutions.generation_worker.build_with_repair",
                 new=fake_build,
