@@ -18,10 +18,12 @@ from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition
 from packages.capabilities.providers import BaseProvider
 from packages.database.custom_software_models import GeneratedProject
 from packages.database.product_models import SolutionJob, SolutionRecord
+from packages.model_runtime.trace_context import current_trace_metadata
 from packages.software_projects import SoftwareProjectService
 from packages.software_projects.delivery import persist_generated_source_archive
 from packages.solutions.composer import create_solution_from_intent
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, solution_json
+from packages.tasks.delivery import capture_task_origin, delivery_target_from_origin
 
 
 def _json(value: str | None) -> dict[str, Any]:
@@ -54,6 +56,15 @@ def _default_name(objective: str) -> str:
     return (sentence[:80].rstrip(" ,;:-") or "Software Project")
 
 
+def _active_runtime_run_id(context) -> str | None:
+    invocation = context.invocation if isinstance(context.invocation, dict) else {}
+    metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
+    explicit = str(metadata.get("runtime_run_id") or "").strip()
+    if explicit:
+        return explicit
+    return str(current_trace_metadata().get("runtime_run_id") or "").strip() or None
+
+
 def _job_evidence(job: SolutionJob | None) -> dict[str, Any]:
     if job is None:
         return {}
@@ -76,6 +87,7 @@ def _job_json(job: SolutionJob | None) -> dict[str, Any] | None:
         "source_bundle_id": evidence.get("sourceBundleId"),
         "source_version": evidence.get("sourceVersion"),
         "source_archive_artifact_id": evidence.get("sourceArchiveArtifactId"),
+        "parent_agent_run_id": evidence.get("parentAgentRunId"),
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "ended_at": job.ended_at.isoformat() if job.ended_at else None,
     }
@@ -266,10 +278,6 @@ class SoftwareBuildProvider(BaseProvider):
             "publication_performed": solution.production_state == "live",
             "source_archive": archive,
             "source_archive_artifact_id": archive.get("artifact_id") if archive else None,
-            # The generated worker reaches preview_ready only after its isolated
-            # build/test/process-start/health/acceptance contract passes. Normalize
-            # that durable worker result into the evidence vocabulary used by the
-            # root-objective verifier. Never infer these booleans from model prose.
             "build_success": bool(runner_verified),
             "test_success": bool(runner_verified),
             "tests_passed": bool(runner_verified),
@@ -293,6 +301,16 @@ class SoftwareBuildProvider(BaseProvider):
             if not objective:
                 return CapabilityResult(False, False, {"reason": "objective_required"})
             name = " ".join(str(arguments.get("name") or _default_name(objective)).replace("\x00", "").split()).strip()[:200]
+            return_source_archive = bool(arguments.get("return_source_archive", True))
+            parent_run_id = _active_runtime_run_id(context)
+            origin = await capture_task_origin(context)
+            delivery_target = delivery_target_from_origin(origin)
+            # Software source remains owned by the Workspace even when the request
+            # originated in Personal AI. Delayed delivery reauthorizes that Workspace
+            # before resolving or attaching the artifact.
+            delivery_target["artifact_scope"] = "workspace"
+            delivery_target["artifact_tenant_id"] = str(context.tenant_id or "")
+
             row, decision = await create_solution_from_intent(
                 context.db,
                 tenant_id=context.tenant_id,
@@ -305,14 +323,27 @@ class SoftwareBuildProvider(BaseProvider):
             stored_context = _json(row.context_json)
             stored_context["softwareBuildRequest"] = {
                 "requestedBy": context.actor_id,
-                "returnSourceArchive": bool(arguments.get("return_source_archive", True)),
+                "returnSourceArchive": return_source_archive,
                 "privatePreviewOnly": True,
                 "publishAuthorized": False,
+                "parentAgentRunId": parent_run_id,
+                "origin": origin,
+                "deliveryTarget": delivery_target,
             }
             row.context_json = json.dumps(stored_context, ensure_ascii=False, sort_keys=True)
             await self.projects.sync_legacy(context.db, context.tenant_id)
             project = await self.projects.get(context.db, context.tenant_id, str(row.runtime_reference))
             job = await _latest_job(context.db, row.id)
+            if job is not None:
+                evidence = _job_evidence(job)
+                evidence.update(
+                    {
+                        "parentAgentRunId": parent_run_id,
+                        "returnSourceArchive": return_source_archive,
+                        "deliveryTarget": delivery_target,
+                    }
+                )
+                job.evidence_json = json.dumps(evidence, ensure_ascii=False)
             payload = {
                 "project": _project_json(project),
                 "project_id": project.id,
@@ -324,13 +355,14 @@ class SoftwareBuildProvider(BaseProvider):
                 "job_accepted": bool(job and job.status in {"queued", "running", "succeeded"}) or row.preview_state == "ready",
                 "build_state": job.status if job else str(row.lifecycle_status),
                 "build_success": False,
-                "source_archive_requested": bool(arguments.get("return_source_archive", True)),
+                "source_archive_requested": return_source_archive,
                 "private_preview_only": True,
                 "publication_performed": False,
                 "deployment_performed": False,
+                "deferred": True,
+                "continuation_kind": "software_build",
+                "parent_agent_run_id": parent_run_id,
             }
-            # Queue acceptance is the verified result of this capability invocation;
-            # it is deliberately not proof of the root software objective.
             return CapabilityResult(True, True, payload, project.id)
 
         if capability_name == "software.build.status":
@@ -370,8 +402,6 @@ class SoftwareBuildProvider(BaseProvider):
             )
             if source is None:
                 return CapabilityResult(False, False, {"reason": "generated_source_not_available_yet"})
-            invocation = context.invocation if isinstance(context.invocation, dict) else {}
-            metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
             filename = str(arguments.get("filename") or f"{project.name}-source-v{source.source_version}.zip")
             artifact = await persist_generated_source_archive(
                 context.db,
@@ -379,7 +409,7 @@ class SoftwareBuildProvider(BaseProvider):
                 created_by=context.actor_id,
                 source=source,
                 filename=filename,
-                run_id=str(metadata.get("runtime_run_id") or "") or None,
+                run_id=_active_runtime_run_id(context),
             )
             solution = await context.db.scalar(
                 select(SolutionRecord).where(
