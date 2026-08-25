@@ -14,27 +14,16 @@ on:
       - "packages/agent_computer/**"
       - "packages/agents/**"
       - "packages/artifacts/**"
-      - "packages/business_brain/attachments/**"
-      - "packages/capabilities/artifact_provider.py"
-      - "packages/capabilities/computer_provider.py"
-      - "packages/capabilities/file_runtime_provider.py"
-      - "packages/capabilities/file_authoring_provider.py"
-      - "packages/capabilities/gmail_artifact_provider.py"
-      - "packages/capabilities/personal_google_provider.py"
-      - "packages/capabilities/defaults.py"
-      - "packages/capabilities/contracts.py"
-      - "packages/channels/envelope.py"
-      - "packages/channels/service.py"
+      - "packages/business_brain/**"
+      - "packages/capabilities/**"
+      - "packages/channels/**"
       - "packages/connectors/discord/**"
       - "packages/database/artifact_models.py"
       - "packages/database/schema.py"
       - "packages/connectors/google_provider.py"
-      - "packages/security/execution_context.py"
-      - "packages/security/permissions.py"
-      - "packages/coding_harness/execution_loop.py"
-      - "packages/coding_harness/contract_guidance.py"
-      - "packages/coding_harness/objective_audit.py"
-      - "packages/coding_harness/studio_controller.py"
+      - "packages/security/**"
+      - "packages/software_projects/coding/**"
+      - "packages/runtime_plugins/**"
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_artifact_delivery.py"
@@ -47,8 +36,6 @@ on:
       - "tests/test_file_authoring_provider.py"
       - "tests/test_gmail_artifact_provider.py"
       - "tests/test_coding_harness_execution_loop.py"
-      - "tests/test_studio_agent_generation.py"
-      - "tests/test_studio_agent_controller.py"
       - "tests/test_studio_real_capability_contracts.py"
       - ".github/workflows/unified-agent-runtime.yml"
   workflow_dispatch:
@@ -82,6 +69,7 @@ jobs:
           packages/artifacts/blob_store.py
           packages/artifacts/delivery.py
           packages/artifacts/service.py
+          packages/business_brain/agent.py
           packages/business_brain/attachments/batch_processor.py
           packages/capabilities/artifact_provider.py
           packages/capabilities/computer_provider.py
@@ -95,10 +83,9 @@ jobs:
           packages/connectors/discord/secure_runtime.py
           packages/database/artifact_models.py
           packages/database/schema.py
-          packages/coding_harness/execution_loop.py
-          packages/coding_harness/contract_guidance.py
-          packages/coding_harness/objective_audit.py
-          packages/coding_harness/studio_controller.py
+          packages/software_projects/coding/execution_loop.py
+          packages/software_projects/coding/contract_guidance.py
+          packages/software_projects/coding/objective_audit.py
           alembic/versions/0041_agent_artifacts.py
       - name: Test shared Railway Sandbox computer contracts
         working-directory: apps/sandbox_runner
@@ -109,7 +96,7 @@ jobs:
         env:
           DATABASE_URL: sqlite+aiosqlite:///./unified-agent-runtime-ci.db
         run: python -m alembic upgrade head
-      - name: Run unified runtime and Studio construction acceptance tests
+      - name: Run unified runtime and software construction acceptance tests
         env:
           OPERLY_ENV: test
           SESSION_SECRET: test-session-secret-that-is-long-enough
@@ -126,6 +113,4 @@ jobs:
           tests/test_file_authoring_provider.py
           tests/test_gmail_artifact_provider.py
           tests/test_coding_harness_execution_loop.py
-          tests/test_studio_agent_generation.py
-          tests/test_studio_agent_controller.py
           tests/test_studio_real_capability_contracts.py
