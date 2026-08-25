@@ -35,3 +35,4 @@ class ChannelResponse:
     role: str | None = None
     status: str = "ok"
     tenant_options: list[dict[str, str]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
