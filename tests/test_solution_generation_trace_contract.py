@@ -9,7 +9,7 @@ import pytest
 
 from apps.api.runtime_trace_router import _WORKSPACE_TRACE_SURFACES
 from packages.software_projects.coding.execution_loop import _trace_metadata
-from packages.custom_software import runner_adapters
+from packages.runtime_plugins import runner_adapters
 from packages.runtime_plugins.runner_adapters import ExternalRunnerAdapter, _safe_runner_payload
 from packages.runtime_plugins.sandbox import SandboxFailure
 from packages.database.model_trace import redact_trace_value
@@ -39,7 +39,7 @@ def test_runner_trace_payload_never_persists_transport_grants_or_source_text():
                 {
                     "path": "backend/app.py",
                     "content": "print('source must not be duplicated into the trace')",
-                    "generatedBy": "coding_harness",
+                    "generatedBy": "agent_runtime",
                 }
             ],
         },
@@ -70,7 +70,7 @@ def test_solution_attempt_uses_one_correlation_id_across_worker_and_harness():
         "tenant-1",
         "user-1",
         plan,
-        "solution:11111111-1111-1111-1111-111111111111:generated-build:4",
+        "solution:11111111-1111-1111-1111-111111111111:software-build:4",
     )
     job = SimpleNamespace(
         solution_id="11111111-1111-1111-1111-111111111111",
