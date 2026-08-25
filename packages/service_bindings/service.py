@@ -9,6 +9,7 @@ from packages.capabilities.firewall import (
     CapabilityInvocation,
     CapabilityInvocationResult,
 )
+from packages.security.delegation import delegate_execution_context
 from packages.security.execution_context import ExecutionContext
 from packages.service_bindings.contracts import BindingCandidate, BindingInvocation, ServiceBinding
 
@@ -61,8 +62,10 @@ class CapabilityGateway:
     """Project/runtime entrypoint for invoking one configured binding handle.
 
     The gateway accepts a binding id rather than a provider credential or arbitrary
-    capability id. Authorization semantics are inherited from the normal
-    CapabilityFirewall and will be refined in the dedicated authorization pass.
+    capability id. Every invocation is reduced to the binding's exact capability and
+    executes as a delegated software-project principal through CapabilityFirewall.
+    The authenticated workspace member remains the accountable delegator, but the
+    generated runtime can never inherit that person's broader capability universe.
     """
 
     binding_loader: BindingLoader
@@ -90,6 +93,13 @@ class CapabilityGateway:
                 status="DENIED",
                 error="Binding does not belong to this workspace",
             )
+        if binding.binding_mode != "capability_gateway":
+            return CapabilityInvocationResult(
+                ok=False,
+                capability_id=binding.capability_id,
+                status="DENIED",
+                error="Binding mode is not executable through the capability gateway",
+            )
 
         arguments = dict(invocation.arguments)
         allowed_fields = binding.configuration.get("allowed_argument_fields")
@@ -112,6 +122,21 @@ class CapabilityGateway:
         loaded = self.registry_loader(execution_context.workspace_id)
         registry = await loaded if hasattr(loaded, "__await__") else loaded
         firewall = ActionBackedCapabilityFirewall(registry)
+        try:
+            delegated = delegate_execution_context(
+                execution_context,
+                principal_kind="software_project",
+                principal_id=project_id,
+                capability_ids={binding.capability_id},
+                delegation_id_value=binding.id,
+            )
+        except (PermissionError, ValueError) as error:
+            return CapabilityInvocationResult(
+                ok=False,
+                capability_id=binding.capability_id,
+                status="DENIED",
+                error=str(error),
+            )
         return await firewall.invoke(
             CapabilityInvocation(
                 capability_id=binding.capability_id,
@@ -128,5 +153,5 @@ class CapabilityGateway:
                     "principal_scope": binding.principal_scope,
                 },
             ),
-            execution_context,
+            delegated,
         )
