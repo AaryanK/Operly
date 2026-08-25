@@ -1,0 +1,361 @@
+/*
+ * Canonical Operly palette.
+ *
+ * This layer intentionally contains color, border and shadow overrides only.
+ * Responsive layout remains owned by the existing component styles and
+ * convergence.css. Keep geometry/breakpoint rules out of this file.
+ */
+:root,
+html[data-theme="light"],
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-canvas: #0d0a15;
+  --ui-panel: #15111e;
+  --ui-panel-muted: #1b1627;
+  --ui-panel-glass: rgba(21, 17, 30, .88);
+  --ui-ink: #f7f3ff;
+  --ui-muted: #a69bb8;
+  --ui-muted-2: #766c88;
+  --ui-line: rgba(212, 190, 255, .12);
+  --ui-line-strong: rgba(212, 190, 255, .22);
+  --ui-accent: #9b72ff;
+  --ui-accent-strong: #c4a7ff;
+  --ui-accent-soft: rgba(155, 114, 255, .14);
+  --ui-accent-cyan: #e88bdc;
+  --ui-accent-pink: #e88bdc;
+  --ui-accent-gradient: linear-gradient(135deg, #8d63f4 0%, #ac83ff 66%, #e88bdc 100%);
+  --ui-rail: #0c0912;
+  --ui-nav: #12101a;
+  --ui-nav-ink: #f7f3ff;
+  --ui-danger: #ff8f9d;
+  --ui-shadow-soft: 0 10px 30px rgba(0, 0, 0, .18);
+  --ui-shadow: 0 18px 55px rgba(0, 0, 0, .24);
+  --ui-shadow-float: 0 30px 80px rgba(0, 0, 0, .32);
+  --ui-glow: 0 0 0 1px rgba(155, 114, 255, .10), 0 18px 55px rgba(120, 77, 214, .16);
+  background: var(--ui-canvas);
+  color: var(--ui-ink);
+}
+
+body {
+  color: var(--ui-ink);
+  background:
+    radial-gradient(circle at 15% 8%, rgba(155, 114, 255, .12), transparent 27%),
+    radial-gradient(circle at 88% 92%, rgba(232, 139, 220, .07), transparent 28%),
+    var(--ui-canvas) !important;
+}
+
+.authenticated-shell,
+.workspace-page {
+  color: var(--ui-ink);
+  background: var(--ui-canvas) !important;
+}
+
+.authenticated-shell {
+  background:
+    radial-gradient(circle at 92% 0%, rgba(155, 114, 255, .07), transparent 28%),
+    var(--ui-canvas) !important;
+}
+
+.scope-rail {
+  background: linear-gradient(180deg, #12101a 0%, #0c0912 100%) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: 12px 0 34px rgba(0, 0, 0, .20) !important;
+}
+
+.scope-mark,
+.scope-account,
+.workspace-identity > span {
+  color: var(--ui-ink);
+  background: linear-gradient(145deg, #221b31, #1b1627) !important;
+  border-color: var(--ui-line) !important;
+}
+.scope-mark:hover {
+  border-color: rgba(196, 167, 255, .42) !important;
+  background: #221b31 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .20) !important;
+}
+.scope-mark.active {
+  border-color: rgba(212, 190, 255, .30) !important;
+  background: var(--ui-accent-gradient) !important;
+  box-shadow: 0 10px 28px rgba(132, 84, 238, .25), inset 0 1px 0 rgba(255, 255, 255, .20) !important;
+}
+
+.scope-brand,
+.scope-brand.active,
+.scope-brand:hover,
+.assistant-avatar.brand-avatar,
+.boot-mark {
+  background: #0e0b16 !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.scope-brand.active {
+  box-shadow: 0 0 0 1px rgba(155, 114, 255, .28), 0 10px 30px rgba(120, 77, 214, .20) !important;
+}
+.scope-brand:hover { border-color: rgba(196, 167, 255, .48) !important; }
+.assistant-avatar.brand-avatar { border-color: rgba(155, 114, 255, .26) !important; }
+
+.workspace-nav,
+.personal-history,
+.conversation-list-panel,
+.account-settings-nav {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(155, 114, 255, .08), transparent 28%),
+    linear-gradient(180deg, #15111e 0%, #100c18 100%) !important;
+  border-color: var(--ui-line) !important;
+}
+.workspace-identity { border-color: var(--ui-line) !important; }
+.workspace-identity small,
+.nav-group > small { color: var(--ui-muted-2) !important; }
+.nav-group button { color: var(--ui-muted) !important; }
+.nav-group button:hover { color: var(--ui-ink) !important; background: rgba(255, 255, 255, .035) !important; }
+.nav-group button.active {
+  color: var(--ui-ink) !important;
+  background: var(--ui-accent-soft) !important;
+  box-shadow: inset 0 0 0 1px rgba(155, 114, 255, .10) !important;
+}
+.nav-group button.active::before {
+  background: linear-gradient(#c4a7ff, #e88bdc) !important;
+  box-shadow: 0 0 14px rgba(155, 114, 255, .42) !important;
+}
+
+.surface-header,
+.account-settings-main > header {
+  color: var(--ui-ink);
+  background:
+    radial-gradient(circle at 90% -30%, rgba(155, 114, 255, .09), transparent 34%),
+    rgba(21, 17, 30, .92) !important;
+  border-color: var(--ui-line) !important;
+}
+.surface-header h1,
+.card-heading h2,
+.section-heading h2 { color: var(--ui-ink); }
+.surface-header p,
+.data-row small,
+.data-row p,
+.message-row p,
+.plugin-card p,
+.solution-card > p,
+.destination-card p { color: var(--ui-muted) !important; }
+.eyebrow {
+  color: var(--ui-accent-strong) !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor;
+}
+
+.workspace-hero,
+.personal-surface,
+.ai-chat-panel {
+  color: var(--ui-ink);
+  background: var(--ui-panel) !important;
+}
+.conversation-stage {
+  background:
+    radial-gradient(circle at 76% 4%, rgba(155, 114, 255, .055), transparent 25%),
+    radial-gradient(circle at 20% 82%, rgba(232, 139, 220, .035), transparent 22%),
+    linear-gradient(180deg, #15111e 0%, #0f0c17 100%) !important;
+  scrollbar-color: #3b304d transparent !important;
+}
+
+.metric-card,
+.destination-card,
+.data-card,
+.presence-card,
+.solution-compose-card,
+.solutions-library,
+.info-banner,
+.plugin-card,
+.solution-card,
+.connector-card,
+.role-card,
+.account-settings-card,
+.account-settings-main,
+.settings-callout,
+.create-workspace-card,
+.account-identity,
+.personal-connector-card,
+.workspace-settings-list > button,
+.settings-boundary-grid > div,
+.suggestion-grid button,
+.inline-form {
+  color: var(--ui-ink) !important;
+  background: linear-gradient(155deg, rgba(27, 22, 39, .98), rgba(18, 14, 27, .98)) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: var(--ui-shadow-soft) !important;
+}
+.destination-card:hover,
+.plugin-card:hover,
+.solution-card:hover,
+.connector-card:hover,
+.workspace-settings-list > button:hover,
+.suggestion-grid button:hover {
+  border-color: rgba(155, 114, 255, .34) !important;
+  background: linear-gradient(155deg, #221b31, #171220) !important;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, .22) !important;
+}
+
+.primary-button,
+.composer-actions > button:not(.attach-button) {
+  color: #fff !important;
+  background: linear-gradient(135deg, #8d63f4, #ac83ff) !important;
+  box-shadow: 0 12px 30px rgba(132, 84, 238, .24) !important;
+}
+.primary-button:hover,
+.composer-actions > button:not(.attach-button):not(:disabled):hover {
+  box-shadow: 0 14px 34px rgba(132, 84, 238, .30) !important;
+}
+.secondary-button,
+.history-head button,
+.account-settings-main > header > button,
+.workspace-more-sheet > header > button,
+.history-mobile-close,
+.mobile-history-button {
+  color: var(--ui-ink) !important;
+  background: rgba(255, 255, 255, .025) !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.secondary-button:hover,
+.history-head button:hover { border-color: rgba(155, 114, 255, .36) !important; }
+.text-button { color: var(--ui-accent-strong) !important; }
+.icon-action,
+.destination-card > span,
+.attach-button,
+.capability-list > span,
+.privacy-pill,
+.workspace-context-pill {
+  color: var(--ui-accent-strong) !important;
+  background: var(--ui-accent-soft) !important;
+  border-color: rgba(155, 114, 255, .14) !important;
+}
+.attach-button { box-shadow: inset 0 0 0 1px rgba(155, 114, 255, .06) !important; }
+
+.composer {
+  color: var(--ui-ink) !important;
+  background: rgba(21, 17, 30, .90) !important;
+  border-color: var(--ui-line-strong) !important;
+  box-shadow: var(--ui-shadow-float), 0 0 0 1px rgba(155, 114, 255, .05) !important;
+}
+.composer::before {
+  background: linear-gradient(120deg, rgba(155, 114, 255, .23), transparent 30%, transparent 70%, rgba(232, 139, 220, .15)) !important;
+}
+.composer:focus-within {
+  border-color: rgba(155, 114, 255, .55) !important;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, .30), 0 0 0 3px rgba(155, 114, 255, .10) !important;
+}
+.composer textarea,
+.form-stack input,
+.form-stack select,
+.form-stack textarea,
+.inline-form input,
+.inline-form select,
+.solution-compose-card input,
+.solution-compose-card textarea,
+.member-row select {
+  color: var(--ui-ink) !important;
+  background: #0e0b16 !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.composer textarea::placeholder,
+.form-stack input::placeholder,
+.form-stack textarea::placeholder { color: var(--ui-muted-2) !important; }
+.form-stack input:focus,
+.form-stack select:focus,
+.form-stack textarea:focus,
+.inline-form input:focus,
+.inline-form select:focus,
+.solution-compose-card input:focus,
+.solution-compose-card textarea:focus {
+  border-color: var(--ui-accent) !important;
+  box-shadow: 0 0 0 4px rgba(155, 114, 255, .13) !important;
+}
+
+.assistant-avatar {
+  background: var(--ui-accent-gradient) !important;
+  border-color: rgba(212, 190, 255, .24) !important;
+  box-shadow: 0 8px 28px rgba(120, 77, 214, .24), inset 0 1px 0 rgba(255, 255, 255, .18) !important;
+}
+.chat-message.user .assistant-avatar {
+  background: linear-gradient(145deg, #41364f, #30283c) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .18) !important;
+}
+.chat-message.user > div:last-child {
+  color: var(--ui-ink) !important;
+  background: rgba(27, 22, 39, .88) !important;
+  border-color: var(--ui-line) !important;
+}
+.chat-message.user > div:last-child > strong { color: var(--ui-muted) !important; }
+.assistant-message p,
+.chat-message p,
+.message-content { color: #ded5eb !important; }
+.message-content h3,
+.message-content h4 { color: var(--ui-ink) !important; }
+.message-content code { color: #e9ddff !important; background: #221b31 !important; }
+.message-content pre { color: #f4efff !important; background: #0e0b16 !important; border-color: var(--ui-line-strong) !important; }
+.message-table-wrap { background: var(--ui-panel) !important; border-color: var(--ui-line) !important; }
+.message-content table th { color: var(--ui-ink) !important; background: #221b31 !important; }
+.message-content table td { color: #ded5eb !important; border-color: var(--ui-line) !important; }
+
+.history-list > button { color: var(--ui-ink) !important; }
+.history-list > button:hover,
+.history-list > button.active,
+.account-settings-nav > button:hover,
+.account-settings-nav > button.active {
+  color: var(--ui-ink) !important;
+  background: var(--ui-accent-soft) !important;
+  border-color: rgba(155, 114, 255, .12) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18) !important;
+}
+
+.workspace-mobile-nav {
+  color: var(--ui-ink) !important;
+  background: rgba(21, 17, 30, .96) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, .18) !important;
+}
+.workspace-mobile-nav button { color: var(--ui-muted) !important; }
+.workspace-mobile-nav button.active {
+  color: var(--ui-accent-strong) !important;
+  background: var(--ui-accent-soft) !important;
+}
+.workspace-more-sheet {
+  color: var(--ui-ink) !important;
+  background: var(--ui-panel) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: var(--ui-shadow-float) !important;
+}
+.workspace-more-list > button {
+  color: var(--ui-ink) !important;
+  background: var(--ui-panel-muted) !important;
+  border-color: var(--ui-line) !important;
+}
+.workspace-more-list > button.active {
+  border-color: rgba(155, 114, 255, .38) !important;
+  background: var(--ui-accent-soft) !important;
+}
+.workspace-more-backdrop,
+.personal-history-backdrop { background: rgba(9, 6, 14, .58) !important; }
+
+.branded-boot,
+html[data-theme="dark"] .branded-boot {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(155, 114, 255, .16), transparent 21%),
+    radial-gradient(circle at 56% 42%, rgba(232, 139, 220, .08), transparent 35%),
+    var(--ui-canvas) !important;
+}
+.branded-boot::before { background: radial-gradient(circle, rgba(155, 114, 255, .16), transparent 68%) !important; }
+.branded-boot::after { background: radial-gradient(circle, rgba(232, 139, 220, .10), transparent 68%) !important; }
+.boot-mark,
+html[data-theme="dark"] .boot-mark {
+  box-shadow: 0 30px 90px rgba(120, 77, 214, .26), 0 0 0 10px rgba(155, 114, 255, .05) !important;
+}
+.boot-orbit { border-color: rgba(155, 114, 255, .18) !important; }
+.boot-orbit::before { border-color: rgba(232, 139, 220, .12) !important; }
+.boot-orbit span:first-child {
+  background: #9b72ff !important;
+  box-shadow: 0 0 18px rgba(155, 114, 255, .68) !important;
+}
+.boot-orbit span:last-child {
+  background: #e88bdc !important;
+  box-shadow: 0 0 16px rgba(232, 139, 220, .60) !important;
+}
+
+/* Semantic states deliberately retain their own success/warning/error colors. */
