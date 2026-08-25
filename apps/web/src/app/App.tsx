@@ -23,11 +23,11 @@ function RouteFallback() {
   return <BrandedBoot message="Opening your operating layer…" />;
 }
 
-function recordProductActivity(eventName: "page_view" | "heartbeat") {
+function recordProductPageView() {
   return api<{ ok: boolean; recorded: boolean }>("/analytics/event", {
     method: "POST",
     body: JSON.stringify({
-      event_name: eventName,
+      event_name: "page_view",
       path: window.location.pathname,
     }),
   });
@@ -49,21 +49,8 @@ export function App() {
 
   useEffect(() => {
     if (!profile || loading || transitioning || route.kind === "unknown") return;
-    recordProductActivity("page_view").catch(() => undefined);
+    recordProductPageView().catch(() => undefined);
   }, [loading, profile?.email, profile?.id, route, transitioning]);
-
-  useEffect(() => {
-    if (!profile) return;
-    const heartbeat = () => {
-      if (document.visibilityState === "visible") recordProductActivity("heartbeat").catch(() => undefined);
-    };
-    const timer = window.setInterval(heartbeat, 5 * 60 * 1000);
-    window.addEventListener("focus", heartbeat);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", heartbeat);
-    };
-  }, [profile?.email, profile?.id]);
 
   if (loading && !profile) return <BrandedBoot message="Opening your operating layer…" />;
   if (error && !profile) return <div className="boot-screen branded-boot error-state"><OperlyMark className="boot-mark" /><strong>OPERLY</strong><h1>Operly could not open this account.</h1><p>{error}</p><a href="/login">Sign in</a></div>;
