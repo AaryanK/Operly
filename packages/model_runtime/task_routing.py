@@ -436,25 +436,43 @@ def _existing_route(request: InferenceRequest) -> TaskRouteDecision | None:
     return None
 
 
+_TOOL_TURN_MAX_OUTPUT_TOKENS = 2_048
+
+
 def _task_budget(
     decision: TaskRouteDecision,
     current: InferenceBudget | None,
+    *,
+    has_tools: bool = False,
 ) -> InferenceBudget:
+    """Choose a bounded completion reservation for the current inference turn.
+
+    Tool-loop turns normally need only enough output to select/call capabilities and
+    summarize observations. Reserving a long-form completion budget on those turns
+    wastes provider TPM capacity and can make an otherwise small request fail before
+    inference starts. Explicit caller budgets remain authoritative.
+    """
     current = current or InferenceBudget()
     defaults = {
-        "bounded_operation": (45.0, 2, 4000),
-        "research": (120.0, 3, 9000),
-        "coding_or_studio": (150.0, 3, 12000),
-        "validation": (90.0, 3, 7000),
-        "planning": (90.0, 3, 8000),
-        "business_reasoning": (75.0, 3, 7000),
+        "bounded_operation": (45.0, 2, 3_000),
+        "research": (120.0, 3, 6_000),
+        "coding_or_studio": (150.0, 3, 6_000),
+        "validation": (90.0, 3, 5_000),
+        "planning": (90.0, 3, 5_000),
+        "business_reasoning": (75.0, 3, 4_000),
     }
-    timeout, models, output = defaults.get(decision.task_type, defaults["business_reasoning"])
+    timeout, models, default_output = defaults.get(
+        decision.task_type,
+        defaults["business_reasoning"],
+    )
+    output = current.max_output_tokens
+    if output is None:
+        output = min(default_output, _TOOL_TURN_MAX_OUTPUT_TOKENS) if has_tools else default_output
     return InferenceBudget(
         timeout_seconds=current.timeout_seconds or timeout,
         attempts_per_model=max(1, current.attempts_per_model),
         max_models=current.max_models or models,
-        max_output_tokens=current.max_output_tokens or output,
+        max_output_tokens=output,
     )
 
 
@@ -520,7 +538,7 @@ class TaskRoutedBusinessModel:
             tools=request.tools if "tools" in requirements.requires else (),
             response_schema=request.response_schema,
             modality_inputs=request.modality_inputs,
-            budget=_task_budget(decision, request.budget),
+            budget=_task_budget(decision, request.budget, has_tools=bool(request.tools)),
             metadata=metadata,
         )
         result = await selected.infer(routed)
