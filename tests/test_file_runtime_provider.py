@@ -1,10 +1,6 @@
-import base64
-import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
-from packages.business_brain.attachments.models import GeneratedOutput, OutputFile
 from packages.capabilities.defaults import default_registry
 from packages.capabilities.file_runtime_provider import FileRuntimeProvider
 
@@ -22,49 +18,23 @@ class FakeProcessor:
 
     async def process(self, bundle, temp_dir=None):
         self.bundle = bundle
-        path = Path(temp_dir or tempfile.mkdtemp()) / "result.txt"
-        path.write_text("processed", encoding="utf-8")
-        return GeneratedOutput(
-            "Complete",
-            [OutputFile(path, "result.txt", "text/plain", path.stat().st_size)],
-            [],
-            "extract",
-            [item.filename for item in bundle.attachments],
-            [],
-        )
+        raise AssertionError("processor should not be reached for invalid transport")
 
 
 class FileRuntimeProviderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_processes_trusted_inline_files_and_returns_output(self):
+    async def test_rejects_invalid_base64_before_processor_or_persistence(self):
         processor = FakeProcessor()
         provider = FileRuntimeProvider(processor)
         result = await provider.execute(
-            SimpleNamespace(tenant_id="tenant-1", actor_id="user-1"),
-            "files.process",
-            {
-                "request": "Extract this file",
-                "output_format": "txt",
-                "files": [
-                    {
-                        "filename": "notes.txt",
-                        "content_type": "text/plain",
-                        "content_base64": base64.b64encode(b"hello").decode("ascii"),
-                    }
-                ],
-            },
-        )
-        self.assertTrue(result.success)
-        self.assertFalse(result.changed)
-        self.assertEqual(result.evidence["accepted"], ["notes.txt"])
-        self.assertEqual(base64.b64decode(result.evidence["files"][0]["content_base64"]), b"processed")
-        self.assertEqual(processor.bundle.tenant_id, "tenant-1")
-        self.assertEqual(processor.bundle.actor_id, "user-1")
-
-    async def test_rejects_invalid_base64_before_processor(self):
-        processor = FakeProcessor()
-        provider = FileRuntimeProvider(processor)
-        result = await provider.execute(
-            SimpleNamespace(tenant_id="tenant-1", actor_id="user-1"),
+            SimpleNamespace(
+                tenant_id="tenant-1",
+                actor_id="user-1",
+                scope_kind="workspace",
+                scope_id="tenant-1",
+                owner_user_id=None,
+                db=None,
+                invocation={"metadata": {"runtime_run_id": "run-test"}},
+            ),
             "files.process",
             {"request": "Read it", "files": [{"filename": "bad.txt", "content_base64": "%%%"}]},
         )
@@ -78,6 +48,19 @@ class FileRuntimeProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(definition.category, "files")
         self.assertEqual(definition.permissions, ("files:process",))
         self.assertEqual(registry.provider_name("files.process"), "operly_file_runtime")
+
+        batch = registry.definition("files.batch_process")
+        self.assertEqual(batch.category, "files")
+        self.assertIn("process many files", batch.semantic_operations)
+        self.assertEqual(registry.provider_name("files.batch_process"), "operly_file_runtime")
+
+    def test_files_process_prefers_artifact_ids_and_does_not_return_binary_contract(self):
+        registry = default_registry()
+        schema = registry.definition("files.process").input_schema
+        self.assertIn("artifact_ids", schema["properties"])
+        # Generated file bytes are intentionally absent from the stable output
+        # contract; results return durable artifact IDs instead.
+        self.assertNotIn("content_base64", registry.definition("files.process").output_schema.get("properties", {}))
 
 
 if __name__ == "__main__":
