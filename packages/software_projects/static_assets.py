@@ -1,16 +1,10 @@
-"""Build a self-contained sandboxed Studio preview document.
-
-A sandbox without allow-same-origin intentionally has an opaque origin, so protected
-relative subresource requests cannot rely on the owner's session cookie. Inline only
-files already stored in the same immutable Studio source bundle; keep the sandbox
-opaque instead of weakening it with allow-same-origin.
-"""
+"""Static source helpers for canonical SoftwareProject previews and deployments."""
 from __future__ import annotations
 
 import re
 from urllib.parse import urlsplit
 
-from packages.custom_software.source_bundles import normalized_path
+from packages.software_projects.source_bundle import normalized_path
 
 
 def _bundle_path(value: str) -> str | None:
@@ -34,8 +28,8 @@ def _escape_script(text: str) -> str:
     return str(text or "").replace("</script", "<\\/script")
 
 
-def inline_local_preview_assets(html: str, records: dict[str, str]) -> str:
-    """Inline local CSS/JS references from one stored Studio source bundle."""
+def inline_local_assets(html: str, records: dict[str, str]) -> str:
+    """Inline local CSS/JS files from one immutable canonical source version."""
     source = str(html or "")
 
     def replace_link(match: re.Match) -> str:
@@ -65,9 +59,16 @@ def inline_local_preview_assets(html: str, records: dict[str, str]) -> str:
         script_type = f' type="{type_attr.group(2)}"' if type_attr else ""
         return f'<script{script_type} data-operly-inline-source="{path}">{_escape_script(records[path])}</script>{body_close}'
 
-    source = re.sub(
+    return re.sub(
         r"(?is)(<script\b[^>]*\bsrc\s*=\s*['\"][^'\"]+['\"][^>]*>)(.*?</script\s*>)",
         replace_script,
         source,
     )
-    return source
+
+
+def canonical_static_document(files: dict[str, str]) -> str:
+    """Return a self-contained static document suitable for preview/deploy."""
+    html = files.get("index.html")
+    if html is None:
+        raise ValueError("Static SoftwareProject source must contain index.html")
+    return inline_local_assets(html, files)

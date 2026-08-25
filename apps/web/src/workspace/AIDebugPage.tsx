@@ -6,7 +6,7 @@ import { WorkspaceSummary } from "../app/types";
 type ModelObserved = { provider: string; model: string };
 type TokenUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 type AIRun = {
-  kind: "runtime" | "studio";
+  kind: "runtime";
   runId: string;
   conversationId?: string | null;
   surface: string;
@@ -20,8 +20,6 @@ type AIRun = {
   successCount: number;
   modelCandidatesObserved: ModelObserved[];
   tokenUsage: TokenUsage;
-  operation?: string;
-  projectId?: string;
 };
 type RunListResponse = { runCount: number; runs: AIRun[]; redactionApplied: boolean; hiddenReasoningRedacted: boolean };
 type TraceEntry = {
@@ -39,7 +37,7 @@ type TraceEntry = {
   callIndex?: number;
   trace: Record<string, unknown>;
 };
-type RunDetail = AIRun & { entries: TraceEntry[]; instruction?: string; redactionApplied: boolean; hiddenReasoningRedacted: boolean };
+type RunDetail = AIRun & { entries: TraceEntry[]; redactionApplied: boolean; hiddenReasoningRedacted: boolean };
 
 function number(value: number | undefined) {
   return new Intl.NumberFormat().format(value || 0);
@@ -84,7 +82,7 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
       const response = await api<RunListResponse>(`/runtime-traces/runs?tenant_id=${encodeURIComponent(workspace.id)}&limit=150`);
       setRuns(response.runs);
       if (selected) {
-        const refreshed = response.runs.find((run) => run.runId === selected.runId && run.kind === selected.kind);
+        const refreshed = response.runs.find((run) => run.runId === selected.runId);
         if (refreshed) setSelected(refreshed);
       }
     } catch (caught) {
@@ -100,7 +98,7 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
     setDetailLoading(true);
     setError(null);
     try {
-      const response = await api<RunDetail>(`/runtime-traces/runs/${encodeURIComponent(run.runId)}?tenant_id=${encodeURIComponent(workspace.id)}&kind=${run.kind}`);
+      const response = await api<RunDetail>(`/runtime-traces/runs/${encodeURIComponent(run.runId)}?tenant_id=${encodeURIComponent(workspace.id)}`);
       setDetail(response);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "AI run could not be loaded");
@@ -123,8 +121,6 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
         run.conversationId,
         run.surface,
         run.channel,
-        run.operation,
-        run.projectId,
         ...run.components,
         ...run.modelCandidatesObserved.flatMap((model) => [model.provider, model.model]),
       ].filter(Boolean).join(" ").toLowerCase();
@@ -137,7 +133,7 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
       <div>
         <span className="eyebrow">Debug</span>
         <h1>AI runs</h1>
-        <p>Inspect the exact model-visible request, supplied context, tools, provider/model selection, responses, retries, token usage, and failures for every persisted AI execution in this workspace.</p>
+        <p>Inspect the exact model-visible request, supplied context, tools, provider/model selection, responses, retries, token usage, and failures for every persisted AgentRuntime execution in this workspace.</p>
       </div>
       <div className="page-actions"><button className="secondary-button" onClick={reload} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button></div>
     </header>
@@ -154,12 +150,12 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
         </div>
         {filtered.length ? <div className="row-list">{filtered.map((run) => {
           const primaryModel = run.modelCandidatesObserved[0];
-          return <button className={`data-row stacked ${selected?.runId === run.runId && selected?.kind === run.kind ? "active" : ""}`} key={`${run.kind}:${run.runId}`} onClick={() => openRun(run)}>
+          return <button className={`data-row stacked ${selected?.runId === run.runId ? "active" : ""}`} key={run.runId} onClick={() => openRun(run)}>
             <div>
-              <strong>{run.surface} · {run.kind === "studio" ? run.operation || "Studio" : run.components[0] || "AI runtime"}</strong>
+              <strong>{run.surface} · {run.components[0] || "AgentRuntime"}</strong>
               <span className={statusClass(run.status)}>{run.status}</span>
               <p>{primaryModel ? `${primaryModel.provider} / ${primaryModel.model}` : "Model not recorded"} · {number(run.tokenUsage.inputTokens)} in / {number(run.tokenUsage.outputTokens)} out · {when(run.startedAt)}</p>
-              <p><code>{run.runId}</code>{run.conversationId ? ` · conversation ${run.conversationId}` : ""}{run.projectId ? ` · project ${run.projectId}` : ""}</p>
+              <p><code>{run.runId}</code>{run.conversationId ? ` · conversation ${run.conversationId}` : ""}</p>
             </div>
           </button>;
         })}</div> : <div className="empty-panel">{loading ? "Loading AI runs…" : "No AI runs match these filters."}</div>}
@@ -170,7 +166,7 @@ export function AIDebugPage({ workspace }: { workspace: WorkspaceSummary }) {
         {!selected && <div className="empty-panel">Choose an execution to inspect everything Operly supplied to the model and everything returned from the model/provider boundary.</div>}
         {selected && detailLoading && <div className="empty-panel">Loading the complete model trace…</div>}
         {detail && <div className="row-list">
-          <div className="data-row stacked"><div><strong>Run summary</strong><p>{detail.surface} · {detail.status} · {number(detail.tokenUsage.totalTokens)} recorded tokens · {detail.modelCandidatesObserved.map((model) => `${model.provider}/${model.model}`).join(" → ") || "No model provenance recorded"}</p>{detail.instruction && <details><summary>Studio instruction</summary><pre><code>{detail.instruction}</code></pre></details>}</div></div>
+          <div className="data-row stacked"><div><strong>Run summary</strong><p>{detail.surface} · {detail.status} · {number(detail.tokenUsage.totalTokens)} recorded tokens · {detail.modelCandidatesObserved.map((model) => `${model.provider}/${model.model}`).join(" → ") || "No model provenance recorded"}</p></div></div>
           {detail.entries.map((entry, index) => <div className="data-row stacked" key={entry.id || `${entry.phase}:${index}`}>
             <div>
               <strong>{entry.phase}{entry.component ? ` · ${entry.component}` : ""}{entry.callIndex ? ` · call ${entry.callIndex}` : ""}</strong>

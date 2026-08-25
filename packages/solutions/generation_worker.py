@@ -1,8 +1,8 @@
-"""Durable Postgres-backed software generation worker.
+"""Durable Postgres-backed canonical SoftwareProject generation worker.
 
-Legacy generated_project jobs remain readable/retryable, but new software work is
-owned by SoftwareProject/Solution. GeneratedSourceBundle is an internal coding/runner
-adapter only; canonical source is imported before a job can complete successfully.
+GeneratedSourceBundle and SoftwarePlanRecord remain internal execution adapters for
+planning/runner mechanics. Product identity and source authority are exclusively
+SoftwareProject and SoftwareSourceVersionRecord.
 """
 from __future__ import annotations
 
@@ -27,8 +27,7 @@ from packages.custom_software.planner import build_software_plan
 from packages.custom_software.planning_orchestrator import PlanningNeedsUserInput
 from packages.custom_software.runner_adapters import ExternalRunnerAdapter
 from packages.custom_software.schema import SoftwarePlan
-from packages.custom_software.service import plan_artifact_graph, slugify
-from packages.database.custom_software_models import GeneratedProject, SoftwarePlanRecord, SoftwarePlanVersion
+from packages.database.custom_software_models import SoftwarePlanRecord, SoftwarePlanVersion
 from packages.database.db import SessionFactory, init_db
 from packages.database.product_models import SolutionJob, SolutionRecord
 from packages.database.software_project_models import SoftwareProjectRecord
@@ -36,9 +35,8 @@ from packages.software_projects import SoftwareSourceService
 from packages.solutions.completion import finalize_software_job
 from packages.solutions.service import LifecycleStatus, RuntimeType
 
-GENERATED_JOB_TYPE="generated_generation"
 SOFTWARE_JOB_TYPE="software_generation"
-SUPPORTED_JOB_TYPES=(GENERATED_JOB_TYPE,SOFTWARE_JOB_TYPE)
+SUPPORTED_JOB_TYPES=(SOFTWARE_JOB_TYPE,)
 
 
 def worker_enabled()->bool:return os.getenv("OPERLY_SOLUTION_WORKER_ENABLED","0").strip().lower() in {"1","true","yes","on"}
@@ -77,7 +75,7 @@ def _planning_input_digest(name:str,objective:str,context:dict[str,Any])->str:
     return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 
 async def _reusable_approved_plan(db,row:SolutionRecord,planning_input_digest:str)->SoftwarePlanRecord|None:
-    prior=(await db.scalars(select(SolutionJob).where(SolutionJob.tenant_id==row.tenant_id,SolutionJob.solution_id==row.id,SolutionJob.job_type.in_(("initial_generation",*SUPPORTED_JOB_TYPES)),SolutionJob.plan_id.is_not(None)).order_by(desc(SolutionJob.attempt),desc(SolutionJob.created_at)).limit(20))).all()
+    prior=(await db.scalars(select(SolutionJob).where(SolutionJob.tenant_id==row.tenant_id,SolutionJob.solution_id==row.id,SolutionJob.job_type.in_(("initial_generation",SOFTWARE_JOB_TYPE)),SolutionJob.plan_id.is_not(None)).order_by(desc(SolutionJob.attempt),desc(SolutionJob.created_at)).limit(20))).all()
     for item in prior:
         evidence=_evidence(item)
         if evidence.get("planningEngine")!=PLANNING_ENGINE or evidence.get("planningInputDigest")!=planning_input_digest:continue
@@ -86,17 +84,11 @@ async def _reusable_approved_plan(db,row:SolutionRecord,planning_input_digest:st
     return None
 
 async def _next_attempt(db,tenant_id:str,solution_id:str)->int:
-    previous=await db.scalar(select(SolutionJob).where(SolutionJob.tenant_id==tenant_id,SolutionJob.solution_id==solution_id,SolutionJob.job_type.in_(("initial_generation",*SUPPORTED_JOB_TYPES))).order_by(desc(SolutionJob.attempt)).limit(1));return int(previous.attempt)+1 if previous else 1
+    previous=await db.scalar(select(SolutionJob).where(SolutionJob.tenant_id==tenant_id,SolutionJob.solution_id==solution_id,SolutionJob.job_type.in_(("initial_generation",SOFTWARE_JOB_TYPE))).order_by(desc(SolutionJob.attempt)).limit(1));return int(previous.attempt)+1 if previous else 1
 
-async def create_generated_placeholder(db,tenant_id:str,user_id:str,name:str,objective:str)->GeneratedProject:
-    """Legacy compatibility constructor. New software.build never calls this."""
-    base=slugify(name) or "generated-solution";slug=base;suffix=2
-    while await db.scalar(select(GeneratedProject.id).where(GeneratedProject.slug==slug)):
-        slug=f"{base}-{suffix}";suffix+=1
-    project=GeneratedProject(tenant_id=tenant_id,slug=slug,name=name[:200],vertical="custom",prompt=objective,brand_json="{}",artifact_graph_json="{}",created_by=user_id,architecture_pack="custom");db.add(project);await db.flush();return project
-
-async def _queue_generation(db,*,row:SolutionRecord,user_id:str,job_type:str)->tuple[SolutionRecord,SolutionJob]:
-    active=await db.scalar(select(SolutionJob).where(SolutionJob.tenant_id==row.tenant_id,SolutionJob.solution_id==row.id,SolutionJob.job_type==job_type,SolutionJob.status.in_(("queued","running"))).order_by(desc(SolutionJob.attempt)).limit(1))
+async def _queue_generation(db,*,row:SolutionRecord,user_id:str)->tuple[SolutionRecord,SolutionJob]:
+    if RuntimeType(row.runtime_type)!=RuntimeType.SOFTWARE_PROJECT:raise ValueError("Software generation requires a SoftwareProject-backed Solution")
+    active=await db.scalar(select(SolutionJob).where(SolutionJob.tenant_id==row.tenant_id,SolutionJob.solution_id==row.id,SolutionJob.job_type==SOFTWARE_JOB_TYPE,SolutionJob.status.in_(("queued","running"))).order_by(desc(SolutionJob.attempt)).limit(1))
     if active:return row,active
     attempt=await _next_attempt(db,row.tenant_id,row.id);context=_context(row);owner=context.get("ownerIntent") if isinstance(context.get("ownerIntent"),dict) else {};objective=" ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000];digest=_planning_input_digest(row.name,objective,context);reusable=await _reusable_approved_plan(db,row,digest);source_reference=f"software-plan:{reusable.id}:{reusable.approved_version}" if reusable else f"owner-intent:{row.id}"
     evidence={"objective":objective,"createdBy":user_id,"implementationResolution":context.get("implementationResolution",{}),"planningEngine":PLANNING_ENGINE,"planningInputDigest":digest}
@@ -104,15 +96,14 @@ async def _queue_generation(db,*,row:SolutionRecord,user_id:str,job_type:str)->t
     for key,target in (("parentAgentRunId","parentAgentRunId"),("returnSourceArchive","returnSourceArchive"),("deliveryTarget","deliveryTarget")):
         if request.get(key) is not None:evidence[target]=request.get(key)
     if reusable:evidence.update({"reusedSoftwarePlanId":reusable.id,"reusedSoftwarePlanVersion":reusable.approved_version})
-    job=SolutionJob(tenant_id=row.tenant_id,solution_id=row.id,source_version_reference=source_reference,job_type=job_type,status="queued",attempt=attempt,created_by=user_id,plan_id=reusable.id if reusable else None,log_json="[]",evidence_json=json.dumps(evidence,ensure_ascii=False),idempotency_key=f"solution:{row.id}:generated-build:{attempt}")
-    _append_log(job,"queue","queued","Software Solution queued for durable worker execution")
+    job=SolutionJob(tenant_id=row.tenant_id,solution_id=row.id,source_version_reference=source_reference,job_type=SOFTWARE_JOB_TYPE,status="queued",attempt=attempt,created_by=user_id,plan_id=reusable.id if reusable else None,log_json="[]",evidence_json=json.dumps(evidence,ensure_ascii=False),idempotency_key=f"solution:{row.id}:software-build:{attempt}")
+    _append_log(job,"queue","queued","SoftwareProject Solution queued for durable worker execution")
     if reusable:_append_log(job,"planning","reused",f"Reusing approved SoftwarePlan v{reusable.approved_version}; retry resumes at source generation")
     db.add(job);await db.flush();initial={"status":"queued","stage":"source_generation" if reusable else "planning","jobId":job.id,"attempt":attempt}
     if reusable:initial.update({"softwarePlanId":reusable.id,"softwarePlanVersion":reusable.approved_version,"resumedFromCheckpoint":"planning"})
     context["initialGeneration"]=initial;row.lifecycle_status=LifecycleStatus.BUILDING;row.current_version_reference=None;row.preview_state="unavailable";row.preview_url=None;row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True);await db.flush();return row,job
 
-async def queue_generated_generation(db,*,row:SolutionRecord,user_id:str):return await _queue_generation(db,row=row,user_id=user_id,job_type=GENERATED_JOB_TYPE)
-async def queue_software_generation(db,*,row:SolutionRecord,user_id:str):return await _queue_generation(db,row=row,user_id=user_id,job_type=SOFTWARE_JOB_TYPE)
+async def queue_software_generation(db,*,row:SolutionRecord,user_id:str):return await _queue_generation(db,row=row,user_id=user_id)
 
 async def _create_plan_record(db,job:SolutionJob,row:SolutionRecord,user_id:str)->SoftwarePlanRecord:
     context=_context(row);owner=context.get("ownerIntent") if isinstance(context.get("ownerIntent"),dict) else {};objective=" ".join(str(owner.get("objective") or row.description or "").split()).strip()[:8000];plan=SoftwarePlanRecord(tenant_id=row.tenant_id,prompt=_planning_prompt(row.name,objective,context),created_by=user_id,status="planning");db.add(plan);await db.flush();job.plan_id=plan.id;job.source_version_reference=f"software-plan:{plan.id}:pending";evidence=_evidence(job);evidence["softwarePlanId"]=plan.id;job.evidence_json=json.dumps(evidence,ensure_ascii=False);_append_log(job,"planning","running",f"SoftwarePlan {plan.id} persisted before model planning");context["initialGeneration"]={"status":"running","stage":"planning","jobId":job.id,"attempt":job.attempt,"softwarePlanId":plan.id};row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True);await db.commit();await db.refresh(job);await db.refresh(plan);return plan
@@ -145,9 +136,6 @@ async def _ensure_plan(db,job:SolutionJob,row:SolutionRecord,user_id:str):
     if not plan_row.approved_version:await approve(db,plan_row,plan_row.current_version)
     await db.refresh(plan_row);job.plan_id=plan_row.id;job.source_version_reference=f"software-plan:{plan_row.id}:{plan_row.approved_version}";evidence=_evidence(job);evidence.update({"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version});job.evidence_json=json.dumps(evidence,ensure_ascii=False);_append_log(job,"planning","succeeded",f"SoftwarePlan v{plan_row.approved_version} validated and approved");await db.commit();return plan_row,plan
 
-async def _bind_project(db,project:GeneratedProject,plan_row:SoftwarePlanRecord,plan:SoftwarePlan)->None:
-    project.plan_id=plan_row.id;project.approved_plan_version=plan_row.approved_version;project.architecture_pack="custom";project.vertical="custom";design=plan.design.model_dump() if getattr(plan,"design",None) else {};design.update({"name":project.name,"vertical":"custom"});project.brand_json=json.dumps(design,ensure_ascii=False);project.artifact_graph_json=json.dumps(plan_artifact_graph(plan.model_dump(),project.id,int(project.version or 1),int(plan_row.approved_version or plan_row.current_version)),ensure_ascii=False);await db.flush()
-
 async def _mark_failed(db,job:SolutionJob,row:SolutionRecord,stage:str,error:Exception)->None:
     generic=" ".join(str(error).split())[:1000] or type(error).__name__;context=_context(row);previous=context.get("initialGeneration") if isinstance(context.get("initialGeneration"),dict) else {};safe=" ".join(str(previous.get("failureMessage") or "").split())[:1000] or generic;_append_log(job,stage,"failed",safe);initial=dict(previous);initial.update({"status":"retryable","stage":stage,"error":safe,"jobId":job.id,"attempt":job.attempt});
     if job.plan_id:initial["softwarePlanId"]=job.plan_id
@@ -155,29 +143,21 @@ async def _mark_failed(db,job:SolutionJob,row:SolutionRecord,stage:str,error:Exc
     for key in ("failureClassification","failureMessage","buildId","buildState","runnerEventState","runnerExitCode","repairNumber","runnerAttempt"):
         if initial.get(key) is not None:evidence[key]=initial.get(key)
     job.evidence_json=json.dumps(evidence,ensure_ascii=False)
-    if row.runtime_type==RuntimeType.SOFTWARE_PROJECT:
-        project=await db.get(SoftwareProjectRecord,row.runtime_reference)
-        if project and project.tenant_id==row.tenant_id:project.state="failed"
+    project=await db.get(SoftwareProjectRecord,row.runtime_reference)
+    if project and project.tenant_id==row.tenant_id:project.state="failed"
     await db.commit()
 
 async def process_generation_job(db,job:SolutionJob)->None:
     row=await db.get(SolutionRecord,job.solution_id)
     if row is None or row.tenant_id!=job.tenant_id:raise LookupError("Software Solution job lost its Solution record")
-    runtime_type=RuntimeType(row.runtime_type)
-    if runtime_type not in {RuntimeType.GENERATED_PROJECT,RuntimeType.SOFTWARE_PROJECT}:raise ValueError("Software generation worker accepts only generated_project or software_project Solutions")
-    legacy_project=None;canonical_project=None
-    if runtime_type==RuntimeType.GENERATED_PROJECT:
-        legacy_project=await db.get(GeneratedProject,row.runtime_reference)
-        if legacy_project is None or legacy_project.tenant_id!=row.tenant_id:raise LookupError("Generated Solution runtime is missing")
-    else:
-        canonical_project=await db.get(SoftwareProjectRecord,row.runtime_reference)
-        if canonical_project is None or canonical_project.tenant_id!=row.tenant_id:raise LookupError("SoftwareProject runtime is missing")
+    if RuntimeType(row.runtime_type)!=RuntimeType.SOFTWARE_PROJECT:raise ValueError("Software generation worker accepts only SoftwareProject Solutions")
+    canonical_project=await db.get(SoftwareProjectRecord,row.runtime_reference)
+    if canonical_project is None or canonical_project.tenant_id!=row.tenant_id:raise LookupError("SoftwareProject runtime is missing")
     user_id=job.created_by or str(_evidence(job).get("createdBy") or "")
     if not user_id:raise ValueError("Software Solution job is missing its creating principal")
     stage="planning";final_source=None
     try:
         plan_row,plan=await _ensure_plan(db,job,row,user_id)
-        if legacy_project is not None:await _bind_project(db,legacy_project,plan_row,plan)
         context=_context(row);context["softwarePlan"]={"id":plan_row.id,"version":plan_row.approved_version,"status":plan_row.status};context["initialGeneration"]={"status":"running","stage":"source_generation","jobId":job.id,"attempt":job.attempt,"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version};row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True);job.status="running";_append_log(job,"source_generation","running","Generating executable source from the approved requirement ledger");await db.commit();stage="source_generation";last_progress=None
         async def generation_progress(next_stage:str,status:str,payload:dict[str,Any])->None:
             nonlocal stage,last_progress
@@ -192,11 +172,9 @@ async def process_generation_job(db,job:SolutionJob)->None:
             await db.commit()
         build,source,repairs=await build_with_repair(db,row.tenant_id,user_id,plan_row,plan,job.idempotency_key,adapter=ExternalRunnerAdapter(),progress_callback=generation_progress);final_source=source;job.source_version_reference=str(source.source_version)
         if build.state!="preview_ready":raise RuntimeError(f"Generated build did not reach preview_ready: {build.failure_classification or build.state or 'software_build_failed'}")
-        canonical_source=None
-        if canonical_project is not None:
-            provenance=json.loads(source.provenance_json or "{}") if getattr(source,"provenance_json",None) else {};provenance.update({"canonicalSoftwareProjectId":canonical_project.id,"runnerAdapter":True});source.provenance_json=json.dumps(provenance,ensure_ascii=False,sort_keys=True)
-            canonical_source=await SoftwareSourceService().import_generated(db,tenant_id=row.tenant_id,project_id=canonical_project.id,source=source,originating_run_id=str(_evidence(job).get("parentAgentRunId") or "") or None);canonical_project.active_source_version_id=canonical_source.id;canonical_project.active_runtime_id=canonical_source.runtime_profile;canonical_project.state="preview_ready";job.source_version_reference=canonical_source.id
-        stage="preview_readiness";_append_log(job,"build","succeeded",f"Isolated build {build.id} completed");_append_log(job,"acceptance_test","succeeded","Build, tests, health and acceptance checks passed");_append_log(job,stage,"succeeded","Verified isolated preview is active");context=_context(row);context["initialGeneration"]={"status":"applied","stage":stage,"jobId":job.id,"attempt":job.attempt,"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version,"sourceBundleId":source.id,"sourceVersion":source.source_version,"canonicalSourceVersionId":canonical_source.id if canonical_source else None,"buildId":build.id,"repairCount":len(repairs)};row.lifecycle_status=LifecycleStatus.PREVIEW_READY;row.current_version_reference=canonical_source.id if canonical_source else str(source.source_version);row.preview_state="ready";row.preview_url="/api/solutions/{solution_id}/preview";row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True);job.status="succeeded";job.ended_at=datetime.utcnow();job.failure_classification=None;job.locked_by=None;job.lease_expires_at=None;job.heartbeat_at=None;evidence=_evidence(job);evidence.update({"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version,"sourceBundleId":source.id,"sourceVersion":source.source_version,"canonicalSourceVersionId":canonical_source.id if canonical_source else None,"buildId":build.id,"buildState":build.state,"repairs":repairs});job.evidence_json=json.dumps(evidence,ensure_ascii=False);await db.commit();await finalize_software_job(db,job=job,solution=row,generated_source=source)
+        provenance=json.loads(source.provenance_json or "{}") if getattr(source,"provenance_json",None) else {};provenance.update({"canonicalSoftwareProjectId":canonical_project.id,"runnerAdapter":True});source.provenance_json=json.dumps(provenance,ensure_ascii=False,sort_keys=True)
+        canonical_source=await SoftwareSourceService().import_generated(db,tenant_id=row.tenant_id,project_id=canonical_project.id,source=source,originating_run_id=str(_evidence(job).get("parentAgentRunId") or "") or None);canonical_project.active_source_version_id=canonical_source.id;canonical_project.active_runtime_id=canonical_source.runtime_profile;canonical_project.state="preview_ready";job.source_version_reference=canonical_source.id
+        stage="preview_readiness";_append_log(job,"build","succeeded",f"Isolated build {build.id} completed");_append_log(job,"acceptance_test","succeeded","Build, tests, health and acceptance checks passed");_append_log(job,stage,"succeeded","Verified isolated preview is active");context=_context(row);context["initialGeneration"]={"status":"applied","stage":stage,"jobId":job.id,"attempt":job.attempt,"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version,"sourceBundleId":source.id,"sourceVersion":source.source_version,"canonicalSourceVersionId":canonical_source.id,"buildId":build.id,"repairCount":len(repairs)};row.lifecycle_status=LifecycleStatus.PREVIEW_READY;row.current_version_reference=canonical_source.id;row.preview_state="ready";row.preview_url="/api/solutions/{solution_id}/preview";row.context_json=json.dumps(context,ensure_ascii=False,sort_keys=True);job.status="succeeded";job.ended_at=datetime.utcnow();job.failure_classification=None;job.locked_by=None;job.lease_expires_at=None;job.heartbeat_at=None;evidence=_evidence(job);evidence.update({"softwarePlanId":plan_row.id,"softwarePlanVersion":plan_row.approved_version,"sourceBundleId":source.id,"sourceVersion":source.source_version,"canonicalSourceVersionId":canonical_source.id,"buildId":build.id,"buildState":build.state,"repairs":repairs});job.evidence_json=json.dumps(evidence,ensure_ascii=False);await db.commit();await finalize_software_job(db,job=job,solution=row,generated_source=source)
     except Exception as error:
         await _mark_failed(db,job,row,stage,error)
         await finalize_software_job(db,job=job,solution=row,generated_source=final_source)
@@ -204,7 +182,7 @@ async def process_generation_job(db,job:SolutionJob)->None:
 async def claim_next_generation_job(worker_id:str)->str|None:
     now=datetime.utcnow();lease_until=now+timedelta(seconds=_lease_seconds())
     async with SessionFactory() as db:
-        statement=select(SolutionJob).where(SolutionJob.job_type.in_(SUPPORTED_JOB_TYPES),SolutionJob.cancellation_requested.is_(False),or_(SolutionJob.status=="queued",and_(SolutionJob.status=="running",SolutionJob.lease_expires_at.is_not(None),SolutionJob.lease_expires_at<now))).order_by(SolutionJob.queued_at,SolutionJob.created_at).limit(1).with_for_update(skip_locked=True);job=await db.scalar(statement)
+        statement=select(SolutionJob).where(SolutionJob.job_type==SOFTWARE_JOB_TYPE,SolutionJob.cancellation_requested.is_(False),or_(SolutionJob.status=="queued",and_(SolutionJob.status=="running",SolutionJob.lease_expires_at.is_not(None),SolutionJob.lease_expires_at<now))).order_by(SolutionJob.queued_at,SolutionJob.created_at).limit(1).with_for_update(skip_locked=True);job=await db.scalar(statement)
         if job is None:return None
         reclaimed=job.status=="running";job.status="running";job.started_at=job.started_at or now;job.locked_by=worker_id;job.heartbeat_at=now;job.lease_expires_at=lease_until;_append_log(job,"worker_lease","reclaimed" if reclaimed else "claimed","Expired worker lease reclaimed after interruption" if reclaimed else f"Claimed by {worker_id}");await db.commit();return job.id
 

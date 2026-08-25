@@ -1,8 +1,4 @@
-"""Canonical immutable source persistence for SoftwareProject.
-
-Source is durable backend state.  Legacy Studio/generated bundles can be imported
-without becoming writable authorities; sandboxes only receive materialized copies.
-"""
+"""Canonical immutable source persistence for SoftwareProject."""
 from __future__ import annotations
 
 import hashlib
@@ -11,8 +7,8 @@ from typing import Any, Mapping
 
 from sqlalchemy import func, select
 
-from packages.custom_software.source_bundles import MAX_BYTES, MAX_FILES, normalized_path
 from packages.database.software_project_models import SoftwareProjectRecord, SoftwareSourceVersionRecord
+from packages.software_projects.source_bundle import MAX_BYTES, MAX_FILES, normalized_path
 
 
 class SoftwareSourceError(ValueError):
@@ -124,8 +120,6 @@ class SoftwareSourceService:
         change_summary: str = "",
         originating_run_id: str | None = None,
         parent_source_id: str | None = None,
-        legacy_source_type: str | None = None,
-        legacy_source_reference: str | None = None,
     ) -> SoftwareSourceVersionRecord:
         project = await db.scalar(
             select(SoftwareProjectRecord).where(
@@ -136,20 +130,9 @@ class SoftwareSourceService:
         if project is None:
             raise LookupError("Software project not found")
 
-        if legacy_source_type and legacy_source_reference:
-            existing = await db.scalar(
-                select(SoftwareSourceVersionRecord).where(
-                    SoftwareSourceVersionRecord.tenant_id == tenant_id,
-                    SoftwareSourceVersionRecord.legacy_source_type == legacy_source_type,
-                    SoftwareSourceVersionRecord.legacy_source_reference == legacy_source_reference,
-                )
-            )
-            if existing is not None:
-                return existing
-
         records, manifest, digest = _canonical_records(files)
         current = await self.latest(db, tenant_id, project_id)
-        if current is not None and current.bundle_digest == digest and not legacy_source_reference:
+        if current is not None and current.bundle_digest == digest:
             return current
         source_version = int(
             await db.scalar(
@@ -171,8 +154,6 @@ class SoftwareSourceService:
             provenance_json=json.dumps(dict(provenance or {}), ensure_ascii=False, sort_keys=True, default=str),
             change_summary=str(change_summary or "")[:2000],
             originating_run_id=str(originating_run_id or "")[:160] or None,
-            legacy_source_type=str(legacy_source_type or "")[:40] or None,
-            legacy_source_reference=str(legacy_source_reference or "")[:120] or None,
             created_by=str(user_id or "")[:120],
         )
         db.add(row)
@@ -182,7 +163,16 @@ class SoftwareSourceService:
         await db.flush()
         return row
 
-    async def import_generated(self, db, *, tenant_id: str, project_id: str, source, originating_run_id: str | None = None):
+    async def import_generated(
+        self,
+        db,
+        *,
+        tenant_id: str,
+        project_id: str,
+        source,
+        originating_run_id: str | None = None,
+    ) -> SoftwareSourceVersionRecord:
+        """Import a verified isolated-runner bundle into canonical source authority."""
         records = _json(getattr(source, "files_json", None), [])
         files = {
             str(item.get("path") or ""): str(item.get("content") or "")
@@ -199,32 +189,6 @@ class SoftwareSourceService:
             files=files,
             runtime_profile=runtime,
             provenance=provenance if isinstance(provenance, dict) else {},
-            change_summary=str((provenance if isinstance(provenance, dict) else {}).get("summary") or "Imported generated source"),
+            change_summary=str((provenance if isinstance(provenance, dict) else {}).get("summary") or "Imported verified runner source"),
             originating_run_id=originating_run_id,
-            legacy_source_type="generated_source_bundle",
-            legacy_source_reference=str(source.id),
-        )
-
-    async def import_studio(self, db, *, tenant_id: str, project_id: str, source):
-        records = _json(getattr(source, "files_json", None), [])
-        if isinstance(records, dict):
-            files = {str(path): str(content) for path, content in records.items()}
-        else:
-            files = {
-                str(item.get("path") or ""): str(item.get("content") or "")
-                for item in records
-                if isinstance(item, dict) and item.get("path")
-            }
-        provenance = _json(getattr(source, "provenance_json", None), {})
-        return await self.persist(
-            db,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            user_id=str(getattr(source, "created_by", "") or ""),
-            files=files,
-            runtime_profile="static-web-js",
-            provenance=provenance if isinstance(provenance, dict) else {},
-            change_summary=str(getattr(source, "change_summary", "") or "Imported Studio source"),
-            legacy_source_type="studio_source_version",
-            legacy_source_reference=str(source.id),
         )

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -9,30 +10,16 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
-from packages.actions.service import ActionService
 from packages.business.service import BusinessService
-from packages.capabilities.agent_harness import ROLE_AUTHORITY
-from packages.capabilities.defaults import default_registry
 from packages.company.events import append_event
-from packages.database.product_models import (
-    SolutionDeployment,
-    SolutionDomain,
-    SolutionImprovementProposal,
-    SolutionJob,
-)
-from packages.solutions import SolutionService, SolutionType
+from packages.database.product_models import SolutionDeployment, SolutionDomain, SolutionJob
+from packages.solutions import SolutionService
 from packages.solutions.composer import create_solution_from_intent
-from packages.solutions.operations import PresenceOperationsService, proposal_json
 from packages.solutions.production import ProductionService, job_json
 from packages.solutions.service import solution_json
 
 router = APIRouter(prefix="/api/solutions", tags=["solutions"])
 service = SolutionService()
-
-
-class CreateSolutionInput(BaseModel):
-    solution_type: str = Field(default=SolutionType.DIGITAL_PRESENCE)
-    name: str | None = Field(default=None, max_length=200)
 
 
 class ComposeSolutionInput(BaseModel):
@@ -59,38 +46,12 @@ async def list_solutions(
     return [solution_json(row) for row in rows]
 
 
-@router.post("")
-async def create_solution(
-    payload: CreateSolutionInput,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    """Legacy Digital Presence endpoint retained for existing clients."""
-    if payload.solution_type != SolutionType.DIGITAL_PRESENCE:
-        raise HTTPException(
-            status_code=422,
-            detail="Use /api/solutions/compose for intent-driven Solution creation",
-        )
-    try:
-        row = await service.create_presence(
-            db,
-            auth.tenant.id,
-            auth.user.id,
-            payload.name,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    await db.commit()
-    return solution_json(row)
-
-
 @router.post("/compose", status_code=201)
 async def compose_solution(
     payload: ComposeSolutionInput,
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Classify owner intent before selecting/creating the Solution runtime."""
     if auth.role != "owner":
         raise HTTPException(status_code=403, detail="Only owners can create Solutions")
     try:
@@ -142,14 +103,9 @@ async def approve_solution(
     db: AsyncSession = Depends(get_db),
 ):
     if auth.role != "owner":
-        raise HTTPException(status_code=403, detail="Only owners can publish a business presence")
+        raise HTTPException(status_code=403, detail="Only owners can publish a Solution")
     try:
-        job, row = await service.approve(
-            db,
-            auth.tenant.id,
-            solution_id,
-            auth.user.id,
-        )
+        job, row = await service.approve(db, auth.tenant.id, solution_id, auth.user.id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
@@ -194,92 +150,6 @@ async def solution_jobs(
     return [job_json(row) for row in rows]
 
 
-@router.post("/{solution_id}/observe")
-async def observe_solution(
-    solution_id: str,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        result = await PresenceOperationsService(service).observe(
-            db,
-            auth.tenant.id,
-            solution_id,
-            force=True,
-        )
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    await db.commit()
-    return result
-
-
-@router.get("/{solution_id}/improvements")
-async def solution_improvements(
-    solution_id: str,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        await service.get(db, auth.tenant.id, solution_id)
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    rows = (
-        await db.scalars(
-            select(SolutionImprovementProposal)
-            .where(
-                SolutionImprovementProposal.tenant_id == auth.tenant.id,
-                SolutionImprovementProposal.solution_id == solution_id,
-            )
-            .order_by(desc(SolutionImprovementProposal.created_at))
-        )
-    ).all()
-    return [proposal_json(row) for row in rows]
-
-
-@router.post("/{solution_id}/improvements/{proposal_id}/review")
-async def review_improvement(
-    solution_id: str,
-    proposal_id: str,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    if auth.role != "owner":
-        raise HTTPException(status_code=403, detail="Only owners can approve a website change")
-    proposal = await db.scalar(
-        select(SolutionImprovementProposal).where(
-            SolutionImprovementProposal.id == proposal_id,
-            SolutionImprovementProposal.solution_id == solution_id,
-            SolutionImprovementProposal.tenant_id == auth.tenant.id,
-        )
-    )
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Improvement proposal not found")
-
-    action = await ActionService(
-        db,
-        default_registry(),
-        authority=set(ROLE_AUTHORITY["owner"]),
-        actor_id=auth.user.id,
-    ).propose(
-        tenant_id=auth.tenant.id,
-        objective=proposal.expected_outcome,
-        capability="solution.apply_improvement",
-        arguments={"proposal_id": proposal.id},
-        rationale=proposal.issue,
-        expected_outcome=proposal.expected_outcome,
-        risk_level=proposal.risk,
-        idempotency_key=f"proposal:{proposal.id}:approval",
-    )
-    proposal.action_id = action.id
-    await db.commit()
-    return {
-        "proposal": proposal_json(proposal),
-        "action_id": action.id,
-        "approval_id": action.approval_id,
-        "status": action.status,
-    }
-
-
 @router.post("/{solution_id}/rollback")
 async def rollback_solution(
     solution_id: str,
@@ -288,7 +158,7 @@ async def rollback_solution(
     db: AsyncSession = Depends(get_db),
 ):
     if auth.role != "owner":
-        raise HTTPException(status_code=403, detail="Only owners can roll back a business presence")
+        raise HTTPException(status_code=403, detail="Only owners can roll back a Solution")
     try:
         job, row = await ProductionService(service).rollback(
             db,
@@ -323,8 +193,6 @@ async def solution_domains(
             )
         )
     ).all()
-    import json
-
     return [
         {
             "id": row.id,
@@ -359,8 +227,6 @@ async def request_domain(
         )
     )
     if existing:
-        import json
-
         return {
             "id": existing.id,
             "domain": domain,
@@ -368,8 +234,6 @@ async def request_domain(
             "dns_requirements": json.loads(existing.dns_requirements_json),
             "ssl_state": existing.ssl_state,
         }
-
-    import json
 
     requirements = {
         "type": "CNAME",
@@ -396,7 +260,7 @@ async def request_domain(
     }
 
 
-public_router = APIRouter(tags=["published presence"])
+public_router = APIRouter(tags=["published solution"])
 
 
 @public_router.post(
@@ -437,10 +301,7 @@ async def published_presence_form(
     email = values.get("email", "").strip()
     message = values.get("message", "").strip()
     if not name or not email or not message:
-        raise HTTPException(
-            status_code=422,
-            detail="Name, email, and message are required",
-        )
+        raise HTTPException(status_code=422, detail="Name, email, and message are required")
 
     contact = await BusinessService.create_contact(
         db,
@@ -459,7 +320,6 @@ async def published_presence_form(
         next_action=message[:2000],
         actor="published_presence",
     )
-
     event = await append_event(
         db,
         tenant_id=deployment.tenant_id,
@@ -510,26 +370,20 @@ async def published_presence(
         .order_by(desc(SolutionDeployment.deployed_at))
     )
     if not deployment:
-        raise HTTPException(status_code=404, detail="Published presence not found")
+        raise HTTPException(status_code=404, detail="Published Solution not found")
 
     root_value = os.getenv("OPERLY_DEPLOYMENT_ROOT", "")
     if not root_value:
-        raise HTTPException(
-            status_code=503,
-            detail="Published presence storage is unavailable",
-        )
+        raise HTTPException(status_code=503, detail="Published Solution storage is unavailable")
     root = Path(root_value).resolve()
     artifact = Path(deployment.artifact_reference).resolve()
     if root not in artifact.parents or not artifact.is_file():
-        raise HTTPException(
-            status_code=503,
-            detail="Published presence artifact is unavailable",
-        )
+        raise HTTPException(status_code=503, detail="Published Solution artifact is unavailable")
     return FileResponse(
         artifact,
         media_type="text/html",
         headers={
-            "Content-Security-Policy": "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "public, max-age=60",
         },
