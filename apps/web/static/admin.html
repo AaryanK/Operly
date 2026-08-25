@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="description" content="Operly platform administration">
+  <link rel="icon" type="image/png" href="/static/operly-logo.png">
+  <title>Operly · Platform Admin</title>
+  <link rel="stylesheet" href="/static/admin.css?v=20260825-platform-admin-v1">
+</head>
+<body>
+  <section id="admin-login" class="admin-login hidden" aria-labelledby="admin-login-title">
+    <div class="login-glow" aria-hidden="true"></div>
+    <form id="admin-login-form" class="login-card" autocomplete="on">
+      <div class="admin-brand"><img src="/static/operly-logo.png" alt="Operly"><span>OPERLY</span></div>
+      <div class="eyebrow">Platform administration</div>
+      <h1 id="admin-login-title">Owner console</h1>
+      <p>Sign in with the account configured by <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code>.</p>
+      <label>Email<input id="admin-email" type="email" autocomplete="username" required></label>
+      <label>Password<input id="admin-password" type="password" autocomplete="current-password" required></label>
+      <div id="admin-login-error" class="notice error hidden" role="alert"></div>
+      <button id="admin-login-submit" type="submit" class="primary-button">Open admin dashboard</button>
+      <a class="quiet-link" href="/">Back to Operly</a>
+    </form>
+  </section>
+
+  <div id="admin-loading" class="loading-screen">
+    <img src="/static/operly-logo.png" alt="">
+    <strong>OPERLY ADMIN</strong>
+    <span>Loading platform state…</span>
+  </div>
+
+  <div id="admin-app" class="admin-app hidden">
+    <aside class="admin-sidebar">
+      <div class="admin-brand sidebar-brand"><img src="/static/operly-logo.png" alt="Operly"><span>OPERLY</span></div>
+      <div class="sidebar-caption">Platform admin</div>
+      <nav aria-label="Admin sections">
+        <button class="nav-item active" data-admin-tab="overview"><span>⌁</span>Overview</button>
+        <button class="nav-item" data-admin-tab="users"><span>◎</span>Users</button>
+        <button class="nav-item" data-admin-tab="workspaces"><span>◇</span>Workspaces</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="admin-identity"><span class="identity-dot"></span><div><strong id="admin-name">Admin</strong><small id="admin-email-label"></small></div></div>
+        <button id="admin-logout" class="ghost-button">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <header class="admin-topbar">
+        <div>
+          <div class="eyebrow">Operly platform</div>
+          <h1 id="admin-page-title">Overview</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="generated-at" class="generated-at"></span>
+          <button id="admin-refresh" class="ghost-button">Refresh</button>
+        </div>
+      </header>
+
+      <div class="admin-content">
+        <section id="admin-tab-overview" class="admin-tab">
+          <div class="metric-grid">
+            <article class="metric-card"><span>Users</span><strong data-metric="users">—</strong><small><b data-metric="signups_today">—</b> new today</small></article>
+            <article class="metric-card"><span>Active now</span><strong data-metric="active_now">—</strong><small>last 15 minutes</small></article>
+            <article class="metric-card"><span>DAU</span><strong data-metric="dau">—</strong><small>last 24 hours</small></article>
+            <article class="metric-card"><span>WAU</span><strong data-metric="wau">—</strong><small>last 7 days</small></article>
+            <article class="metric-card"><span>MAU</span><strong data-metric="mau">—</strong><small>last 30 days</small></article>
+            <article class="metric-card"><span>Workspaces</span><strong data-metric="workspaces">—</strong><small><b data-metric="memberships">—</b> memberships</small></article>
+          </div>
+
+          <div class="dashboard-grid wide-left">
+            <article class="panel chart-panel">
+              <div class="panel-heading"><div><span class="panel-kicker">Growth</span><h2>Signups & sign-ins</h2></div><span class="panel-meta">30 days</span></div>
+              <div id="activity-chart" class="activity-chart" aria-label="30 day signup and sign-in chart"></div>
+              <div class="chart-legend"><span><i class="legend-signups"></i>Signups</span><span><i class="legend-signins"></i>Sign-ins</span></div>
+            </article>
+
+            <article class="panel health-panel">
+              <div class="panel-heading"><div><span class="panel-kicker">Accounts</span><h2>Account health</h2></div></div>
+              <div class="health-stat"><span>Active accounts</span><strong data-metric="active_accounts">—</strong></div>
+              <div class="health-stat"><span>Verified users</span><strong data-metric="verified_users">—</strong></div>
+              <div class="health-meter"><div id="verified-meter"></div></div>
+              <p id="verified-copy" class="panel-note">Waiting for account data.</p>
+            </article>
+          </div>
+
+          <div class="dashboard-grid even">
+            <article class="panel geography-panel">
+              <div class="panel-heading"><div><span class="panel-kicker">Geography</span><h2>Where users are active</h2></div><span id="geo-coverage" class="panel-meta">—</span></div>
+              <div id="geo-cloud" class="geo-cloud"></div>
+              <div id="country-list" class="country-list"></div>
+              <p class="panel-note">Country is derived from trusted edge headers. Operly analytics does not store raw IP addresses.</p>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading"><div><span class="panel-kicker">Product</span><h2>Top app paths</h2></div><span class="panel-meta">30 days</span></div>
+              <div id="top-paths" class="path-list"></div>
+            </article>
+          </div>
+
+          <article class="panel">
+            <div class="panel-heading"><div><span class="panel-kicker">Newest accounts</span><h2>Recent signups</h2></div><button class="text-button" data-admin-tab="users">View all users →</button></div>
+            <div id="recent-users" class="recent-users"></div>
+          </article>
+        </section>
+
+        <section id="admin-tab-users" class="admin-tab hidden">
+          <div class="section-toolbar"><div><span class="panel-kicker">Accounts</span><h2>Users</h2><p>Platform-wide account state, activity, location and workspace membership.</p></div><label class="search-field"><span>Search</span><input id="user-search" type="search" placeholder="Name, email, country…"></label></div>
+          <article class="panel table-panel"><div id="users-table" class="data-table"></div></article>
+        </section>
+
+        <section id="admin-tab-workspaces" class="admin-tab hidden">
+          <div class="section-toolbar"><div><span class="panel-kicker">Tenancy</span><h2>Workspaces</h2><p>Every Operly workspace and the users currently attached to it.</p></div></div>
+          <div id="workspace-grid" class="workspace-grid"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/admin.js?v=20260825-platform-admin-v1"></script>
+</body>
+</html>
