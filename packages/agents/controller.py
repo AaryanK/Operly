@@ -6,6 +6,11 @@ import json
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from packages.agents.persistence import (
+    checkpoint_agent_run,
+    find_resumable_agent_run,
+    load_agent_run,
+)
 from packages.agents.planning import AdaptivePlanner
 from packages.agents.run_state import CompactRunState
 from packages.agents.runtime import AgentRuntime, ObservationHook
@@ -65,12 +70,29 @@ def _replan_reason(result: dict[str, Any], state: CompactRunState) -> str | None
     return None
 
 
+def _lifecycle_state(result: dict[str, Any]) -> str:
+    truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
+    status = str((truth or {}).get("status") or "").upper()
+    if status == "WAITING_APPROVAL":
+        return "waiting_approval"
+    if status in {"FAILED", "UNVERIFIED", "CANCELLED", "EXPIRED"}:
+        return "failed"
+    if bool(result.get("stopped")):
+        return "failed"
+    return "completed"
+
+
+def _resumable_state(value: str) -> bool:
+    return str(value or "").lower() in {"running", "waiting_approval", "failed"}
+
+
 class AgentRunController:
     """Plan only when useful, run the micro-loop, compact state, and replan on evidence.
 
     The controller owns operational state rather than hidden model reasoning. It does
     not widen authority: capability/context access remains entirely in the supplied
-    harness callbacks and canonical firewall.
+    harness callbacks and canonical firewall. Durable checkpoints use the same
+    runtime_run_id for Operly AI, Studio, MCP and workflow-triggered runs.
     """
 
     def __init__(
@@ -95,13 +117,57 @@ class AgentRunController:
         inference_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         metadata = dict(inference_metadata or {})
-        runtime_run_id = str(metadata.get("runtime_run_id") or uuid4())
+        requested_run_id = str(metadata.get("runtime_run_id") or "").strip()
+        existing = None
+        if requested_run_id:
+            runtime_run_id = requested_run_id
+            existing = await load_agent_run(runtime_run_id, metadata=metadata)
+        else:
+            existing = await find_resumable_agent_run(objective=objective, metadata=metadata)
+            runtime_run_id = str((existing or {}).get("run_id") or uuid4())
         metadata["runtime_run_id"] = runtime_run_id
         metadata["runtime_controller"] = "adaptive"
 
-        plan = await self.planner.plan(objective, trace_metadata=metadata)
-        state = CompactRunState(objective=objective, plan=plan)
-        _replace_runtime_state_message(messages, state)
+        resumed = False
+        if existing is not None and str(existing.get("state") or "").lower() == "completed":
+            raise RuntimeError("Durable agent run is already completed; reuse its artifacts/results instead of repeating side effects")
+        if existing is not None and _resumable_state(existing.get("state") or ""):
+            checkpoint = existing.get("checkpoint") if isinstance(existing.get("checkpoint"), dict) else {}
+            state = CompactRunState.from_dict(checkpoint, fallback_objective=objective)
+            if state.objective and objective and state.objective.strip() != objective.strip():
+                raise ValueError("Durable agent run objective does not match the requested resume objective")
+            if state.plan is None:
+                state.plan = await self.planner.plan(objective, trace_metadata=metadata)
+            resumed = True
+            _replace_runtime_state_message(messages, state)
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="run.resumed",
+                lifecycle_state="running",
+                payload={
+                    "previous_state": existing.get("state"),
+                    "checkpoint_revision": state.revision,
+                    "artifact_refs": sorted(state.artifact_refs)[-50:],
+                    "pending_approval_ids": sorted(state.pending_approval_ids)[-20:],
+                    "implicit_resume": not bool(requested_run_id),
+                },
+            )
+        else:
+            plan = await self.planner.plan(objective, trace_metadata=metadata)
+            state = CompactRunState(objective=objective, plan=plan)
+            _replace_runtime_state_message(messages, state)
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="run.started",
+                lifecycle_state="running",
+                payload={"plan": state.plan.as_dict() if state.plan else None},
+            )
 
         async def observe(
             capability_id: str,
@@ -109,52 +175,113 @@ class AgentRunController:
             observation: dict[str, Any],
         ) -> None:
             state.record_observation(capability_id, observation)
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="capability.observed",
+                lifecycle_state=(
+                    "waiting_approval"
+                    if str(observation.get("status") or "").upper() == "WAITING_APPROVAL"
+                    else "running"
+                ),
+                payload={
+                    "capability_id": capability_id,
+                    "argument_keys": sorted(arguments),
+                    "observation": observation,
+                },
+            )
             if on_observation is not None:
-                # Preserve AgentRuntime's observation-hook contract exactly. The
-                # controller may summarize state, but it must not erase caller data.
                 await _resolve(on_observation(capability_id, arguments, observation))
 
         attempts: list[dict[str, Any]] = []
         combined_trace = []
         replans = 0
 
-        while True:
-            result = await AgentRuntime(max_steps=max_steps).run(
-                model=model,
-                messages=messages,
-                schemas=schemas,
-                invoke=invoke,
-                on_observation=observe,
-                inference_metadata={
-                    **metadata,
-                    "plan_revision": state.plan.revision if state.plan else 0,
-                },
-            )
-            combined_trace.extend(result.get("trace") or [])
-            attempts.append(
-                {
-                    "plan_revision": state.plan.revision if state.plan else 0,
-                    "stop_reason": result.get("stop_reason"),
-                    "stopped": bool(result.get("stopped")),
-                    "execution_truth": result.get("execution_truth"),
-                    "budget": result.get("budget") or {},
-                }
-            )
+        try:
+            while True:
+                result = await AgentRuntime(max_steps=max_steps).run(
+                    model=model,
+                    messages=messages,
+                    schemas=schemas,
+                    invoke=invoke,
+                    on_observation=observe,
+                    inference_metadata={
+                        **metadata,
+                        "plan_revision": state.plan.revision if state.plan else 0,
+                        "resumed": resumed,
+                    },
+                )
+                combined_trace.extend(result.get("trace") or [])
+                attempts.append(
+                    {
+                        "plan_revision": state.plan.revision if state.plan else 0,
+                        "stop_reason": result.get("stop_reason"),
+                        "stopped": bool(result.get("stopped")),
+                        "execution_truth": result.get("execution_truth"),
+                        "budget": result.get("budget") or {},
+                    }
+                )
 
-            reason = _replan_reason(result, state)
-            if not reason or replans >= self.max_replans:
-                result["trace"] = combined_trace
-                result["run_plan"] = state.plan.as_dict() if state.plan else None
-                result["run_state"] = state.as_dict()
-                result["controller_attempts"] = attempts
-                result["replans"] = replans
-                result["runtime_run_id"] = runtime_run_id
-                return result
+                reason = _replan_reason(result, state)
+                if not reason or replans >= self.max_replans:
+                    result["trace"] = combined_trace
+                    result["run_plan"] = state.plan.as_dict() if state.plan else None
+                    result["run_state"] = state.as_dict()
+                    result["controller_attempts"] = attempts
+                    result["replans"] = replans
+                    result["runtime_run_id"] = runtime_run_id
+                    result["resumed"] = resumed
+                    lifecycle = _lifecycle_state(result)
+                    await checkpoint_agent_run(
+                        runtime_run_id=runtime_run_id,
+                        objective=objective,
+                        metadata=metadata,
+                        state=state.as_dict(),
+                        event_type="run.finished",
+                        lifecycle_state=lifecycle,
+                        payload={
+                            "execution_truth": result.get("execution_truth"),
+                            "stop_reason": result.get("stop_reason"),
+                            "stopped": bool(result.get("stopped")),
+                            "replans": replans,
+                            "budget": result.get("budget") or {},
+                            "resumed": resumed,
+                        },
+                        error=(
+                            str(result.get("stop_reason") or "run failed")
+                            if lifecycle == "failed"
+                            else None
+                        ),
+                    )
+                    return result
 
-            state.plan = await self.planner.replan(
-                state,
-                reason=reason,
-                trace_metadata=metadata,
+                state.plan = await self.planner.replan(
+                    state,
+                    reason=reason,
+                    trace_metadata=metadata,
+                )
+                replans += 1
+                _replace_runtime_state_message(messages, state)
+                await checkpoint_agent_run(
+                    runtime_run_id=runtime_run_id,
+                    objective=objective,
+                    metadata=metadata,
+                    state=state.as_dict(),
+                    event_type="run.replanned",
+                    lifecycle_state="running",
+                    payload={"reason": reason, "replans": replans, "plan": state.plan.as_dict()},
+                )
+        except Exception as error:
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="run.failed",
+                lifecycle_state="failed",
+                payload={"error_type": type(error).__name__, "resumed": resumed},
+                error=str(error),
             )
-            replans += 1
-            _replace_runtime_state_message(messages, state)
+            raise

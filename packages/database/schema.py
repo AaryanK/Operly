@@ -1,12 +1,13 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0040_business_event_scope"
+ALEMBIC_HEAD = "0041_agent_artifacts"
 
 
 def import_all_models() -> None:
     from packages.database import models  # noqa: F401
     from packages.database import operations_models  # noqa: F401
     from packages.database import agent_models  # noqa: F401
+    from packages.database import artifact_models  # noqa: F401
     from packages.database import business_models  # noqa: F401
     from packages.database import studio_models  # noqa: F401
     from packages.database import studio_source_models  # noqa: F401

@@ -1,0 +1,82 @@
+name: unified-agent-runtime
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/artifact_router.py"
+      - "apps/api/system_router.py"
+      - "apps/sandbox_runner/**"
+      - "packages/agent_computer/**"
+      - "packages/agents/**"
+      - "packages/artifacts/**"
+      - "packages/business_brain/attachments/**"
+      - "packages/capabilities/artifact_provider.py"
+      - "packages/capabilities/computer_provider.py"
+      - "packages/capabilities/file_runtime_provider.py"
+      - "packages/capabilities/gmail_artifact_provider.py"
+      - "packages/capabilities/defaults.py"
+      - "packages/capabilities/contracts.py"
+      - "packages/database/artifact_models.py"
+      - "packages/database/schema.py"
+      - "packages/connectors/google_provider.py"
+      - "packages/security/execution_context.py"
+      - "packages/security/permissions.py"
+      - "requirements.txt"
+      - "alembic/versions/0041_agent_artifacts.py"
+      - "tests/test_file_runtime_provider.py"
+      - "tests/test_unified_agent_artifact_runtime.py"
+      - "tests/test_agent_computer_storage_ingress_resume.py"
+      - ".github/workflows/unified-agent-runtime.yml"
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile unified runtime
+        run: >-
+          python -m py_compile
+          apps/api/artifact_router.py
+          apps/api/system_router.py
+          packages/agent_computer/runner_client.py
+          packages/agents/controller.py
+          packages/agents/persistence.py
+          packages/agents/run_state.py
+          packages/artifacts/blob_store.py
+          packages/artifacts/service.py
+          packages/business_brain/attachments/batch_processor.py
+          packages/capabilities/artifact_provider.py
+          packages/capabilities/computer_provider.py
+          packages/capabilities/file_runtime_provider.py
+          packages/capabilities/gmail_artifact_provider.py
+          packages/database/artifact_models.py
+          packages/database/schema.py
+          alembic/versions/0041_agent_artifacts.py
+      - name: Test shared Railway Sandbox computer contracts
+        working-directory: apps/sandbox_runner
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+      - name: Verify migration reaches head
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./unified-agent-runtime-ci.db
+        run: python -m alembic upgrade head
+      - name: Run unified runtime acceptance tests
+        env:
+          OPERLY_ENV: test
+          SESSION_SECRET: test-session-secret-that-is-long-enough
+          AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
+        run: >-
+          python -m pytest -q
+          tests/test_file_runtime_provider.py
+          tests/test_unified_agent_artifact_runtime.py
+          tests/test_agent_computer_storage_ingress_resume.py

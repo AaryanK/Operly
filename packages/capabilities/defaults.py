@@ -1,11 +1,14 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.app_identity_provider import AppIdentityProvider
+from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
+from packages.capabilities.computer_provider import AgentComputerProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.event_provider import EventDiscoveryProvider
 from packages.capabilities.eventful_business_provider import EventfulUnifiedBusinessProvider
+from packages.capabilities.gmail_artifact_provider import GmailArtifactProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.gmail_read_provider import GmailReadProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
@@ -45,6 +48,14 @@ from packages.plugins import (
 
 
 def _builtin_providers():
+    # FileRuntimeProvider intentionally loads only when the registry is being
+    # bootstrapped. Its attachment stack uses channel formatting, whose package
+    # surface can load the agent harness and therefore this module. Keeping this
+    # heavyweight provider out of module-import time prevents a registry ↔ agent ↔
+    # attachment circular import while preserving one canonical provider instance
+    # for AI, Studio, MCP and workflows.
+    from packages.capabilities.file_runtime_provider import FileRuntimeProvider
+
     return (
         CompanyProvider(),
         ResearchProvider(),
@@ -66,6 +77,9 @@ def _builtin_providers():
         ReminderProvider(),
         UniversalTaskProvider(),
         PublicWebReadProvider(),
+        ArtifactProvider(),
+        FileRuntimeProvider(),
+        AgentComputerProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
@@ -75,6 +89,7 @@ def _builtin_providers():
         GmailProvider(),
         GmailReadProvider(),
         GmailDraftLifecycleProvider(),
+        GmailArtifactProvider(),
         GoogleCalendarProvider(),
         CalendarSemanticsProvider(),
     )

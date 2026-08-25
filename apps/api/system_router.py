@@ -3,6 +3,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.artifact_router import router as artifact_router
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from apps.api.schemas import TenantUpdate
 from packages.database.models import Tenant
@@ -18,6 +19,7 @@ from packages.model_runtime.routing_policy import (
 
 
 router = APIRouter(prefix="/api", tags=["system"])
+router.include_router(artifact_router)
 
 
 def deployed_commit_sha() -> str:

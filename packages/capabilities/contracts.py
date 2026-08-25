@@ -22,6 +22,8 @@ class CapabilityDefinition:
     ``name`` and ``risk_level`` are retained as compatibility field names for the
     existing tool loop. New code should treat ``id`` as the stable capability id
     and may use plugin/tags/semantic_operations for discovery and composition.
+    ``execution_timeout_seconds`` is an application-enforced upper bound for one
+    provider invocation; the firewall clamps it again before execution.
     """
 
     id: str
@@ -34,6 +36,7 @@ class CapabilityDefinition:
     permissions: tuple[str, ...] = ()
     approval_policy: ApprovalPolicy = ApprovalPolicy.POLICY
     execution_mode: ExecutionMode = ExecutionMode.CONTROL_PLANE
+    execution_timeout_seconds: int = 30
     source: str = "operly_builtin"
     provider: str = "operly"
     integration_provider: str | None = None
