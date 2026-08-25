@@ -1,0 +1,127 @@
+name: software-runtime-smoke
+
+on:
+  push:
+    branches: [main, "architecture/**", "fix/**"]
+    paths:
+      - "apps/api/software_projects_router.py"
+      - "apps/api/solution_generation_router.py"
+      - "apps/api/main.py"
+      - "apps/runner/**"
+      - "packages/agents/**"
+      - "packages/capabilities/**"
+      - "packages/model_runtime/**"
+      - "packages/plugins/**"
+      - "packages/runtime_plugins/**"
+      - "packages/software_projects/**"
+      - "packages/service_bindings/**"
+      - "packages/solutions/**"
+      - "tests/test_canonical_software_architecture.py"
+      - "tests/test_coding_agent_tool_loop.py"
+      - "tests/test_coding_agent_input_guardrail.py"
+      - "tests/test_coding_semantic_failover.py"
+      - "tests/test_coding_context_window.py"
+      - "tests/test_coding_context_working_set.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_general_software_construction.py"
+      - "tests/test_fullstack_runtime_contract.py"
+      - "tests/test_generation_stage_truth.py"
+      - "tests/test_graph_coverage_repair.py"
+      - "tests/test_live_plan_projection.py"
+      - "tests/test_planning_model_runtime_boundary.py"
+      - "tests/test_scope_convergence.py"
+      - "tests/test_studio_behavior_first_finish_gate.py"
+      - "tests/test_studio_phase0_semantic_planning_repair.py"
+      - "tests/test_studio_real_capability_contracts.py"
+      - ".github/workflows/software-runtime-smoke.yml"
+  pull_request:
+    paths:
+      - "apps/api/software_projects_router.py"
+      - "apps/api/solution_generation_router.py"
+      - "apps/api/main.py"
+      - "apps/runner/**"
+      - "packages/agents/**"
+      - "packages/capabilities/**"
+      - "packages/model_runtime/**"
+      - "packages/plugins/**"
+      - "packages/runtime_plugins/**"
+      - "packages/software_projects/**"
+      - "packages/service_bindings/**"
+      - "packages/solutions/**"
+      - "tests/test_canonical_software_architecture.py"
+      - "tests/test_coding_agent_tool_loop.py"
+      - "tests/test_coding_agent_input_guardrail.py"
+      - "tests/test_coding_semantic_failover.py"
+      - "tests/test_coding_context_window.py"
+      - "tests/test_coding_context_working_set.py"
+      - "tests/test_generated_solution_worker.py"
+      - "tests/test_general_software_construction.py"
+      - "tests/test_fullstack_runtime_contract.py"
+      - "tests/test_generation_stage_truth.py"
+      - "tests/test_graph_coverage_repair.py"
+      - "tests/test_live_plan_projection.py"
+      - "tests/test_planning_model_runtime_boundary.py"
+      - "tests/test_scope_convergence.py"
+      - "tests/test_studio_behavior_first_finish_gate.py"
+      - "tests/test_studio_phase0_semantic_planning_repair.py"
+      - "tests/test_studio_real_capability_contracts.py"
+      - ".github/workflows/software-runtime-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Enforce canonical runtime ownership
+        run: |
+          set -euo pipefail
+          test ! -d packages/custom_software
+          test ! -d packages/coding_harness
+          test ! -d packages/studio
+          if grep -R --line-number --include='*.py' -E 'packages\.(custom_software|coding_harness|studio)(\.| import )' apps packages; then
+            exit 1
+          fi
+
+      - name: Compile software construction runtime
+        run: >-
+          python -m compileall -q
+          packages/software_projects
+          packages/runtime_plugins
+          packages/solutions
+          packages/agents
+
+      - name: Check current browser JavaScript syntax
+        run: |
+          set -euo pipefail
+          find apps/web/static -maxdepth 1 -type f -name '*.js' -print0 | sort -z | xargs -0 -r -n1 node --check
+
+      - name: Run software construction regressions
+        run: >-
+          python -m pytest -q
+          tests/test_canonical_software_architecture.py
+          tests/test_coding_agent_tool_loop.py
+          tests/test_coding_agent_input_guardrail.py
+          tests/test_coding_semantic_failover.py
+          tests/test_coding_context_window.py
+          tests/test_coding_context_working_set.py
+          tests/test_generated_solution_worker.py
+          tests/test_general_software_construction.py
+          tests/test_fullstack_runtime_contract.py
+          tests/test_generation_stage_truth.py
+          tests/test_graph_coverage_repair.py
+          tests/test_live_plan_projection.py
+          tests/test_planning_model_runtime_boundary.py
+          tests/test_scope_convergence.py
+          tests/test_studio_behavior_first_finish_gate.py
+          tests/test_studio_phase0_semantic_planning_repair.py
+          tests/test_studio_real_capability_contracts.py
