@@ -21,7 +21,7 @@ on:
       - "tests/test_solution_manifest.py"
       - "tests/test_solution_initial_generation_lifecycle.py"
       - "tests/test_generated_preview_permissions.py"
-      - "tests/test_generated_solution_worker.py"
+      - "tests/test_software_solution_worker.py"
       - "tests/test_solution_generation_trace_contract.py"
       - "tests/test_runner_async_polling.py"
       - "tests/test_solution_source_inspector.py"
@@ -83,7 +83,7 @@ jobs:
           tests/test_solution_manifest.py
           tests/test_solution_initial_generation_lifecycle.py
           tests/test_generated_preview_permissions.py
-          tests/test_generated_solution_worker.py
+          tests/test_software_solution_worker.py
           tests/test_solution_generation_trace_contract.py
           tests/test_runner_async_polling.py
           tests/test_solution_source_inspector.py
