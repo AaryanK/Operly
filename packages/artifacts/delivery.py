@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
 from typing import Any, Iterable
+from urllib.parse import quote
 
 from sqlalchemy import select
 
@@ -56,6 +58,13 @@ def _scope_run_clauses(scope: ArtifactScope) -> list[Any]:
     return clauses
 
 
+def _download_url(scope: ArtifactScope, artifact_id: str) -> str:
+    prefix = "/api/artifacts" if scope.kind == "workspace" else "/api/personal/artifacts"
+    path = f"{prefix}/{quote(str(artifact_id), safe='')}/download"
+    base = str(os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    return f"{base}{path}" if base else path
+
+
 async def resolve_delivery_artifacts(
     db,
     scope: ArtifactScope,
@@ -79,7 +88,9 @@ async def resolve_delivery_artifacts(
             row = await service.get(scope, artifact_id)
         except LookupError:
             continue
-        output.append(artifact_json(row))
+        item = artifact_json(row)
+        item["download_url"] = _download_url(scope, row.id)
+        output.append(item)
     return output
 
 
