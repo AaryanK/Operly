@@ -1,14 +1,19 @@
 from pathlib import Path
 
 
+HISTORICAL_PACKAGE_PATHS = (
+    "packages/custom_software",
+    "packages/coding_harness",
+    "packages/studio",
+    "packages/application_builder",
+    "packages/dashboard_studio",
+)
+HISTORICAL_IMPORTS = tuple(value.replace("/", ".") for value in HISTORICAL_PACKAGE_PATHS)
+
+
 def test_historical_software_packages_are_physically_removed():
-    for path in (
-        Path("packages/custom_software"),
-        Path("packages/coding_harness"),
-        Path("packages/studio"),
-        Path("packages/application_builder"),
-        Path("packages/dashboard_studio"),
-    ):
+    for value in HISTORICAL_PACKAGE_PATHS:
+        path = Path(value)
         assert not path.exists(), f"historical package still exists: {path}"
 
 
@@ -25,22 +30,28 @@ def test_canonical_software_runtime_packages_exist():
         assert path.exists(), f"canonical runtime path missing: {path}"
 
 
-def test_executable_source_has_no_historical_implementation_imports():
-    forbidden = (
-        "packages.custom_software",
-        "packages.coding_harness",
-        "packages.studio",
-        "packages.application_builder",
-        "packages.dashboard_studio",
-    )
+def test_python_source_and_tests_have_no_historical_implementation_imports():
     offenders = []
-    for root in (Path("apps"), Path("packages")):
+    this_file = Path(__file__).resolve()
+    for root in (Path("apps"), Path("packages"), Path("tests")):
         for path in root.rglob("*.py"):
+            if path.resolve() == this_file:
+                continue
             text = path.read_text(encoding="utf-8")
-            for token in forbidden:
+            for token in HISTORICAL_IMPORTS:
                 if token in text:
                     offenders.append(f"{path}: {token}")
     assert not offenders, "historical implementation imports remain:\n" + "\n".join(offenders)
+
+
+def test_workflows_do_not_reference_historical_package_paths():
+    offenders = []
+    for path in Path(".github/workflows").glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        for token in HISTORICAL_PACKAGE_PATHS:
+            if token in text:
+                offenders.append(f"{path}: {token}")
+    assert not offenders, "historical CI package paths remain:\n" + "\n".join(offenders)
 
 
 def test_generation_worker_uses_canonical_owners():
