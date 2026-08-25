@@ -1,22 +1,32 @@
-from sqlalchemy import select
+"""Website semantics over canonical SoftwareProject source."""
+from __future__ import annotations
+
+import re
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
-from packages.database.studio_models import StudioVersion
-from packages.solutions.service import RuntimeType, SolutionService, SolutionType
-from packages.studio.schema import SiteSchema
-from packages.studio.service import StudioService
+from packages.capabilities.software_build_provider import SoftwareBuildProvider
+from packages.software_projects import SoftwareProjectService, SoftwareSourceService, files_from_row
+from packages.solutions.service import SolutionService
+
+
+_TITLE_RE = re.compile(r"(?is)<title\b[^>]*>(.*?)</title\s*>")
+
+
+def _title(html: str) -> str | None:
+    match = _TITLE_RE.search(str(html or ""))
+    return re.sub(r"\s+", " ", match.group(1)).strip()[:200] if match else None
 
 
 class UnifiedWebsiteProvider(BaseProvider):
-    """Website operations against the canonical Digital Presence solution."""
+    """Keep website-level intent while using SoftwareProject as the only backend."""
 
     name = "operly_website"
     capabilities = (
         CapabilityDefinition(
             "website.inspect",
             "website_inspect",
-            "Inspect the current draft or published Digital Presence website.",
+            "Inspect the current canonical source for a website-like SoftwareProject.",
             {
                 "type": "object",
                 "properties": {"solution_id": {"type": "string"}},
@@ -26,15 +36,19 @@ class UnifiedWebsiteProvider(BaseProvider):
             risk_level="read_only",
             permissions=("website:read",),
             approval_policy=ApprovalPolicy.AUTO,
+            plugin_id="operly.website",
+            category="software",
+            tags=frozenset({"website", "software", "source", "inspect"}),
+            semantic_operations=frozenset({"inspect website", "read website source", "check current website"}),
         ),
         CapabilityDefinition(
             "website.edit",
             "website_edit",
-            "Create a new draft website version with an updated site title. This never publishes the change.",
+            "Edit a website-like SoftwareProject through the canonical software.edit AgentRuntime path. This never publishes the change.",
             {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
                     "solution_id": {"type": "string"},
                 },
                 "required": ["title"],
@@ -45,63 +59,48 @@ class UnifiedWebsiteProvider(BaseProvider):
             permissions=("website:write",),
             approval_policy=ApprovalPolicy.AUTO,
             reversible=True,
+            plugin_id="operly.website",
+            category="software",
+            tags=frozenset({"website", "software", "edit", "source"}),
+            semantic_operations=frozenset({"edit website", "change website title", "update website"}),
         ),
     )
 
     def __init__(self):
         self.solutions = SolutionService()
-        self.studio = StudioService()
+        self.projects = SoftwareProjectService()
+        self.sources = SoftwareSourceService()
+        self.software = SoftwareBuildProvider()
 
-    async def _presence(self, context, requested_id=None):
+    async def _target(self, context, requested_id=None):
         if requested_id:
-            row, runtime = await self.solutions.resolve(
+            solution, project_record = await self.solutions.resolve(
                 context.db,
                 context.tenant_id,
                 str(requested_id),
             )
-        else:
-            rows = await self.solutions.list(context.db, context.tenant_id)
-            row = next(
-                (
-                    item
-                    for item in rows
-                    if item.solution_type == SolutionType.DIGITAL_PRESENCE
-                ),
-                None,
-            )
-            if row is None:
-                raise LookupError("No Digital Presence exists yet")
-            row, runtime = await self.solutions.resolve(
-                context.db,
-                context.tenant_id,
-                row.id,
-            )
+            project = await self.projects.get(context.db, context.tenant_id, project_record.id)
+            source = await self.sources.latest(context.db, context.tenant_id, project.id)
+            if source is None:
+                raise LookupError("Website source is not available yet")
+            return solution, project, source
 
-        if row.solution_type != SolutionType.DIGITAL_PRESENCE:
-            raise ValueError("Selected solution is not a Digital Presence")
-        if row.runtime_type != RuntimeType.STUDIO:
-            raise ValueError("Digital Presence is not backed by the Studio runtime")
-        return row, runtime
-
-    async def _schema(self, context, project):
-        version_id = project.active_draft_version_id or project.published_version_id
-        if not version_id:
-            raise LookupError("Website has no version to inspect")
-        version = await self.studio.version(
-            context.db,
-            context.tenant_id,
-            project.id,
-            version_id,
-        )
-        return version, SiteSchema.model_validate_json(version.schema_json)
+        solutions = await self.solutions.list(context.db, context.tenant_id)
+        for solution in solutions:
+            project = await self.projects.get(context.db, context.tenant_id, solution.runtime_reference)
+            source = await self.sources.latest(context.db, context.tenant_id, project.id)
+            if source is None:
+                continue
+            files = files_from_row(source)
+            if "index.html" in files or source.runtime_profile in {"static-web-js", "react-web", "next-fullstack"}:
+                return solution, project, source
+        raise LookupError("No website-like SoftwareProject exists yet")
 
     async def execute(self, context, capability_name, arguments):
         try:
-            solution, project = await self._presence(
-                context,
-                arguments.get("solution_id"),
-            )
-            current, schema = await self._schema(context, project)
+            solution, project, source = await self._target(context, arguments.get("solution_id"))
+            files = files_from_row(source)
+            html = files.get("index.html", "")
 
             if capability_name == "website.inspect":
                 return CapabilityResult(
@@ -110,90 +109,51 @@ class UnifiedWebsiteProvider(BaseProvider):
                     {
                         "solution_id": solution.id,
                         "project_id": project.id,
-                        "version_id": current.id,
-                        "site_title": schema.site.title,
-                        "description": schema.site.description,
-                        "pages": [
-                            {"id": page.id, "slug": page.slug, "title": page.title}
-                            for page in schema.pages
-                        ],
-                        "theme": schema.theme.model_dump(mode="json"),
+                        "source_version_id": source.id,
+                        "source_version": source.source_version,
+                        "runtime_profile": source.runtime_profile,
+                        "site_title": _title(html),
+                        "files": sorted(files),
+                        "published": solution.production_state == "live",
                     },
-                    current.id,
+                    source.id,
                 )
 
-            if capability_name == "website.edit":
-                if not context.actor_id:
-                    return CapabilityResult(
-                        False,
-                        False,
-                        {"reason": "authenticated_actor_required"},
-                    )
-                title = str(arguments["title"]).strip()[:120]
-                if not title:
-                    return CapabilityResult(False, False, {"reason": "title is required"})
-
-                before = schema.site.title
-                schema.site.title = title
-                schema.site.seo.title = title
-                for page in schema.pages:
-                    if page.slug == "home":
-                        page.seo.title = title
-                    for section in page.sections:
-                        if section.type == "navbar":
-                            section.props.site_title = title
-                        elif section.type == "footer":
-                            section.props.business_name = title
-
-                version = await self.studio.save_schema(
-                    context.db,
-                    context.tenant_id,
-                    project.id,
-                    context.actor_id,
-                    schema.model_dump(mode="json"),
-                    "AI draft: update website title",
-                )
-                return CapabilityResult(
-                    True,
-                    before != title,
-                    {
-                        "solution_id": solution.id,
-                        "project_id": project.id,
-                        "version_id": version.id,
-                        "before_title": before,
-                        "title": title,
-                        "published": False,
-                    },
-                    version.id,
-                )
+            if not context.actor_id:
+                return CapabilityResult(False, False, {"reason": "authenticated_actor_required"})
+            title = " ".join(str(arguments.get("title") or "").split()).strip()[:200]
+            if not title:
+                return CapabilityResult(False, False, {"reason": "title_required"})
+            delegated = {
+                "project_id": project.id,
+                "instruction": f"Update the website title to {title!r}. Update the HTML document title, visible brand/title text where appropriate, and relevant SEO metadata without changing unrelated behavior.",
+                "studio_context": {"source_version_id": source.id},
+            }
+            result = await self.software.execute(context, "software.edit", delegated)
+            if not result.success:
+                return result
+            verified = await self.software.verify(context, "software.edit", delegated, result)
+            if not verified.success:
+                return verified
+            return CapabilityResult(
+                True,
+                verified.changed,
+                {
+                    **verified.evidence,
+                    "solution_id": solution.id,
+                    "project_id": project.id,
+                    "requested_title": title,
+                    "published": False,
+                    "canonical_runtime": True,
+                },
+                verified.external_reference,
+            )
         except (LookupError, ValueError) as error:
             return CapabilityResult(False, False, {"reason": str(error)})
-
-        return CapabilityResult(False, False, {"reason": "unsupported_website_capability"})
 
     async def verify(self, context, capability_name, arguments, result):
         if not result.success:
             return CapabilityResult(False, result.changed, result.evidence, result.external_reference)
         if capability_name == "website.inspect":
-            return CapabilityResult(True, False, {"website_observed": True, **result.evidence})
-        if not result.external_reference:
-            return CapabilityResult(False, result.changed, {"reason": "verification_target_missing"})
-
-        version = await context.db.scalar(
-            select(StudioVersion).where(
-                StudioVersion.id == result.external_reference,
-                StudioVersion.tenant_id == context.tenant_id,
-            )
-        )
-        actual = SiteSchema.model_validate_json(version.schema_json).site.title if version else None
-        expected = str(arguments["title"]).strip()[:120]
-        return CapabilityResult(
-            actual == expected,
-            result.changed,
-            {
-                "version_id": result.external_reference,
-                "expected_title": expected,
-                "actual_title": actual,
-            },
-            result.external_reference,
-        )
+            return CapabilityResult(True, False, {"website_observed": True, **result.evidence}, result.external_reference)
+        return result
