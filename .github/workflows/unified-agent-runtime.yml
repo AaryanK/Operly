@@ -22,7 +22,7 @@ on:
       - "packages/security/execution_context.py"
       - "packages/security/permissions.py"
       - "requirements.txt"
-      - "alembic/versions/0040_agent_artifacts.py"
+      - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_file_runtime_provider.py"
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
@@ -60,7 +60,7 @@ jobs:
           packages/capabilities/gmail_artifact_provider.py
           packages/database/artifact_models.py
           packages/database/schema.py
-          alembic/versions/0040_agent_artifacts.py
+          alembic/versions/0041_agent_artifacts.py
       - name: Test shared Railway Sandbox computer contracts
         working-directory: apps/sandbox_runner
         run: |
