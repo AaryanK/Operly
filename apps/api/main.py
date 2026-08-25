@@ -14,7 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
+from apps.api.admin_router import router as admin_router
 from apps.api.agent_router import router as agent_router
+from apps.api.analytics_router import router as analytics_router
 from apps.api.app_identity_router import admin_router as app_identity_admin_router
 from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
 from apps.api.application_builder_router import router as application_builder_router
@@ -79,7 +81,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
-WEB_ASSET_REVISION = "20260823-ui-system-v3"
+WEB_ASSET_REVISION = "20260825-platform-admin-v1"
 
 
 async def bootstrap_admin() -> None:
@@ -212,6 +214,8 @@ app.add_middleware(
 for router in (
     system_router,
     session_router,
+    analytics_router,
+    admin_router,
     personal_agent_router,
     personal_connectors_router,
     workspace_router,
@@ -314,6 +318,9 @@ def legal_page(name: str) -> HTMLResponse:
 async def frontend(path: str):
     if path == "channels" or path.startswith("channels/"):
         return canonical_frontend_shell()
+
+    if path == "admin" or path.startswith("admin/"):
+        return legal_page("admin.html")
 
     if path in {"privacy", "terms"}:
         return legal_page(path)
