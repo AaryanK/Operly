@@ -20,7 +20,7 @@ from packages.database.product_models import (
     SolutionImprovementProposal,
     SolutionJob,
 )
-from packages.solutions import SolutionService, SolutionType
+from packages.solutions import SolutionService
 from packages.solutions.composer import create_solution_from_intent
 from packages.solutions.operations import PresenceOperationsService, proposal_json
 from packages.solutions.production import ProductionService, job_json
@@ -28,11 +28,6 @@ from packages.solutions.service import solution_json
 
 router = APIRouter(prefix="/api/solutions", tags=["solutions"])
 service = SolutionService()
-
-
-class CreateSolutionInput(BaseModel):
-    solution_type: str = Field(default=SolutionType.DIGITAL_PRESENCE)
-    name: str | None = Field(default=None, max_length=200)
 
 
 class ComposeSolutionInput(BaseModel):
@@ -59,38 +54,13 @@ async def list_solutions(
     return [solution_json(row) for row in rows]
 
 
-@router.post("")
-async def create_solution(
-    payload: CreateSolutionInput,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    """Legacy Digital Presence endpoint retained for existing clients."""
-    if payload.solution_type != SolutionType.DIGITAL_PRESENCE:
-        raise HTTPException(
-            status_code=422,
-            detail="Use /api/solutions/compose for intent-driven Solution creation",
-        )
-    try:
-        row = await service.create_presence(
-            db,
-            auth.tenant.id,
-            auth.user.id,
-            payload.name,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    await db.commit()
-    return solution_json(row)
-
-
 @router.post("/compose", status_code=201)
 async def compose_solution(
     payload: ComposeSolutionInput,
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Classify owner intent before selecting/creating the Solution runtime."""
+    """Create a canonical SoftwareProject-backed Solution from owner intent."""
     if auth.role != "owner":
         raise HTTPException(status_code=403, detail="Only owners can create Solutions")
     try:
