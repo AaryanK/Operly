@@ -6,10 +6,34 @@ import { MessageContent } from "../ui/MessageContent";
 import { OperlyMark } from "../ui/OperlyMark";
 
 type Conversation = { id: string; title?: string | null; updated_at?: string | null };
-type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null };
-type ChatResult = { message: string; conversation_id: string };
+type Artifact = { artifact_id: string; filename: string; content_type?: string | null; size_bytes?: number | null };
+type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null; artifacts?: Artifact[] };
+type ChatResult = { message: string; conversation_id: string; artifacts?: Artifact[] };
 
 type Props = { workspace: WorkspaceSummary };
+
+function artifactSize(value?: number | null) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "File";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function ArtifactCards({ artifacts }: { artifacts?: Artifact[] }) {
+  if (!artifacts?.length) return null;
+  return <div className="chat-artifacts" aria-label="Generated files">
+    {artifacts.map((artifact) => <a
+      className="artifact-chip"
+      href={`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}/download`}
+      key={artifact.artifact_id}
+    >
+      <span className="artifact-icon" aria-hidden="true">↧</span>
+      <span className="artifact-copy"><strong>{artifact.filename}</strong><small>{artifactSize(artifact.size_bytes)} · {artifact.content_type || "file"}</small></span>
+      <span className="artifact-action">Download</span>
+    </a>)}
+  </div>;
+}
 
 export function WorkspaceOperly({ workspace }: Props) {
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -80,7 +104,11 @@ export function WorkspaceOperly({ workspace }: Props) {
         result = await api<ChatResult>("/agent/chat", { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId, application_id: null }) });
       }
       setConversationId(result.conversation_id);
-      setMessages((current) => [...current, { role: "assistant", content: result.message || "Done." }]);
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: result.message || (result.artifacts?.length ? "Created the requested file." : "Done."),
+        artifacts: result.artifacts || [],
+      }]);
       await refreshHistory(result.conversation_id);
     } catch (caught) {
       setFiles(pendingFiles);
@@ -92,7 +120,7 @@ export function WorkspaceOperly({ workspace }: Props) {
     <aside className="conversation-list-panel"><div className="history-head"><div><small>WORKSPACE AI</small><strong>Conversations</strong></div><div className="history-head-actions"><button onClick={() => { setConversationId(null); setMessages([]); }} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button></div></div><div className="history-list">{conversations.length === 0 && <p className="empty-copy">No workspace conversations yet.</p>}{conversations.map((item) => <button key={item.id} className={item.id === conversationId ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{item.updated_at ? new Date(item.updated_at).toLocaleDateString() : ""}</small></span></button>)}</div></aside>
     <section className="ai-chat-panel">
       <header className="surface-header compact-header"><div><span className="eyebrow">Operly · {workspace.name}</span><h1>What should we work on?</h1><p>Workspace context, connectors, tools, approvals, and permissions stay inside this workspace boundary.</p></div><span className="workspace-context-pill">{workspace.name}</span></header>
-      <div className="conversation-stage" ref={stage}>{messages.length === 0 && <div className="suggestion-grid"><button onClick={() => setText("What needs my attention right now?")}><strong>Needs attention</strong><span>Review exceptions and pending work</span></button><button onClick={() => setText("Summarize my current sales pipeline")}><strong>Sales pipeline</strong><span>Customers, leads, quotes and orders</span></button><button onClick={() => setText("Show me the actions waiting for my approval")}><strong>Approvals</strong><span>See consequential actions before execution</span></button></div>}{messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}{busy && <div className="working-state"><span></span>Operly is working…</div>}{error && <div className="inline-error">{error}</div>}</div>
+      <div className="conversation-stage" ref={stage}>{messages.length === 0 && <div className="suggestion-grid"><button onClick={() => setText("What needs my attention right now?")}><strong>Needs attention</strong><span>Review exceptions and pending work</span></button><button onClick={() => setText("Summarize my current sales pipeline")}><strong>Sales pipeline</strong><span>Customers, leads, quotes and orders</span></button><button onClick={() => setText("Show me the actions waiting for my approval")}><strong>Approvals</strong><span>See consequential actions before execution</span></button></div>}{messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <><MessageContent content={item.content} /><ArtifactCards artifacts={item.artifacts} /></> : <p>{item.content}</p>}</div></article>)}{busy && <div className="working-state"><span></span>Operly is working…</div>}{error && <div className="inline-error">{error}</div>}</div>
       <form className="composer" onSubmit={send}>{files.length > 0 && <div className="attachment-strip">{files.map((file, index) => <span key={`${file.name}-${index}`}>{file.name}<button type="button" onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}>×</button></span>)}</div>}<input ref={picker} type="file" multiple hidden onChange={addFiles} accept="image/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.docx,.pptx,.xlsx,.odt,.ods,.html,.log,.css,.sql,.py,.js,.ts,.tsx,.jsx,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.sh" /><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Ask Operly anything, or tell it what to do…" rows={2} /><div className="composer-actions"><div><button className="attach-button" type="button" onClick={() => picker.current?.click()}>＋ Attach</button><span>Permission- and approval-gated</span></div><button disabled={busy || (!text.trim() && !files.length)}>{busy ? "Working…" : "Send"}</button></div></form>
     </section>
   </div></main>;

@@ -35,3 +35,23 @@ class ChannelResponse:
     role: str | None = None
     status: str = "ok"
     tenant_options: list[dict[str, str]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Keep generated files visible even in text-only channel adapters.
+
+        Rich adapters may upload/render ``artifacts`` directly. Older adapters that
+        only send ``message`` still receive authenticated Operly download links, so a
+        durable artifact can never disappear merely because the surface has not added
+        a native file-card implementation yet.
+        """
+        if not self.artifacts:
+            return
+        links: list[str] = []
+        for artifact in self.artifacts[:10]:
+            filename = str(artifact.get("filename") or "generated file")
+            url = str(artifact.get("download_url") or "").strip()
+            if url:
+                links.append(f"• {filename}: {url}")
+        if links:
+            self.message = (str(self.message or "").rstrip() + "\n\nFiles:\n" + "\n".join(links)).strip()

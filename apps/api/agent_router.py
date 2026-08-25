@@ -8,6 +8,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from packages.artifacts.delivery import artifacts_by_assistant_message, project_agent_result
+from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.business_brain import AgentInput, get_agent_service
 from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
 from packages.business_brain.attachments.multimodal_processor import attachment_hashes
@@ -27,6 +29,15 @@ class ChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     conversation_id: str | None = Field(default=None, max_length=120)
     application_id: str | None = Field(default=None, max_length=120)
+
+
+def _workspace_artifact_scope(auth: AuthContext) -> ArtifactScope:
+    return ArtifactScope("workspace", auth.tenant.id, tenant_id=auth.tenant.id)
+
+
+async def _project_result(auth: AuthContext, result: dict) -> dict:
+    async with session_scope() as db:
+        return await project_agent_result(db, _workspace_artifact_scope(auth), result)
 
 
 async def _run_agent(auth: AuthContext, request: AgentInput):
@@ -57,7 +68,7 @@ async def chat(
     payload: ChatInput,
     auth: AuthContext = Depends(get_auth_context),
 ):
-    return await _run_agent(
+    result = await _run_agent(
         auth,
         AgentInput(
             tenant_id=auth.tenant.id,
@@ -74,6 +85,7 @@ async def chat(
             },
         ),
     )
+    return await _project_result(auth, result)
 
 
 @router.post("/chat-with-attachments")
@@ -90,6 +102,7 @@ async def chat_with_attachments(
     if len(files) > limits.max_attachments:
         raise HTTPException(413, f"Maximum {limits.max_attachments} attachments")
 
+    effective_conversation_id = conversation_id or str(uuid4())
     inputs: list[AttachmentInput] = []
     total = 0
     for index, upload in enumerate(files, 1):
@@ -111,6 +124,26 @@ async def chat_with_attachments(
         )
 
     audit_id = str(uuid4())
+    uploaded_artifacts: list[dict] = []
+    async with session_scope() as db:
+        service = ArtifactService(db)
+        scope = _workspace_artifact_scope(auth)
+        for item in inputs:
+            row = await service.create_bytes(
+                scope,
+                filename=item.filename,
+                content_type=item.declared_content_type,
+                content=item.content_bytes,
+                source="web_chat_upload",
+                created_by=auth.user.id,
+                metadata={
+                    "ingress": "web_chat_v1",
+                    "conversation_id": effective_conversation_id,
+                    "attachment_audit_id": audit_id,
+                },
+            )
+            uploaded_artifacts.append(artifact_json(row))
+
     bundle = AttachmentBundle(
         user_request=message.strip() or "Analyze the supplied attachment(s).",
         attachments=inputs,
@@ -140,7 +173,7 @@ async def chat_with_attachments(
                 ),
                 operation=processed.operation_summary or "analyze",
                 success=bool(processed.accepted),
-                generated_output_count=0,
+                generated_output_count=len(processed.files),
                 error_category=None,
             )
         )
@@ -151,9 +184,24 @@ async def chat_with_attachments(
             {
                 "message": "No supported attachments could be processed",
                 "skipped": processed.skipped,
+                "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
             },
         )
 
+    # The extracted attachment text remains untrusted evidence. Durable artifact
+    # handles are separately supplied in application-controlled dashboard context so
+    # the model can call files.process without trusting identifiers found in a file.
+    trusted_upload_context = {
+        "uploaded_artifacts": [
+            {
+                "artifact_id": item["artifact_id"],
+                "filename": item["filename"],
+                "content_type": item["content_type"],
+                "size_bytes": item["size_bytes"],
+            }
+            for item in uploaded_artifacts
+        ]
+    }
     result = await _run_agent(
         auth,
         AgentInput(
@@ -161,7 +209,7 @@ async def chat_with_attachments(
             principal_id=f"web-user:{auth.user.id}",
             actor_name=auth.user.display_name,
             channel="web",
-            conversation_id=conversation_id,
+            conversation_id=effective_conversation_id,
             text=message.strip(),
             attachment_context=processed.message,
             attachment_names=list(processed.accepted),
@@ -171,13 +219,18 @@ async def chat_with_attachments(
                 "role": auth.role,
                 "allow_tenant_context": True,
                 "attachment_audit_id": audit_id,
+                "attachment_artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
+                "dashboard_context": trusted_upload_context,
             },
         ),
     )
+    result = await _project_result(auth, result)
     result["attachments"] = {
         "accepted": processed.accepted,
         "skipped": processed.skipped,
         "warnings": processed.warnings,
+        "artifacts": uploaded_artifacts,
+        "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
     }
     return result
 
@@ -235,12 +288,19 @@ async def conversation_messages(
             .limit(200)
         )
     ).all()
+    artifacts_by_message = await artifacts_by_assistant_message(
+        db,
+        _workspace_artifact_scope(auth),
+        conversation_id=conversation_id,
+        messages=rows,
+    )
     return [
         {
             "id": row.id,
             "role": row.role,
             "content": row.content,
             "created_at": row.created_at.isoformat(),
+            "artifacts": artifacts_by_message.get(row.id, []),
         }
         for row in rows
     ]
