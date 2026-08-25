@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import uuid4
 
 from sqlalchemy import or_, select
 
+from packages.artifacts.blob_store import ArtifactBlobStore, configured_blob_store
 from packages.database.artifact_models import ArtifactRecord
 
 
@@ -66,6 +68,11 @@ def _safe_filename(value: str) -> str:
     return name or "artifact.bin"
 
 
+def _storage_key(scope: ArtifactScope, filename: str) -> str:
+    safe_scope = re.sub(r"[^A-Za-z0-9._:-]+", "-", scope.scope_id)[:220]
+    return f"{scope.kind}/{safe_scope}/{uuid4().hex}/{_safe_filename(filename)}"
+
+
 def artifact_json(row: ArtifactRecord, *, include_metadata: bool = True) -> dict[str, Any]:
     try:
         metadata = json.loads(row.metadata_json or "{}") if include_metadata else {}
@@ -89,10 +96,16 @@ def artifact_json(row: ArtifactRecord, *, include_metadata: bool = True) -> dict
 
 
 class ArtifactService:
-    """Scope-enforced artifact storage used by AI, Studio, workflows and connectors."""
+    """Scope-enforced artifact storage used by AI, Studio, workflows and connectors.
 
-    def __init__(self, db):
+    Metadata and ownership always live in Operly's database. Blob bytes use the
+    configured S3-compatible backend in production and fall back to the database
+    when no external store is configured (useful for local development/tests).
+    """
+
+    def __init__(self, db, *, blob_store: ArtifactBlobStore | None = None):
         self.db = db
+        self.blob_store = blob_store if blob_store is not None else configured_blob_store()
 
     @staticmethod
     def _scope_predicate(scope: ArtifactScope):
@@ -128,6 +141,18 @@ class ArtifactService:
         if len(raw) > MAX_ARTIFACT_BYTES:
             raise ValueError(f"Artifact exceeds {MAX_ARTIFACT_BYTES} byte limit")
         digest = hashlib.sha256(raw).hexdigest()
+        safe_name = _safe_filename(filename)
+        normalized_type = str(content_type or "application/octet-stream")[:200]
+        storage_kind = "database"
+        storage_key = None
+        content_bytes: bytes | None = raw
+
+        if self.blob_store is not None:
+            storage_key = _storage_key(scope, safe_name)
+            await self.blob_store.put(storage_key, raw, content_type=normalized_type)
+            storage_kind = str(self.blob_store.kind)[:32]
+            content_bytes = None
+
         row = ArtifactRecord(
             scope_kind=scope.kind,
             scope_id=scope.scope_id,
@@ -136,18 +161,27 @@ class ArtifactService:
             run_id=(str(run_id)[:120] if run_id else None),
             parent_artifact_id=(str(parent_artifact_id)[:36] if parent_artifact_id else None),
             created_by=(str(created_by)[:120] if created_by else None),
-            filename=_safe_filename(filename),
-            content_type=str(content_type or "application/octet-stream")[:200],
+            filename=safe_name,
+            content_type=normalized_type,
             size_bytes=len(raw),
             sha256=digest,
             source=str(source or "agent")[:80],
-            storage_kind="database",
-            content_bytes=raw,
+            storage_kind=storage_kind,
+            storage_key=storage_key,
+            content_bytes=content_bytes,
             metadata_json=json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True, default=str)[:100_000],
             expires_at=expires_at,
         )
         self.db.add(row)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except Exception:
+            if self.blob_store is not None and storage_key:
+                try:
+                    await self.blob_store.delete(storage_key)
+                except Exception:
+                    pass
+            raise
         return row
 
     async def create_path(
@@ -249,10 +283,15 @@ class ArtifactService:
 
     async def read_bytes(self, scope: ArtifactScope, artifact_id: str) -> bytes:
         row = await self.get(scope, artifact_id)
-        if row.storage_kind != "database" or row.content_bytes is None:
-            raise RuntimeError("Artifact storage backend is not readable by this runtime")
-        raw = bytes(row.content_bytes)
-        if hashlib.sha256(raw).hexdigest() != row.sha256:
+        if row.storage_kind == "database":
+            if row.content_bytes is None:
+                raise RuntimeError("Database artifact content is missing")
+            raw = bytes(row.content_bytes)
+        else:
+            if self.blob_store is None or row.storage_kind != self.blob_store.kind or not row.storage_key:
+                raise RuntimeError("Artifact storage backend is not configured for this object")
+            raw = await self.blob_store.get(row.storage_key)
+        if len(raw) != row.size_bytes or hashlib.sha256(raw).hexdigest() != row.sha256:
             raise RuntimeError("Artifact integrity check failed")
         return raw
 
