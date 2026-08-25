@@ -21,6 +21,11 @@ def _json(value: str | None, default):
     return parsed
 
 
+async def _persist_evidence(db, job: SolutionJob, evidence: dict[str, Any]) -> None:
+    job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
+    await db.commit()
+
+
 async def _append_parent_completion(
     db,
     *,
@@ -92,8 +97,7 @@ async def _retryable_finalization_failure(db, job: SolutionJob, evidence: dict[s
     evidence["completionStatus"]="RETRYABLE"
     evidence["completionFailedStage"]=stage
     evidence["completionError"]=f"{type(error).__name__}:{str(error)[:500]}"
-    job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
-    await db.commit()
+    await _persist_evidence(db,job,evidence)
     return evidence
 
 
@@ -109,7 +113,9 @@ async def finalize_software_job(
     Build/test/start/health/acceptance evidence is authoritative for software
     success. Artifact projection or surface delivery failures are completion
     failures only: they stay retryable and must never rewrite a verified build as
-    failed.
+    failed. Each durable stage commits its receipt before the next stage begins so
+    retrying finalization cannot recreate the archive or append parent completion
+    twice.
     """
     evidence=_json(job.evidence_json,{})
     if not isinstance(evidence,dict):evidence={}
@@ -119,8 +125,14 @@ async def finalize_software_job(
     context=_json(solution.context_json,{})
     request=context.get("softwareBuildRequest") if isinstance(context,dict) and isinstance(context.get("softwareBuildRequest"),dict) else {}
     succeeded=job.status=="succeeded" and str(evidence.get("buildState") or "")=="preview_ready"
+    return_archive=succeeded and bool(request.get("returnSourceArchive",evidence.get("returnSourceArchive",True))) and generated_source is not None
+
     artifact_ids:list[str]=[]
-    if succeeded and bool(request.get("returnSourceArchive",evidence.get("returnSourceArchive",True))) and generated_source is not None:
+    existing_archive_id=str(evidence.get("sourceArchiveArtifactId") or "").strip()
+    if existing_archive_id:
+        artifact_ids.append(existing_archive_id)
+        evidence.setdefault("sourceArchiveStatus","VERIFIED")
+    elif return_archive:
         try:
             archive=await persist_generated_source_archive(
                 db,
@@ -137,39 +149,55 @@ async def finalize_software_job(
             "sourceArchiveArtifactId":archive["artifact_id"],
             "sourceArchiveFilename":archive["filename"],
             "sourceArchiveSha256":archive["sha256"],
+            "sourceArchiveStatus":"VERIFIED",
         })
+        await _persist_evidence(db,job,evidence)
+    else:
+        evidence.setdefault("sourceArchiveStatus","NOT_REQUIRED")
 
     parent_run_id=str(evidence.get("parentAgentRunId") or request.get("parentAgentRunId") or "") or None
-    try:
-        await _append_parent_completion(
-            db,parent_run_id=parent_run_id,tenant_id=job.tenant_id,job=job,solution=solution,
-            succeeded=succeeded,artifact_ids=artifact_ids,evidence=evidence,
-        )
-    except Exception as error:
-        return await _retryable_finalization_failure(db,job,evidence,"parent_run",error)
+    if parent_run_id and evidence.get("parentRunCompletionStatus")!="VERIFIED":
+        try:
+            await _append_parent_completion(
+                db,parent_run_id=parent_run_id,tenant_id=job.tenant_id,job=job,solution=solution,
+                succeeded=succeeded,artifact_ids=artifact_ids,evidence=evidence,
+            )
+        except Exception as error:
+            return await _retryable_finalization_failure(db,job,evidence,"parent_run",error)
+        evidence["parentRunCompletionStatus"]="VERIFIED"
+        evidence["parentRunCompletionIdempotencyKey"]=f"software-job:{job.id}:parent-completion"
+        await _persist_evidence(db,job,evidence)
+    elif not parent_run_id:
+        evidence.setdefault("parentRunCompletionStatus","NOT_REQUIRED")
 
     target=evidence.get("deliveryTarget") if isinstance(evidence.get("deliveryTarget"),dict) else request.get("deliveryTarget")
-    receipt=None
-    if isinstance(target,dict) and target.get("provider"):
+    receipt=evidence.get("deliveryReceipt") if isinstance(evidence.get("deliveryReceipt"),dict) else None
+    if isinstance(target,dict) and target.get("provider") and evidence.get("deliveryStatus")!="VERIFIED":
         message=(
             f"{solution.name} is ready. The application passed its isolated build, tests, startup, health, and acceptance checks."
             if succeeded else
             f"{solution.name} could not complete successfully. Operly kept the failed build evidence and did not mark the application preview-ready."
         )
+        delivery_target=dict(target)
+        delivery_target.setdefault("idempotency_key",f"software-job:{job.id}:terminal-delivery")
         try:
-            receipt=await deliver_task_output(target,message,artifact_ids=artifact_ids)
+            receipt=await deliver_task_output(delivery_target,message,artifact_ids=artifact_ids)
             evidence["deliveryStatus"]="VERIFIED"
             evidence["deliveryReceipt"]=receipt
+            evidence["deliveryIdempotencyKey"]=delivery_target["idempotency_key"]
+            evidence.pop("deliveryError",None)
+            await _persist_evidence(db,job,evidence)
         except Exception as error:
             evidence["deliveryStatus"]="FAILED"
             evidence["deliveryError"]=f"{type(error).__name__}:{str(error)[:300]}"
             return await _retryable_finalization_failure(db,job,evidence,"surface_delivery",error)
+    elif not (isinstance(target,dict) and target.get("provider")):
+        evidence.setdefault("deliveryStatus","NOT_REQUIRED")
 
     evidence["completionFinalized"]=True
     evidence["completionStatus"]="VERIFIED"
     evidence["completionFinalizedAt"]=datetime.utcnow().isoformat()+"Z"
     evidence.pop("completionFailedStage",None)
     evidence.pop("completionError",None)
-    job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
-    await db.commit()
+    await _persist_evidence(db,job,evidence)
     return evidence
