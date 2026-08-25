@@ -51,6 +51,97 @@ def _parse_json_object(value: str) -> dict[str, Any]:
         return {}
 
 
+_EVIDENCE_KEYS = frozenset(
+    {
+        # Generic lifecycle/error evidence.
+        "status",
+        "ok",
+        "success",
+        "changed",
+        "error",
+        "reason",
+        "verification",
+        "observation",
+        "side_effects",
+        # Artifact/document evidence.
+        "artifact_id",
+        "artifact_ids",
+        "artifacts",
+        "artifact_kind",
+        "output_format",
+        "columns",
+        "row_count",
+        "processed_count",
+        "attachment_count",
+        "expected_attachment_count",
+        "attachment_filenames",
+        "expected_attachment_filenames",
+        "attachments_persisted_by_provider",
+        "draft_persisted_by_provider",
+        "draft_id",
+        "message_id",
+        "delivery_status",
+        "recipients",
+        "subject",
+        "conversion",
+        "input_artifact_id",
+        # Canonical software/project/source evidence.
+        "project",
+        "project_id",
+        "software_project_id",
+        "source",
+        "source_id",
+        "source_version",
+        "source_bundle_id",
+        "active_source_version_id",
+        "runtime_id",
+        "active_runtime_id",
+        "runtime_profile",
+        "solution",
+        "solution_id",
+        "job",
+        "job_id",
+        "build",
+        "build_id",
+        "build_state",
+        "lifecycle_status",
+        "preview_state",
+        "preview_url",
+        "production_state",
+        "production_url",
+        "files",
+        "file_count",
+        "changed_paths",
+        # Isolated-runner proof. These are stronger than model narration.
+        "build_success",
+        "test_success",
+        "tests_passed",
+        "process_start_success",
+        "process_started",
+        "health_check_success",
+        "health_passed",
+        "acceptance_check_success",
+        "acceptance_passed",
+        "preview_available",
+        "failure_classification",
+        "failure_evidence",
+        "isolation",
+        "network",
+        "ephemeral",
+        "exit_code",
+        "timed_out",
+        # Binding/delegation evidence.
+        "binding",
+        "binding_id",
+        "capability_id",
+        "target_invoked",
+        "target_availability",
+        "persisted",
+        "revoked",
+    }
+)
+
+
 def _small_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -61,37 +152,7 @@ def _small_value(value: Any) -> Any:
     if isinstance(value, dict):
         allowed = {}
         for key, item in value.items():
-            if key in {
-                "status",
-                "ok",
-                "success",
-                "changed",
-                "error",
-                "reason",
-                "artifact_id",
-                "artifact_ids",
-                "artifacts",
-                "artifact_kind",
-                "output_format",
-                "columns",
-                "row_count",
-                "processed_count",
-                "attachment_count",
-                "expected_attachment_count",
-                "attachment_filenames",
-                "expected_attachment_filenames",
-                "attachments_persisted_by_provider",
-                "draft_persisted_by_provider",
-                "draft_id",
-                "message_id",
-                "delivery_status",
-                "recipients",
-                "subject",
-                "conversion",
-                "input_artifact_id",
-                "verification",
-                "observation",
-            }:
+            if str(key) in _EVIDENCE_KEYS:
                 allowed[str(key)] = _small_value(item)
         return allowed
     return str(value)[:400]
@@ -120,6 +181,10 @@ def compact_trace_evidence(trace: Iterable[Any]) -> list[dict[str, Any]]:
                 "subject",
                 "filename",
                 "title",
+                "name",
+                "project_id",
+                "binding_id",
+                "capability_id",
             }
         }
         output.append(
@@ -139,7 +204,7 @@ def _strings(value: Any, *, limit: int = 12) -> tuple[str, ...]:
 
 
 class ObjectiveEvidenceVerifier:
-    """Semantically compare plan success criteria with capability-verified evidence."""
+    """Semantically compare root success criteria with capability-verified evidence."""
 
     async def verify(
         self,
@@ -165,6 +230,7 @@ class ObjectiveEvidenceVerifier:
             "Determine whether every observable success criterion for the root user objective is proven by the supplied structured capability evidence. "
             "Be strict: model prose is not evidence. A file extension or artifact existence alone does not prove requested spreadsheet columns/content. "
             "A Gmail draft alone does not prove an attachment; attachment delivery requires provider verification such as attachments_persisted_by_provider=true and matching counts/filenames. "
+            "For software, source/project existence does not prove a working application: when the objective asks for runnable software, require relevant isolated-runner build/test/start/health/acceptance evidence or an equivalent provider-verified runtime result. A queued build is not a completed build. "
             "A missing or ambiguous fact is UNSATISFIED, not an invitation to guess. Read-only absence (for example zero meetings) is valid only when evidence shows the corresponding read capability actually ran successfully."
         )
         payload = {
