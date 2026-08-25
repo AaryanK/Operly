@@ -106,7 +106,7 @@ class SoftwareSolutionWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(evidence["planningInputDigest"]), 64)
 
         payload = solution_json(row)
-        self.assertEqual(payload["runtime"]["kind"], RuntimeType.SOFTWARE_PROJECT)
+        self.assertEqual(payload["runtime"]["kind"], "software")
         self.assertEqual(payload["generation"]["status"], "queued")
         self.assertEqual(payload["generation"]["stage"], "planning")
 
