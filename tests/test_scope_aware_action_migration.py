@@ -20,7 +20,10 @@ def test_scope_aware_action_migration_upgrades_fresh_database():
         command.upgrade(config(url), "head")
 
         current, head = revisions(url)
-        assert current == head == ALEMBIC_HEAD == "0039_scope_aware_actions"
+        # This test protects the 0039 scope invariants, not a frozen repository
+        # head. Later migrations must remain able to upgrade through 0039 while
+        # preserving those ownership constraints.
+        assert current == head == ALEMBIC_HEAD
 
         with closing(sqlite3.connect(path)) as db:
             for table, check_name in (
