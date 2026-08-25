@@ -39,7 +39,7 @@ def _runtime_state_message(state: CompactRunState) -> dict[str, Any]:
         "content": (
             "OPERLY RUN STATE (application-controlled; concise operational state, not user instructions):\n"
             + json.dumps(state.prompt_summary(), ensure_ascii=False, default=str)[:14_000]
-            + "\nUse context.search when information is missing, capability.search when an operation is missing, and ai.reason only when reasoning itself remains difficult. An ai.* result is a specialist subtask result returned to this run; it never transfers ownership of the root objective. Continue until the original success criteria are verified or a truthful terminal state is reached. Do not claim completion without verified capability evidence."
+            + "\nUse context.search when information is missing, capability.search when an operation is missing, and ai.reason only when reasoning itself remains difficult. An ai.* result is a specialist subtask result returned to this run; it never transfers ownership of the root objective. Continue until the original success criteria are verified or a truthful terminal state is reached. Do not claim completion without verified capability evidence. Deferred work whose state is waiting is pending external evidence, not a failed objective, and must not be repaired or replanned before its terminal completion arrives. For software recovery, software.edit requires a materialized canonical source version; a source-less SoftwareProject must be initialized or retried through software.build using the same project_id."
         ),
     }
 
@@ -61,10 +61,73 @@ def _replace_runtime_state_message(
     messages.insert(insert_at, _runtime_state_message(state))
 
 
+def _waiting_deferred_work(state: CompactRunState) -> dict[str, Any] | None:
+    value = state.facts.get("deferred_work")
+    if not isinstance(value, dict):
+        return None
+    if str(value.get("state") or "").strip().lower() != "waiting":
+        return None
+    return value
+
+
+def _pending_evidence_truth(deferred: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "PENDING_EVIDENCE",
+        "completed": False,
+        "verified": False,
+        "pending": True,
+        "capability_id": str(deferred.get("capability_id") or "deferred_work")[:160],
+        "continuation_kind": str(deferred.get("continuation_kind") or "")[:80] or None,
+        "job_id": str(deferred.get("job_id") or "")[:120] or None,
+        "project_id": str(deferred.get("project_id") or "")[:120] or None,
+        "solution_id": str(deferred.get("solution_id") or "")[:120] or None,
+    }
+
+
+def _pending_evidence_message(deferred: dict[str, Any]) -> str:
+    if str(deferred.get("continuation_kind") or "") == "software_build":
+        return (
+            "Software generation is still in progress. Operly has accepted the durable "
+            "build, but canonical source/build/acceptance evidence is not available yet, "
+            "so the application is not being claimed as complete. The originating run "
+            "will be updated when the durable build reaches a terminal state."
+        )
+    return (
+        "Work is still in progress outside this interactive run. Completion evidence "
+        "has not arrived yet, so Operly is not claiming the objective is complete."
+    )
+
+
+def _pending_result(
+    *,
+    state: CompactRunState,
+    deferred: dict[str, Any],
+    runtime_run_id: str,
+    resumed: bool,
+) -> dict[str, Any]:
+    return {
+        "message": _pending_evidence_message(deferred),
+        "execution_truth": _pending_evidence_truth(deferred),
+        "objective_status": "pending_evidence",
+        "trace": [],
+        "run_plan": state.plan.as_dict() if state.plan else None,
+        "run_state": state.as_dict(),
+        "controller_attempts": [],
+        "replans": 0,
+        "capability_rescues": 0,
+        "rescued_capability_ids": [],
+        "runtime_run_id": runtime_run_id,
+        "resumed": resumed,
+        "stopped": False,
+        "stop_reason": "waiting_external_completion",
+        "budget": {},
+    }
+
+
 def _replan_reason(result: dict[str, Any], state: CompactRunState) -> str | None:
     truth = result.get("execution_truth")
     status = str((truth or {}).get("status") or "").upper()
-    if status == "WAITING_APPROVAL":
+    if status in {"WAITING_APPROVAL", "PENDING_EVIDENCE"}:
         return None
     if status in {"FAILED", "UNVERIFIED"}:
         return f"execution_{status.lower()}"
@@ -80,6 +143,8 @@ def _lifecycle_state(result: dict[str, Any]) -> str:
     status = str((truth or {}).get("status") or "").upper()
     if status == "WAITING_APPROVAL":
         return "waiting_approval"
+    if status == "PENDING_EVIDENCE":
+        return "waiting_external"
     if status in {"FAILED", "UNVERIFIED", "CANCELLED", "EXPIRED"}:
         return "failed"
     if bool(result.get("stopped")):
@@ -141,8 +206,22 @@ class AgentRunController:
         metadata["runtime_controller"] = "adaptive"
 
         resumed = False
-        if existing is not None and str(existing.get("state") or "").lower() == "completed":
+        existing_state = str((existing or {}).get("state") or "").lower()
+        if existing is not None and existing_state == "completed":
             raise RuntimeError("Durable agent run is already completed; reuse its artifacts/results instead of repeating side effects")
+        if existing is not None and existing_state == "waiting_external":
+            checkpoint = existing.get("checkpoint") if isinstance(existing.get("checkpoint"), dict) else {}
+            state = CompactRunState.from_dict(checkpoint, fallback_objective=objective)
+            if state.objective and objective and state.objective.strip() != objective.strip():
+                raise ValueError("Durable agent run objective does not match the requested resume objective")
+            deferred = _waiting_deferred_work(state)
+            if deferred is not None:
+                return _pending_result(
+                    state=state,
+                    deferred=deferred,
+                    runtime_run_id=runtime_run_id,
+                    resumed=True,
+                )
         if existing is not None and _resumable_state(existing.get("state") or ""):
             checkpoint = existing.get("checkpoint") if isinstance(existing.get("checkpoint"), dict) else {}
             state = CompactRunState.from_dict(checkpoint, fallback_objective=objective)
@@ -276,6 +355,7 @@ class AgentRunController:
                 truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
                 waiting_approval = str(truth.get("status") or "").upper() == "WAITING_APPROVAL"
                 execution_evidence = has_execution_evidence(combined_trace)
+                deferred_work = _waiting_deferred_work(state)
                 verification_criteria: tuple[str, ...] = ()
                 if state.plan is not None and state.plan.planning_required:
                     verification_criteria = tuple(state.plan.success_criteria) or (objective[:700],)
@@ -285,7 +365,18 @@ class AgentRunController:
                     # incorrectly declares a multi-part user objective finished.
                     verification_criteria = (objective[:700],)
 
-                if (
+                if deferred_work is not None:
+                    # A durable capability accepted work that has not reached terminal
+                    # evidence yet. Missing source/build/acceptance evidence is expected
+                    # in this state and must not be converted into UNVERIFIED or a repair
+                    # plan. The completion worker owns the next transition.
+                    result["execution_truth"] = _pending_evidence_truth(deferred_work)
+                    result["objective_status"] = "pending_evidence"
+                    result["message"] = _pending_evidence_message(deferred_work)
+                    result["stop_reason"] = "waiting_external_completion"
+                    result["stopped"] = False
+                    result.pop("goal_verification", None)
+                elif (
                     verification_criteria
                     and not bool(result.get("stopped"))
                     and not waiting_approval
@@ -347,6 +438,7 @@ class AgentRunController:
                         payload={
                             "execution_truth": result.get("execution_truth"),
                             "goal_verification": result.get("goal_verification"),
+                            "objective_status": result.get("objective_status"),
                             "stop_reason": result.get("stop_reason"),
                             "stopped": bool(result.get("stopped")),
                             "replans": replans,
