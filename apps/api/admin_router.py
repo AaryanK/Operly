@@ -1,4 +1,3 @@
-import json
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -8,6 +7,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
+from packages.database.analytics_models import ProductAnalyticsEvent
 from packages.database.models import (
     AppUser,
     AuthSession,
@@ -19,6 +19,7 @@ from packages.database.models import (
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 LOGIN_EVENT_TYPES = ("login_success", "google_authentication_success")
+ANALYTICS_ACTIVITY_EVENTS = ("page_view", "heartbeat")
 
 
 def _configured_admin_email() -> str:
@@ -48,23 +49,6 @@ async def require_platform_admin(
     return account
 
 
-def _safe_metadata(value: str | None) -> dict:
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _country_code(event: SecurityEvent) -> str | None:
-    value = str(_safe_metadata(event.metadata_json).get("country_code") or "").strip().upper()
-    if len(value) == 2 and value.isalpha() and value not in {"XX"}:
-        return value
-    return None
-
-
 async def _active_user_count(
     db: AsyncSession,
     cutoff: datetime,
@@ -72,10 +56,11 @@ async def _active_user_count(
     admin_email: str,
 ) -> int:
     value = await db.scalar(
-        select(func.count(func.distinct(AuthSession.user_id)))
-        .join(AppUser, AppUser.id == AuthSession.user_id)
+        select(func.count(func.distinct(ProductAnalyticsEvent.user_id)))
+        .join(AppUser, AppUser.id == ProductAnalyticsEvent.user_id)
         .where(
-            AuthSession.last_activity_at >= cutoff,
+            ProductAnalyticsEvent.created_at >= cutoff,
+            ProductAnalyticsEvent.event_name.in_(ANALYTICS_ACTIVITY_EVENTS),
             func.lower(AppUser.email) != admin_email,
         )
     )
@@ -90,24 +75,26 @@ async def _geography_summary(
 ) -> dict:
     events = (
         await db.scalars(
-            select(SecurityEvent)
+            select(ProductAnalyticsEvent)
             .where(
-                SecurityEvent.created_at >= since,
-                SecurityEvent.outcome == "succeeded",
-                SecurityEvent.event_type.in_(LOGIN_EVENT_TYPES),
-                SecurityEvent.user_id.is_not(None),
-                SecurityEvent.user_id != admin_user_id,
+                ProductAnalyticsEvent.created_at >= since,
+                ProductAnalyticsEvent.event_name == "page_view",
+                ProductAnalyticsEvent.user_id.is_not(None),
+                ProductAnalyticsEvent.user_id != admin_user_id,
             )
-            .order_by(SecurityEvent.created_at.desc())
+            .order_by(ProductAnalyticsEvent.created_at.desc())
         )
     ).all()
 
     buckets: dict[str, dict] = defaultdict(lambda: {"visits": 0, "users": set()})
     unknown_visits = 0
     located_visits = 0
+    path_counts: dict[str, int] = defaultdict(int)
     for event in events:
-        code = _country_code(event)
-        if not code:
+        if event.path:
+            path_counts[event.path] += 1
+        code = str(event.country_code or "").strip().upper()
+        if len(code) != 2 or not code.isalpha() or code == "XX":
             unknown_visits += 1
             continue
         located_visits += 1
@@ -125,12 +112,17 @@ async def _geography_summary(
     ]
     countries.sort(key=lambda item: (item["unique_users"], item["visits"]), reverse=True)
     total = located_visits + unknown_visits
+    top_paths = [
+        {"path": path, "views": views}
+        for path, views in sorted(path_counts.items(), key=lambda item: item[1], reverse=True)[:10]
+    ]
     return {
         "countries": countries,
-        "located_signins": located_visits,
-        "unknown_signins": unknown_visits,
-        "total_signins": total,
+        "located_views": located_visits,
+        "unknown_views": unknown_visits,
+        "total_views": total,
         "coverage_percent": round((located_visits / total) * 100, 1) if total else 0.0,
+        "top_paths": top_paths,
     }
 
 
@@ -283,7 +275,7 @@ async def admin_overview(
 @router.get("/users")
 async def admin_users(
     limit: int = Query(default=100, ge=1, le=500),
-    account: AccountAuthContext = Depends(require_platform_admin),
+    _: AccountAuthContext = Depends(require_platform_admin),
     db: AsyncSession = Depends(get_db),
 ):
     users = (
@@ -329,24 +321,23 @@ async def admin_users(
 
     latest_event_subquery = (
         select(
-            SecurityEvent.user_id.label("user_id"),
-            func.max(SecurityEvent.created_at).label("created_at"),
+            ProductAnalyticsEvent.user_id.label("user_id"),
+            func.max(ProductAnalyticsEvent.created_at).label("created_at"),
         )
         .where(
-            SecurityEvent.user_id.in_(user_ids),
-            SecurityEvent.outcome == "succeeded",
-            SecurityEvent.event_type.in_(LOGIN_EVENT_TYPES),
+            ProductAnalyticsEvent.user_id.in_(user_ids),
+            ProductAnalyticsEvent.country_code.is_not(None),
         )
-        .group_by(SecurityEvent.user_id)
+        .group_by(ProductAnalyticsEvent.user_id)
         .subquery()
     )
     location_events = (
         await db.scalars(
-            select(SecurityEvent).join(
+            select(ProductAnalyticsEvent).join(
                 latest_event_subquery,
                 and_(
-                    SecurityEvent.user_id == latest_event_subquery.c.user_id,
-                    SecurityEvent.created_at == latest_event_subquery.c.created_at,
+                    ProductAnalyticsEvent.user_id == latest_event_subquery.c.user_id,
+                    ProductAnalyticsEvent.created_at == latest_event_subquery.c.created_at,
                 ),
             )
         )
@@ -354,7 +345,7 @@ async def admin_users(
     latest_country: dict[str, str | None] = {}
     for event in location_events:
         if event.user_id and event.user_id not in latest_country:
-            latest_country[event.user_id] = _country_code(event)
+            latest_country[event.user_id] = event.country_code
 
     admin_email = _configured_admin_email()
     return [
