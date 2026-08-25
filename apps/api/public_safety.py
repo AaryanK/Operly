@@ -17,6 +17,7 @@ PUBLIC_SHELL_ROUTES = {
     "/privacy",
     "/terms",
     "/admin",
+    "/channels",
     "/docs",
     "/redoc",
     "/openapi.json",
@@ -42,11 +43,12 @@ def _looks_like_asset(path: str) -> bool:
 
 
 def _unknown_public_route(path: str) -> bool:
-    if path in PUBLIC_SHELL_ROUTES:
+    normalized = path.rstrip("/") or "/"
+    if normalized in PUBLIC_SHELL_ROUTES:
         return False
-    if any(path.startswith(prefix) for prefix in PUBLIC_ROUTE_PREFIXES):
+    if any(normalized.startswith(prefix) for prefix in PUBLIC_ROUTE_PREFIXES):
         return False
-    if _looks_like_asset(path):
+    if _looks_like_asset(normalized):
         return False
     return True
 
