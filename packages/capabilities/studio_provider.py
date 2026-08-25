@@ -2,22 +2,22 @@ from sqlalchemy import desc, select
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
+from packages.capabilities.software_build_provider import SoftwareBuildProvider
 from packages.database.product_models import SolutionRecord
 from packages.database.studio_models import StudioDeployment, StudioProject, StudioVersion
 from packages.database.studio_source_models import StudioSourceVersion
 from packages.solutions.production import ProductionService
 from packages.solutions.service import RuntimeType, SolutionService
-from packages.studio import source_agent
 from packages.studio.service import StudioService
 
 
 class StudioProvider(BaseProvider):
-    """Compatibility capability surface over the source-first Studio runtime.
+    """Compatibility capability surface over the unified software runtime.
 
-    The public capability IDs remain stable during migration, but AI generation no
-    longer routes through the legacy schema generator. Source versions are the
-    primary editable artifact and the unified production service can publish either
-    source or a legacy schema version.
+    The public Studio capability IDs remain stable during migration, but coding is
+    owned exclusively by ``software.build``/``software.edit`` and AgentRuntime.
+    Legacy Studio rows remain adapters for reads/publication until their follow-up
+    schema retirement; they are never an alternate coding-agent execution path.
     """
 
     name = "operly_studio"
@@ -58,7 +58,7 @@ class StudioProvider(BaseProvider):
         CapabilityDefinition(
             "studio.generate_site",
             "studio_generate_site",
-            "Generate or edit the real source files of a Studio website draft. This never publishes it.",
+            "Compatibility alias that builds or edits a Studio project through the canonical software runtime. This never publishes it.",
             {
                 "type": "object",
                 "properties": {"project_id": {"type": "string"}, "request": {"type": "string"}},
@@ -138,6 +138,7 @@ class StudioProvider(BaseProvider):
     def __init__(self):
         self.service = StudioService()
         self.solutions = SolutionService()
+        self.software = SoftwareBuildProvider()
 
     async def _solution_for_project(self, db, tenant_id: str, project_id: str):
         await self.solutions.sync(db, tenant_id)
@@ -192,36 +193,75 @@ class StudioProvider(BaseProvider):
                 )
 
             if capability_name == "studio.generate_site":
-                project = await self.service.project(
+                legacy_project = await self.service.project(
                     context.db,
                     context.tenant_id,
                     str(arguments["project_id"]),
                 )
-                source = await source_agent.edit_source(
+                # Resolving through SoftwareProjectService syncs the legacy Studio
+                # facade and keeps tenant ownership authoritative on the backend.
+                project = await self.software.projects.get(
                     context.db,
                     context.tenant_id,
-                    context.actor_id or "OPERLY",
-                    project,
-                    str(arguments["request"]),
-                    editor_context={
-                        "surface": "capability",
-                        "objective": str(arguments["request"]),
-                    },
+                    legacy_project.id,
                 )
-                payload = source_agent.source_json(source)
+                request = " ".join(
+                    str(arguments.get("request") or "").replace("\x00", "").split()
+                ).strip()[:12000]
+                if not request:
+                    return CapabilityResult(False, False, {"reason": "request_required"})
+                current = await self.software.sources.latest(
+                    context.db,
+                    context.tenant_id,
+                    project.id,
+                )
+                if current is None:
+                    delegated_name = "software.build"
+                    delegated_arguments = {
+                        "project_id": project.id,
+                        "objective": request,
+                        "name": project.name,
+                        "return_source_archive": True,
+                    }
+                    action = "build_queued"
+                else:
+                    delegated_name = "software.edit"
+                    delegated_arguments = {
+                        "project_id": project.id,
+                        "instruction": request,
+                        "studio_context": {
+                            "source_version_id": current.id,
+                        },
+                    }
+                    action = "edited"
+                result = await self.software.execute(
+                    context,
+                    delegated_name,
+                    delegated_arguments,
+                )
+                if not result.success:
+                    return result
+                result = await self.software.verify(
+                    context,
+                    delegated_name,
+                    delegated_arguments,
+                    result,
+                )
+                if not result.success:
+                    return result
                 return CapabilityResult(
                     True,
-                    True,
+                    result.changed,
                     {
+                        **result.evidence,
                         "project_id": project.id,
-                        "source_id": source.id,
-                        "source_version": source.source_version,
-                        "runtime_profile": payload.get("runtimeProfile"),
-                        "files": payload.get("files", []),
-                        "summary": payload.get("summary"),
+                        "legacy_studio_project_id": legacy_project.id,
+                        "action": action,
+                        "compatibility_alias": "studio.generate_site",
+                        "canonical_runtime": True,
                         "published": False,
                     },
-                    source.id,
+                    result.external_reference,
                 )
 
             if capability_name == "studio.list_versions":
@@ -278,10 +318,16 @@ class StudioProvider(BaseProvider):
                     context.tenant_id,
                     str(arguments["project_id"]),
                 )
-                latest = await source_agent.latest_source(
-                    context.db,
-                    context.tenant_id,
-                    project.id,
+                # Publication still supports legacy Studio versions as an adapter,
+                # but it no longer imports or calls the retired Studio source agent.
+                latest = await context.db.scalar(
+                    select(StudioSourceVersion)
+                    .where(
+                        StudioSourceVersion.tenant_id == context.tenant_id,
+                        StudioSourceVersion.project_id == project.id,
+                    )
+                    .order_by(desc(StudioSourceVersion.source_version))
+                    .limit(1)
                 )
                 version_id = str(
                     arguments.get("version_id")
