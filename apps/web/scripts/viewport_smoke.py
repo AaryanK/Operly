@@ -213,7 +213,7 @@ def run() -> None:
                         for route, expected in PUBLIC_ROUTES.items():
                             open_page(page, base_url, route, expected, viewport)
 
-                        open_page(page, base_url, "/channels/@me", "Your account-level AI", viewport)
+                        open_page(page, base_url, "/channels/@me", "Operly", viewport)
                         if width <= 680:
                             history = page.locator(".mobile-history-button")
                             history.wait_for(state="visible")
