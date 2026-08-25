@@ -15,10 +15,13 @@ on:
       - "packages/agents/**"
       - "packages/artifacts/**"
       - "packages/business_brain/attachments/**"
+      - "packages/business_brain/personal_agent.py"
       - "packages/capabilities/artifact_provider.py"
       - "packages/capabilities/computer_provider.py"
+      - "packages/capabilities/file_authoring_provider.py"
       - "packages/capabilities/file_runtime_provider.py"
       - "packages/capabilities/gmail_artifact_provider.py"
+      - "packages/capabilities/personal_google_provider.py"
       - "packages/capabilities/defaults.py"
       - "packages/capabilities/contracts.py"
       - "packages/channels/envelope.py"
@@ -33,7 +36,10 @@ on:
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
+      - "tests/test_file_authoring_provider.py"
       - "tests/test_file_runtime_provider.py"
+      - "tests/test_gmail_artifact_provider.py"
+      - "tests/test_agent_objective_verification.py"
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
       - ".github/workflows/unified-agent-runtime.yml"
@@ -63,14 +69,18 @@ jobs:
           packages/agents/controller.py
           packages/agents/persistence.py
           packages/agents/run_state.py
+          packages/agents/verification.py
           packages/artifacts/blob_store.py
           packages/artifacts/delivery.py
           packages/artifacts/service.py
+          packages/business_brain/personal_agent.py
           packages/business_brain/attachments/batch_processor.py
           packages/capabilities/artifact_provider.py
           packages/capabilities/computer_provider.py
+          packages/capabilities/file_authoring_provider.py
           packages/capabilities/file_runtime_provider.py
           packages/capabilities/gmail_artifact_provider.py
+          packages/capabilities/personal_google_provider.py
           packages/channels/envelope.py
           packages/channels/service.py
           packages/connectors/discord/artifact_delivery.py
@@ -96,6 +106,9 @@ jobs:
           python -m pytest -q
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
+          tests/test_file_authoring_provider.py
           tests/test_file_runtime_provider.py
+          tests/test_gmail_artifact_provider.py
+          tests/test_agent_objective_verification.py
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py
