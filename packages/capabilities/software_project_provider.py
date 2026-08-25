@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
 from packages.service_bindings import ServiceBindingStore
@@ -38,7 +37,12 @@ def _binding_json(binding) -> dict:
     }
 
 
-def _plugin_context(context, objective: str) -> PluginInvocationContext:
+def _plugin_context(context, objective: str):
+    # Import lazily: agent_harness imports the default registry, which registers this
+    # provider. A module-level import would form defaults -> provider -> harness ->
+    # defaults and make the entire capability/task surface fail during collection.
+    from packages.capabilities.agent_harness import PluginInvocationContext
+
     invocation = context.invocation if isinstance(context.invocation, dict) else {}
     metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
     return PluginInvocationContext(
@@ -237,6 +241,10 @@ class SoftwareProjectProvider(BaseProvider):
             )
 
         if capability_name == "software.binding.create":
+            # Availability uses the canonical harness, but import it only at runtime
+            # so provider registration itself remains acyclic.
+            from packages.capabilities.agent_harness import PluginAgentHarness
+
             target = str(arguments.get("capability_id") or "").strip()
             availability = await PluginAgentHarness().availability(
                 target,
