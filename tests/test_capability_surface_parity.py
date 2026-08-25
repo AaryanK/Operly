@@ -10,7 +10,7 @@ def test_core_capability_domains_have_cross_surface_contracts():
         "workspace",
         "context",
         "actions",
-        "studio",
+        "software",
         "gmail",
         "crm",
         "reminders",
