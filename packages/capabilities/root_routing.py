@@ -14,13 +14,18 @@ _BUILD_ACTION_RE = re.compile(
     r"\b(?:build|create|make|develop|implement|generate|write|code|design|produce|set\s+up|spin\s+up)\b",
     re.IGNORECASE,
 )
-_SOFTWARE_PRODUCT_RE = re.compile(
-    r"\b(?:app|application|web\s+app|website|software|codebase|dashboard|portal|platform|api|backend|frontend|full[-\s]?stack)\b",
+_STRONG_SOFTWARE_PRODUCT_RE = re.compile(
+    r"\b(?:app|application|web\s+app|website|software|codebase|dashboard|portal|platform|full[-\s]?stack)\b",
     re.IGNORECASE,
 )
+_SOFTWARE_COMPONENT_RE = re.compile(r"\b(?:api|backend|frontend)\b", re.IGNORECASE)
 _SYSTEM_RE = re.compile(r"\bsystem\b", re.IGNORECASE)
 _STRONG_COMPLETION_RE = re.compile(
     r"\b(?:working|runnable|deployable|complete|entire|full[-\s]?stack|production[-\s]?ready)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_ARTIFACT_RE = re.compile(
+    r"\b(?:file|snippet|schema|migration|component|function|class|query|prompt)\b",
     re.IGNORECASE,
 )
 _NON_PRODUCT_SYSTEM_RE = re.compile(
@@ -33,14 +38,15 @@ def requires_software_build(objective: str) -> bool:
     """Return True only for a clear root request to construct runnable software.
 
     Deliberately excluded examples include a code snippet, one source file, a schema
-    file, or a system prompt. Those remain valid artifact/file-authoring requests.
+    file, component, query, or system prompt. Those remain artifact/file-authoring
+    requests even when they mention a software layer such as an API or frontend.
     """
 
     text = " ".join(str(objective or "").split()).strip()
     if not text or not _BUILD_ACTION_RE.search(text):
         return False
 
-    if _SOFTWARE_PRODUCT_RE.search(text):
+    if _STRONG_SOFTWARE_PRODUCT_RE.search(text):
         return True
 
     if _SYSTEM_RE.search(text) and not _NON_PRODUCT_SYSTEM_RE.search(text):
@@ -48,5 +54,10 @@ def requires_software_build(objective: str) -> bool:
         # explicit completion language or a sufficiently descriptive objective keeps
         # short non-software phrases from becoming application builds accidentally.
         return bool(_STRONG_COMPLETION_RE.search(text) or len(text.split()) >= 6)
+
+    if _SOFTWARE_COMPONENT_RE.search(text):
+        # "Build an API/backend/frontend" is software construction, while "write an
+        # API schema" or "create a frontend component" remains normal file authoring.
+        return not _EXPLICIT_ARTIFACT_RE.search(text)
 
     return False
