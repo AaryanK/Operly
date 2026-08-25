@@ -15,6 +15,7 @@ from packages.model_runtime.contracts import (
     InferenceBudget,
     InferenceRequest,
     InferenceResult,
+    Model,
     ModelInferenceError,
     ModelTraits,
 )
@@ -28,6 +29,13 @@ from packages.plugins.extensions import (
 )
 
 _TOKEN_RE = re.compile(r"[a-z0-9_-]+")
+_EXPLICIT_EXECUTION_PHRASES = (
+    "do not merely plan",
+    "do not just plan",
+    "don't just plan",
+    "dont just plan",
+    "not just plan",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +179,24 @@ def classify_business_task(objective: str) -> TaskRouteDecision:
             "read_research_sources",
             0.50,
             "fallback heuristic identified a research workload shape",
+        )
+    explicit_execution = any(phrase in text for phrase in _EXPLICIT_EXECUTION_PHRASES)
+    if explicit_execution and has(
+        "send",
+        "create",
+        "update",
+        "delete",
+        "schedule",
+        "email",
+        "remind",
+        "approve",
+    ):
+        return TaskRouteDecision(
+            "bounded_operation",
+            "bounded_task",
+            "bounded_action_with_approval",
+            0.60,
+            "fallback heuristic honored explicit execution ownership",
         )
     if has("plan", "strategy", "roadmap", "design", "architect", "proposal"):
         return TaskRouteDecision(
@@ -443,6 +469,29 @@ class TaskRoutedBusinessModel:
     def __init__(self) -> None:
         self.last_decision: TaskRouteDecision | None = None
         self.last_requirements: ModelRequirements | None = None
+        self._selected_requirements: ModelRequirements | None = None
+        self._selected_fallback_role: str | None = None
+        self._selected_model: Model | None = None
+
+    def _select_model(
+        self,
+        requirements: ModelRequirements,
+        *,
+        fallback_role: str,
+    ) -> Model:
+        """Reuse one compatible model session so pool cooldown/preference state survives turns."""
+        if (
+            self._selected_model is not None
+            and self._selected_requirements == requirements
+            and self._selected_fallback_role == fallback_role
+        ):
+            return self._selected_model
+
+        selected = model_for_requirements(requirements, fallback_role=fallback_role)
+        self._selected_requirements = requirements
+        self._selected_fallback_role = fallback_role
+        self._selected_model = selected
+        return selected
 
     async def infer(self, request: InferenceRequest) -> InferenceResult:
         decision = _existing_route(request)
@@ -456,7 +505,7 @@ class TaskRoutedBusinessModel:
         requirements = requirements_for_task(decision, request)
         self.last_requirements = requirements
         fallback_role = "business_agent" if request.tools else decision.role
-        selected = model_for_requirements(requirements, fallback_role=fallback_role)
+        selected = self._select_model(requirements, fallback_role=fallback_role)
 
         metadata = dict(request.metadata)
         route_metadata = decision.as_dict()
