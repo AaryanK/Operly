@@ -30,7 +30,7 @@ on:
       - "tests/test_canonical_software_architecture.py"
       - "tests/test_software_project_persistence.py"
       - "tests/test_software_build_capability.py"
-      - "tests/test_generated_solution_worker.py"
+      - "tests/test_software_solution_worker.py"
       - "tests/test_fullstack_runtime_contract.py"
       - "tests/test_solution_source_inspector.py"
       - "tests/test_solution_production.py"
@@ -100,7 +100,7 @@ jobs:
           tests/test_canonical_software_architecture.py
           tests/test_software_project_persistence.py
           tests/test_software_build_capability.py
-          tests/test_generated_solution_worker.py
+          tests/test_software_solution_worker.py
           tests/test_fullstack_runtime_contract.py
           tests/test_solution_source_inspector.py
           tests/test_solution_production.py
