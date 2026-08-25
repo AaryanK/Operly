@@ -219,6 +219,7 @@ def run() -> None:
                             history.wait_for(state="visible")
                             assert_min_target(page, ".mobile-history-button", 44, f"Personal at {viewport}")
                             history.click()
+                            page.wait_for_timeout(250)
                             drawer = page.locator("#personal-conversation-history")
                             drawer_box = drawer.bounding_box()
                             if not drawer_box or drawer_box["x"] < -1:
