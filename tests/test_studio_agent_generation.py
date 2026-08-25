@@ -505,17 +505,51 @@ def test_source_scoped_runner_key_survives_restart_without_rebinding_new_source(
     assert source_scoped_idempotency_key(base, first) != source_scoped_idempotency_key(base, repaired)
 
 
-def test_solution_keys_route_through_shared_durable_studio_controller(monkeypatch):
+def test_solution_keys_use_generic_coding_runner_loop_without_studio_controller(monkeypatch):
     import packages.coding_harness.studio_controller as studio
 
-    expected = (SimpleNamespace(state="preview_ready"), SimpleNamespace(source_version=1), [])
-    called = {}
+    source = SimpleNamespace(
+        id="source-1",
+        source_version=1,
+        bundle_digest="sha256:" + "a" * 64,
+        manifest_json="{}",
+        provenance_json="{}",
+        plan_id="plan-1",
+        plan_version=1,
+    )
+    build = SimpleNamespace(
+        id="build-1",
+        state="preview_ready",
+        failure_classification=None,
+        result_json="{}",
+        attempt=1,
+    )
+    calls = {"submit": 0}
 
-    async def fake_controller(*args, **kwargs):
-        called["metadata"] = kwargs["metadata"]
-        return expected
+    async def forbidden_controller(*args, **kwargs):
+        raise AssertionError("solution generation must not detour through studio_controller")
 
-    monkeypatch.setattr(studio, "run_studio_generation", fake_controller)
+    async def latest(*args, **kwargs):
+        return source
+
+    async def submit(*args, **kwargs):
+        calls["submit"] += 1
+        assert args[5] is source
+        assert args[6] == "solution:solution-123:generated-build:9"
+        return build
+
+    async def settled(*args, **kwargs):
+        return build
+
+    async def no_trace(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(studio, "run_studio_generation", forbidden_controller)
+    monkeypatch.setattr(execution_loop, "latest_source", latest)
+    monkeypatch.setattr(execution_loop, "submit_source_build", submit)
+    monkeypatch.setattr(execution_loop, "_await_runner_build", settled)
+    monkeypatch.setattr(execution_loop, "_trace", no_trace)
+
     actual = asyncio.run(
         execution_loop.build_with_repair(
             SimpleNamespace(),
@@ -526,6 +560,6 @@ def test_solution_keys_route_through_shared_durable_studio_controller(monkeypatc
             "solution:solution-123:generated-build:9",
         )
     )
-    assert actual == expected
-    assert called["metadata"]["runtime_run_id"] == "solution:solution-123:attempt:9"
-    assert called["metadata"]["surface"] == "solution_generation"
+
+    assert actual == (build, source, [])
+    assert calls["submit"] == 1
