@@ -58,7 +58,7 @@ class PlanningModelRuntimeBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     def test_live_plan_service_has_no_provider_transport_dependency(self):
         root = Path(__file__).resolve().parents[1]
-        source = (root / "packages/custom_software/plan_service.py").read_text()
+        source = (root / "packages/software_projects/planning/plan_service.py").read_text()
         self.assertIn("ModelPlanningClient", source)
         for token in (
             "OllamaPlanningClient",
