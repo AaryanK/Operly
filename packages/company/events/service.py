@@ -11,10 +11,11 @@ from packages.database.company_models import BusinessEventRecord
 
 @dataclass(frozen=True, slots=True)
 class BusinessEvent:
+    # Keep the legacy workspace-event positional shape stable. Before 0040 every
+    # BusinessEvent was workspace-owned, so defaulting legacy callers to workspace
+    # is backwards-compatible while Personal events must opt into their owner scope.
     id: str
-    scope_kind: str
     tenant_id: str | None
-    owner_user_id: str | None
     event_type: str
     occurred_at: datetime
     actor_type: str
@@ -24,23 +25,25 @@ class BusinessEvent:
     correlation_id: str | None
     causation_id: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
+    scope_kind: str = field(default="workspace", kw_only=True)
+    owner_user_id: str | None = field(default=None, kw_only=True)
 
 
 def _event(row: BusinessEventRecord) -> BusinessEvent:
     return BusinessEvent(
-        row.id,
-        row.scope_kind,
-        row.tenant_id,
-        row.owner_user_id,
-        row.event_type,
-        row.occurred_at,
-        row.actor_type,
-        row.actor_id,
-        row.source,
-        json.loads(row.payload_json),
-        row.correlation_id,
-        row.causation_id,
-        json.loads(row.metadata_json),
+        id=row.id,
+        tenant_id=row.tenant_id,
+        event_type=row.event_type,
+        occurred_at=row.occurred_at,
+        actor_type=row.actor_type,
+        actor_id=row.actor_id,
+        source=row.source,
+        payload=json.loads(row.payload_json),
+        correlation_id=row.correlation_id,
+        causation_id=row.causation_id,
+        metadata=json.loads(row.metadata_json),
+        scope_kind=row.scope_kind,
+        owner_user_id=row.owner_user_id,
     )
 
 
