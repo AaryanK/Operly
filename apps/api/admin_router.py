@@ -1,3 +1,4 @@
+import json
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -7,7 +8,6 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
-from packages.database.analytics_models import ProductAnalyticsEvent
 from packages.database.models import (
     AppUser,
     AuthSession,
@@ -19,7 +19,8 @@ from packages.database.models import (
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 LOGIN_EVENT_TYPES = ("login_success", "google_authentication_success")
-ANALYTICS_ACTIVITY_EVENTS = ("page_view", "heartbeat")
+PRODUCT_PAGE_VIEW = "product_page_view"
+PRODUCT_ACTIVITY_TYPES = (PRODUCT_PAGE_VIEW, "product_heartbeat")
 
 
 def _configured_admin_email() -> str:
@@ -49,6 +50,21 @@ async def require_platform_admin(
     return account
 
 
+def _event_metadata(event: SecurityEvent) -> dict:
+    try:
+        parsed = json.loads(event.metadata_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _event_country(event: SecurityEvent) -> str | None:
+    value = str(_event_metadata(event).get("country_code") or "").strip().upper()
+    if len(value) == 2 and value.isalpha() and value != "XX":
+        return value
+    return None
+
+
 async def _active_user_count(
     db: AsyncSession,
     cutoff: datetime,
@@ -56,11 +72,12 @@ async def _active_user_count(
     admin_email: str,
 ) -> int:
     value = await db.scalar(
-        select(func.count(func.distinct(ProductAnalyticsEvent.user_id)))
-        .join(AppUser, AppUser.id == ProductAnalyticsEvent.user_id)
+        select(func.count(func.distinct(SecurityEvent.user_id)))
+        .join(AppUser, AppUser.id == SecurityEvent.user_id)
         .where(
-            ProductAnalyticsEvent.created_at >= cutoff,
-            ProductAnalyticsEvent.event_name.in_(ANALYTICS_ACTIVITY_EVENTS),
+            SecurityEvent.created_at >= cutoff,
+            SecurityEvent.outcome == "succeeded",
+            SecurityEvent.event_type.in_(PRODUCT_ACTIVITY_TYPES),
             func.lower(AppUser.email) != admin_email,
         )
     )
@@ -75,14 +92,15 @@ async def _geography_summary(
 ) -> dict:
     events = (
         await db.scalars(
-            select(ProductAnalyticsEvent)
+            select(SecurityEvent)
             .where(
-                ProductAnalyticsEvent.created_at >= since,
-                ProductAnalyticsEvent.event_name == "page_view",
-                ProductAnalyticsEvent.user_id.is_not(None),
-                ProductAnalyticsEvent.user_id != admin_user_id,
+                SecurityEvent.created_at >= since,
+                SecurityEvent.outcome == "succeeded",
+                SecurityEvent.event_type == PRODUCT_PAGE_VIEW,
+                SecurityEvent.user_id.is_not(None),
+                SecurityEvent.user_id != admin_user_id,
             )
-            .order_by(ProductAnalyticsEvent.created_at.desc())
+            .order_by(SecurityEvent.created_at.desc())
         )
     ).all()
 
@@ -91,10 +109,12 @@ async def _geography_summary(
     located_visits = 0
     path_counts: dict[str, int] = defaultdict(int)
     for event in events:
-        if event.path:
-            path_counts[event.path] += 1
-        code = str(event.country_code or "").strip().upper()
-        if len(code) != 2 or not code.isalpha() or code == "XX":
+        metadata = _event_metadata(event)
+        path = str(metadata.get("path") or "").strip()
+        if path:
+            path_counts[path] += 1
+        code = _event_country(event)
+        if not code:
             unknown_visits += 1
             continue
         located_visits += 1
@@ -321,23 +341,24 @@ async def admin_users(
 
     latest_event_subquery = (
         select(
-            ProductAnalyticsEvent.user_id.label("user_id"),
-            func.max(ProductAnalyticsEvent.created_at).label("created_at"),
+            SecurityEvent.user_id.label("user_id"),
+            func.max(SecurityEvent.created_at).label("created_at"),
         )
         .where(
-            ProductAnalyticsEvent.user_id.in_(user_ids),
-            ProductAnalyticsEvent.country_code.is_not(None),
+            SecurityEvent.user_id.in_(user_ids),
+            SecurityEvent.outcome == "succeeded",
+            SecurityEvent.event_type.in_(PRODUCT_ACTIVITY_TYPES),
         )
-        .group_by(ProductAnalyticsEvent.user_id)
+        .group_by(SecurityEvent.user_id)
         .subquery()
     )
     location_events = (
         await db.scalars(
-            select(ProductAnalyticsEvent).join(
+            select(SecurityEvent).join(
                 latest_event_subquery,
                 and_(
-                    ProductAnalyticsEvent.user_id == latest_event_subquery.c.user_id,
-                    ProductAnalyticsEvent.created_at == latest_event_subquery.c.created_at,
+                    SecurityEvent.user_id == latest_event_subquery.c.user_id,
+                    SecurityEvent.created_at == latest_event_subquery.c.created_at,
                 ),
             )
         )
@@ -345,7 +366,7 @@ async def admin_users(
     latest_country: dict[str, str | None] = {}
     for event in location_events:
         if event.user_id and event.user_id not in latest_country:
-            latest_country[event.user_id] = event.country_code
+            latest_country[event.user_id] = _event_country(event)
 
     admin_email = _configured_admin_email()
     return [
