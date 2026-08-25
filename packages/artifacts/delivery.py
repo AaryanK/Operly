@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import defaultdict
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -63,6 +64,36 @@ def _download_url(scope: ArtifactScope, artifact_id: str) -> str:
     path = f"{prefix}/{quote(str(artifact_id), safe='')}/download"
     base = str(os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
     return f"{base}{path}" if base else path
+
+
+def _strip_model_artifact_links(message: str, artifacts: Iterable[dict[str, Any]]) -> str:
+    """Remove model-invented artifact links when verified delivery metadata exists.
+
+    Artifact IDs are opaque handles, not URLs. The model may mention a filename, but
+    surfaces must derive navigation/download behavior only from scope-verified
+    ``artifacts`` metadata. This prevents prose such as
+    ``[report.xlsx](artifact-uuid)`` from becoming an alternate delivery contract.
+    """
+    text = str(message or "")
+    artifact_ids = {
+        str(item.get("artifact_id") or "").strip()
+        for item in artifacts
+        if str(item.get("artifact_id") or "").strip()
+    }
+    if not artifact_ids:
+        return text.strip()
+
+    def replace_link(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        target = match.group(2).strip().strip("<>")
+        return label if target in artifact_ids else match.group(0)
+
+    text = re.sub(r"\[([^\]\n]{1,300})\]\(([^)\n]{1,500})\)", replace_link, text)
+    for artifact_id in artifact_ids:
+        text = text.replace(f"<{artifact_id}>", "")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 async def resolve_delivery_artifacts(
@@ -168,10 +199,15 @@ async def project_agent_result(
         "run_state": str(getattr(run_row, "state", "") or "") or None,
     }
 
+    # Model prose is not an artifact routing surface. Keep filenames readable but
+    # remove model-invented links to opaque artifact IDs; adapters render/download
+    # only from the verified artifact envelope above.
+    message = _strip_model_artifact_links(str(projected.get("message") or ""), artifacts)
+    projected["message"] = message
+
     # Never let a generic fallback hide verified output, a failed durable run, or a
     # complete absence of execution evidence. Specific informational prose is left
     # alone; only empty/generic completion claims are hardened here.
-    message = str(projected.get("message") or "").strip()
     generic = message.lower().rstrip(".! ") in {"", "done", "completed"}
     if artifacts and generic:
         names = ", ".join(f"`{item['filename']}`" for item in artifacts[:3])

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { installArtifactDownloadHandling } from "./ui/artifactDownload";
 import { initializeTheme } from "./ui/theme";
 import "./ui/tokens.css";
 import "./ui/app.css";
@@ -19,6 +20,7 @@ import "./ui/approvals.css";
 import "./ui/admin-palette.css";
 
 initializeTheme();
+installArtifactDownloadHandling();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operly frontend root was not found");
