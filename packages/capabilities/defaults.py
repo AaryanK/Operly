@@ -54,6 +54,7 @@ def _builtin_providers():
     # heavyweight provider out of module-import time prevents a registry ↔ agent ↔
     # attachment circular import while preserving one canonical provider instance
     # for AI, Studio, MCP and workflows.
+    from packages.capabilities.file_authoring_provider import FileAuthoringProvider
     from packages.capabilities.file_runtime_provider import FileRuntimeProvider
 
     return (
@@ -79,6 +80,7 @@ def _builtin_providers():
         PublicWebReadProvider(),
         ArtifactProvider(),
         FileRuntimeProvider(),
+        FileAuthoringProvider(),
         AgentComputerProvider(),
         MessagingProvider(),
         MessageCurationProvider(),

@@ -14,6 +14,7 @@ from packages.agents.persistence import (
 from packages.agents.planning import AdaptivePlanner
 from packages.agents.run_state import CompactRunState
 from packages.agents.runtime import AgentRuntime, ObservationHook
+from packages.agents.verification import ObjectiveEvidenceVerifier, partial_completion_message
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -87,7 +88,7 @@ def _resumable_state(value: str) -> bool:
 
 
 class AgentRunController:
-    """Plan only when useful, run the micro-loop, compact state, and replan on evidence.
+    """Plan only when useful, run the micro-loop, compact state, verify, and replan.
 
     The controller owns operational state rather than hidden model reasoning. It does
     not widen authority: capability/context access remains entirely in the supplied
@@ -99,9 +100,11 @@ class AgentRunController:
         self,
         *,
         planner: AdaptivePlanner | None = None,
+        verifier: ObjectiveEvidenceVerifier | None = None,
         max_replans: int = 1,
     ) -> None:
         self.planner = planner or AdaptivePlanner()
+        self.verifier = verifier or ObjectiveEvidenceVerifier()
         self.max_replans = max(0, min(int(max_replans), 2))
 
     async def run(
@@ -214,18 +217,51 @@ class AgentRunController:
                     },
                 )
                 combined_trace.extend(result.get("trace") or [])
+
+                goal_verification = None
+                truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
+                waiting_approval = str(truth.get("status") or "").upper() == "WAITING_APPROVAL"
+                if (
+                    state.plan is not None
+                    and state.plan.planning_required
+                    and not bool(result.get("stopped"))
+                    and not waiting_approval
+                ):
+                    goal_verification = await self.verifier.verify(
+                        objective=objective,
+                        success_criteria=state.plan.success_criteria,
+                        trace=combined_trace,
+                        metadata=metadata,
+                    )
+                    result["goal_verification"] = goal_verification.as_dict()
+                    if not goal_verification.satisfied:
+                        for item in goal_verification.missing:
+                            marker = f"root objective unverified: {item}"
+                            if marker not in state.failures:
+                                state.failures.append(marker)
+                        result["execution_truth"] = {
+                            "status": "UNVERIFIED",
+                            "completed": False,
+                            "verified": False,
+                            "capability_id": "root_objective",
+                            "missing": list(goal_verification.missing),
+                        }
+
                 attempts.append(
                     {
                         "plan_revision": state.plan.revision if state.plan else 0,
                         "stop_reason": result.get("stop_reason"),
                         "stopped": bool(result.get("stopped")),
                         "execution_truth": result.get("execution_truth"),
+                        "goal_verification": goal_verification.as_dict() if goal_verification else None,
                         "budget": result.get("budget") or {},
                     }
                 )
 
                 reason = _replan_reason(result, state)
                 if not reason or replans >= self.max_replans:
+                    if goal_verification is not None and not goal_verification.satisfied:
+                        result["message"] = partial_completion_message(goal_verification)
                     result["trace"] = combined_trace
                     result["run_plan"] = state.plan.as_dict() if state.plan else None
                     result["run_state"] = state.as_dict()
@@ -243,6 +279,7 @@ class AgentRunController:
                         lifecycle_state=lifecycle,
                         payload={
                             "execution_truth": result.get("execution_truth"),
+                            "goal_verification": result.get("goal_verification"),
                             "stop_reason": result.get("stop_reason"),
                             "stopped": bool(result.get("stopped")),
                             "replans": replans,

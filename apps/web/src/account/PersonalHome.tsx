@@ -179,8 +179,9 @@ export function PersonalHome({ profile }: Props) {
     setMessage("");
     const pendingFiles = files;
     setFiles([]);
-    const visibleText = trimmed || "Analyze the supplied attachment(s).";
-    setMessages((current) => [...current, { role: "user", content: visibleText }]);
+    const visibleText = trimmed || `[Attached: ${pendingFiles.map((file) => file.name).join(", ")}]`;
+    const optimistic: Message = { role: "user", content: visibleText };
+    setMessages((current) => [...current, optimistic]);
 
     try {
       let result: ChatResult;
@@ -205,8 +206,13 @@ export function PersonalHome({ profile }: Props) {
       }]);
       await Promise.all([loadConversations(nextId), loadApprovals()]);
     } catch (caught) {
+      setMessages((current) => {
+        const index = current.lastIndexOf(optimistic);
+        return index >= 0 ? current.filter((_, itemIndex) => itemIndex !== index) : current;
+      });
       setError(caught instanceof Error ? caught.message : "Personal Operly could not complete that request");
-      setFiles(pendingFiles);
+      // Do not silently restore failed files. Restoring them made repeated retries
+      // re-upload the same bytes and accumulate duplicate synthetic transcript turns.
     } finally {
       setBusy(false);
     }

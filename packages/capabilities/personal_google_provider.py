@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
 from packages.capabilities.contracts import CapabilityResult
+from packages.capabilities.gmail_artifact_provider import GmailArtifactProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.gmail_read_provider import GmailReadProvider
 from packages.capabilities.providers import BaseProvider
@@ -31,6 +32,7 @@ PERSONAL_GOOGLE_CAPABILITY_IDS = frozenset(
         "gmail.read_message",
         "gmail.modify_labels",
         "gmail.create_draft",
+        "gmail.create_draft_with_artifacts",
         "gmail.read_thread",
         "gmail.list_attachments",
         "gmail.read_attachment",
@@ -55,6 +57,7 @@ def _underlying_providers():
         GmailProvider(),
         GmailReadProvider(),
         GmailDraftLifecycleProvider(),
+        GmailArtifactProvider(),
         GoogleCalendarProvider(),
         CalendarSemanticsProvider(),
     )

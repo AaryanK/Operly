@@ -1,5 +1,3 @@
-import json
-import tempfile
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,18 +9,18 @@ from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.artifacts.delivery import artifacts_by_assistant_message, project_agent_result
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.business_brain import AgentInput, get_agent_service
-from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
-from packages.business_brain.attachments.multimodal_processor import attachment_hashes
-from packages.business_brain.attachments.privacy import redacted_name
+from packages.business_brain.attachments import MultimodalProcessor
 from packages.business_brain.ollama_client import OllamaError
 from packages.business_brain.security import AgentSecurityError
-from packages.database.agent_models import AgentConversation, AgentMessage, AttachmentAudit
+from packages.database.agent_models import AgentConversation, AgentMessage
 from packages.database.db import session_scope
 from packages.model_runtime import ModelInferenceError
 from packages.model_runtime.semantic_router import SemanticRoutingError
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
-attachment_processor = MultimodalProcessor()
+# Kept only as the canonical attachment size/count policy. Uploads are no longer
+# eagerly analyzed here; the agent chooses files.convert or files.process later.
+attachment_limits = MultimodalProcessor().limits
 
 
 class ChatInput(BaseModel):
@@ -48,9 +46,6 @@ async def _run_agent(auth: AuthContext, request: AgentInput):
     except SemanticRoutingError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except ModelInferenceError as error:
-        # Inference/provider failures are upstream dependency failures, not an
-        # unhandled application exception. Keep provider/model internals out of the
-        # public response while preserving the normalized classification for clients.
         raise HTTPException(
             status_code=503 if error.retryable else 502,
             detail={
@@ -96,101 +91,44 @@ async def chat_with_attachments(
     files: list[UploadFile] = File(default=[]),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    limits = attachment_processor.limits
+    limits = attachment_limits
     if not files:
         raise HTTPException(422, "Attach at least one supported file")
     if len(files) > limits.max_attachments:
         raise HTTPException(413, f"Maximum {limits.max_attachments} attachments")
 
     effective_conversation_id = conversation_id or str(uuid4())
-    inputs: list[AttachmentInput] = []
-    total = 0
-    for index, upload in enumerate(files, 1):
-        raw = await upload.read(limits.max_attachment_bytes + 1)
-        await upload.close()
-        if len(raw) > limits.max_attachment_bytes:
-            raise HTTPException(413, f"{upload.filename or 'Attachment'} is too large")
-        total += len(raw)
-        if total > limits.max_total_bytes:
-            raise HTTPException(413, "Total attachment size limit exceeded")
-        inputs.append(
-            AttachmentInput(
-                index=index,
-                filename=upload.filename or f"attachment-{index}",
-                declared_content_type=upload.content_type,
-                size_bytes=len(raw),
-                content_bytes=raw,
-            )
-        )
-
-    audit_id = str(uuid4())
     uploaded_artifacts: list[dict] = []
+    total = 0
     async with session_scope() as db:
         service = ArtifactService(db)
         scope = _workspace_artifact_scope(auth)
-        for item in inputs:
+        for index, upload in enumerate(files, 1):
+            raw = await upload.read(limits.max_attachment_bytes + 1)
+            await upload.close()
+            if len(raw) > limits.max_attachment_bytes:
+                raise HTTPException(413, f"{upload.filename or 'Attachment'} is too large")
+            total += len(raw)
+            if total > limits.max_total_bytes:
+                raise HTTPException(413, "Total attachment size limit exceeded")
             row = await service.create_bytes(
                 scope,
-                filename=item.filename,
-                content_type=item.declared_content_type,
-                content=item.content_bytes,
+                filename=upload.filename or f"attachment-{index}",
+                content_type=upload.content_type,
+                content=raw,
                 source="web_chat_upload",
                 created_by=auth.user.id,
                 metadata={
-                    "ingress": "web_chat_v1",
+                    "ingress": "web_chat_v2",
                     "conversation_id": effective_conversation_id,
-                    "attachment_audit_id": audit_id,
                 },
             )
             uploaded_artifacts.append(artifact_json(row))
 
-    bundle = AttachmentBundle(
-        user_request=message.strip() or "Analyze the supplied attachment(s).",
-        attachments=inputs,
-        requested_output_format="message",
-        tenant_id=auth.tenant.id,
-        actor_id=auth.user.id,
-    )
-    try:
-        with tempfile.TemporaryDirectory(prefix="operly-web-") as temp_dir:
-            processed = await attachment_processor.process(bundle, temp_dir)
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(422, str(error)) from error
-
-    async with session_scope() as db:
-        db.add(
-            AttachmentAudit(
-                tenant_id=auth.tenant.id,
-                actor_id=auth.user.id,
-                guild_id=None,
-                channel_id="web",
-                message_id=audit_id,
-                attachment_count=len(inputs),
-                filenames_json=json.dumps([redacted_name(item.filename) for item in inputs]),
-                hashes_json=json.dumps(attachment_hashes(bundle)),
-                categories_json=json.dumps(
-                    [item.detected_content_type or "rejected" for item in inputs]
-                ),
-                operation=processed.operation_summary or "analyze",
-                success=bool(processed.accepted),
-                generated_output_count=len(processed.files),
-                error_category=None,
-            )
-        )
-
-    if not processed.accepted:
-        raise HTTPException(
-            422,
-            {
-                "message": "No supported attachments could be processed",
-                "skipped": processed.skipped,
-                "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
-            },
-        )
-
-    # The extracted attachment text remains untrusted evidence. Durable artifact
-    # handles are separately supplied in application-controlled dashboard context so
-    # the model can call files.process without trusting identifiers found in a file.
+    # Artifact IDs are application-assigned trusted handles. The file bytes themselves
+    # remain untrusted. Crucially, no perception model runs at ingress: a format-only
+    # request can discover files.convert, while a content question can discover
+    # files.process. This avoids forcing vision inference for image->PDF conversion.
     trusted_upload_context = {
         "uploaded_artifacts": [
             {
@@ -200,7 +138,11 @@ async def chat_with_attachments(
                 "size_bytes": item["size_bytes"],
             }
             for item in uploaded_artifacts
-        ]
+        ],
+        "attachment_contract": (
+            "These are application-assigned Artifact Store handles. Use files.convert for format-only conversion; "
+            "use files.process only when the contents must be understood."
+        ),
     }
     result = await _run_agent(
         auth,
@@ -210,15 +152,13 @@ async def chat_with_attachments(
             actor_name=auth.user.display_name,
             channel="web",
             conversation_id=effective_conversation_id,
-            text=message.strip(),
-            attachment_context=processed.message,
-            attachment_names=list(processed.accepted),
+            text=message.strip() or "Work with the uploaded attachment(s).",
+            attachment_names=[item["filename"] for item in uploaded_artifacts],
             metadata={
                 "application_id": application_id,
                 "user_id": auth.user.id,
                 "role": auth.role,
                 "allow_tenant_context": True,
-                "attachment_audit_id": audit_id,
                 "attachment_artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
                 "dashboard_context": trusted_upload_context,
             },
@@ -226,11 +166,12 @@ async def chat_with_attachments(
     )
     result = await _project_result(auth, result)
     result["attachments"] = {
-        "accepted": processed.accepted,
-        "skipped": processed.skipped,
-        "warnings": processed.warnings,
+        "accepted": [item["filename"] for item in uploaded_artifacts],
+        "skipped": [],
+        "warnings": [],
         "artifacts": uploaded_artifacts,
         "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
+        "ingress": "artifact_store_v2",
     }
     return result
 

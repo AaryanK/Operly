@@ -18,7 +18,9 @@ on:
       - "packages/capabilities/artifact_provider.py"
       - "packages/capabilities/computer_provider.py"
       - "packages/capabilities/file_runtime_provider.py"
+      - "packages/capabilities/file_authoring_provider.py"
       - "packages/capabilities/gmail_artifact_provider.py"
+      - "packages/capabilities/personal_google_provider.py"
       - "packages/capabilities/defaults.py"
       - "packages/capabilities/contracts.py"
       - "packages/channels/envelope.py"
@@ -39,6 +41,9 @@ on:
       - "tests/test_file_runtime_provider.py"
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
+      - "tests/test_agent_objective_verification.py"
+      - "tests/test_file_authoring_provider.py"
+      - "tests/test_gmail_artifact_provider.py"
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_studio_agent_generation.py"
       - "tests/test_studio_agent_controller.py"
@@ -69,6 +74,7 @@ jobs:
           packages/agents/controller.py
           packages/agents/persistence.py
           packages/agents/run_state.py
+          packages/agents/verification.py
           packages/artifacts/blob_store.py
           packages/artifacts/delivery.py
           packages/artifacts/service.py
@@ -76,7 +82,9 @@ jobs:
           packages/capabilities/artifact_provider.py
           packages/capabilities/computer_provider.py
           packages/capabilities/file_runtime_provider.py
+          packages/capabilities/file_authoring_provider.py
           packages/capabilities/gmail_artifact_provider.py
+          packages/capabilities/personal_google_provider.py
           packages/channels/envelope.py
           packages/channels/service.py
           packages/connectors/discord/artifact_delivery.py
@@ -108,6 +116,9 @@ jobs:
           tests/test_file_runtime_provider.py
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py
+          tests/test_agent_objective_verification.py
+          tests/test_file_authoring_provider.py
+          tests/test_gmail_artifact_provider.py
           tests/test_coding_harness_execution_loop.py
           tests/test_studio_agent_generation.py
           tests/test_studio_agent_controller.py
