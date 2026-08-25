@@ -7,11 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
-from packages.database.analytics_models import ProductAnalyticsEvent
+from packages.database.models import SecurityEvent
 
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 _ALLOWED_EVENTS = {"page_view", "heartbeat"}
+_EVENT_TYPES = {
+    "page_view": "product_page_view",
+    "heartbeat": "product_heartbeat",
+}
 _DEFAULT_COUNTRY_HEADERS = (
     "cf-ipcountry",
     "x-vercel-ip-country",
@@ -37,6 +41,14 @@ def _clean_path(value: object) -> str | None:
     return path[:500]
 
 
+def _metadata(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 @router.post("/event", status_code=202)
 async def record_product_event(
     payload: dict,
@@ -49,32 +61,45 @@ async def record_product_event(
         return {"ok": True, "recorded": False}
 
     path = _clean_path(payload.get("path"))
+    event_type = _EVENT_TYPES[event_name]
     now = datetime.utcnow()
     dedupe_window = timedelta(seconds=20 if event_name == "page_view" else 240)
-    recent = await db.scalar(
-        select(ProductAnalyticsEvent.id)
-        .where(
-            ProductAnalyticsEvent.user_id == account.user.id,
-            ProductAnalyticsEvent.session_id == account.session.id,
-            ProductAnalyticsEvent.event_name == event_name,
-            ProductAnalyticsEvent.path == path,
-            ProductAnalyticsEvent.created_at >= now - dedupe_window,
+    recent_events = (
+        await db.scalars(
+            select(SecurityEvent)
+            .where(
+                SecurityEvent.user_id == account.user.id,
+                SecurityEvent.event_type == event_type,
+                SecurityEvent.outcome == "succeeded",
+                SecurityEvent.created_at >= now - dedupe_window,
+            )
+            .order_by(SecurityEvent.created_at.desc())
+            .limit(8)
         )
-        .limit(1)
-    )
-    if recent:
-        return {"ok": True, "recorded": False}
+    ).all()
+    for recent in recent_events:
+        metadata = _metadata(recent.metadata_json)
+        if metadata.get("session_id") == account.session.id and metadata.get("path") == path:
+            return {"ok": True, "recorded": False}
 
-    event = ProductAnalyticsEvent(
-        user_id=account.user.id,
-        tenant_id=account.session.tenant_id,
-        session_id=account.session.id,
-        event_name=event_name,
-        path=path,
-        country_code=_country_code(request),
-        metadata_json=json.dumps({}, separators=(",", ":")),
-        created_at=now,
+    metadata = {
+        "path": path,
+        "session_id": account.session.id,
+    }
+    country_code = _country_code(request)
+    if country_code:
+        metadata["country_code"] = country_code
+
+    db.add(
+        SecurityEvent(
+            user_id=account.user.id,
+            tenant_id=account.session.tenant_id,
+            event_type=event_type,
+            outcome="succeeded",
+            ip_hash=None,
+            metadata_json=json.dumps(metadata, separators=(",", ":"), sort_keys=True),
+            created_at=now,
+        )
     )
-    db.add(event)
     await db.commit()
     return {"ok": True, "recorded": True}
