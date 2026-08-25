@@ -146,8 +146,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ),
                     ),
-                    # Personal AI may carry a selected workspace id for delegation.
-                    # Canonical DM surface must remain visible only to the human.
                     ModelRuntimeTrace(
                         run_id="run-personal",
                         conversation_id="discord:trace-channel",
@@ -172,9 +170,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ),
                     ),
-                    # A direct workspace conversation is still private to its human.
-                    # Workspace-wide owner browsing must not expose it merely because
-                    # it is tenant-bound and the current viewer owns the workspace.
                     ModelRuntimeTrace(
                         run_id="run-workspace-private",
                         conversation_id="workspace-private-trace",
@@ -292,7 +287,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
             detail = await get_ai_run(
                 "run-workspace",
                 tenant_id=self.tenant_id,
-                kind="runtime",
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
@@ -311,7 +305,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
                 await get_ai_run(
                     "run-workspace-private",
                     tenant_id=self.tenant_id,
-                    kind="runtime",
                     account=SimpleNamespace(user=owner),
                     db=db,
                 )
@@ -334,7 +327,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
             detail = await get_ai_run(
                 "run-personal",
                 tenant_id=None,
-                kind="runtime",
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
@@ -343,7 +335,6 @@ class RuntimeTraceAccessTests(unittest.IsolatedAsyncioTestCase):
             private_detail = await get_ai_run(
                 "run-workspace-private",
                 tenant_id=None,
-                kind="runtime",
                 account=SimpleNamespace(user=owner),
                 db=db,
             )
