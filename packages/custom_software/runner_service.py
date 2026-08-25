@@ -143,6 +143,15 @@ CLASSIFICATION_FAILURE_STATE = {
     "security_policy_violation": "security_blocked",
     "resource_violation": "resource_exceeded",
 }
+CLASSIFICATION_ALIASES = {
+    "health_failure": "health_check_failure",
+    "health_failed": "health_check_failure",
+    "healthcheck_failure": "health_check_failure",
+    "health_check_failed": "health_check_failure",
+    "acceptance_failure": "acceptance_test_failure",
+    "acceptance_check_failure": "acceptance_test_failure",
+    "acceptance_failed": "acceptance_test_failure",
+}
 
 
 class RunnerStateError(ValueError):
@@ -162,9 +171,14 @@ def _failure_evidence(result):
     return evidence if isinstance(evidence, dict) else {}
 
 
+def _normalize_failure_classification(value):
+    classification = str(value or "").strip().lower()
+    return CLASSIFICATION_ALIASES.get(classification, classification)
+
+
 def _failure_classification(result):
     evidence = _failure_evidence(result)
-    explicit = str(evidence.get("classification") or "").strip()
+    explicit = _normalize_failure_classification(evidence.get("classification"))
     if explicit:
         return explicit
     for key, classification in (
