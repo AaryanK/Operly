@@ -8,6 +8,7 @@ import { OperlyMark } from "../ui/OperlyMark";
 type Conversation = { id: string; title?: string | null; updated_at?: string | null };
 type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null };
 type ChatResult = { message: string; conversation_id?: string | null };
+type Approval = { id: string; action: string; status: string; details?: Record<string, unknown>; payload?: Record<string, unknown>; created_at?: string | null };
 
 type Props = { profile: PersonalProfile | null };
 
@@ -17,14 +18,39 @@ function formatDate(value?: string | null) {
   catch { return ""; }
 }
 
+function approvalText(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : value == null ? fallback : String(value);
+}
+
+function ApprovalSubstance({ item }: { item: Approval }) {
+  const details = item.details || {};
+  const argumentsValue = details.arguments && typeof details.arguments === "object" ? details.arguments : {};
+  return <div className="approval-substance">
+    <div className="approval-substance-grid">
+      <span><small>Objective</small><strong>{approvalText(details.objective, item.action)}</strong></span>
+      <span><small>Expected outcome</small><strong>{approvalText(details.expected_outcome, "Complete the requested action")}</strong></span>
+      <span><small>Risk</small><strong>{approvalText(details.risk_level, "Review required")}</strong></span>
+      <span><small>Capability</small><strong>{approvalText(details.capability, item.action)}</strong></span>
+    </div>
+    {details.rationale && <p className="approval-rationale"><strong>Why Operly wants to do this:</strong> {approvalText(details.rationale)}</p>}
+    <details open>
+      <summary>Full action payload</summary>
+      <code>{JSON.stringify({ ...details, arguments: argumentsValue }, null, 2)}</code>
+    </details>
+  </div>;
+}
+
 export function PersonalHome({ profile }: Props) {
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(() => {
     try { return window.localStorage.getItem("operly.personal-history-collapsed") === "true"; }
@@ -39,6 +65,29 @@ export function PersonalHome({ profile }: Props) {
     const next = prefer || conversationId || rows[0]?.id || null;
     if (next && next !== conversationId) await openConversation(next);
     if (!next) setMessages([]);
+  }
+
+  async function loadApprovals() {
+    try {
+      const rows = await api<Approval[]>("/approvals/personal");
+      setApprovals(rows);
+      setApprovalError(null);
+    } catch (caught) {
+      setApprovalError(caught instanceof Error ? caught.message : "Personal approvals are unavailable");
+    }
+  }
+
+  async function decideApproval(id: string, status: "approved" | "rejected") {
+    setApprovalBusy(id);
+    setApprovalError(null);
+    try {
+      await api(`/approvals/personal/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await loadApprovals();
+    } catch (caught) {
+      setApprovalError(caught instanceof Error ? caught.message : "Approval decision could not be saved");
+    } finally {
+      setApprovalBusy(null);
+    }
   }
 
   async function openConversation(id: string) {
@@ -62,6 +111,7 @@ export function PersonalHome({ profile }: Props) {
 
   useEffect(() => {
     loadConversations().catch((caught) => setError(caught instanceof Error ? caught.message : "Conversation history is unavailable"));
+    loadApprovals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -121,7 +171,7 @@ export function PersonalHome({ profile }: Props) {
       const nextId = result.conversation_id || conversationId;
       setConversationId(nextId || null);
       setMessages((current) => [...current, { role: "assistant", content: result.message }]);
-      await loadConversations(nextId);
+      await Promise.all([loadConversations(nextId), loadApprovals()]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Personal Operly could not complete that request");
       setFiles(pendingFiles);
@@ -129,6 +179,8 @@ export function PersonalHome({ profile }: Props) {
       setBusy(false);
     }
   }
+
+  const pendingApprovals = approvals.filter((item) => item.status === "pending");
 
   return (
     <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileHistoryOpen ? "mobile-history-open" : ""}`}>
@@ -145,6 +197,15 @@ export function PersonalHome({ profile }: Props) {
       <main className="personal-surface">
         <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><button className="mobile-history-button" type="button" onClick={() => setMobileHistoryOpen(true)} aria-expanded={mobileHistoryOpen} aria-controls="personal-conversation-history">History</button><span className="privacy-pill">Private</span></div></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
+          {pendingApprovals.length > 0 && <section className="personal-approval-stack" aria-label="Pending personal approvals">
+            <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>{pendingApprovals.length} approval{pendingApprovals.length === 1 ? "" : "s"} waiting</h2></div><button className="text-button" type="button" onClick={loadApprovals}>Refresh</button></div>
+            {pendingApprovals.map((item) => <article className="personal-approval-card" key={item.id}>
+              <div className="personal-approval-title"><div><span className="status-chip status-pending">Pending</span><strong>{item.action}</strong></div><small>{formatDate(item.created_at)}</small></div>
+              <ApprovalSubstance item={item} />
+              <div className="row-actions"><button disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "rejected")}>Reject</button><button className="primary-button" disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "approved")}>{approvalBusy === item.id ? "Working…" : "Approve"}</button></div>
+            </article>)}
+          </section>}
+          {approvalError && <div className="inline-error">{approvalError}</div>}
           {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
           {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}
           {busy && <div className="working-state"><span></span>Operly is working…</div>}
