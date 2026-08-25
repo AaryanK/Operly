@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0039_scope_aware_actions"
+ALEMBIC_HEAD = "0040_business_event_scope"
 
 
 def import_all_models() -> None:
