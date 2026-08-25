@@ -220,7 +220,31 @@ class SolutionService:
 
     async def list(self,db,tenant_id):
         await self.sync(db,tenant_id)
-        return (await db.scalars(select(SolutionRecord).where(SolutionRecord.tenant_id==tenant_id,SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED).order_by(desc(SolutionRecord.updated_at)))).all()
+        rows=(await db.scalars(select(SolutionRecord).where(
+            SolutionRecord.tenant_id==tenant_id,
+            SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED,
+        ).order_by(desc(SolutionRecord.updated_at)))).all()
+        canonical_ids={
+            str(value) for value in (await db.scalars(select(SolutionRecord.runtime_reference).where(
+                SolutionRecord.tenant_id==tenant_id,
+                SolutionRecord.runtime_type==RuntimeType.SOFTWARE_PROJECT,
+                SolutionRecord.lifecycle_status!=LifecycleStatus.ARCHIVED,
+            ))).all() if value
+        }
+        if not canonical_ids:return rows
+        facades=(await db.scalars(select(SoftwareProjectRecord).where(
+            SoftwareProjectRecord.tenant_id==tenant_id,
+            SoftwareProjectRecord.id.in_(canonical_ids),
+        ))).all()
+        hidden_legacy={
+            (str(project.legacy_runtime_type),str(project.legacy_runtime_reference))
+            for project in facades
+            if project.legacy_runtime_type and project.legacy_runtime_reference
+        }
+        return [
+            row for row in rows
+            if (str(row.runtime_type),str(row.runtime_reference)) not in hidden_legacy
+        ]
 
     async def get(self,db,tenant_id,solution_id):
         await self.sync(db,tenant_id)
