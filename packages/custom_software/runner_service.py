@@ -238,6 +238,8 @@ async def _record_runner_failure_observation(db, row, state, result, classificat
         if key in result
     }
     row.result_json = json.dumps(result)
+    if classification:
+        row.failure_classification = classification
     await _event(
         db,
         row,
@@ -372,6 +374,8 @@ async def apply_runner_response(db, row, response, submission):
                 message="Runner quality gate failed",
                 details=_failure_evidence(result),
             )
+            if classification:
+                row.failure_classification = classification
         except RunnerStateError as error:
             # The original result was already checkpointed. Record the secondary
             # orchestration defect without replacing the primary runner evidence.
