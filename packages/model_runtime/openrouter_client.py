@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import random
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +37,84 @@ def _api_key() -> str:
         if value:
             return value
     return ""
+
+
+def _redact_error_detail(value: object) -> str:
+    """Bound provider diagnostics without leaking obvious credentials."""
+    text = str(value or "").strip()
+    text = re.sub(
+        r"(?i)(bearer\s+|api[_ -]?key[=:]\s*|token[=:]\s*)[^\s,;]+",
+        r"\1[REDACTED]",
+        text,
+    )
+    return text[:2000]
+
+
+def _nested_error_detail(value: object, *, depth: int = 0) -> str:
+    """Extract a useful message from OpenRouter's sometimes JSON-encoded metadata.raw."""
+    if value is None or depth > 4:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text[:1] in {"{", "["}:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return _redact_error_detail(text)
+            nested = _nested_error_detail(parsed, depth=depth + 1)
+            return nested or _redact_error_detail(text)
+        return _redact_error_detail(text)
+    if isinstance(value, dict):
+        for key in ("message", "error", "detail", "raw"):
+            if key not in value:
+                continue
+            nested = _nested_error_detail(value.get(key), depth=depth + 1)
+            if nested:
+                return nested
+        return _redact_error_detail(json.dumps(value, ensure_ascii=False, default=str))
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _nested_error_detail(item, depth=depth + 1)
+            if nested:
+                return nested
+        return ""
+    return _redact_error_detail(value)
+
+
+def _openrouter_error_detail(body: object, response_text: str) -> str:
+    """Prefer the upstream provider's concrete rejection over a generic wrapper."""
+    if isinstance(body, dict):
+        error_body = body.get("error")
+        if isinstance(error_body, dict):
+            top = _nested_error_detail(error_body.get("message"))
+            metadata = error_body.get("metadata")
+            raw = ""
+            if isinstance(metadata, dict):
+                raw = _nested_error_detail(
+                    metadata.get("raw")
+                    or metadata.get("error")
+                    or metadata.get("message")
+                )
+            if raw and raw != top:
+                if not top or top.lower() in {
+                    "provider returned error",
+                    "provider error",
+                    "upstream provider error",
+                }:
+                    return _redact_error_detail(
+                        f"{top + ': ' if top else ''}{raw}"
+                    )
+            if top:
+                return top
+            if raw:
+                return raw
+        elif error_body is not None:
+            detail = _nested_error_detail(error_body)
+            if detail:
+                return detail
+    return _redact_error_detail(response_text) or "unknown upstream error"
 
 
 def _image_url(value: object) -> str | None:
@@ -296,17 +375,9 @@ class OpenRouterClient:
             )
 
             if response.status != 200:
-                upstream = None
-                if isinstance(body, dict):
-                    error_body = body.get("error")
-                    upstream = (
-                        error_body.get("message")
-                        if isinstance(error_body, dict)
-                        else error_body
-                    )
+                upstream = _openrouter_error_detail(body, response_text)
                 raise OllamaError(
-                    f"OpenRouter request failed ({response.status}): "
-                    f"{str(upstream or response_text or 'unknown upstream error')[:500]}",
+                    f"OpenRouter request failed ({response.status}): {upstream}",
                     status=response.status,
                     retryable=response.status in _RETRYABLE_STATUSES,
                 )

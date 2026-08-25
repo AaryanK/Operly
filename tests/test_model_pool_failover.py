@@ -11,7 +11,7 @@ from packages.model_runtime import (
     model_for_role,
 )
 from packages.model_runtime.ollama_client import OllamaError
-from packages.model_runtime.openrouter_client import OpenRouterClient
+from packages.model_runtime.openrouter_client import OpenRouterClient, _openrouter_error_detail
 from packages.model_runtime.portfolio import model_route
 from packages.model_runtime.registry import ConfiguredModel, ModelPool, _failure
 
@@ -133,6 +133,44 @@ class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(error.classification, "quota_or_credits")
         self.assertFalse(error.retryable)
+
+    def test_openrouter_generic_provider_error_includes_nested_metadata_raw_message(self):
+        body = {
+            "error": {
+                "message": "Provider returned error",
+                "metadata": {
+                    "raw": json.dumps(
+                        {
+                            "error": {
+                                "message": "Invalid schema for function 'edit': missing required property"
+                            }
+                        }
+                    )
+                },
+            }
+        }
+
+        detail = _openrouter_error_detail(body, json.dumps(body))
+
+        self.assertEqual(
+            detail,
+            "Provider returned error: Invalid schema for function 'edit': missing required property",
+        )
+
+    def test_openrouter_nested_error_detail_redacts_obvious_bearer_secret(self):
+        body = {
+            "error": {
+                "message": "Provider returned error",
+                "metadata": {
+                    "raw": '{"error":{"message":"authorization Bearer sk-super-secret"}}'
+                },
+            }
+        }
+
+        detail = _openrouter_error_detail(body, json.dumps(body))
+
+        self.assertIn("Bearer [REDACTED]", detail)
+        self.assertNotIn("sk-super-secret", detail)
 
     async def test_provider_neutral_budget_reaches_adapter_output_limit(self):
         client = _BudgetAwareClient()
