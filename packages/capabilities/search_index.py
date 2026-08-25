@@ -37,6 +37,13 @@ _LEXICAL_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "memory": ("context", "remember", "preference", "fact"),
 }
 
+# Semantic ranking is useful for paraphrases, but exact/strong lexical matches should
+# not pay model-startup/embedding cost. Keep this deliberately conservative so
+# ambiguous natural-language searches still use the semantic backend.
+_FAST_LEXICAL_SCORE = 6.0
+_MODERATE_LEXICAL_SCORE = 4.0
+_FAST_LEXICAL_MARGIN = 2.0
+
 
 def _words(value: str) -> list[str]:
     return _WORD_RE.findall(str(value or "").lower())
@@ -56,6 +63,7 @@ class CapabilitySearchHit:
     score: float
     semantic_score: float
     lexical_score: float
+    strategy: str = "hybrid_semantic"
 
 
 class CapabilitySearchIndex:
@@ -97,6 +105,17 @@ class CapabilitySearchIndex:
         score += 1.5 * len(tags & query_words)
         return score
 
+    @staticmethod
+    def _use_lexical_fast_path(scores: list[tuple[str, float]]) -> bool:
+        if not scores:
+            return False
+        ranked = sorted(scores, key=lambda item: (-item[1], item[0]))
+        top = ranked[0][1]
+        second = ranked[1][1] if len(ranked) > 1 else 0.0
+        if top >= _FAST_LEXICAL_SCORE:
+            return True
+        return top >= _MODERATE_LEXICAL_SCORE and (top - second) >= _FAST_LEXICAL_MARGIN
+
     def search(
         self,
         definitions: Sequence,
@@ -119,8 +138,36 @@ class CapabilitySearchIndex:
                 continue
             eligible.append(definition)
 
-        semantic_scores: dict[str, float] = {}
         clean_query = str(query or "").strip()
+        lexical_scores = {
+            str(definition.id): self._lexical_score(definition, clean_query)
+            for definition in eligible
+        }
+
+        # Exact IDs/names and unambiguous strong lexical matches are already enough to
+        # choose a candidate set. Do not initialize or invoke the embedding backend in
+        # that case; this is the hot path for agent follow-up discovery such as
+        # `task.create`, `event.search`, or an operation named in a previous result.
+        lexical_pairs = [
+            (capability_id, score)
+            for capability_id, score in lexical_scores.items()
+            if score > 0.0
+        ]
+        if clean_query and self._use_lexical_fast_path(lexical_pairs):
+            ranked = [
+                CapabilitySearchHit(
+                    capability_id=capability_id,
+                    score=round(score, 6),
+                    semantic_score=0.0,
+                    lexical_score=round(score, 6),
+                    strategy="lexical_fast_path",
+                )
+                for capability_id, score in lexical_pairs
+            ]
+            ranked.sort(key=lambda item: (-item.score, item.capability_id))
+            return ranked[: max(1, min(int(limit), 20))]
+
+        semantic_scores: dict[str, float] = {}
         if eligible and clean_query:
             documents = [
                 SemanticDocument(
@@ -142,7 +189,7 @@ class CapabilitySearchIndex:
         for definition in eligible:
             capability_id = str(definition.id)
             semantic = semantic_scores.get(capability_id, 0.0)
-            lexical = self._lexical_score(definition, clean_query)
+            lexical = lexical_scores.get(capability_id, 0.0)
             score = semantic * 10.0 + lexical
             if clean_query and score <= 0.0:
                 continue
@@ -152,6 +199,7 @@ class CapabilitySearchIndex:
                     score=round(score, 6),
                     semantic_score=round(semantic, 6),
                     lexical_score=round(lexical, 6),
+                    strategy="hybrid_semantic",
                 )
             )
         ranked.sort(key=lambda item: (-item.score, item.capability_id))
