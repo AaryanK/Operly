@@ -44,6 +44,18 @@ def _loaded(row: AgentRunRecord) -> dict[str, Any]:
     }
 
 
+def _deferred_state(checkpoint: dict[str, Any] | None) -> str:
+    if not isinstance(checkpoint, dict):
+        return ""
+    facts = checkpoint.get("facts")
+    if not isinstance(facts, dict):
+        return ""
+    deferred = facts.get("deferred_work")
+    if not isinstance(deferred, dict):
+        return ""
+    return str(deferred.get("state") or "").strip().lower()
+
+
 async def _destroy_computer_after_commit(sandbox_id: str | None) -> None:
     """Best-effort cleanup; Railway idle expiry is the secondary failsafe."""
     clean = str(sandbox_id or "").strip()
@@ -108,6 +120,24 @@ async def checkpoint_agent_run(
             raise PermissionError("Agent run scope mismatch")
 
         compact = dict(state or {})
+
+        # The asynchronous completion worker can win the race with the interactive
+        # controller after a deferred capability returns. Never let a stale
+        # "deferred_work=waiting" checkpoint overwrite terminal completion evidence.
+        # Explicit retries remain possible because a resumed failed checkpoint carries
+        # deferred_work=failed rather than the stale waiting state.
+        try:
+            current_checkpoint = json.loads(row.checkpoint_json or "{}")
+        except json.JSONDecodeError:
+            current_checkpoint = {}
+        current_deferred = _deferred_state(current_checkpoint)
+        incoming_deferred = _deferred_state(compact)
+        if (
+            current_deferred in {"completed", "failed"}
+            and incoming_deferred == "waiting"
+        ):
+            return
+
         row.objective = str(objective or row.objective or "")[:50_000]
         row.state = str(lifecycle_state or "running")[:32]
         row.plan_json = _json(compact.get("plan") or {})
@@ -198,7 +228,7 @@ async def find_resumable_agent_run(
                 AgentRunRecord.scope_id == scope_id,
                 AgentRunRecord.conversation_id == conversation_id,
                 AgentRunRecord.objective == normalized_objective,
-                AgentRunRecord.state.in_(["running", "waiting_approval"]),
+                AgentRunRecord.state.in_(["running", "waiting_approval", "waiting_external"]),
                 AgentRunRecord.completed_at.is_(None),
             )
             .order_by(AgentRunRecord.updated_at.desc())
