@@ -23,12 +23,7 @@ def _dedupe(values: Iterable[str]) -> list[str]:
 
 
 def artifact_ids_from_run(run: dict[str, Any] | None) -> list[str]:
-    """Return durable artifact handles emitted by one agent run.
-
-    The adaptive controller keeps artifact references in run_state. A small fallback
-    remains for direct runtime/capability callers that already return artifact IDs at
-    the top level. This function never treats prose or filenames as authority.
-    """
+    """Return durable artifact handles emitted by one agent run."""
     value = run if isinstance(run, dict) else {}
     state = value.get("run_state") if isinstance(value.get("run_state"), dict) else {}
     refs = state.get("artifact_refs") or value.get("artifact_ids") or []
@@ -37,6 +32,28 @@ def artifact_ids_from_run(run: dict[str, Any] | None) -> list[str]:
     if not isinstance(refs, (list, tuple, set)):
         return []
     return _dedupe(str(item) for item in refs)
+
+
+def _scope_run_clauses(scope: ArtifactScope) -> list[Any]:
+    clauses: list[Any] = [
+        AgentRunRecord.scope_kind == scope.kind,
+        AgentRunRecord.scope_id == scope.scope_id,
+    ]
+    if scope.kind == "workspace":
+        clauses.extend(
+            [
+                AgentRunRecord.tenant_id == scope.tenant_id,
+                AgentRunRecord.owner_user_id.is_(None),
+            ]
+        )
+    else:
+        clauses.extend(
+            [
+                AgentRunRecord.owner_user_id == scope.owner_user_id,
+                AgentRunRecord.tenant_id.is_(None),
+            ]
+        )
+    return clauses
 
 
 async def resolve_delivery_artifacts(
@@ -86,6 +103,55 @@ def _run_refs(row: AgentRunRecord) -> list[str]:
     return _dedupe(str(item) for item in values)
 
 
+async def project_agent_result(
+    db,
+    scope: ArtifactScope,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Add verified artifact delivery metadata to an agent result.
+
+    Agent services remain transport-neutral. Web, Discord, MCP and other adapters can
+    all call this one projection before rendering their surface-specific response.
+    Only persisted artifacts in the selected execution scope are exposed.
+    """
+    projected = dict(result)
+    runtime_run_id = str(projected.get("runtime_run_id") or "").strip()
+    run_row = None
+    refs = artifact_ids_from_run(projected)
+    if runtime_run_id:
+        run_row = await db.scalar(
+            select(AgentRunRecord).where(
+                AgentRunRecord.id == runtime_run_id,
+                *_scope_run_clauses(scope),
+            )
+        )
+        if run_row is not None:
+            refs = _dedupe([*refs, *_run_refs(run_row)])
+
+    artifacts = await resolve_delivery_artifacts(db, scope, refs)
+    projected["artifacts"] = artifacts
+    projected["artifact_ids"] = [item["artifact_id"] for item in artifacts]
+    projected["delivery"] = {
+        "transport": "artifact_refs_v1",
+        "runtime_run_id": runtime_run_id or None,
+        "artifact_count": len(artifacts),
+        "run_state": str(getattr(run_row, "state", "") or "") or None,
+    }
+
+    # Never let a generic fallback hide verified output or a failed durable run.
+    message = str(projected.get("message") or "").strip()
+    generic = message.lower().rstrip(".! ") in {"", "done", "completed"}
+    if artifacts and generic:
+        names = ", ".join(f"`{item['filename']}`" for item in artifacts[:3])
+        suffix = "" if len(artifacts) <= 3 else f" and {len(artifacts) - 3} more"
+        projected["message"] = f"Created {names}{suffix}."
+    elif run_row is not None and str(run_row.state or "").lower() == "failed" and generic:
+        projected["message"] = "I couldn't verify completion of that run."
+    elif not message:
+        projected["message"] = "Done."
+    return projected
+
+
 async def artifacts_by_assistant_message(
     db,
     scope: ArtifactScope,
@@ -113,31 +179,14 @@ async def artifacts_by_assistant_message(
     if not assistant_messages:
         return {}
 
-    clauses = [
-        AgentRunRecord.scope_kind == scope.kind,
-        AgentRunRecord.scope_id == scope.scope_id,
-        AgentRunRecord.conversation_id == str(conversation_id),
-    ]
-    if scope.kind == "workspace":
-        clauses.extend(
-            [
-                AgentRunRecord.tenant_id == scope.tenant_id,
-                AgentRunRecord.owner_user_id.is_(None),
-            ]
-        )
-    else:
-        clauses.extend(
-            [
-                AgentRunRecord.owner_user_id == scope.owner_user_id,
-                AgentRunRecord.tenant_id.is_(None),
-            ]
-        )
-
     runs = list(
         (
             await db.scalars(
                 select(AgentRunRecord)
-                .where(*clauses)
+                .where(
+                    *_scope_run_clauses(scope),
+                    AgentRunRecord.conversation_id == str(conversation_id),
+                )
                 .order_by(AgentRunRecord.started_at)
             )
         ).all()
