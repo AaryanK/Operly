@@ -100,8 +100,8 @@ async def _model_role_scenario(monkeypatch):
 
     result = CodingHarnessResult(
         files=[
-            SourceFile("index.html", b"<!doctype html><p>ok</p>"),
-            SourceFile("app.test.js", b"// test"),
+            SourceFile("index.html", b"<!doctype html><p>ok</p>", "test"),
+            SourceFile("app.test.js", b"// test", "test"),
         ],
         plan="plan",
         summary="summary",
