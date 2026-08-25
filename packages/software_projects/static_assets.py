@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from packages.custom_software.source_bundles import normalized_path
+from packages.software_projects.source_bundle import normalized_path
 
 
 def _bundle_path(value: str) -> str | None:
