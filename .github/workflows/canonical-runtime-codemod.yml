@@ -45,18 +45,12 @@ jobs:
             packages/software_projects/planning/renderer.py \
             packages/software_projects/planning/service.py
 
-          mkdir -p packages/agents/hardening
-          git mv packages/studio/context_hardening.py packages/agents/hardening/context_hardening.py
-          git mv packages/studio/hardening_policy.py packages/agents/hardening/policy.py
-          git mv packages/studio/hardening_policy_v2.py packages/agents/hardening/policy_v2.py
-          git mv packages/studio/runtime_policy.py packages/agents/hardening/runtime_policy.py
-          git mv packages/studio/terminal_recovery.py packages/agents/hardening/terminal_recovery.py
-          git mv packages/studio/tool_hardening.py packages/agents/hardening/tool_hardening.py
-          git mv packages/studio/model_latency_policy.py packages/model_runtime/model_latency_policy.py
-          git mv packages/studio/model_provenance.py packages/model_runtime/model_provenance.py
-          git mv packages/studio/design.py packages/software_projects/design.py
-          rm -f packages/studio/__init__.py
-          rmdir packages/studio
+          # Only source/context mutation hardening survives Studio. The rest still
+          # depends on deleted Studio agent loops, SiteSchema, or Studio trace tables.
+          git mv packages/studio/context_hardening.py packages/software_projects/coding/context_hardening.py
+          git mv packages/studio/tool_hardening.py packages/software_projects/coding/tool_hardening.py
+          rm -rf packages/studio
+          rm -f packages/business_brain/studio_tools.py
 
           python - <<'PY'
           from pathlib import Path
@@ -74,15 +68,8 @@ jobs:
               ("packages.coding_harness.interaction_contracts", "packages.runtime_plugins.interaction_contracts"),
               ("packages.coding_harness.runtime_resolution", "packages.runtime_plugins.runtime_resolution"),
               ("packages.coding_harness.", "packages.software_projects.coding."),
-              ("packages.studio.context_hardening", "packages.agents.hardening.context_hardening"),
-              ("packages.studio.hardening_policy_v2", "packages.agents.hardening.policy_v2"),
-              ("packages.studio.hardening_policy", "packages.agents.hardening.policy"),
-              ("packages.studio.runtime_policy", "packages.agents.hardening.runtime_policy"),
-              ("packages.studio.terminal_recovery", "packages.agents.hardening.terminal_recovery"),
-              ("packages.studio.tool_hardening", "packages.agents.hardening.tool_hardening"),
-              ("packages.studio.model_latency_policy", "packages.model_runtime.model_latency_policy"),
-              ("packages.studio.model_provenance", "packages.model_runtime.model_provenance"),
-              ("packages.studio.design", "packages.software_projects.design"),
+              ("packages.studio.context_hardening", "packages.software_projects.coding.context_hardening"),
+              ("packages.studio.tool_hardening", "packages.software_projects.coding.tool_hardening"),
           ]
 
           roots = [Path("apps"), Path("packages"), Path("tests"), Path("scripts")]
@@ -99,11 +86,6 @@ jobs:
                       updated = updated.replace(old, new)
                   if updated != text:
                       path.write_text(updated, encoding="utf-8")
-
-          # New package roots should describe their actual authority.
-          Path("packages/agents/hardening/__init__.py").write_text(
-              '"""Generic AgentRuntime hardening policies and recovery utilities."""\n', encoding="utf-8"
-          )
           PY
 
           # No executable Python may retain the historical implementation namespaces.
