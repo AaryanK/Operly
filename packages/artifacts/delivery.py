@@ -9,7 +9,7 @@ from urllib.parse import quote
 from sqlalchemy import select
 
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
-from packages.database.artifact_models import AgentRunRecord
+from packages.database.artifact_models import AgentRunEventRecord, AgentRunRecord
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:
@@ -114,6 +114,25 @@ def _run_refs(row: AgentRunRecord) -> list[str]:
     return _dedupe(str(item) for item in values)
 
 
+async def _has_capability_observation(db, run_id: str) -> bool:
+    """Return whether the durable run observed any real capability execution.
+
+    This is deliberately evidence-based rather than intent/keyword based. A model may
+    answer informational questions without tools, but a generic execution claim such
+    as ``Done.`` is not treated as proof that an operation happened when the run has
+    no capability observation at all.
+    """
+    event_id = await db.scalar(
+        select(AgentRunEventRecord.id)
+        .where(
+            AgentRunEventRecord.run_id == run_id,
+            AgentRunEventRecord.event_type == "capability.observed",
+        )
+        .limit(1)
+    )
+    return event_id is not None
+
+
 async def project_agent_result(
     db,
     scope: ArtifactScope,
@@ -149,7 +168,9 @@ async def project_agent_result(
         "run_state": str(getattr(run_row, "state", "") or "") or None,
     }
 
-    # Never let a generic fallback hide verified output or a failed durable run.
+    # Never let a generic fallback hide verified output, a failed durable run, or a
+    # complete absence of execution evidence. Specific informational prose is left
+    # alone; only empty/generic completion claims are hardened here.
     message = str(projected.get("message") or "").strip()
     generic = message.lower().rstrip(".! ") in {"", "done", "completed"}
     if artifacts and generic:
@@ -158,6 +179,8 @@ async def project_agent_result(
         projected["message"] = f"Created {names}{suffix}."
     elif run_row is not None and str(run_row.state or "").lower() == "failed" and generic:
         projected["message"] = "I couldn't verify completion of that run."
+    elif run_row is not None and generic and not await _has_capability_observation(db, run_row.id):
+        projected["message"] = "I don't have verified execution evidence that the requested operation completed."
     elif not message:
         projected["message"] = "Done."
     return projected
