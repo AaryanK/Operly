@@ -1,6 +1,6 @@
 """Durable objective-owning controller for Studio software generation.
 
-The coding agent remains the specialist that authors source.  AgentRunController is
+The coding agent remains the specialist that authors source. AgentRunController is
 the outer owner of the original product objective: it checkpoints each observation,
 re-enters safely after worker restarts, and refuses to equate runner-green with
 product-complete until deterministic objective/capability evidence also passes.
@@ -18,6 +18,7 @@ from packages.agents.run_state import RunPlan, RunTask
 from packages.coding_harness.build_service import RunnerProfileUnsupported, submit_source_build
 from packages.coding_harness.objective_audit import audit_generated_source
 from packages.coding_harness.source_service import (
+    edit_source_for_plan,
     generate_source_for_plan,
     latest_source,
     repair_source_for_plan,
@@ -54,6 +55,49 @@ def _objective(plan: Any) -> str:
         or data.get("projectName")
         or "Build and verify the approved Studio Solution."
     ).strip()
+
+
+def _coding_plan(plan: Any) -> dict[str, Any]:
+    """Project the approved plan with the literal owner request as product authority.
+
+    The planner may normalize/summarize the request for graph construction, but the
+    coding model must never receive a weaker product objective than the owner actually
+    supplied. We therefore make the literal prompt the coding objective and an explicit
+    mandatory root requirement while preserving the rest of the approved plan.
+    """
+    data = _plan_data(plan)
+    owner = _objective(plan)
+    projected = dict(data)
+    provenance = dict(data.get("provenance") or {}) if isinstance(data.get("provenance"), dict) else {}
+    provenance["originalPrompt"] = owner
+    projected["provenance"] = provenance
+    projected["summary"] = owner
+    projected["primaryGoal"] = owner
+    projected["ownerOriginalRequest"] = owner
+
+    ledger = [dict(item) for item in (data.get("requirementLedger") or []) if isinstance(item, dict)]
+    normalized_owner = " ".join(owner.split()).lower()
+    already_rooted = any(
+        " ".join(str(item.get("exactText") or item.get("normalizedMeaning") or "").split()).lower() == normalized_owner
+        for item in ledger
+    )
+    if owner and not already_rooted:
+        ledger.insert(
+            0,
+            {
+                "id": "OWNER-ROOT",
+                "exactText": owner,
+                "normalizedMeaning": owner,
+                "mandatory": True,
+                "acceptanceCriteria": [
+                    "The executable product directly implements every explicit behavior in the owner's literal request; placeholders, comments, mocks, renamed buttons, and no-op handlers do not count."
+                ],
+                "relatedPlanNodeIds": [],
+                "exclusions": [],
+            },
+        )
+    projected["requirementLedger"] = ledger
+    return projected
 
 
 def _success_criteria(plan: Any) -> tuple[str, ...]:
@@ -177,6 +221,36 @@ def _provenance(row: Any) -> dict[str, Any]:
         return {}
 
 
+def _structural_gap_count(audit: dict[str, Any]) -> int:
+    """Count gaps that usually require architectural rewrites, not tiny repairs."""
+    total = 0
+    for key in ("behaviorGaps", "capabilityUsageGaps", "authorityGaps"):
+        value = audit.get(key)
+        if isinstance(value, (list, tuple)):
+            total += len(value)
+    return total
+
+
+def _architectural_objective_gap(audit: dict[str, Any]) -> bool:
+    behavior = audit.get("behaviorGaps") if isinstance(audit.get("behaviorGaps"), list) else []
+    capabilities = audit.get("capabilityUsageGaps") if isinstance(audit.get("capabilityUsageGaps"), list) else []
+    authority = audit.get("authorityGaps") if isinstance(audit.get("authorityGaps"), list) else []
+    return _structural_gap_count(audit) >= 3 or (bool(behavior) and bool(capabilities or authority))
+
+
+def _should_regenerate_stale_source(
+    audit: dict[str, Any],
+    *,
+    generation_attempt: int,
+    repairs: list[dict[str, Any]],
+    already_regenerated: bool,
+) -> bool:
+    """Prefer a clean build when a retry inherits a broadly invalid old bundle."""
+    if audit.get("verified") or generation_attempt <= 1 or repairs or already_regenerated:
+        return False
+    return _architectural_objective_gap(audit)
+
+
 async def _repair_history(db, tenant_id: str, plan_row: Any, runtime_run_id: str) -> list[dict[str, Any]]:
     """Recover repair budget/history from immutable source provenance after restart."""
     try:
@@ -196,7 +270,8 @@ async def _repair_history(db, tenant_id: str, plan_row: Any, runtime_run_id: str
     for row in rows:
         provenance = _provenance(row)
         evidence = provenance.get("failureEvidence") if isinstance(provenance.get("failureEvidence"), dict) else {}
-        if provenance.get("sourceOperation") != "runner_repair" or str(evidence.get("runtimeRunId") or "") != runtime_run_id:
+        operation = str(provenance.get("sourceOperation") or "")
+        if operation not in {"runner_repair", "objective_repair"} or str(evidence.get("runtimeRunId") or "") != runtime_run_id:
             continue
         history.append(
             {
@@ -228,13 +303,19 @@ async def run_studio_generation(
 ):
     """Run one Solution attempt under the shared durable AgentRunController."""
     objective = _objective(plan)
+    coding_plan = _coding_plan(plan)
     runtime_run_id = str(metadata.get("runtime_run_id") or idempotency_key)[:120]
+    try:
+        generation_attempt = max(1, int(metadata.get("generation_attempt") or 1))
+    except (TypeError, ValueError):
+        generation_attempt = 1
     repair_budget = max(0, min(int(max_repairs), 6))
-    controller = AgentRunController(planner=_StudioPlanner(plan), max_replans=0)
+    controller = AgentRunController(planner=_StudioPlanner(coding_plan), max_replans=0)
     control_model = _StudioControlModel()
     final_result: dict[str, Any] = {}
     transient_history: list[dict[str, Any]] = []
     terminal_error: Exception | None = None
+    regenerated_stale_source = False
 
     async def history() -> list[dict[str, Any]]:
         durable = await _repair_history(db, tenant_id, plan_row, runtime_run_id)
@@ -245,9 +326,33 @@ async def run_studio_generation(
         current_history = await history()
         repair_number = len(current_history) + 1
         await _notify(progress_callback, "source_repair", "running", {"repairNumber": repair_number, "failureEvidence": tagged})
-        updated, result = await repair_source_for_plan(
-            db, tenant_id, user_id, plan_row, plan, source, tagged, client=client
-        )
+
+        objective_audit = tagged.get("objectiveAudit") if isinstance(tagged.get("objectiveAudit"), dict) else {}
+        architectural = tagged.get("classification") == "objective_incomplete" and _architectural_objective_gap(objective_audit)
+        if architectural:
+            instruction = (
+                "The current implementation is architecturally inadequate for the owner's literal request. "
+                "Re-evaluate the whole application against that request and rewrite, replace, add, or remove any source necessary. "
+                "Do not preserve a scaffold merely because it already exists. Implement the real end-to-end behavior, real Operly capability calls, authoritative persistence/identity, and executable acceptance tests. "
+                "Placeholders, mock services, comments describing future work, no-op handlers, hard-coded identities, and tests that only assert true are forbidden.\n\n"
+                f"OBJECTIVE AUDIT EVIDENCE:\n{json.dumps(objective_audit, ensure_ascii=False, sort_keys=True)[:16000]}"
+            )
+            updated, result = await edit_source_for_plan(
+                db,
+                tenant_id,
+                user_id,
+                plan_row,
+                coding_plan,
+                source,
+                instruction,
+                client=client,
+                edit_kind="objective_repair",
+                context={"objectiveAudit": objective_audit, "ownerOriginalRequest": objective},
+            )
+        else:
+            updated, result = await repair_source_for_plan(
+                db, tenant_id, user_id, plan_row, coding_plan, source, tagged, client=client
+            )
         await db.commit()
         await db.refresh(updated)
         row = {
@@ -258,13 +363,14 @@ async def run_studio_generation(
             "toSourceVersion": getattr(updated, "source_version", None),
             "changedPaths": getattr(result, "changed_paths", []) or [],
             "summary": getattr(result, "summary", None),
+            "repairMode": "architectural_rewrite" if architectural else "minimal_runner_repair",
         }
         transient_history.append(row)
         await _notify(progress_callback, "source_repair", "succeeded", row)
         return updated
 
     async def advance(_name: str, _arguments: dict[str, Any], _call_id: str | None):
-        nonlocal terminal_error
+        nonlocal terminal_error, regenerated_stale_source
         source = await latest_source(
             db,
             tenant_id,
@@ -272,9 +378,9 @@ async def run_studio_generation(
             getattr(plan_row, "approved_version", None),
         )
         if source is None:
-            await _notify(progress_callback, "source_generation", "running", {"planId": getattr(plan_row, "id", None)})
+            await _notify(progress_callback, "source_generation", "running", {"planId": getattr(plan_row, "id", None), "ownerOriginalRequest": objective})
             source, result = await generate_source_for_plan(
-                db, tenant_id, user_id, plan_row, plan, client=client
+                db, tenant_id, user_id, plan_row, coding_plan, client=client
             )
             await db.commit()
             await db.refresh(source)
@@ -292,8 +398,52 @@ async def run_studio_generation(
             }
 
         repairs = await history()
-        audit = audit_generated_source(plan, source)
+        audit = audit_generated_source(coding_plan, source)
         if not audit["verified"]:
+            if _should_regenerate_stale_source(
+                audit,
+                generation_attempt=generation_attempt,
+                repairs=repairs,
+                already_regenerated=regenerated_stale_source,
+            ):
+                previous_version = getattr(source, "source_version", None)
+                regenerated_stale_source = True
+                await _notify(
+                    progress_callback,
+                    "source_generation",
+                    "running",
+                    {
+                        "planId": getattr(plan_row, "id", None),
+                        "fromSourceVersion": previous_version,
+                        "reason": "structural_objective_reset",
+                        "objectiveAudit": audit,
+                        "ownerOriginalRequest": objective,
+                    },
+                )
+                source, result = await generate_source_for_plan(
+                    db, tenant_id, user_id, plan_row, coding_plan, client=client
+                )
+                await db.commit()
+                await db.refresh(source)
+                await _notify(
+                    progress_callback,
+                    "source_generation",
+                    "succeeded",
+                    {
+                        "sourceBundleId": getattr(source, "id", None),
+                        "sourceVersion": getattr(source, "source_version", None),
+                        "fromSourceVersion": previous_version,
+                        "reason": "structural_objective_reset",
+                        "changedPaths": getattr(result, "changed_paths", []) or [],
+                    },
+                )
+                return {
+                    "ok": True,
+                    "status": "RUNNING",
+                    "artifact_refs": [str(getattr(source, "id", ""))],
+                    "objectiveAudit": audit,
+                    "message": "Structurally stale source replaced with a clean generation; objective audit is next.",
+                }
             if len(repairs) >= repair_budget:
                 terminal_error = RuntimeError(f"Generated source does not satisfy approved objective: {audit['message']}")
                 await _notify(progress_callback, "source_repair", "failed", audit)
@@ -328,7 +478,7 @@ async def run_studio_generation(
                 tenant_id,
                 user_id,
                 plan_row,
-                plan,
+                coding_plan,
                 source,
                 attempt_key,
                 adapter=adapter,
@@ -353,7 +503,7 @@ async def run_studio_generation(
 
         repairs = await history()
         if build.state == "preview_ready":
-            final_audit = audit_generated_source(plan, source)
+            final_audit = audit_generated_source(coding_plan, source)
             if not final_audit["verified"]:
                 terminal_error = RuntimeError("Runner passed but the approved objective audit regressed")
                 return {"ok": False, "status": "FAILED", "error": str(terminal_error), "objectiveAudit": final_audit}
@@ -404,12 +554,7 @@ async def run_studio_generation(
             },
         }
     ]
-    messages = [
-        {
-            "role": "user",
-            "content": objective,
-        }
-    ]
+    messages = [{"role": "user", "content": objective}]
     result = await controller.run(
         objective=objective,
         model=control_model,
