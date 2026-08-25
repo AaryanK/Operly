@@ -1,13 +1,13 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.app_identity_provider import AppIdentityProvider
 from packages.capabilities.artifact_provider import ArtifactProvider
-from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
 from packages.capabilities.computer_provider import AgentComputerProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.event_provider import EventDiscoveryProvider
+from packages.capabilities.eventful_business_provider import EventfulUnifiedBusinessProvider
 from packages.capabilities.gmail_artifact_provider import GmailArtifactProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.gmail_read_provider import GmailReadProvider
@@ -65,7 +65,7 @@ def _builtin_providers():
         ConversationHistoryProvider(),
         ActionLifecycleProvider(),
         UnifiedWebsiteProvider(),
-        UnifiedBusinessProvider(),
+        EventfulUnifiedBusinessProvider(),
         CRMReadProvider(),
         WorkspaceProvider(),
         OperationsProvider(),
@@ -114,6 +114,53 @@ def _provider_events(provider) -> tuple[EventSpec, ...]:
                     description=f"Event emitted by {definition.id}",
                 )
     return tuple(output[event_id] for event_id in sorted(output))
+
+
+def _capability_runtime_events() -> tuple[EventSpec, ...]:
+    """Public trigger surface over the ActionService capability lifecycle.
+
+    ActionService already durably records these events for every workspace capability
+    invocation. Registering them here makes that existing real-time stream available
+    to the generic workflow compiler without adding per-capability trigger code.
+    """
+    payload_schema = {
+        "type": "object",
+        "properties": {
+            "action_id": {"type": "string"},
+            "capability": {"type": "string"},
+            "status": {"type": "string"},
+            "principal_id": {"type": "string"},
+            "client_id": {"type": "string"},
+            "origin": {"type": "string"},
+            "connector_id": {"type": "string"},
+            "resource_type": {"type": "string"},
+            "scope_kind": {"type": "string"},
+        },
+        "required": ["action_id", "capability", "status"],
+        "additionalProperties": True,
+    }
+    descriptions = {
+        "action.proposed": "A governed Operly capability action was proposed.",
+        "action.waiting_approval": "A capability action is waiting for human approval.",
+        "action.approved": "A previously gated capability action was approved.",
+        "action.executing": "A capability action started executing through the firewall.",
+        "action.executed": "A capability provider returned successfully and is awaiting verification.",
+        "action.verifying": "Operly started verifying a capability result.",
+        "action.verified": "A capability action completed and its result was verified.",
+        "action.rejected": "A capability action was rejected by policy or a human approver.",
+        "action.failed": "A capability action failed before successful verification.",
+        "action.verification_failed": "A capability action ran but failed result verification.",
+    }
+    return tuple(
+        EventSpec(
+            event_id,
+            description=description,
+            payload_schema=payload_schema,
+            scope="workspace",
+            tags=frozenset({"capability", "workflow", "runtime", "realtime"}),
+        )
+        for event_id, description in descriptions.items()
+    )
 
 
 def bootstrap_builtin_plugins() -> None:
@@ -165,6 +212,23 @@ def bootstrap_builtin_plugins() -> None:
             ),
             replace=True,
         )
+
+    # ActionService is the common governed seam for agents, workflows, Studio and MCP.
+    # Its durable lifecycle stream therefore becomes a generic event source that any
+    # workflow may subscribe to, filtered by payload.capability when desired.
+    runtime.register(
+        PluginContribution(
+            manifest=PluginManifest(
+                id="builtin:capability_runtime",
+                version="1.0.0",
+                display_name="Capability Runtime",
+                description="Real-time governed capability lifecycle events shared by every Operly surface.",
+                events=_capability_runtime_events(),
+                metadata={"builtin": True, "platform_runtime": True, "shared_with_studio": True},
+            ),
+        ),
+        replace=True,
+    )
 
     # Task execution is a platform lifecycle, not a Discord lifecycle. It polls the
     # existing ScheduledJob wake-up rows and routes outputs through plugin adapters.
