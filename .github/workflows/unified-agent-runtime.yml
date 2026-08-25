@@ -41,6 +41,7 @@ on:
       - "tests/test_agent_computer_storage_ingress_resume.py"
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_studio_agent_generation.py"
+      - "tests/test_studio_agent_controller.py"
       - ".github/workflows/unified-agent-runtime.yml"
   workflow_dispatch:
 
@@ -109,3 +110,4 @@ jobs:
           tests/test_agent_computer_storage_ingress_resume.py
           tests/test_coding_harness_execution_loop.py
           tests/test_studio_agent_generation.py
+          tests/test_studio_agent_controller.py
