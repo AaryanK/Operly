@@ -1,11 +1,21 @@
+from types import SimpleNamespace
+
+import pytest
+
+from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.defaults import default_registry
-from packages.capabilities.session_view import DEFAULT_KERNEL_IDS, SessionCapabilityView
+from packages.capabilities.root_routing import requires_software_build
+from packages.capabilities.session_view import (
+    DEFAULT_KERNEL_IDS,
+    DEFAULT_ROOT_OPERATION_IDS,
+    SessionCapabilityView,
+)
 
 
-def _tool_ids(view: SessionCapabilityView) -> set[str]:
+def _tool_ids(view: SessionCapabilityView, *, stage: str | None = None) -> set[str]:
     return {
         item["function"]["name"]
-        for item in view.schemas()
+        for item in view.schemas(stage=stage)
         if isinstance(item, dict) and isinstance(item.get("function"), dict)
     }
 
@@ -55,6 +65,86 @@ def test_model_escalation_kernel_is_visible_when_model_authority_exists():
     tools = _tool_ids(view)
     assert "model.invoke" in tools
     assert "model.deep_reason" in tools
+
+
+def test_software_build_is_first_class_but_still_authority_and_stage_gated():
+    assert DEFAULT_ROOT_OPERATION_IDS == {"software.build"}
+    registry = default_registry(set())
+
+    authorized = SessionCapabilityView(
+        registry,
+        "tenant-test",
+        {"solution:generate"},
+    )
+    assert "software.build" in _tool_ids(authorized)
+    # Root operations are not kernel capabilities. Planning/research stages still
+    # reduce the model-visible write surface in the normal way.
+    assert "software.build" not in _tool_ids(authorized, stage="planning")
+
+    unauthorized = SessionCapabilityView(
+        registry,
+        "tenant-test",
+        {"files:process"},
+    )
+    assert "software.build" not in _tool_ids(unauthorized)
+
+
+def test_root_software_routing_distinguishes_products_from_single_files():
+    assert requires_software_build(
+        "Build me an employee attendance system with QR clock in and clock out, manager dashboard and admin analytics."
+    )
+    assert requires_software_build(
+        "Write an entire runnable codebase for a working QR based clock in and clock out application."
+    )
+    assert requires_software_build("Create a complete customer support dashboard.")
+
+    assert not requires_software_build("Write schema.sql for an employees table.")
+    assert not requires_software_build(
+        "Create a TypeScript file that exports a function to add two numbers."
+    )
+    assert not requires_software_build("Write a system prompt for the assistant.")
+    assert not requires_software_build("Give me a React code snippet.")
+
+
+class _ObjectiveOnlyDB:
+    def __init__(self, objective: str):
+        self.objective = objective
+
+    async def get(self, _model, _execution_id):
+        return SimpleNamespace(objective=self.objective)
+
+
+@pytest.mark.asyncio
+async def test_artifact_create_text_cannot_substitute_for_root_software_build():
+    objective = (
+        "Build me a working employee attendance system with QR clock in and clock out, "
+        "manager dashboard, admin analytics, authentication and a database."
+    )
+    context = SimpleNamespace(
+        db=_ObjectiveOnlyDB(objective),
+        tenant_id="tenant-test",
+        actor_id="user-1",
+        scope_kind="workspace",
+        scope_id="tenant-test",
+        owner_user_id=None,
+        execution_id="action-1",
+        invocation={"metadata": {"runtime_run_id": "run-1"}},
+    )
+
+    result = await ArtifactProvider().execute(
+        context,
+        "artifact.create_text",
+        {
+            "filename": "frontend_ui.tsx",
+            "content": "export default function App(){return null}",
+        },
+    )
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.evidence["reason"] == "software_product_requires_software_build"
+    assert result.evidence["required_capability"] == "software.build"
+    assert result.evidence["persisted"] is False
 
 
 def test_describe_observation_progressively_exposes_exact_schema():
