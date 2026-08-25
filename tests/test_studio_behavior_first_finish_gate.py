@@ -99,7 +99,10 @@ async def _model_role_scenario(monkeypatch):
         return SimpleNamespace(role=role)
 
     result = CodingHarnessResult(
-        files=[SourceFile("index.html", b"<!doctype html><p>ok</p>"), SourceFile("app.test.js", b"// test"))],
+        files=[
+            SourceFile("index.html", b"<!doctype html><p>ok</p>"),
+            SourceFile("app.test.js", b"// test"),
+        ],
         plan="plan",
         summary="summary",
     )
@@ -159,7 +162,9 @@ async def _model_role_scenario(monkeypatch):
 
     compact = json.loads(source_service._plan_specification(plan))
     assert compact["completionPolicy"]["objectiveAuditRequired"] is True
-    assert compact["implementationOrder"][0].startswith("Implement the owner's literal end-to-end product behavior first")
+    assert compact["implementationOrder"][0].startswith(
+        "Implement the owner's literal end-to-end product behavior first"
+    )
 
 
 def test_greenfield_role_unchanged_but_objective_rewrite_uses_repair_pool(monkeypatch):
