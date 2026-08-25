@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 import binascii
 import tempfile
-from pathlib import Path
 from typing import Any
 
 from packages.artifacts.service import ArtifactService, artifact_json, artifact_scope_from_context
@@ -71,9 +70,11 @@ class FileRuntimeProvider(BaseProvider):
                 "additionalProperties": False,
             },
             {"type": "object"},
-            risk_level="read_only",
+            risk_level="low",
             permissions=("files:process",),
             approval_policy=ApprovalPolicy.AUTO,
+            execution_timeout_seconds=300,
+            reversible=True,
             category="files",
             display_name="Process files",
             tags=frozenset({"files", "attachments", "documents", "multimodal", "artifacts"}),
@@ -140,9 +141,11 @@ class FileRuntimeProvider(BaseProvider):
                 "additionalProperties": False,
             },
             {"type": "object"},
-            risk_level="read_only",
+            risk_level="low",
             permissions=("files:process",),
             approval_policy=ApprovalPolicy.AUTO,
+            execution_timeout_seconds=1800,
+            reversible=True,
             category="files",
             display_name="Batch process files",
             tags=frozenset({"files", "batch", "documents", "invoices", "artifacts", "spreadsheet", "pdf"}),
@@ -253,8 +256,6 @@ class FileRuntimeProvider(BaseProvider):
                 source_rows.append(row)
                 inputs.append(item)
 
-        # Re-number after composing durable + inline inputs so attachment attribution
-        # remains deterministic and unique.
         for index, item in enumerate(inputs, 1):
             item.index = index
 
@@ -310,8 +311,6 @@ class FileRuntimeProvider(BaseProvider):
         service = ArtifactService(context.db)
         scope = artifact_scope_from_context(context)
         records = []
-        # Materialize/query in small windows so a 400-file task does not load the
-        # entire corpus into the web worker or model context at once.
         for start in range(0, len(artifact_ids), 20):
             chunk_ids = artifact_ids[start : start + 20]
             chunk_rows = await service.get_many(scope, chunk_ids, max_items=20)
@@ -327,7 +326,6 @@ class FileRuntimeProvider(BaseProvider):
                     concurrency=int(arguments.get("concurrency", 4)),
                 )
             )
-            # Drop raw material before the next window.
             del material
 
         sums = sum_columns(records, sum_requested)
