@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from email.message import EmailMessage
 from typing import Any
+from urllib.parse import quote
 
 from packages.artifacts.service import ArtifactService, artifact_scope_from_context
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult, ExecutionMode
@@ -32,6 +33,19 @@ def _mime_parts(content_type: str | None) -> tuple[str, str]:
     return main[:80], sub[:120]
 
 
+def _attachment_filenames(part: dict[str, Any] | None) -> list[str]:
+    if not isinstance(part, dict):
+        return []
+    output: list[str] = []
+    filename = str(part.get("filename") or "").strip()
+    body = part.get("body") if isinstance(part.get("body"), dict) else {}
+    if filename and (body.get("attachmentId") or body.get("data") is not None):
+        output.append(filename)
+    for child in part.get("parts") or []:
+        output.extend(_attachment_filenames(child if isinstance(child, dict) else None))
+    return output
+
+
 class GmailArtifactProvider(BaseProvider):
     """Gmail draft operations that consume durable artifact IDs, never raw model bytes."""
 
@@ -42,7 +56,7 @@ class GmailArtifactProvider(BaseProvider):
             "gmail_create_draft_with_artifacts",
             (
                 "Create a Gmail draft and attach durable Operly artifacts from the current execution scope. "
-                "Use artifact IDs returned by files.process/files.batch_process; the model never needs attachment bytes."
+                "Use artifact IDs returned by file capabilities; the model never needs attachment bytes."
             ),
             {
                 "type": "object",
@@ -152,22 +166,63 @@ class GmailArtifactProvider(BaseProvider):
             return CapabilityResult(False, False, {"reason": "gmail_artifact_draft_failed", "message": str(error)[:1000]})
 
     async def verify(self, context, capability_name: str, arguments: dict[str, Any], result: CapabilityResult) -> CapabilityResult:
-        del context, arguments
         if capability_name != "gmail.create_draft_with_artifacts":
             return CapabilityResult(False, result.changed, {"reason": "unsupported_gmail_artifact_capability"})
-        valid = bool(
-            result.success
-            and result.evidence.get("draft_id")
-            and result.evidence.get("attachment_count") == len(result.evidence.get("attachment_artifact_ids") or [])
-        )
+        draft_id = str(result.evidence.get("draft_id") or "").strip()
+        expected = [
+            str(item.get("filename") or "").strip()
+            for item in result.evidence.get("attachments") or []
+            if isinstance(item, dict) and str(item.get("filename") or "").strip()
+        ]
+        expected_artifact_ids = list(result.evidence.get("attachment_artifact_ids") or [])
+        if not result.success or not draft_id or not expected or len(expected) != len(expected_artifact_ids):
+            return CapabilityResult(
+                False,
+                result.changed,
+                {
+                    "reason": "gmail_draft_attachment_evidence_incomplete",
+                    "draft_id": draft_id or None,
+                    "attachment_artifact_ids": expected_artifact_ids,
+                },
+                result.external_reference,
+            )
+        try:
+            connector = await google_connector_for_context(context, GMAIL_MODIFY)
+            token = await google_access_token_for_context(context, connector)
+            persisted = await request_json(
+                "GET",
+                f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{quote(draft_id, safe='')}",
+                token,
+                params={"format": "full"},
+            )
+            payload = ((persisted.get("message") or {}).get("payload") or {})
+            provider_filenames = _attachment_filenames(payload)
+        except (LookupError, ValueError, RuntimeError) as error:
+            return CapabilityResult(
+                False,
+                result.changed,
+                {
+                    "reason": "gmail_draft_provider_verification_failed",
+                    "draft_id": draft_id,
+                    "message": str(error)[:500],
+                },
+                result.external_reference,
+            )
+
+        valid = sorted(provider_filenames) == sorted(expected)
         return CapabilityResult(
             valid,
             result.changed,
             {
-                "draft_id": result.evidence.get("draft_id"),
-                "attachment_artifact_ids": result.evidence.get("attachment_artifact_ids") or [],
-                "attachment_count": result.evidence.get("attachment_count", 0),
-                "draft_persisted_by_provider": valid,
+                "draft_id": draft_id,
+                "attachment_artifact_ids": expected_artifact_ids,
+                "attachment_count": len(provider_filenames),
+                "expected_attachment_count": len(expected),
+                "attachment_filenames": provider_filenames,
+                "expected_attachment_filenames": expected,
+                "draft_persisted_by_provider": bool(persisted.get("id") == draft_id),
+                "attachments_persisted_by_provider": valid,
+                "delivery_status": "draft" if valid else "unverified",
             },
             result.external_reference,
         )

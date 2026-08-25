@@ -306,9 +306,26 @@ async def test_400_invoice_north_star_runs_through_firewall_and_drafts_email(run
     captured: dict = {}
 
     async def fake_request(method, url, token, payload=None, **kwargs):
-        del kwargs
-        captured.update(method=method, url=url, token=token, payload=payload)
-        return {"id": "draft-400", "message": {"id": "message-400"}}
+        if method == "POST":
+            captured.update(method=method, url=url, token=token, payload=payload)
+            return {"id": "draft-400", "message": {"id": "message-400"}}
+        assert method == "GET"
+        assert url.endswith("/gmail/v1/users/me/drafts/draft-400")
+        assert kwargs.get("params") == {"format": "full"}
+        return {
+            "id": "draft-400",
+            "message": {
+                "id": "message-400",
+                "payload": {
+                    "parts": [
+                        {
+                            "filename": "operly-batch-summary.pdf",
+                            "body": {"attachmentId": "attachment-400"},
+                        }
+                    ]
+                },
+            },
+        }
 
     with (
         patch("packages.actions.service.emit_runtime_trace_event", AsyncMock()),
@@ -344,9 +361,11 @@ async def test_400_invoice_north_star_runs_through_firewall_and_drafts_email(run
 
     assert draft_action.status == ActionStatus.VERIFIED
     draft = json.loads(draft_action.result_json)["evidence"]
+    verification = json.loads(draft_action.verification_json)["evidence"]
     assert draft["draft_id"] == "draft-400"
     assert draft["attachment_artifact_ids"] == [pdf["artifact_id"]]
     assert draft["delivery_status"] == "draft"
+    assert verification["attachments_persisted_by_provider"] is True
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/gmail/v1/users/me/drafts")
 
