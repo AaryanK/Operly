@@ -5,15 +5,9 @@ on:
     branches: [capability-sandbox]
     paths:
       - "packages/capability_sandbox/**"
-      - "packages/coding_harness/**"
-      - "packages/custom_software/graph_planning.py"
-      - "packages/custom_software/graph_coverage.py"
-      - "packages/custom_software/live_planning.py"
-      - "packages/custom_software/live_projection.py"
-      - "packages/custom_software/planning_orchestrator.py"
-      - "packages/custom_software/scope_convergence.py"
-      - "apps/api/coding_harness_router.py"
-      - "apps/web/static/coding-harness-ui.js"
+      - "packages/software_projects/coding/**"
+      - "packages/software_projects/planning/**"
+      - "packages/runtime_plugins/**"
       - "apps/web/static/graph-planning-ui.js"
       - "apps/web/static/planning-clarification-normal.js"
       - "apps/web/static/planning-clarification.css"
@@ -44,23 +38,24 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
-      - run: >-
+      - name: Compile canonical software capability runtime
+        run: >-
           python -m py_compile
-          packages/coding_harness/context_window.py
-          packages/coding_harness/model_client.py
-          packages/coding_harness/opencode_agent.py
-          packages/coding_harness/web_tools.py
-          packages/coding_harness/source_service.py
-          packages/custom_software/graph_planning.py
-          packages/custom_software/graph_coverage.py
-          packages/custom_software/planning_orchestrator.py
-          packages/custom_software/live_projection.py
-          packages/custom_software/scope_convergence.py
-          apps/api/coding_harness_router.py
-      - run: node --check apps/web/static/coding-harness-ui.js
+          packages/software_projects/coding/context_window.py
+          packages/software_projects/coding/model_client.py
+          packages/software_projects/coding/opencode_agent.py
+          packages/software_projects/coding/web_tools.py
+          packages/software_projects/coding/source_service.py
+          packages/software_projects/planning/graph_planning.py
+          packages/software_projects/planning/graph_coverage.py
+          packages/software_projects/planning/planning_orchestrator.py
+          packages/software_projects/planning/live_projection.py
+          packages/software_projects/planning/scope_convergence.py
+          packages/runtime_plugins/runner_service.py
       - run: node --check apps/web/static/planning-clarification-normal.js
       - run: node --check apps/web/static/graph-planning-ui.js
-      - run: >-
+      - name: Run capability and software-construction contracts
+        run: >-
           python -m pytest -q
           tests/test_capability_target_resolution.py
           tests/test_refinement_scope_routing.py
