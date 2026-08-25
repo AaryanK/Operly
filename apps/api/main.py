@@ -42,7 +42,6 @@ from apps.api.software_projects_router import router as software_projects_router
 from apps.api.solution_generation_router import router as solution_generation_router
 from apps.api.solutions_router import public_router as solutions_public_router
 from apps.api.solutions_router import router as solutions_router
-from apps.api.studio_router import router as studio_router
 from apps.api.studio_source_router import router as studio_source_router
 from apps.api.system_router import router as system_router
 from apps.api.workspace_entities_router import router as workspace_entities_router
@@ -232,7 +231,6 @@ for router in (
     capability_diagnostics_router,
     channel_identity_router,
     operations_router,
-    studio_router,
     studio_source_router,
     software_projects_router,
     solutions_router,
