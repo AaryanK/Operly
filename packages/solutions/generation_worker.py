@@ -330,10 +330,14 @@ async def _bind_project(db, project: GeneratedProject, plan_row: SoftwarePlanRec
 
 
 async def _mark_failed(db, job: SolutionJob, row: SolutionRecord, stage: str, error: Exception) -> None:
-    safe_error = " ".join(str(error).split())[:1000] or type(error).__name__
-    _append_log(job, stage, "failed", safe_error)
+    generic_error = " ".join(str(error).split())[:1000] or type(error).__name__
     context = _context(row)
-    initial = {"status": "retryable", "stage": stage, "error": safe_error, "jobId": job.id, "attempt": job.attempt}
+    previous = context.get("initialGeneration") if isinstance(context.get("initialGeneration"), dict) else {}
+    runner_detail = " ".join(str(previous.get("failureMessage") or "").split())[:1000]
+    safe_error = runner_detail or generic_error
+    _append_log(job, stage, "failed", safe_error)
+    initial = dict(previous)
+    initial.update({"status": "retryable", "stage": stage, "error": safe_error, "jobId": job.id, "attempt": job.attempt})
     if job.plan_id:
         initial["softwarePlanId"] = job.plan_id
     context["initialGeneration"] = initial
@@ -344,12 +348,15 @@ async def _mark_failed(db, job: SolutionJob, row: SolutionRecord, stage: str, er
     row.context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
     job.status = "failed"
     job.ended_at = datetime.utcnow()
-    job.failure_classification = type(error).__name__[:80]
+    job.failure_classification = str(initial.get("failureClassification") or type(error).__name__)[:80]
     job.locked_by = None
     job.lease_expires_at = None
     job.heartbeat_at = None
     evidence = _evidence(job)
     evidence.update({"failedStage": stage, "error": safe_error})
+    for key in ("failureClassification", "failureMessage", "buildId", "buildState", "runnerEventState", "runnerExitCode", "repairNumber", "runnerAttempt"):
+        if initial.get(key) is not None:
+            evidence[key] = initial.get(key)
     job.evidence_json = json.dumps(evidence, ensure_ascii=False)
     await db.commit()
 
@@ -411,11 +418,19 @@ async def process_generation_job(db, job: SolutionJob) -> None:
             ):
                 if payload.get(source_key) is not None:
                     initial[target_key] = payload.get(source_key)
+            if clean_status == "failed":
+                for source_key, target_key in (
+                    ("message", "failureMessage"), ("buildState", "buildState"),
+                    ("runnerEventState", "runnerEventState"), ("runnerExitCode", "runnerExitCode"),
+                    ("attempt", "runnerAttempt"),
+                ):
+                    if payload.get(source_key) is not None:
+                        initial[target_key] = payload.get(source_key)
             current["initialGeneration"] = initial
             row.context_json = json.dumps(current, ensure_ascii=False, sort_keys=True)
             signature = (clean_stage, clean_status)
             if signature != last_progress:
-                detail = payload.get("classification") or payload.get("state") or payload.get("to") or payload.get("message")
+                detail = payload.get("message") or payload.get("classification") or payload.get("state") or payload.get("to")
                 _append_log(job, clean_stage, clean_status, str(detail) if detail else None)
                 last_progress = signature
             await db.commit()

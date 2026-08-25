@@ -64,7 +64,15 @@ async def test_runner_test_failure_is_not_reported_as_source_generation():
                 await progress(
                     "runner_test",
                     "failed",
-                    {"buildId": build.id, "classification": "test_failure"},
+                    {
+                        "buildId": build.id,
+                        "classification": "test_failure",
+                        "message": "AssertionError: expected clock-out QR to close the active shift",
+                        "buildState": "tests_failed",
+                        "runnerEventState": "testing",
+                        "runnerExitCode": 1,
+                        "attempt": 3,
+                    },
                 )
                 return build, source, []
 
@@ -86,8 +94,19 @@ async def test_runner_test_failure_is_not_reported_as_source_generation():
             assert row.lifecycle_status == LifecycleStatus.FAILED
             assert generation["stage"] == "runner_test"
             assert generation["stage"] != "source_generation"
+            assert generation["error"] == "AssertionError: expected clock-out QR to close the active shift"
+            context = json.loads(row.context_json)["initialGeneration"]
+            assert context["failureClassification"] == "test_failure"
+            assert context["failureMessage"] == "AssertionError: expected clock-out QR to close the active shift"
+            assert context["buildState"] == "tests_failed"
+            assert context["runnerEventState"] == "testing"
+            assert context["runnerExitCode"] == 1
+            assert context["runnerAttempt"] == 3
             evidence = json.loads(job.evidence_json)
             assert evidence["failedStage"] == "runner_test"
+            assert evidence["failureClassification"] == "test_failure"
+            assert evidence["failureMessage"] == "AssertionError: expected clock-out QR to close the active shift"
+            assert evidence["runnerExitCode"] == 1
             logs = json.loads(job.log_json)
             assert any(item["stage"] == "runner_build" for item in logs)
             assert any(item["stage"] == "runner_test" for item in logs)
