@@ -20,6 +20,12 @@ DEFAULT_KERNEL_IDS = frozenset(
     }
 )
 
+# Canonical product-level operations that should be available immediately when the
+# authenticated principal is allowed to use them. Unlike DEFAULT_KERNEL_IDS these do
+# not bypass capability-stage narrowing; they are ordinary governed operations whose
+# schemas simply do not require a discovery round trip first.
+DEFAULT_ROOT_OPERATION_IDS = frozenset({"software.build"})
+
 _READ_METHOD_MARKERS = (
     ".read",
     ".get",
@@ -40,8 +46,8 @@ class SessionCapabilityView:
 
     Authorization and relevance are deliberately separate. A capability can be
     executable by the principal without being exposed to the model. The view starts
-    with a tiny permanent kernel plus explicitly supplied initial IDs, then expands
-    only after discovery/describe observations.
+    with a tiny permanent kernel plus first-class root operations and explicitly
+    supplied initial IDs, then expands only after discovery/describe observations.
     """
 
     registry: Any
@@ -54,6 +60,7 @@ class SessionCapabilityView:
 
     def __post_init__(self) -> None:
         self.exposed_ids.update(DEFAULT_KERNEL_IDS)
+        self.exposed_ids.update(DEFAULT_ROOT_OPERATION_IDS)
         self.exposed_ids.update(str(item) for item in self.initial_ids if str(item))
 
     def _visible(self, capability_id: str) -> bool:
