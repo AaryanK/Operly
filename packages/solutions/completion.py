@@ -86,6 +86,17 @@ async def _append_parent_completion(
     ))
 
 
+async def _retryable_finalization_failure(db, job: SolutionJob, evidence: dict[str, Any], stage: str, error: Exception) -> dict[str, Any]:
+    """Persist completion failure without mutating verified software build truth."""
+    evidence["completionFinalized"]=False
+    evidence["completionStatus"]="RETRYABLE"
+    evidence["completionFailedStage"]=stage
+    evidence["completionError"]=f"{type(error).__name__}:{str(error)[:500]}"
+    job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
+    await db.commit()
+    return evidence
+
+
 async def finalize_software_job(
     db,
     *,
@@ -93,7 +104,13 @@ async def finalize_software_job(
     solution: SolutionRecord,
     generated_source=None,
 ) -> dict[str, Any]:
-    """Idempotently archive, wake the parent run, and deliver terminal output."""
+    """Idempotently archive, wake the parent run, and deliver terminal output.
+
+    Build/test/start/health/acceptance evidence is authoritative for software
+    success. Artifact projection or surface delivery failures are completion
+    failures only: they stay retryable and must never rewrite a verified build as
+    failed.
+    """
     evidence=_json(job.evidence_json,{})
     if not isinstance(evidence,dict):evidence={}
     if bool(evidence.get("completionFinalized")):
@@ -104,14 +121,17 @@ async def finalize_software_job(
     succeeded=job.status=="succeeded" and str(evidence.get("buildState") or "")=="preview_ready"
     artifact_ids:list[str]=[]
     if succeeded and bool(request.get("returnSourceArchive",evidence.get("returnSourceArchive",True))) and generated_source is not None:
-        archive=await persist_generated_source_archive(
-            db,
-            tenant_id=job.tenant_id,
-            created_by=str(job.created_by or evidence.get("createdBy") or ""),
-            source=generated_source,
-            filename=f"{solution.name}-source.zip",
-            run_id=str(evidence.get("parentAgentRunId") or request.get("parentAgentRunId") or "") or None,
-        )
+        try:
+            archive=await persist_generated_source_archive(
+                db,
+                tenant_id=job.tenant_id,
+                created_by=str(job.created_by or evidence.get("createdBy") or ""),
+                source=generated_source,
+                filename=f"{solution.name}-source.zip",
+                run_id=str(evidence.get("parentAgentRunId") or request.get("parentAgentRunId") or "") or None,
+            )
+        except Exception as error:
+            return await _retryable_finalization_failure(db,job,evidence,"source_archive",error)
         artifact_ids.append(str(archive["artifact_id"]))
         evidence.update({
             "sourceArchiveArtifactId":archive["artifact_id"],
@@ -120,10 +140,13 @@ async def finalize_software_job(
         })
 
     parent_run_id=str(evidence.get("parentAgentRunId") or request.get("parentAgentRunId") or "") or None
-    await _append_parent_completion(
-        db,parent_run_id=parent_run_id,tenant_id=job.tenant_id,job=job,solution=solution,
-        succeeded=succeeded,artifact_ids=artifact_ids,evidence=evidence,
-    )
+    try:
+        await _append_parent_completion(
+            db,parent_run_id=parent_run_id,tenant_id=job.tenant_id,job=job,solution=solution,
+            succeeded=succeeded,artifact_ids=artifact_ids,evidence=evidence,
+        )
+    except Exception as error:
+        return await _retryable_finalization_failure(db,job,evidence,"parent_run",error)
 
     target=evidence.get("deliveryTarget") if isinstance(evidence.get("deliveryTarget"),dict) else request.get("deliveryTarget")
     receipt=None
@@ -138,16 +161,15 @@ async def finalize_software_job(
             evidence["deliveryStatus"]="VERIFIED"
             evidence["deliveryReceipt"]=receipt
         except Exception as error:
-            # Finalization stays retryable. Do not mark finalized if delivery was
-            # explicitly requested but failed authorization/provider delivery.
             evidence["deliveryStatus"]="FAILED"
             evidence["deliveryError"]=f"{type(error).__name__}:{str(error)[:300]}"
-            job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
-            await db.commit()
-            return evidence
+            return await _retryable_finalization_failure(db,job,evidence,"surface_delivery",error)
 
     evidence["completionFinalized"]=True
+    evidence["completionStatus"]="VERIFIED"
     evidence["completionFinalizedAt"]=datetime.utcnow().isoformat()+"Z"
+    evidence.pop("completionFailedStage",None)
+    evidence.pop("completionError",None)
     job.evidence_json=json.dumps(evidence,ensure_ascii=False,sort_keys=True,default=str)
     await db.commit()
     return evidence
