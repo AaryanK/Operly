@@ -163,7 +163,7 @@ class SoftwareSourceService:
         await db.flush()
         return row
 
-    async def import_runner_source(
+    async def import_generated(
         self,
         db,
         *,
@@ -172,7 +172,7 @@ class SoftwareSourceService:
         source,
         originating_run_id: str | None = None,
     ) -> SoftwareSourceVersionRecord:
-        """Import a verified runner adapter bundle into canonical source authority."""
+        """Import a verified isolated-runner bundle into canonical source authority."""
         records = _json(getattr(source, "files_json", None), [])
         files = {
             str(item.get("path") or ""): str(item.get("content") or "")
