@@ -103,8 +103,31 @@ def delivery_target_from_origin(origin: dict[str, Any], delivery: str = "origin"
     }
 
 
+async def _resolve_workspace_authority(
+    *,
+    tenant_id: str,
+    user_id: str,
+    provider: str,
+    conversation_id: str | None,
+    purpose: str,
+) -> None:
+    try:
+        async with session_scope() as db:
+            await resolve_execution_context(
+                db,
+                workspace_id=tenant_id,
+                user_id=user_id,
+                channel=f"{purpose}:{provider}",
+                conversation_id=conversation_id,
+                metadata={"scheduled_delivery": True, "purpose": purpose},
+                require_membership=True,
+            )
+    except ExecutionContextError as error:
+        raise TaskDeliveryError(f"{purpose}_workspace_authority_revoked") from error
+
+
 async def _reauthorize_delivery_target(target: dict[str, Any]) -> None:
-    """Re-evaluate delayed delivery authority instead of trusting creation-time state."""
+    """Re-evaluate delayed message and artifact authority at delivery time."""
     scope = str(target.get("scope") or "workspace").strip().lower()
     user_id = str(target.get("user_id") or "").strip()
     if not user_id:
@@ -115,24 +138,35 @@ async def _reauthorize_delivery_target(target: dict[str, Any]) -> None:
             user = await db.get(AppUser, user_id)
             if user is None or not user.active:
                 raise TaskDeliveryError("task_delivery_personal_authority_revoked")
-        return
+    else:
+        tenant_id = str(target.get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise TaskDeliveryError("task_delivery_workspace_missing")
+        await _resolve_workspace_authority(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            provider=str(target.get("provider") or "unknown"),
+            conversation_id=str(target.get("external_conversation_id") or "") or None,
+            purpose="task_delivery",
+        )
 
-    tenant_id = str(target.get("tenant_id") or "").strip()
-    if not tenant_id:
-        raise TaskDeliveryError("task_delivery_workspace_missing")
-    try:
-        async with session_scope() as db:
-            await resolve_execution_context(
-                db,
-                workspace_id=tenant_id,
+    artifact_scope = str(target.get("artifact_scope") or scope).strip().lower()
+    if artifact_scope == "workspace":
+        artifact_tenant_id = str(
+            target.get("artifact_tenant_id") or target.get("tenant_id") or ""
+        ).strip()
+        if not artifact_tenant_id:
+            raise TaskDeliveryError("artifact_delivery_workspace_missing")
+        # Personal AI may deliver a Workspace-owned artifact to the same authorized
+        # human, but the artifact never changes ownership. Recheck membership now.
+        if scope != "workspace" or artifact_tenant_id != str(target.get("tenant_id") or ""):
+            await _resolve_workspace_authority(
+                tenant_id=artifact_tenant_id,
                 user_id=user_id,
-                channel=f"task_delivery:{str(target.get('provider') or 'unknown')}",
+                provider=str(target.get("provider") or "unknown"),
                 conversation_id=str(target.get("external_conversation_id") or "") or None,
-                metadata={"scheduled_delivery": True},
-                require_membership=True,
+                purpose="artifact_delivery",
             )
-    except ExecutionContextError as error:
-        raise TaskDeliveryError("task_delivery_workspace_authority_revoked") from error
 
 
 async def _record_workspace_delivery_event(
@@ -140,7 +174,9 @@ async def _record_workspace_delivery_event(
     event_type: RuntimeTraceEvent,
     payload: dict[str, Any],
 ) -> None:
-    tenant_id = str(target.get("tenant_id") or "").strip()
+    tenant_id = str(
+        target.get("artifact_tenant_id") or target.get("tenant_id") or ""
+    ).strip()
     if not tenant_id:
         return
     try:
@@ -160,8 +196,6 @@ async def _record_workspace_delivery_event(
                 source="task_delivery",
             )
     except Exception:
-        # Delivery truth must not be changed by telemetry failure. The adapter
-        # receipt remains the source of truth for the active run.
         return
 
 
@@ -183,13 +217,6 @@ async def deliver_task_output(
     *,
     artifact_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Deliver delayed output after a fresh authority check.
-
-    Artifact IDs remain opaque scoped handles. They are passed to the adapter only
-    after authority is rechecked; adapters must resolve bytes/URLs through the
-    Artifact Store for the exact target scope rather than trusting model-authored
-    filenames or links.
-    """
     delivery_target = dict(target)
     ids = _dedupe_artifact_ids(artifact_ids)
     if ids:
@@ -259,7 +286,7 @@ async def deliver_task_output(
 
 @dataclass(slots=True)
 class OperlyConversationDeliveryAdapter:
-    """Persist task output back to an Operly web/personal conversation."""
+    """Persist delayed output back to an Operly web/personal conversation."""
 
     providers: tuple[str, ...] = ("web", "operly", "task")
 
