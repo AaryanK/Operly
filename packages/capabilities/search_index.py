@@ -106,15 +106,37 @@ class CapabilitySearchIndex:
         return score
 
     @staticmethod
-    def _use_lexical_fast_path(scores: list[tuple[str, float]]) -> bool:
+    def _exact_identifier_match(definitions: Sequence, query: str) -> bool:
+        normalized = str(query or "").strip().lower()
+        if not normalized:
+            return False
+        return any(
+            normalized
+            in {
+                str(definition.id or "").strip().lower(),
+                str(definition.name or "").strip().lower(),
+            }
+            for definition in definitions
+        )
+
+    @classmethod
+    def _use_lexical_fast_path(
+        cls,
+        definitions: Sequence,
+        query: str,
+        scores: list[tuple[str, float]],
+    ) -> bool:
         if not scores:
             return False
+        if cls._exact_identifier_match(definitions, query):
+            return True
         ranked = sorted(scores, key=lambda item: (-item[1], item[0]))
         top = ranked[0][1]
         second = ranked[1][1] if len(ranked) > 1 else 0.0
-        if top >= _FAST_LEXICAL_SCORE:
+        margin = top - second
+        if top >= _FAST_LEXICAL_SCORE and margin >= 1.5:
             return True
-        return top >= _MODERATE_LEXICAL_SCORE and (top - second) >= _FAST_LEXICAL_MARGIN
+        return top >= _MODERATE_LEXICAL_SCORE and margin >= _FAST_LEXICAL_MARGIN
 
     def search(
         self,
@@ -153,7 +175,7 @@ class CapabilitySearchIndex:
             for capability_id, score in lexical_scores.items()
             if score > 0.0
         ]
-        if clean_query and self._use_lexical_fast_path(lexical_pairs):
+        if clean_query and self._use_lexical_fast_path(eligible, clean_query, lexical_pairs):
             ranked = [
                 CapabilitySearchHit(
                     capability_id=capability_id,
