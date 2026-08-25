@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from packages.custom_software import live_planning
+from packages.software_projects.planning import live_planning
 from packages.software_projects.planning.provider_planning import (
     ProviderPlanningClient,
     provider_planning_mode,
@@ -11,7 +11,7 @@ from packages.model_runtime.portfolio import ModelRoute
 
 
 class ProviderNeutralPlanningTests(unittest.IsolatedAsyncioTestCase):
-    def test_legacy_live_planning_names_resolve_to_provider_neutral_runtime(self):
+    def test_live_planning_exports_provider_neutral_runtime(self):
         self.assertIs(live_planning.OllamaPlanningClient, ProviderPlanningClient)
         self.assertIs(live_planning.planning_mode, provider_planning_mode)
 
