@@ -96,11 +96,16 @@ class SolutionSourceInspectorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(isolated)
 
-    def test_solutions_ui_has_clickable_source_file_inspector(self):
+    def test_solutions_ui_has_clickable_canonical_source_file_inspector(self):
         frontend = Path("apps/web/src/workspace/SolutionsPage.tsx").read_text(
             encoding="utf-8"
         )
-        self.assertIn("View generated files", frontend)
+        self.assertIn("View source", frontend)
+        self.assertIn('const isSoftware = runtimeKind === "software"', frontend)
+        self.assertIn("const canInspectSource = isSoftware", frontend)
+        self.assertIn("const canRetryGeneration = failed && isSoftware", frontend)
+        self.assertNotIn('runtimeKind === "generated"', frontend)
+        self.assertNotIn('runtimeKind === "app"', frontend)
         self.assertIn("/source`", frontend)
         self.assertIn('role="dialog"', frontend)
         self.assertIn("selectedSourceFile?.content", frontend)
