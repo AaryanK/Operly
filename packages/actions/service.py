@@ -77,6 +77,15 @@ def _scope_trace_payload(action: BusinessActionRecord) -> dict[str, str]:
     return payload
 
 
+def _execution_timeout(definition) -> int:
+    """Return the application-enforced provider budget, always finitely bounded."""
+    try:
+        requested = int(getattr(definition, "execution_timeout_seconds", 30) or 30)
+    except (TypeError, ValueError):
+        requested = 30
+    return max(1, min(requested, 1800))
+
+
 class ActionService:
     def __init__(
         self,
@@ -361,10 +370,11 @@ class ActionService:
                 },
                 resource_id=f"{connector}:{action.capability}",
             )
+        timeout_seconds = _execution_timeout(definition)
         try:
             result = await asyncio.wait_for(
                 provider.execute(provider_context, action.capability, arguments),
-                timeout=30,
+                timeout=timeout_seconds,
             )
         except Exception as error:
             if connector:
@@ -376,13 +386,20 @@ class ActionService:
                         "connector": connector,
                         "success": False,
                         "error_type": type(error).__name__,
+                        "execution_timeout_seconds": timeout_seconds,
                         **_scope_trace_payload(action),
                     },
                     resource_id=f"{connector}:{action.capability}",
                     classification=type(error).__name__,
                 )
             action.status = ActionStatus.FAILED
-            action.result_json = json.dumps({"error": str(error)})
+            action.result_json = json.dumps(
+                {
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                    "execution_timeout_seconds": timeout_seconds,
+                }
+            )
             await self._event(action, "action.failed")
             return action
 
