@@ -26,6 +26,8 @@ _FORBIDDEN_SECRET_KEYS = (
     "credential",
     "bearer",
 )
+_SUPPORTED_BINDING_MODES = frozenset({"capability_gateway"})
+_SUPPORTED_PRINCIPAL_SCOPES = frozenset({"project_runtime"})
 
 
 def _configuration(value: str | None) -> dict:
@@ -77,10 +79,9 @@ def _binding(row: ServiceBindingRecord) -> ServiceBinding:
 class ServiceBindingStore:
     """Durable semantic-to-capability mappings for one SoftwareProject.
 
-    Creating a binding never grants runtime authority. A registry may be supplied
-    to validate installation/current authority at configuration time, but it is not
-    required for a draft binding. Every actual invocation is independently
-    re-evaluated by CapabilityFirewall.
+    Creating a binding never grants runtime authority. If a registry is supplied,
+    explicit current authority is mandatory and the target must resolve now. Every
+    actual invocation is independently re-evaluated by CapabilityFirewall.
     """
 
     def __init__(self, capability_registry=None) -> None:
@@ -115,17 +116,25 @@ class ServiceBindingStore:
         await self._project(db, workspace_id, project_id)
         clean_name = " ".join(str(semantic_name or "").split()).strip()
         clean_capability = str(capability_id or "").strip()
+        clean_mode = str(binding_mode or "capability_gateway").strip()
+        clean_principal_scope = str(principal_scope or "project_runtime").strip()
         if not clean_name:
             raise ValueError("Binding semantic name is required")
         if not clean_capability:
             raise ValueError("Binding capability id is required")
+        if clean_mode not in _SUPPORTED_BINDING_MODES:
+            raise ValueError("Unsupported service binding mode")
+        if clean_principal_scope not in _SUPPORTED_PRINCIPAL_SCOPES:
+            raise ValueError("Unsupported service binding principal scope")
 
         if self.capability_registry is not None:
+            if authority is None:
+                raise PermissionError("Binding validation requires explicit current authority")
             definition = self.capability_registry.definition(clean_capability)
             self.capability_registry.resolve(
                 workspace_id,
                 definition.id,
-                authority=set(authority) if authority is not None else None,
+                authority=set(authority),
             )
             clean_capability = definition.id
             capability_version = definition.version
@@ -145,8 +154,8 @@ class ServiceBindingStore:
                 semantic_name=clean_name[:160],
                 capability_id=clean_capability,
                 capability_version=str(capability_version or "1.0.0")[:40],
-                binding_mode=str(binding_mode or "capability_gateway")[:40],
-                principal_scope=str(principal_scope or "project_runtime")[:80],
+                binding_mode=clean_mode[:40],
+                principal_scope=clean_principal_scope[:80],
                 configuration_json=payload,
                 status="active",
                 created_by=user_id,
@@ -157,8 +166,8 @@ class ServiceBindingStore:
                 raise PermissionError("Binding belongs to another workspace")
             existing.capability_id = clean_capability
             existing.capability_version = str(capability_version or "1.0.0")[:40]
-            existing.binding_mode = str(binding_mode or "capability_gateway")[:40]
-            existing.principal_scope = str(principal_scope or "project_runtime")[:80]
+            existing.binding_mode = clean_mode[:40]
+            existing.principal_scope = clean_principal_scope[:80]
             existing.configuration_json = payload
             existing.status = "active"
         await db.flush()
