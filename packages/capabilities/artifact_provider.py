@@ -6,6 +6,8 @@ from typing import Any
 from packages.artifacts.service import ArtifactService, artifact_json, artifact_scope_from_context
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
+from packages.capabilities.root_routing import requires_software_build
+from packages.database.company_models import BusinessActionRecord
 
 
 # Source artifacts are inert downloads, not web responses. Potentially active browser
@@ -64,6 +66,20 @@ def _artifact_text_content_type(filename: str, requested: Any) -> str:
             return requested_type
     suffix = Path(str(filename or "")).suffix.lower()
     return _SOURCE_CONTENT_TYPES.get(suffix, "text/plain; charset=utf-8")
+
+
+async def _root_objective(context) -> str:
+    """Read the durable root objective for this action when one exists.
+
+    Direct provider tests and non-action callers may not provide an execution id or a
+    SQLAlchemy session. In those cases there is no root-routing contract to enforce.
+    """
+    execution_id = str(getattr(context, "execution_id", "") or "").strip()
+    getter = getattr(getattr(context, "db", None), "get", None)
+    if not execution_id or getter is None:
+        return ""
+    row = await getter(BusinessActionRecord, execution_id)
+    return str(getattr(row, "objective", "") or "") if row is not None else ""
 
 
 class ArtifactProvider(BaseProvider):
@@ -138,9 +154,10 @@ class ArtifactProvider(BaseProvider):
             "artifact.create_text",
             "artifact_create_text",
             (
-                "Save model/application-authored UTF-8 text or source code as a durable scoped artifact using the exact requested filename, "
+                "Save one explicitly requested UTF-8 text/source file or code snippet as a durable scoped artifact using the exact requested filename, "
                 "including source extensions such as .py, .html, .js, .ts, .json, .sql and shell-script files. "
-                "This capability only persists inert file bytes; it never executes the authored code."
+                "This capability only persists inert file bytes and never executes them. It is not an application/codebase builder; "
+                "root requests to build working software, websites, dashboards, systems or complete codebases must use software.build."
             ),
             {
                 "type": "object",
@@ -212,6 +229,20 @@ class ArtifactProvider(BaseProvider):
                 },
             )
         if capability_name == "artifact.create_text":
+            objective = await _root_objective(context)
+            if requires_software_build(objective):
+                return CapabilityResult(
+                    False,
+                    False,
+                    {
+                        "reason": "software_product_requires_software_build",
+                        "required_capability": "software.build",
+                        "filename": str(arguments.get("filename") or "artifact.txt"),
+                        "persisted": False,
+                        "inert": True,
+                        "executed": False,
+                    },
+                )
             raw = str(arguments.get("content") or "").encode("utf-8")
             filename = str(arguments.get("filename") or "artifact.txt")
             row = await service.create_bytes(
