@@ -1,6 +1,6 @@
 import unittest
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -75,44 +75,32 @@ class SoftwareProjectPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(project.name, "Operations Console")
         self.assertEqual(project.state.value, "draft")
 
-    async def test_legacy_studio_project_materializes_stable_canonical_identity(self):
-        legacy = StudioProject(
+    async def test_historical_studio_rows_do_not_materialize_canonical_projects(self):
+        historical = StudioProject(
             tenant_id=self.tenant.id,
-            name="Public Website",
-            slug="public-website",
-            description="Existing website runtime",
+            name="Historical Website",
+            slug="historical-website",
+            description="Pre-cutover database history",
             status="draft",
             created_by="owner-a",
         )
-        self.db.add(legacy)
+        self.db.add(historical)
         await self.db.flush()
 
         first = await self.projects.list(self.db, self.tenant.id)
         await self.db.commit()
         second = await self.projects.list(self.db, self.tenant.id)
 
-        matched = [
-            row
-            for row in first
-            if row.metadata.get("runtime_reference") == legacy.id
-        ]
-        self.assertEqual(len(matched), 1)
-        canonical_id = matched[0].id
-        self.assertNotEqual(canonical_id, legacy.id)
-        self.assertTrue(
-            any(
-                row.id == canonical_id
-                and row.metadata.get("compatibility_runtime") == "studio"
-                for row in second
-            )
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(
+            await self.db.scalar(
+                select(func.count(SoftwareProjectRecord.id)).where(
+                    SoftwareProjectRecord.tenant_id == self.tenant.id
+                )
+            ),
+            0,
         )
-        stored = await self.db.scalar(
-            select(SoftwareProjectRecord).where(
-                SoftwareProjectRecord.id == canonical_id
-            )
-        )
-        self.assertEqual(stored.legacy_runtime_type, "studio")
-        self.assertEqual(stored.legacy_runtime_reference, legacy.id)
 
     async def test_service_binding_persists_capability_identity_without_credentials(self):
         project = await self.projects.create(
