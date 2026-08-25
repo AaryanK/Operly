@@ -1,5 +1,6 @@
 @import url('/static/operly-modern.css?v=20260821-modern-v1');
 @import url('/static/operly-coherence.css?v=20260823-coherence-v2');
+@import url('/static/public-admin-palette.css?v=20260825-admin-public-v1');
 html,body{max-width:100%;overflow-x:hidden}
 .operly-dock.page-suppressed{display:none}
 .studio-editor,.app-builder{width:100%;max-width:100%;align-items:stretch}
