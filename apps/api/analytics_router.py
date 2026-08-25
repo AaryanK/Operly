@@ -11,11 +11,7 @@ from packages.database.models import SecurityEvent
 
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
-_ALLOWED_EVENTS = {"page_view", "heartbeat"}
-_EVENT_TYPES = {
-    "page_view": "product_page_view",
-    "heartbeat": "product_heartbeat",
-}
+_EVENT_TYPE = "product_page_view"
 _DEFAULT_COUNTRY_HEADERS = (
     "cf-ipcountry",
     "x-vercel-ip-country",
@@ -56,22 +52,19 @@ async def record_product_event(
     account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    event_name = str(payload.get("event_name") or "").strip().lower()
-    if event_name not in _ALLOWED_EVENTS:
+    if str(payload.get("event_name") or "").strip().lower() != "page_view":
         return {"ok": True, "recorded": False}
 
     path = _clean_path(payload.get("path"))
-    event_type = _EVENT_TYPES[event_name]
     now = datetime.utcnow()
-    dedupe_window = timedelta(seconds=20 if event_name == "page_view" else 240)
     recent_events = (
         await db.scalars(
             select(SecurityEvent)
             .where(
                 SecurityEvent.user_id == account.user.id,
-                SecurityEvent.event_type == event_type,
+                SecurityEvent.event_type == _EVENT_TYPE,
                 SecurityEvent.outcome == "succeeded",
-                SecurityEvent.created_at >= now - dedupe_window,
+                SecurityEvent.created_at >= now - timedelta(seconds=20),
             )
             .order_by(SecurityEvent.created_at.desc())
             .limit(8)
@@ -94,7 +87,7 @@ async def record_product_event(
         SecurityEvent(
             user_id=account.user.id,
             tenant_id=account.session.tenant_id,
-            event_type=event_type,
+            event_type=_EVENT_TYPE,
             outcome="succeeded",
             ip_hash=None,
             metadata_json=json.dumps(metadata, separators=(",", ":"), sort_keys=True),
