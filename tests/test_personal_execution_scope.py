@@ -1,10 +1,13 @@
 import inspect
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from packages.business_brain.personal_agent import PERSONAL_SYSTEM_PROMPT, PersonalAgentService
+from packages.capabilities.personal_provider import PersonalRuntimeProvider
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.database.schema import import_all_models
@@ -101,6 +104,140 @@ class PersonalExecutionScopeTests(unittest.IsolatedAsyncioTestCase):
                     surface=SurfaceKind.PERSONAL_PRIVATE,
                     focus_workspace_id=self.other_workspace_id,
                 )
+
+    async def _assert_personal_software_delegation(self, capability_id, arguments):
+        provider = PersonalRuntimeProvider()
+        definition = SimpleNamespace(id=capability_id)
+        registry = SimpleNamespace(
+            definition=lambda requested: definition if requested == capability_id else None,
+            describe=lambda *args, **kwargs: [
+                {
+                    "id": capability_id,
+                    "authorized": True,
+                    "availability": {"available": True},
+                }
+            ],
+        )
+        exposed = []
+        view = SimpleNamespace(expose=lambda values: exposed.extend(values))
+        captured = {}
+
+        async def invoke(_self, requested_id, supplied, plugin_context):
+            captured["id"] = requested_id
+            captured["arguments"] = supplied
+            captured["context"] = plugin_context
+            return {
+                "ok": True,
+                "changed": True,
+                "external_reference": "canonical-project-id",
+                "evidence": {"workspace_id": plugin_context.tenant_id},
+            }
+
+        context_metadata = {
+            "personal_scope": True,
+            "is_direct": True,
+            "objective": f"delegate {capability_id}",
+        }
+        async with self.sessions() as db:
+            context = SimpleNamespace(
+                actor_id=self.user_id,
+                db=db,
+                tenant_id=None,
+                invocation={"channel": "web", "metadata": context_metadata},
+            )
+            with (
+                patch(
+                    "packages.capabilities.personal_provider.resolve_workspace_permissions",
+                    new=AsyncMock(return_value=frozenset({"workspace:read", "solution:read", "solution:generate"})),
+                ),
+                patch(
+                    "packages.capabilities.agent_harness.PluginAgentHarness.registry_for",
+                    new=AsyncMock(return_value=registry),
+                ),
+                patch(
+                    "packages.capabilities.agent_harness.PluginAgentHarness.session_view_for",
+                    new=AsyncMock(return_value=view),
+                ),
+                patch(
+                    "packages.capabilities.agent_harness.PluginAgentHarness.capability_authorized",
+                    return_value=True,
+                ),
+                patch(
+                    "packages.capabilities.agent_harness.PluginAgentHarness.invoke",
+                    new=invoke,
+                ),
+            ):
+                result = await provider.execute(
+                    context,
+                    "account.workspace_execute",
+                    {
+                        "workspace": self.workspace_id,
+                        "capability_id": capability_id,
+                        "arguments": arguments,
+                    },
+                )
+
+        self.assertTrue(result.success)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.evidence["workspace_id"], self.workspace_id)
+        self.assertEqual(result.evidence["capability_id"], capability_id)
+        self.assertEqual(exposed, [capability_id])
+        self.assertEqual(captured["id"], capability_id)
+        self.assertEqual(captured["arguments"], arguments)
+        delegated = captured["context"]
+        self.assertEqual(delegated.tenant_id, self.workspace_id)
+        self.assertEqual(delegated.user_id, self.user_id)
+        self.assertEqual(delegated.role, "employee")
+        self.assertTrue(delegated.metadata["personal_delegate"])
+        self.assertTrue(delegated.metadata["is_direct"])
+        self.assertFalse(delegated.metadata["shared_surface"])
+
+    async def test_personal_software_build_delegates_into_live_workspace_harness(self):
+        await self._assert_personal_software_delegation(
+            "software.build",
+            {
+                "project_id": "existing-canonical-project-id",
+                "objective": "Build the existing project in place",
+                "return_source_archive": True,
+            },
+        )
+
+    async def test_personal_software_edit_delegates_into_live_workspace_harness(self):
+        await self._assert_personal_software_delegation(
+            "software.edit",
+            {
+                "project_id": "existing-canonical-project-id",
+                "instruction": "Change the hero copy",
+                "studio_context": {"route": "/"},
+            },
+        )
+
+    async def test_personal_software_delegation_rejects_unowned_workspace_before_harness(self):
+        provider = PersonalRuntimeProvider()
+        async with self.sessions() as db:
+            context = SimpleNamespace(
+                actor_id=self.user_id,
+                db=db,
+                tenant_id=None,
+                invocation={"channel": "web", "metadata": {"personal_scope": True}},
+            )
+            with patch(
+                "packages.capabilities.agent_harness.PluginAgentHarness.invoke",
+                new=AsyncMock(),
+            ) as invoke:
+                result = await provider.execute(
+                    context,
+                    "account.workspace_execute",
+                    {
+                        "workspace": self.other_workspace_id,
+                        "capability_id": "software.build",
+                        "arguments": {"objective": "should never execute"},
+                    },
+                )
+                invoke.assert_not_awaited()
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.evidence["reason"], "workspace_ambiguous_or_missing")
 
     def test_personal_agent_does_not_promote_selected_workspace_to_scope(self):
         source = inspect.getsource(PersonalAgentService.run)
