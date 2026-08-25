@@ -1,4 +1,6 @@
 .settings-copy { margin: 6px 0 0; color: var(--ui-muted); line-height: 1.45; }
-.danger-settings { max-width: 620px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid #f1c3bd; border-radius: 13px; background: #fff7f5; }
+.danger-settings { max-width: 620px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid rgba(255,143,157,.24); border-radius: 13px; background: rgba(255,143,157,.065); color: var(--ui-ink); }
+.danger-settings strong { color: var(--ui-ink); }
 .danger-settings p { margin: 5px 0 0; color: var(--ui-muted); }
+.danger-settings button { border-color: rgba(255,143,157,.28); background: rgba(255,143,157,.14); color: #ffd9df; }
 @media (max-width: 560px) { .danger-settings { align-items: flex-start; flex-direction: column; } }

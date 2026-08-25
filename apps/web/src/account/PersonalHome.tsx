@@ -22,6 +22,10 @@ function approvalText(value: unknown, fallback = "") {
   return typeof value === "string" ? value : value == null ? fallback : String(value);
 }
 
+function approvalStatus(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function ApprovalSubstance({ item }: { item: Approval }) {
   const details = item.details || {};
   const argumentsValue = details.arguments && typeof details.arguments === "object" ? details.arguments : {};
@@ -33,7 +37,7 @@ function ApprovalSubstance({ item }: { item: Approval }) {
       <span><small>Capability</small><strong>{approvalText(details.capability, item.action)}</strong></span>
     </div>
     {details.rationale && <p className="approval-rationale"><strong>Why Operly wants to do this:</strong> {approvalText(details.rationale)}</p>}
-    <details open>
+    <details open={item.status === "pending"}>
       <summary>Full action payload</summary>
       <code>{JSON.stringify({ ...details, arguments: argumentsValue }, null, 2)}</code>
     </details>
@@ -181,6 +185,7 @@ export function PersonalHome({ profile }: Props) {
   }
 
   const pendingApprovals = approvals.filter((item) => item.status === "pending");
+  const recentApprovals = approvals.slice(0, 12);
 
   return (
     <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileHistoryOpen ? "mobile-history-open" : ""}`}>
@@ -197,14 +202,15 @@ export function PersonalHome({ profile }: Props) {
       <main className="personal-surface">
         <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><button className="mobile-history-button" type="button" onClick={() => setMobileHistoryOpen(true)} aria-expanded={mobileHistoryOpen} aria-controls="personal-conversation-history">History</button><span className="privacy-pill">Private</span></div></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
-          {pendingApprovals.length > 0 && <section className="personal-approval-stack" aria-label="Pending personal approvals">
-            <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>{pendingApprovals.length} approval{pendingApprovals.length === 1 ? "" : "s"} waiting</h2></div><button className="text-button" type="button" onClick={loadApprovals}>Refresh</button></div>
-            {pendingApprovals.map((item) => <article className="personal-approval-card" key={item.id}>
-              <div className="personal-approval-title"><div><span className="status-chip status-pending">Pending</span><strong>{item.action}</strong></div><small>{formatDate(item.created_at)}</small></div>
+          <section className="personal-approval-stack" aria-label="Personal approvals">
+            <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>Approvals</h2><small>{pendingApprovals.length} pending</small></div><button className="text-button" type="button" onClick={loadApprovals}>Refresh</button></div>
+            {recentApprovals.length === 0 && <p className="empty-copy">No approvals yet.</p>}
+            {recentApprovals.map((item) => <article className="personal-approval-card" key={item.id}>
+              <div className="personal-approval-title"><div><span className={`status-chip status-${item.status.toLowerCase().replaceAll("_", "-")}`}>{approvalStatus(item.status)}</span><strong>{item.action}</strong></div><small>{formatDate(item.created_at)}</small></div>
               <ApprovalSubstance item={item} />
-              <div className="row-actions"><button disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "rejected")}>Reject</button><button className="primary-button" disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "approved")}>{approvalBusy === item.id ? "Working…" : "Approve"}</button></div>
+              {item.status === "pending" && <div className="row-actions"><button disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "rejected")}>Reject</button><button className="primary-button" disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "approved")}>{approvalBusy === item.id ? "Working…" : "Approve"}</button></div>}
             </article>)}
-          </section>}
+          </section>
           {approvalError && <div className="inline-error">{approvalError}</div>}
           {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
           {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}

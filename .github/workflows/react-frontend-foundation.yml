@@ -64,7 +64,7 @@ jobs:
           grep -q 'FROM node:22-alpine AS web-build' Dockerfile
           grep -q 'COPY --from=web-build /web/dist /app/apps/web/dist' Dockerfile
           grep -q 'optimize_logo.py' Dockerfile
-          grep -q 'path.startswith("channels/")' apps/api/main.py
+          grep -q 'route.startswith("channels/")' apps/api/main.py
       - name: Verify canonical route ownership has no migration placeholders
         run: |
           ! grep -R 'PendingMigration' apps/web/src

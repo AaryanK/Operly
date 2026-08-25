@@ -16,10 +16,12 @@ from packages.database.business_models import (
     Lead,
     Quote,
 )
+from packages.plugins.events import emit_workspace_event
 
 
 VALID_LEAD_STAGES = {"new", "qualified", "proposal", "won", "lost"}
 VALID_ITEM_TYPES = {"product", "service"}
+BUSINESS_PLUGIN_ID = "builtin:operly_business"
 
 
 class BusinessService:
@@ -141,6 +143,26 @@ class BusinessService:
             row.id,
             f"Contact created: {row.name}",
             actor,
+        )
+        event_payload = {
+            "contact_id": row.id,
+            "name": row.name,
+            "source": row.source,
+        }
+        if row.email:
+            event_payload["email"] = row.email
+        if row.company:
+            event_payload["company"] = row.company
+        actor_value = str(actor or "").strip()
+        await emit_workspace_event(
+            db,
+            plugin_id=BUSINESS_PLUGIN_ID,
+            event_id="crm.contact.created",
+            tenant_id=tenant_id,
+            payload=event_payload,
+            actor_type="user" if actor_value and actor_value != "OPERLY" else "system",
+            actor_id=actor_value if actor_value and actor_value != "OPERLY" else None,
+            metadata={"business_actor": actor_value[:200] or "OPERLY"},
         )
         return row
 

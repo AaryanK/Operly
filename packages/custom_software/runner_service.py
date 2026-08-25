@@ -111,6 +111,38 @@ FAILURES = {
     "timed_out": "resource_violation",
     "failed": "unknown_failure",
 }
+RUNNER_PHASE_ORDER = (
+    "provisioning",
+    "source_staging",
+    "dependency_resolution",
+    "static_analysis",
+    "building",
+    "testing",
+    "starting",
+    "health_checking",
+    "acceptance_testing",
+    "running",
+)
+RUNNER_PHASE_RANK = {state: index for index, state in enumerate(RUNNER_PHASE_ORDER)}
+PHASE_FAILURE_STATE = {
+    "provisioning": "provision_failed",
+    "dependency_resolution": "dependency_failed",
+    "static_analysis": "static_analysis_failed",
+    "building": "build_failed",
+    "testing": "tests_failed",
+    "starting": "start_failed",
+    "health_checking": "health_check_failed",
+    "acceptance_testing": "acceptance_failed",
+}
+CLASSIFICATION_FAILURE_STATE = {
+    "test_failure": "tests_failed",
+    "build_failure": "build_failed",
+    "runtime_crash": "start_failed",
+    "health_check_failure": "health_check_failed",
+    "acceptance_test_failure": "acceptance_failed",
+    "security_policy_violation": "security_blocked",
+    "resource_violation": "resource_exceeded",
+}
 
 
 class RunnerStateError(ValueError):
@@ -123,6 +155,43 @@ def _redact(value):
         r"\1[REDACTED]",
         str(value),
     )[:4000]
+
+
+def _failure_evidence(result):
+    evidence = result.get("failureEvidence", {}) if isinstance(result, dict) else {}
+    return evidence if isinstance(evidence, dict) else {}
+
+
+def _failure_classification(result):
+    evidence = _failure_evidence(result)
+    explicit = str(evidence.get("classification") or "").strip()
+    if explicit:
+        return explicit
+    for key, classification in (
+        ("buildSuccess", "build_failure"),
+        ("testSuccess", "test_failure"),
+        ("processStartSuccess", "runtime_crash"),
+        ("healthCheckSuccess", "health_check_failure"),
+        ("acceptanceCheckSuccess", "acceptance_test_failure"),
+    ):
+        if result.get(key) is False:
+            return classification
+    return "unknown_failure"
+
+
+def _failure_state_for(current_state, classification):
+    classified = CLASSIFICATION_FAILURE_STATE.get(classification)
+    allowed = TRANSITIONS.get(current_state, set())
+    if classified and (classified == current_state or classified in allowed):
+        return classified
+    phase_failure = PHASE_FAILURE_STATE.get(current_state)
+    if phase_failure and phase_failure in allowed:
+        return phase_failure
+    if "failed" in allowed:
+        return "failed"
+    if classified:
+        return classified
+    return "failed"
 
 
 async def _event(db, row, state, event_type="lifecycle", message="", details=None):
@@ -153,6 +222,60 @@ async def _event(db, row, state, event_type="lifecycle", message="", details=Non
     )
 
 
+async def _record_runner_failure_observation(db, row, state, result, classification):
+    """Persist remote failure evidence before lifecycle normalization can fail."""
+    evidence = _failure_evidence(result)
+    flags = {
+        key: result.get(key)
+        for key in (
+            "buildSuccess",
+            "testSuccess",
+            "processStartSuccess",
+            "healthCheckSuccess",
+            "acceptanceCheckSuccess",
+            "previewAvailable",
+        )
+        if key in result
+    }
+    row.result_json = json.dumps(result)
+    if classification:
+        row.failure_classification = classification
+    await _event(
+        db,
+        row,
+        row.state,
+        event_type="runner_failure_observed",
+        message="Runner returned failure evidence",
+        details={
+            "remoteState": state,
+            "localState": row.state,
+            "classification": classification,
+            "failureEvidence": json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+            "resultFlags": json.dumps(flags, ensure_ascii=False, sort_keys=True),
+        },
+    )
+    # Commit this checkpoint separately. If a later state transition is invalid,
+    # the real runner evidence remains durable instead of being masked by the
+    # orchestration exception.
+    await db.commit()
+    await db.refresh(row)
+
+
+async def _advance_runner_path(db, row, path):
+    """Advance only forward from the durable local checkpoint."""
+    current_rank = RUNNER_PHASE_RANK.get(row.state, -1)
+    for phase in path:
+        phase_rank = RUNNER_PHASE_RANK.get(phase, -1)
+        if phase_rank <= current_rank:
+            continue
+        if phase not in TRANSITIONS.get(row.state, set()):
+            # Optional phases (for example dependency resolution) may not be in
+            # every path. Never replay backwards or manufacture an illegal hop.
+            continue
+        await _event(db, row, phase, message=f"Runner phase: {phase}")
+        current_rank = phase_rank
+
+
 async def apply_runner_response(db, row, response, submission):
     row.runner_job_id = response.get("jobId", row.runner_job_id)
     result = response.get("result", {})
@@ -178,34 +301,7 @@ async def apply_runner_response(db, row, response, submission):
         await db.refresh(row)
         return row
 
-    classification = result.get("failureEvidence", {}).get("classification")
-    phase_paths = {
-        "build_failure": ["provisioning", "source_staging", "static_analysis", "building"],
-        "test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing"],
-        "runtime_crash": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting"],
-        "health_check_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking"],
-        "acceptance_test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking", "acceptance_testing"],
-        "security_policy_violation": ["provisioning", "source_staging"],
-        "resource_violation": ["provisioning", "source_staging", "static_analysis", "building"],
-    }
-    path = phase_paths.get(
-        classification,
-        [
-            "provisioning",
-            "source_staging",
-            "static_analysis",
-            "building",
-            "testing",
-            "starting",
-            "health_checking",
-            "acceptance_testing",
-        ],
-    )
-    for phase in path:
-        if phase != row.state:
-            await _event(db, row, phase, message=f"Runner phase: {phase}")
-
-    if state == "preview_ready" and all(
+    preview_ready = state == "preview_ready" and all(
         result.get(key)
         for key in (
             "buildSuccess",
@@ -215,7 +311,37 @@ async def apply_runner_response(db, row, response, submission):
             "acceptanceCheckSuccess",
             "previewAvailable",
         )
-    ):
+    )
+    classification = None if preview_ready else _failure_classification(result)
+    phase_paths = {
+        "build_failure": ["provisioning", "source_staging", "static_analysis", "building"],
+        "test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing"],
+        "runtime_crash": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting"],
+        "health_check_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking"],
+        "acceptance_test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing", "starting", "health_checking", "acceptance_testing"],
+        "security_policy_violation": ["provisioning", "source_staging"],
+        "resource_violation": ["provisioning", "source_staging", "static_analysis", "building"],
+    }
+    success_path = [
+        "provisioning",
+        "source_staging",
+        "static_analysis",
+        "building",
+        "testing",
+        "starting",
+        "health_checking",
+        "acceptance_testing",
+    ]
+
+    if not preview_ready:
+        await _record_runner_failure_observation(db, row, state, result, classification)
+    await _advance_runner_path(
+        db,
+        row,
+        success_path if preview_ready else phase_paths.get(classification, []),
+    )
+
+    if preview_ready:
         await _event(db, row, "running", message="Generated application process is running")
         await _event(db, row, "preview_ready", message="Health and acceptance checks passed")
         preview = response["preview"]
@@ -238,24 +364,35 @@ async def apply_runner_response(db, row, response, submission):
                 )
             )
     else:
-        classification = classification or "unknown_failure"
-        failure_state = {
-            "test_failure": "tests_failed",
-            "build_failure": "build_failed",
-            "runtime_crash": "start_failed",
-            "health_check_failure": "health_check_failed",
-            "acceptance_test_failure": "acceptance_failed",
-            "security_policy_violation": "security_blocked",
-            "resource_violation": "resource_exceeded",
-        }.get(classification, "failed")
-        await _event(
-            db,
-            row,
-            failure_state,
-            event_type="failure",
-            message="Runner quality gate failed",
-            details=result.get("failureEvidence", {}),
-        )
+        failure_state = _failure_state_for(row.state, classification)
+        try:
+            await _event(
+                db,
+                row,
+                failure_state,
+                event_type="failure",
+                message="Runner quality gate failed",
+                details=_failure_evidence(result),
+            )
+            if classification:
+                row.failure_classification = classification
+        except RunnerStateError as error:
+            # The original result was already checkpointed. Record the secondary
+            # orchestration defect without replacing the primary runner evidence.
+            await _event(
+                db,
+                row,
+                row.state,
+                event_type="runner_orchestration_error",
+                message="Runner failure could not be normalized",
+                details={
+                    "classification": classification,
+                    "targetState": failure_state,
+                    "error": str(error),
+                },
+            )
+            await db.commit()
+            raise
 
     row.result_json = json.dumps(result)
     row.started_at = row.started_at or row.created_at

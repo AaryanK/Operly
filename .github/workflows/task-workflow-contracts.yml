@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/api/approvals_router.py"
+      - "packages/business/**"
       - "packages/business_brain/personal_agent.py"
       - "packages/capabilities/**"
       - "packages/company/events/**"
@@ -11,6 +12,7 @@ on:
       - "packages/plugins/**"
       - "packages/tasks/**"
       - "tests/test_ai_capability_runtime.py"
+      - "tests/test_business_domain_events.py"
       - "tests/test_harness_native_tasks.py"
       - "tests/test_workflow_tasks.py"
       - "tests/test_channel_agnostic_tasks.py"
@@ -32,9 +34,11 @@ jobs:
       - name: Compile task workflow surface
         run: >-
           python -m py_compile
+          packages/business/service.py
           packages/plugins/manifest.py
           packages/plugins/runtime.py
           packages/capabilities/event_provider.py
+          packages/capabilities/eventful_business_provider.py
           packages/capabilities/workflow_task_provider.py
           packages/capabilities/registry_workflow_task_provider.py
           packages/capabilities/universal_task_provider.py
@@ -60,6 +64,7 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_ai_capability_runtime.py
+          tests/test_business_domain_events.py
           tests/test_harness_native_tasks.py
           tests/test_workflow_tasks.py
           tests/test_channel_agnostic_tasks.py
