@@ -6,8 +6,9 @@ import { MessageContent } from "../ui/MessageContent";
 import { OperlyMark } from "../ui/OperlyMark";
 
 type Conversation = { id: string; title?: string | null; updated_at?: string | null };
-type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null };
-type ChatResult = { message: string; conversation_id?: string | null };
+type Artifact = { artifact_id: string; filename: string; content_type?: string | null; size_bytes?: number | null };
+type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null; artifacts?: Artifact[] };
+type ChatResult = { message: string; conversation_id?: string | null; artifacts?: Artifact[] };
 type Approval = { id: string; action: string; status: string; details?: Record<string, unknown>; payload?: Record<string, unknown>; created_at?: string | null };
 
 type Props = { profile: PersonalProfile | null };
@@ -16,6 +17,29 @@ function formatDate(value?: string | null) {
   if (!value) return "";
   try { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)); }
   catch { return ""; }
+}
+
+function artifactSize(value?: number | null) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "File";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function ArtifactCards({ artifacts }: { artifacts?: Artifact[] }) {
+  if (!artifacts?.length) return null;
+  return <div className="chat-artifacts" aria-label="Generated files">
+    {artifacts.map((artifact) => <a
+      className="artifact-chip"
+      href={`/api/personal/artifacts/${encodeURIComponent(artifact.artifact_id)}/download`}
+      key={artifact.artifact_id}
+    >
+      <span className="artifact-icon" aria-hidden="true">↧</span>
+      <span className="artifact-copy"><strong>{artifact.filename}</strong><small>{artifactSize(artifact.size_bytes)} · {artifact.content_type || "file"}</small></span>
+      <span className="artifact-action">Download</span>
+    </a>)}
+  </div>;
 }
 
 function approvalText(value: unknown, fallback = "") {
@@ -174,7 +198,11 @@ export function PersonalHome({ profile }: Props) {
       }
       const nextId = result.conversation_id || conversationId;
       setConversationId(nextId || null);
-      setMessages((current) => [...current, { role: "assistant", content: result.message }]);
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: result.message || (result.artifacts?.length ? "Created the requested file." : "Done."),
+        artifacts: result.artifacts || [],
+      }]);
       await Promise.all([loadConversations(nextId), loadApprovals()]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Personal Operly could not complete that request");
@@ -213,7 +241,7 @@ export function PersonalHome({ profile }: Props) {
           </section>
           {approvalError && <div className="inline-error">{approvalError}</div>}
           {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
-          {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <MessageContent content={item.content} /> : <p>{item.content}</p>}</div></article>)}
+          {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <><MessageContent content={item.content} /><ArtifactCards artifacts={item.artifacts} /></> : <p>{item.content}</p>}</div></article>)}
           {busy && <div className="working-state"><span></span>Operly is working…</div>}
           {error && <div className="inline-error">{error}</div>}
         </div>
