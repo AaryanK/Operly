@@ -2,7 +2,7 @@
 
 Authorization, schema validation, action lifecycle, and provenance converge here so
 provider plugins cannot accidentally bypass the same execution contract used by
-agents, Studio, MCP, and scheduled workflows.
+agents, Studio, MCP, scheduled workflows, or delegated software runtimes.
 """
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ from packages.actions.lifecycle import lifecycle_truth, normalize_lifecycle_stat
 from packages.actions.service import ActionService
 from packages.capabilities.validation import PluginSchemaError, validate_arguments
 from packages.database.db import session_scope
+from packages.security.delegation import (
+    delegation_allows,
+    delegation_authority,
+    effective_principal_key,
+)
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import capability_surface_allowed
 from packages.security.temporal_context import resolve_temporal_context
@@ -82,20 +87,21 @@ class ActionBackedCapabilityFirewall:
 
     @staticmethod
     def _authority(execution_context: ExecutionContext) -> dict[str, Any]:
+        delegated = delegation_authority(execution_context)
         if execution_context.scope_kind is ScopeKind.PERSONAL:
             return {
                 "owner_type": "personal",
                 "owner_id": execution_context.user_id,
                 "scope_id": execution_context.scope_id,
-                "delegation_id": None,
                 "surface": execution_context.surface.value,
+                **delegated,
             }
         return {
             "owner_type": "workspace",
             "owner_id": execution_context.workspace_id,
             "scope_id": execution_context.scope_id,
-            "delegation_id": None,
             "surface": execution_context.surface.value,
+            **delegated,
         }
 
     async def evaluate(
@@ -108,6 +114,8 @@ class ActionBackedCapabilityFirewall:
         except LookupError:
             return CapabilityDecision.DENY
         if not capability_surface_allowed(definition.id, execution_context.surface):
+            return CapabilityDecision.DENY
+        if not delegation_allows(execution_context, definition.id):
             return CapabilityDecision.DENY
         if not set(definition.permissions).issubset(set(execution_context.permissions)):
             return CapabilityDecision.DENY
@@ -137,6 +145,8 @@ class ActionBackedCapabilityFirewall:
             definition = self.registry.definition(request.capability_id)
             if not capability_surface_allowed(definition.id, execution_context.surface):
                 raise PermissionError("Capability is unavailable on this surface")
+            if not delegation_allows(execution_context, definition.id):
+                raise PermissionError("Capability is outside delegated principal scope")
             self.registry.resolve(
                 scope_id,
                 request.capability_id,
@@ -165,8 +175,16 @@ class ActionBackedCapabilityFirewall:
             )
 
         metadata = dict(request.metadata)
-        if execution_context.user_id:
-            metadata["principal_id"] = f"user:{execution_context.user_id}"
+        principal_key = effective_principal_key(execution_context)
+        if principal_key:
+            metadata["principal_id"] = principal_key
+        delegated = delegation_authority(execution_context)
+        metadata["principal_kind"] = delegated.get("principal_kind")
+        metadata["delegation_id"] = delegated.get("delegation_id")
+        if delegated.get("delegator_user_id"):
+            metadata["delegator_user_id"] = delegated["delegator_user_id"]
+        if delegated.get("parent_principal_id"):
+            metadata["parent_principal_id"] = delegated["parent_principal_id"]
         metadata.setdefault("client_id", request.channel or "operly")
         metadata["authority"] = sorted(authority)
         metadata["authority_source"] = authority_source
