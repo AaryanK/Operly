@@ -29,6 +29,9 @@ on:
       - "packages/connectors/google_provider.py"
       - "packages/security/execution_context.py"
       - "packages/security/permissions.py"
+      - "packages/coding_harness/execution_loop.py"
+      - "packages/coding_harness/objective_audit.py"
+      - "packages/coding_harness/studio_controller.py"
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_artifact_delivery.py"
@@ -36,6 +39,8 @@ on:
       - "tests/test_file_runtime_provider.py"
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
+      - "tests/test_coding_harness_execution_loop.py"
+      - "tests/test_studio_agent_generation.py"
       - ".github/workflows/unified-agent-runtime.yml"
   workflow_dispatch:
 
@@ -77,6 +82,9 @@ jobs:
           packages/connectors/discord/secure_runtime.py
           packages/database/artifact_models.py
           packages/database/schema.py
+          packages/coding_harness/execution_loop.py
+          packages/coding_harness/objective_audit.py
+          packages/coding_harness/studio_controller.py
           alembic/versions/0041_agent_artifacts.py
       - name: Test shared Railway Sandbox computer contracts
         working-directory: apps/sandbox_runner
@@ -87,7 +95,7 @@ jobs:
         env:
           DATABASE_URL: sqlite+aiosqlite:///./unified-agent-runtime-ci.db
         run: python -m alembic upgrade head
-      - name: Run unified runtime acceptance tests
+      - name: Run unified runtime and Studio construction acceptance tests
         env:
           OPERLY_ENV: test
           SESSION_SECRET: test-session-secret-that-is-long-enough
@@ -99,3 +107,5 @@ jobs:
           tests/test_file_runtime_provider.py
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py
+          tests/test_coding_harness_execution_loop.py
+          tests/test_studio_agent_generation.py
