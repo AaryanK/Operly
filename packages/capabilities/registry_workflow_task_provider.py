@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvocationContext
 from packages.capabilities.contracts import CapabilityResult
 from packages.capabilities.workflow_task_provider import WorkflowTaskProvider
 from packages.plugins import default_plugin_runtime
@@ -42,7 +41,11 @@ class RegistryWorkflowTaskProvider(WorkflowTaskProvider):
     """
 
     @staticmethod
-    def _plugin_context(context) -> PluginInvocationContext:
+    def _plugin_context(context):
+        # Keep the default registry import acyclic. agent_harness imports
+        # capabilities.defaults, which imports this provider during bootstrap.
+        from packages.capabilities.agent_harness import PluginInvocationContext
+
         invocation = context.invocation if isinstance(context.invocation, dict) else {}
         metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
         return PluginInvocationContext(
@@ -76,6 +79,10 @@ class RegistryWorkflowTaskProvider(WorkflowTaskProvider):
                     "guidance": "Use capability.search/capability.describe and compile only registered plugin capabilities.",
                 },
             )
+
+        # Lazy import is intentional: capability bootstrap must not recursively
+        # import the harness/default registry while this provider is being loaded.
+        from packages.capabilities.agent_harness import PluginAgentHarness
 
         harness = PluginAgentHarness()
         plugin_context = self._plugin_context(context)
