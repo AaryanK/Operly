@@ -2,9 +2,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from packages.application_builder.ai import ApplicationBuilderAI
-from packages.application_builder.schema import ApplicationManifest, BuilderContext, ProposalRequest
 from packages.model_runtime.semantic_router import SemanticRouter
+from packages.software_projects.planning.live_planning import PlanningContextPacket, RequirementsAnalysis
+from packages.software_projects.planning.model_planning_client import ModelPlanningClient
+from packages.model_runtime import InferenceResult
 
 
 class FakeClient:
@@ -17,76 +18,54 @@ class FakeClient:
         return {"content": self.responses.pop(0)}
 
 
+class FakePlanningModel:
+    id = "planner-fixture"
+
+    async def infer(self, request):
+        return InferenceResult(
+            message={
+                "role": "assistant",
+                "content": (
+                    '{"root_objective":"Build a veterinary appointment system",'
+                    '"requirements":[{"requirement_id":"R-001",'
+                    '"source_excerpt":"veterinary appointment system",'
+                    '"normalized_requirement":"Provide veterinary appointments",'
+                    '"category":"product","priority":"mandatory",'
+                    '"acceptance_criteria":["Appointments can be managed"]}],'
+                    '"global_exclusions":[],"questions_requiring_user_input":[],"safe_assumptions":[]}'
+                ),
+            },
+            model_resource_id="planner-fixture",
+            provider="test-provider",
+            provider_model_id="planner-model",
+            latency_ms=1,
+            usage=None,
+            finish_reason="stop",
+        )
+
+
 class SharedModelRuntimeCallsiteTests(unittest.IsolatedAsyncioTestCase):
-    def _request(self):
-        return ProposalRequest(
-            message="Build a veterinary appointment system.",
-            context=BuilderContext(
-                workspaceId="t",
-                applicationId="a",
-                activeVersionId="v",
-                selectionScope="application",
-                userRole="owner",
+    async def test_software_planning_uses_shared_model_infer_contract(self):
+        client = ModelPlanningClient(model_resolver=lambda role: FakePlanningModel())
+        result = await client.generate_structured(
+            role="requirements_analyst",
+            context=PlanningContextPacket(
+                role="requirements_analyst",
+                untrusted_requirements={"prompt": "Build a veterinary appointment system"},
+                current_contract={},
+                related_contracts={},
+                constraints={},
+                previous_findings=[],
+                budget={"remaining_calls": 5},
             ),
+            output_schema=RequirementsAnalysis,
+            request_id="shared-runtime-1",
+            timeout_seconds=30,
         )
-
-    async def test_managed_app_synthesis_resolves_planner_role(self):
-        response = json.dumps(
-            {
-                "application": {"id": "a", "name": "Generated Clinic"},
-                "modules": [],
-                "pages": [],
-                "regions": [],
-                "components": [],
-                "entities": [],
-                "permissions": [],
-                "workflows": [],
-                "integrations": [],
-                "routes": [],
-            }
-        )
-        client = FakeClient([response])
-        with patch(
-            "packages.application_builder.ai.model_chat_client_for_role",
-            return_value=client,
-        ) as factory:
-            plan = await ApplicationBuilderAI().plan(
-                self._request(), ApplicationManifest(application={"id": "a", "name": "A"})
-            )
-        factory.assert_called_once_with("planner")
-        self.assertEqual(client.calls, 1)
-        self.assertEqual(plan["after"]["application"]["name"], "Generated Clinic")
-
-    async def test_manifest_repair_uses_repair_role(self):
-        repaired = json.dumps(
-            {
-                "application": {"id": "a", "name": "Repaired Clinic"},
-                "modules": [],
-                "pages": [],
-                "regions": [],
-                "components": [],
-                "entities": [],
-                "permissions": [],
-                "workflows": [],
-                "integrations": [],
-                "routes": [],
-            }
-        )
-        planner = FakeClient(["not-json"])
-        repair = FakeClient([repaired])
-
-        def client_for_role(role):
-            return {"planner": planner, "repair": repair}[role]
-
-        with patch(
-            "packages.application_builder.ai.model_chat_client_for_role",
-            side_effect=client_for_role,
-        ) as factory:
-            plan = await ApplicationBuilderAI().plan(
-                self._request(), ApplicationManifest(application={"id": "a", "name": "A"})
-            )
-        self.assertEqual([call.args[0] for call in factory.call_args_list], ["planner", "repair"])
-        self.assertEqual(plan["after"]["application"]["name"], "Repaired Clinic")
+        self.assertIsNone(result.failure_classification)
+        self.assertEqual(result.provider, "test-provider")
+        self.assertEqual(result.model_id, "planner-model")
+        self.assertEqual(result.structured_output["root_objective"], "Build a veterinary appointment system")
 
     async def test_semantic_router_resolves_bounded_task_role(self):
         client = FakeClient(
@@ -95,7 +74,7 @@ class SharedModelRuntimeCallsiteTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "domainMatch": True,
                         "known": True,
-                        "route": "secure_login",
+                        "route": "software_build",
                         "reason": "The bounded capability fully satisfies the request.",
                     }
                 )
@@ -106,13 +85,13 @@ class SharedModelRuntimeCallsiteTests(unittest.IsolatedAsyncioTestCase):
             return_value=client,
         ) as factory:
             decision = await SemanticRouter().decide(
-                request="Give staff a secure sign-in page.",
-                domain="application building",
-                routes={"secure_login": "standard secure login"},
+                request="Build a secure staff portal.",
+                domain="software operations",
+                routes={"software_build": "build a governed software project"},
             )
         factory.assert_called_once_with("bounded_task")
         self.assertTrue(decision.known)
-        self.assertEqual(decision.route_id, "secure_login")
+        self.assertEqual(decision.route_id, "software_build")
 
 
 if __name__ == "__main__":
