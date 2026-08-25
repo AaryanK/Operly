@@ -1,11 +1,11 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.app_identity_provider import AppIdentityProvider
-from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.event_provider import EventDiscoveryProvider
+from packages.capabilities.eventful_business_provider import EventfulUnifiedBusinessProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.gmail_read_provider import GmailReadProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
@@ -54,7 +54,7 @@ def _builtin_providers():
         ConversationHistoryProvider(),
         ActionLifecycleProvider(),
         UnifiedWebsiteProvider(),
-        UnifiedBusinessProvider(),
+        EventfulUnifiedBusinessProvider(),
         CRMReadProvider(),
         WorkspaceProvider(),
         OperationsProvider(),
