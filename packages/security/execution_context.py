@@ -29,6 +29,10 @@ PERSONAL_EXECUTION_PERMISSIONS = frozenset(
         "model:invoke",
         "context:human:read",
         "context:human:write",
+        # Private artifact/computer operations remain account-scoped and the
+        # Agent Computer has no production credentials or outbound network.
+        "files:process",
+        "computer:execute",
         # Account-owned Google operations. These permissions do not grant access to a
         # Google account by themselves: the scoped connector resolver still requires
         # a live AccountConnector owned by this same user with matching OAuth scopes.
