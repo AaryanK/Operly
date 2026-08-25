@@ -8,6 +8,7 @@ from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.event_provider import EventDiscoveryProvider
 from packages.capabilities.file_runtime_provider import FileRuntimeProvider
+from packages.capabilities.gmail_artifact_provider import GmailArtifactProvider
 from packages.capabilities.gmail_draft_provider import GmailDraftLifecycleProvider
 from packages.capabilities.gmail_read_provider import GmailReadProvider
 from packages.capabilities.history_provider import ConversationHistoryProvider
@@ -79,6 +80,7 @@ def _builtin_providers():
         GmailProvider(),
         GmailReadProvider(),
         GmailDraftLifecycleProvider(),
+        GmailArtifactProvider(),
         GoogleCalendarProvider(),
         CalendarSemanticsProvider(),
     )
