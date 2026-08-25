@@ -1,8 +1,8 @@
 import asyncio
 
-from packages.coding_harness.opencode_agent import OpenCodeStyleCodingAgent
-from packages.coding_harness.runtime_resolution import validate_runtime_contract
-from packages.custom_software.source_bundles import build_bundle
+from packages.software_projects.coding.opencode_agent import OpenCodeStyleCodingAgent
+from packages.runtime_plugins.runtime_resolution import validate_runtime_contract
+from packages.software_projects.source_bundle import build_bundle
 
 
 SPEC = """

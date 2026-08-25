@@ -1,11 +1,11 @@
 import asyncio
 
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     PlanningContextPacket,
     StructuredModelResult,
     ValidatorOutput,
 )
-from packages.custom_software.scope_convergence import ScopeConvergingPlanningClient
+from packages.software_projects.planning.scope_convergence import ScopeConvergingPlanningClient
 
 
 class FakeValidatorClient:

@@ -2,7 +2,7 @@ from sqlalchemy import select
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
-from packages.custom_software.plan_service import create_plan
+from packages.software_projects.planning.plan_service import create_plan
 from packages.database.custom_software_models import SoftwarePlanRecord
 from packages.database.product_models import SolutionRecord
 from packages.solutions.composer import create_solution_from_intent

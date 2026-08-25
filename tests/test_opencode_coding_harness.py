@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from packages.coding_harness.opencode_agent import OpenCodeStyleCodingAgent, VirtualWorkspace, WorkspacePolicyError
-from packages.custom_software.source_bundles import SourceFile
+from packages.software_projects.coding.opencode_agent import OpenCodeStyleCodingAgent, VirtualWorkspace, WorkspacePolicyError
+from packages.software_projects.source_bundle import SourceFile
 
 
 class FakeCodingModel:

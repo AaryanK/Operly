@@ -1,5 +1,5 @@
-from packages.custom_software.live_planning import AnalystRequirement
-from packages.custom_software.plan_service import _interaction_acceptance, _interaction_test_ids
+from packages.software_projects.planning.live_planning import AnalystRequirement
+from packages.software_projects.planning.plan_service import _interaction_acceptance, _interaction_test_ids
 
 
 def _requirement(text: str, category: str = "behavior") -> AnalystRequirement:

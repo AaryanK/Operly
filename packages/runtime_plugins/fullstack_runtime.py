@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from packages.custom_software.runner_contracts import (
+from packages.runtime_plugins.runner_contracts import (
     BuildSubmission,
     Dependency,
     HealthCheck,

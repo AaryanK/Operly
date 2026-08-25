@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from packages.coding_harness.contracts import (
+from packages.software_projects.coding.contracts import (
     BaselineImport, BenchmarkTask, ExecutionState, OutcomeMetrics, RunnerJob,
 )
-from packages.coding_harness.engine import build_harness_plan, build_harness_plan_with_model
-from packages.coding_harness.evaluation import aggregate_report, calculate_loss, compare_task
-from packages.coding_harness.model_resolution import CapabilityResolutionError, ModelCapabilityResolver
-from packages.coding_harness.state_machine import transition
+from packages.software_projects.coding.engine import build_harness_plan, build_harness_plan_with_model
+from packages.software_projects.coding.evaluation import aggregate_report, calculate_loss, compare_task
+from packages.software_projects.coding.model_resolution import CapabilityResolutionError, ModelCapabilityResolver
+from packages.software_projects.coding.state_machine import transition
 
 
 TASKS = [

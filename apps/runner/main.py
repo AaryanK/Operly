@@ -24,8 +24,8 @@ from pydantic import ValidationError
 
 from apps.runner.docker_backend import DockerIsolationBackend, IsolationUnavailable
 from apps.runner.store import RunnerStore
-from packages.custom_software.runner_contracts import BuildSubmission
-from packages.custom_software.source_bundles import SourceFile, build_bundle
+from packages.runtime_plugins.runner_contracts import BuildSubmission
+from packages.software_projects.source_bundle import SourceFile, build_bundle
 from packages.runtime_plugins import (
     FULLSTACK_PROFILE_VERSION,
     FULLSTACK_RUNTIME_ID,

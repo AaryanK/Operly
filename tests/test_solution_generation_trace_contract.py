@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from apps.api.runtime_trace_router import _WORKSPACE_TRACE_SURFACES
-from packages.coding_harness.execution_loop import _trace_metadata
+from packages.software_projects.coding.execution_loop import _trace_metadata
 from packages.custom_software import runner_adapters
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter, _safe_runner_payload
-from packages.custom_software.sandbox import SandboxFailure
+from packages.runtime_plugins.runner_adapters import ExternalRunnerAdapter, _safe_runner_payload
+from packages.runtime_plugins.sandbox import SandboxFailure
 from packages.database.model_trace import redact_trace_value
 from packages.solutions.traced_generation_worker import _metadata as worker_trace_metadata
 

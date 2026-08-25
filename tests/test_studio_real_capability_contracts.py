@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from packages.coding_harness.contract_guidance import generation_contract_packets
-from packages.coding_harness.objective_audit import audit_generated_source
+from packages.software_projects.coding.contract_guidance import generation_contract_packets
+from packages.software_projects.coding.objective_audit import audit_generated_source
 from packages.relational_data.contracts import InsertRequest, QueryRequest
 from packages.workspace_entities.contracts import EntityList
 

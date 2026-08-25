@@ -10,16 +10,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
-from packages.coding_harness.build_service import SourceRecordError
-from packages.coding_harness.engine import build_harness_plan_with_model
-from packages.coding_harness.execution_loop import build_with_repair
-from packages.coding_harness.model_resolution import CapabilityResolutionError
-from packages.coding_harness.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
-from packages.coding_harness.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
-from packages.coding_harness.source_jobs import job_json, launch_source_job
-from packages.custom_software.source_bundles import BundlePolicyError, normalized_path
-from packages.custom_software.live_planning import PlannerUnavailable, PlanningBlocked
-from packages.custom_software.plan_service import (
+from packages.software_projects.coding.build_service import SourceRecordError
+from packages.software_projects.coding.engine import build_harness_plan_with_model
+from packages.software_projects.coding.execution_loop import build_with_repair
+from packages.software_projects.coding.model_resolution import CapabilityResolutionError
+from packages.software_projects.coding.opencode_agent import CodingAgentNeedsUserInput, CodingHarnessError
+from packages.software_projects.coding.source_service import edit_source_for_plan, generate_source_for_plan, latest_source, source_record_json
+from packages.software_projects.coding.source_jobs import job_json, launch_source_job
+from packages.software_projects.source_bundle import BundlePolicyError, normalized_path
+from packages.software_projects.planning.live_planning import PlannerUnavailable, PlanningBlocked
+from packages.software_projects.planning.plan_service import (
     PlanConflict,
     continue_after_clarification,
     owned_plan,
@@ -27,11 +27,11 @@ from packages.custom_software.plan_service import (
     plan_json,
     plan_version,
 )
-from packages.custom_software.planning_orchestrator import PlanningNeedsUserInput
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter, LocalSubprocessTestRunner
-from packages.custom_software.runner_service import build_json
-from packages.custom_software.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
-from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
+from packages.software_projects.planning.planning_orchestrator import PlanningNeedsUserInput
+from packages.runtime_plugins.runner_adapters import ExternalRunnerAdapter, LocalSubprocessTestRunner
+from packages.runtime_plugins.runner_service import build_json
+from packages.software_projects.planning.schema import AgenticProjectInput, GenerateApprovedPlanInput, RunnerBuildInput
+from packages.runtime_plugins.sandbox import SandboxFailure, SandboxUnavailable
 from packages.database.custom_software_models import GeneratedSourceBundle, RunnerPreviewRecord, SandboxGenerationJob, SandboxJobEvent
 from packages.model_runtime import OllamaError
 

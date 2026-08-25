@@ -4,14 +4,14 @@ import io
 import json
 import tarfile
 
-from packages.custom_software.runner_contracts import (
+from packages.runtime_plugins.runner_contracts import (
     BuildSubmission,
     HealthCheck,
     NetworkPolicy,
     ServiceBindingRequest,
     ServiceBindingTransport,
 )
-from packages.custom_software.source_bundles import SourceFile, build_bundle
+from packages.software_projects.source_bundle import SourceFile, build_bundle
 from packages.runtime_plugins.relational_source_validation import validate_relational_source
 
 

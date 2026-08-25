@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packages.coding_harness.model_client import coding_model_client
+from packages.software_projects.coding.model_client import coding_model_client
 from packages.model_runtime import model_for_role
 
 

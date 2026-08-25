@@ -1,4 +1,4 @@
-from packages.coding_harness.model_client import coding_model_client
+from packages.software_projects.coding.model_client import coding_model_client
 
 
 def _primary_model(client):

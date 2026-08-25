@@ -1,6 +1,6 @@
 import json
 
-from packages.coding_harness.source_service import _plan_specification, _repair_specification
+from packages.software_projects.coding.source_service import _plan_specification, _repair_specification
 
 
 class FakePlan:

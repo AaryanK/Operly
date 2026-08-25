@@ -1,8 +1,8 @@
 import json
 from types import SimpleNamespace
 
-from packages.coding_harness.source_service import _plan_specification
-from packages.custom_software.live_projection import project_live_envelope
+from packages.software_projects.coding.source_service import _plan_specification
+from packages.software_projects.planning.live_projection import project_live_envelope
 
 
 def test_live_projection_discards_legacy_semantic_defaults():

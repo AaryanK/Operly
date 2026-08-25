@@ -9,12 +9,12 @@ from sqlalchemy import desc, select
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
-from packages.coding_harness.execution_loop import build_with_repair
-from packages.coding_harness.opencode_agent import CapabilityCodingAgent
-from packages.coding_harness.source_service import edit_source_for_plan
-from packages.custom_software.plan_service import plan_version
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter
-from packages.custom_software.source_bundles import SourceFile
+from packages.software_projects.coding.execution_loop import build_with_repair
+from packages.software_projects.coding.opencode_agent import CapabilityCodingAgent
+from packages.software_projects.coding.source_service import edit_source_for_plan
+from packages.software_projects.planning.plan_service import plan_version
+from packages.runtime_plugins.runner_adapters import ExternalRunnerAdapter
+from packages.software_projects.source_bundle import SourceFile
 from packages.database.custom_software_models import GeneratedSourceBundle, SoftwarePlanRecord
 from packages.database.product_models import SolutionJob, SolutionRecord
 from packages.database.software_project_models import SoftwareProjectRecord

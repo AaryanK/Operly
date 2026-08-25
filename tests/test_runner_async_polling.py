@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.coding_harness.build_service import _classify_runner_submit_error, submit_source_build
-from packages.coding_harness.execution_loop import _await_runner_build
-from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck
-from packages.custom_software.sandbox import SandboxFailure
+from packages.software_projects.coding.build_service import _classify_runner_submit_error, submit_source_build
+from packages.software_projects.coding.execution_loop import _await_runner_build
+from packages.runtime_plugins.runner_contracts import BuildSubmission, HealthCheck
+from packages.runtime_plugins.sandbox import SandboxFailure
 from packages.database.custom_software_models import (
     GeneratedSourceBundle,
     RunnerBuildRecord,
@@ -27,10 +27,10 @@ class AsyncRunnerPollingTests(unittest.IsolatedAsyncioTestCase):
         refresh = AsyncMock(side_effect=[building, ready])
 
         with patch(
-            "packages.coding_harness.execution_loop.refresh_build",
+            "packages.software_projects.coding.execution_loop.refresh_build",
             new=refresh,
         ), patch(
-            "packages.coding_harness.execution_loop._runner_poll_interval",
+            "packages.software_projects.coding.execution_loop._runner_poll_interval",
             return_value=0.001,
         ):
             result = await _await_runner_build(object(), queued, adapter=object())
@@ -44,10 +44,10 @@ class AsyncRunnerPollingTests(unittest.IsolatedAsyncioTestCase):
         refresh = AsyncMock(return_value=failed)
 
         with patch(
-            "packages.coding_harness.execution_loop.refresh_build",
+            "packages.software_projects.coding.execution_loop.refresh_build",
             new=refresh,
         ), patch(
-            "packages.coding_harness.execution_loop._runner_poll_interval",
+            "packages.software_projects.coding.execution_loop._runner_poll_interval",
             return_value=0.001,
         ):
             result = await _await_runner_build(object(), queued, adapter=object())
@@ -159,10 +159,10 @@ class AsyncRunnerPollingTests(unittest.IsolatedAsyncioTestCase):
             adapter = CountingAdapter()
             fake_bundle = SimpleNamespace(digest=digest)
             with patch(
-                "packages.coding_harness.build_service.source_bundle_from_record",
+                "packages.software_projects.coding.build_service.source_bundle_from_record",
                 return_value=fake_bundle,
             ), patch(
-                "packages.coding_harness.build_service.attach_transport_grants",
+                "packages.software_projects.coding.build_service.attach_transport_grants",
                 side_effect=lambda value: value,
             ):
                 recovered = await submit_source_build(

@@ -23,8 +23,8 @@ import docker
 from docker.errors import DockerException, ImageNotFound, NotFound
 from docker.types import Ulimit
 
-from packages.custom_software.runner_contracts import BuildSubmission, RunnerResult
-from packages.custom_software.source_bundles import SourceBundle
+from packages.runtime_plugins.runner_contracts import BuildSubmission, RunnerResult
+from packages.software_projects.source_bundle import SourceBundle
 from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID, RelationalMigration
 from packages.runtime_plugins import (
     FULLSTACK_PROFILE_VERSION,

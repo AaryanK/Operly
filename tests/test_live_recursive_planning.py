@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     ContractPatchOutput, FailureClass, LivePlanningOrchestrator, PlanningBlocked, PlanningBudget, PlanningContextPacket,
     PlanningMode, PlannerOutput, ProposedNode, StructuredModelResult,
     RequirementPartitionOutput, ValidatorOutput, accepted_partial_contract, classify_failure, deterministic_readiness,
@@ -163,7 +163,7 @@ class FakeModelOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         accepted=accepted_partial_contract(original,verdict)
         self.assertEqual(accepted["inputs"],["accepted input"]); self.assertNotIn("invariants",accepted)
         expanded=ProposedNode.model_validate(node("leaf","execute rules",inputs=["new input"]))
-        from packages.custom_software.live_planning import PartialContract
+        from packages.software_projects.planning.live_planning import PartialContract
         merged=merge_preserved_contract(expanded,PartialContract(inputs=accepted["inputs"]))
         self.assertEqual(merged.inputs,["accepted input","new input"])
 
@@ -171,14 +171,14 @@ class FakeModelOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         analyst={"root_objective":"x","requirements":[{"requirement_id":"R-001","source_excerpt":"x","normalized_requirement":"x","category":"behavior","priority":"mandatory","acceptance_criteria":["x"]}],"global_exclusions":[]}
         client=ScriptedModel([ValueError("bad json"),analyst])
         orchestrator=LivePlanningOrchestrator(client,max_attempts=2)
-        result=await orchestrator._call("requirements_analyst",PlanningContextPacket(role="requirements_analyst",untrusted_requirements={"x":"x"}),__import__("packages.custom_software.live_planning",fromlist=["RequirementsAnalysis"]).RequirementsAnalysis)
+        result=await orchestrator._call("requirements_analyst",PlanningContextPacket(role="requirements_analyst",untrusted_requirements={"x":"x"}),__import__("packages.software_projects.planning.live_planning",fromlist=["RequirementsAnalysis"]).RequirementsAnalysis)
         self.assertEqual(result.root_objective,"x"); self.assertEqual(len(orchestrator.results),2); self.assertEqual(orchestrator.results[1][2].retry_history[0]["attempt"],1)
 
 
 @unittest.skipUnless(os.getenv("OPERLY_RUN_LIVE_PLANNING_TESTS")=="1" and os.getenv("OLLAMA_API_KEY"),"requires OPERLY_RUN_LIVE_PLANNING_TESTS=1 and OLLAMA_API_KEY")
 class LiveModelAcceptanceTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_model_narrow_linguistic_engine(self):
-        from packages.custom_software.live_planning import OllamaPlanningClient
+        from packages.software_projects.planning.live_planning import OllamaPlanningClient
         orchestrator=LivePlanningOrchestrator(OllamaPlanningClient(),PlanningBudget(max_model_calls=80,max_elapsed_seconds=900))
         try:
             result=await orchestrator.run("Design an implementation-ready deterministic ordered linguistic sound-change engine. It accepts lexemes, ordered rules, generation, region, community, and a deterministic seed; preserves intermediate transformations and provenance; rejects malformed rules; and is repeatable.")

@@ -2,8 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import packages.coding_harness.source_service as source_service
-from packages.coding_harness.opencode_agent import (
+import packages.software_projects.coding.source_service as source_service
+from packages.software_projects.coding.opencode_agent import (
     BUILD_SYSTEM,
     CapabilityCodingAgent,
     CodingHarnessResult,
@@ -11,7 +11,7 @@ from packages.coding_harness.opencode_agent import (
     VirtualWorkspace,
     _finish_tool,
 )
-from packages.custom_software.source_bundles import SourceFile
+from packages.software_projects.source_bundle import SourceFile
 
 
 def _camera_qr_specification() -> str:

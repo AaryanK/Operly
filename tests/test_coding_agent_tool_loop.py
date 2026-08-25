@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from packages.coding_harness.opencode_agent import CodingHarnessError, OpenCodeStyleCodingAgent
-from packages.custom_software.source_bundles import SourceFile
+from packages.software_projects.coding.opencode_agent import CodingHarnessError, OpenCodeStyleCodingAgent
+from packages.software_projects.source_bundle import SourceFile
 
 
 class DirectBuildModel:

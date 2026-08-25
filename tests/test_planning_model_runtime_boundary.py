@@ -1,8 +1,8 @@
 import unittest
 from pathlib import Path
 
-from packages.custom_software.live_planning import PlanningContextPacket, RequirementsAnalysis
-from packages.custom_software.model_planning_client import ModelPlanningClient
+from packages.software_projects.planning.live_planning import PlanningContextPacket, RequirementsAnalysis
+from packages.software_projects.planning.model_planning_client import ModelPlanningClient
 from packages.model_runtime import InferenceResult
 
 

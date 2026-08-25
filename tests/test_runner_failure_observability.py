@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck
-from packages.custom_software.runner_service import apply_runner_response
+from packages.runtime_plugins.runner_contracts import BuildSubmission, HealthCheck
+from packages.runtime_plugins.runner_service import apply_runner_response
 from packages.database.custom_software_models import (
     GeneratedSourceBundle,
     RunnerBuildEvent,

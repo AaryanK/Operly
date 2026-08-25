@@ -1,6 +1,6 @@
 import unittest
 
-from packages.custom_software.runner_service import (
+from packages.runtime_plugins.runner_service import (
     _failure_classification,
     _failure_state_for,
 )

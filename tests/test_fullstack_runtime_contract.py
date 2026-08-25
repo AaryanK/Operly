@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from packages.coding_harness.build_service import RunnerProfileUnsupported, _check_runner_profile
-from packages.coding_harness.runtime_resolution import validate_source_files
-from packages.custom_software.fullstack_subprocess_runner import FullStackSubprocessTestRunner
-from packages.custom_software.runner_contracts import BuildSubmission, NetworkPolicy
-from packages.custom_software.source_bundles import SourceFile, build_bundle
+from packages.software_projects.coding.build_service import RunnerProfileUnsupported, _check_runner_profile
+from packages.runtime_plugins.runtime_resolution import validate_source_files
+from packages.runtime_plugins.fullstack_subprocess_runner import FullStackSubprocessTestRunner
+from packages.runtime_plugins.runner_contracts import BuildSubmission, NetworkPolicy
+from packages.software_projects.source_bundle import SourceFile, build_bundle
 from packages.runtime_plugins import register_builtin_runtimes
 from packages.runtime_plugins.fullstack_contract import (
     FULLSTACK_EXECUTION_ENABLED,

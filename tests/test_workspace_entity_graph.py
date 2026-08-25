@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy, ResourcePolicy, ServiceBindingRequest
-from packages.custom_software.source_bundles import SourceFile
+from packages.runtime_plugins.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy, ResourcePolicy, ServiceBindingRequest
+from packages.software_projects.source_bundle import SourceFile
 from packages.relational_data.tokens import BindingGrantError, issue_capability_grant, verify_capability_grant
 from packages.workspace_entities.bindings import attach_workspace_entity_grants
 from packages.workspace_entities.contracts import EntityCreate, EntityList, WORKSPACE_ENTITY_CAPABILITY_ID

@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from apps.api.custom_software_router import _build_result, create_runner_build, repair_runner_build
-from packages.custom_software.schema import RunnerBuildInput, RunnerRepairInput
+from packages.software_projects.planning.schema import RunnerBuildInput, RunnerRepairInput
 
 
 def _auth(role="owner"):

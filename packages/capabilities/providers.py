@@ -205,7 +205,7 @@ class SolutionProvider(BaseProvider):
                 .order_by(GeneratedProject.created_at.desc()).limit(20))).all()
             return CapabilityResult(True,False,{"solutions":[{"id":x.id,"name":x.name,"status":"available","architecture":x.architecture_pack} for x in rows]})
         if not context.actor_id:return CapabilityResult(False,False,{"reason":"authenticated_actor_required"})
-        from packages.custom_software.plan_service import create_plan
+        from packages.software_projects.planning.plan_service import create_plan
         row,_,_=await create_plan(context.db,context.tenant_id,context.actor_id,str(arguments["requirement"])[:12000])
         return CapabilityResult(True,True,{"plan_id":row.id,"status":row.status,"next_step":"owner_review_and_approval"},row.id)
     async def verify(self,context,capability_name,arguments,result):

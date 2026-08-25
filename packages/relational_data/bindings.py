@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-from packages.custom_software.runner_contracts import ServiceBindingTransport
+from packages.runtime_plugins.runner_contracts import ServiceBindingTransport
 from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID
 from packages.relational_data.store import configured_app_data_url
 from packages.relational_data.tokens import BindingGrantError, issue_binding_grant

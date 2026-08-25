@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker,create_async_engine
 from apps.api.dependencies import AuthContext
 from apps.api.architecture_pack_router import InquiryIn,LineIn,LocationIn,POIn,POLineIn,ProductIn,QuoteIn,ReceiveIn,RevisionIn,StockIn,SupplierIn,TransitionIn,create_location,create_po,create_product,create_quote,create_supplier,customer_decision,customer_quote,move_stock,public_inquiry,quote_transition,receive_po,revise_quote,transition_po
-from packages.custom_software.plan_service import approve,create_plan
-from packages.custom_software.service import apply_visual_change,create_project_from_plan,propose_visual_change,rollback_visual_change,ConflictError
+from packages.software_projects.planning.plan_service import approve,create_plan
+from packages.software_projects.planning.service import apply_visual_change,create_project_from_plan,propose_visual_change,rollback_visual_change,ConflictError
 from packages.database.db import Base
 from packages.database.models import AppUser,Tenant,TenantMember
 from packages.database.architecture_pack_models import Inquiry,PurchaseOrderLine,StockLevel

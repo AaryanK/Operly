@@ -1,4 +1,4 @@
-from packages.custom_software.plan_service import _clarified_prompt, _planning_concurrency
+from packages.software_projects.planning.plan_service import _clarified_prompt, _planning_concurrency
 
 
 def test_delegated_clarification_forces_conventional_defaults_without_reasking():

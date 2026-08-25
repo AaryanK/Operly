@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 from unittest.mock import patch
 
-from packages.custom_software.source_bundles import SourceFile, build_bundle
+from packages.software_projects.source_bundle import SourceFile, build_bundle
 from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
 from packages.runtime_plugins.fullstack_runtime import FullStackRuntime
 

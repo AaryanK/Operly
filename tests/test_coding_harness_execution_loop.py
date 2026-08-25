@@ -2,8 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import packages.coding_harness.execution_loop as loop
-from packages.coding_harness.build_service import RunnerProfileUnsupported
+import packages.software_projects.coding.execution_loop as loop
+from packages.software_projects.coding.build_service import RunnerProfileUnsupported
 from packages.runtime_plugins import FULLSTACK_RUNTIME_ID
 
 

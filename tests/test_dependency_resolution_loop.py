@@ -1,12 +1,12 @@
 import json
 import unittest
 
-from packages.custom_software.dependency_resolution import (
+from packages.software_projects.planning.dependency_resolution import (
     DependencyResolutionOutput,
     dependency_findings,
     validate_dependency_resolution,
 )
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     FailureClass,
     PlanningBlocked,
     PlanningBudget,
@@ -15,7 +15,7 @@ from packages.custom_software.live_planning import (
     StructuredModelResult,
     ValidatorOutput,
 )
-from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
+from packages.software_projects.planning.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 
 
 def node(node_id, responsibility, **values):

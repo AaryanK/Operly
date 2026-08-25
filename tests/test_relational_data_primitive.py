@@ -17,7 +17,7 @@ from packages.relational_data.contracts import (
 )
 from packages.relational_data.store import RelationalDataError, RelationalDataStore
 from packages.relational_data.tokens import BindingGrantError, issue_binding_grant, verify_binding_grant
-from packages.custom_software.runner_contracts import ResourcePolicy, ServiceBindingRequest
+from packages.runtime_plugins.runner_contracts import ResourcePolicy, ServiceBindingRequest
 
 
 SECRET = "relational-test-secret-" + "x" * 48
@@ -177,7 +177,7 @@ def test_transport_grants_do_not_mutate_semantic_submission(monkeypatch):
     )
     # Use the real BuildSubmission model for copy semantics after proving the request
     # itself has no secret-bearing transport.
-    from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy
+    from packages.runtime_plugins.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy
     real = BuildSubmission(
         workspaceId="workspace",
         applicationId="application",

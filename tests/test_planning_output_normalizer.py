@@ -1,13 +1,13 @@
 import asyncio
 import json
 
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     FailureClass,
     PlannerOutput,
     PlanningContextPacket,
     StructuredModelResult,
 )
-from packages.custom_software.planning_output_normalizer import (
+from packages.software_projects.planning.planning_output_normalizer import (
     NormalizingPlanningClient,
     normalize_planner_payload,
 )

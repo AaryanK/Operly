@@ -7,16 +7,16 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from packages.custom_software.schema import ServiceRequestInput
-from packages.custom_software.renderer import render_public
-from packages.custom_software.service import ConflictError, DomainError, apply_visual_change, choose_brand, create_project, create_request, propose_visual_change, transition_request
+from packages.software_projects.planning.schema import ServiceRequestInput
+from packages.software_projects.planning.renderer import render_public
+from packages.software_projects.planning.service import ConflictError, DomainError, apply_visual_change, choose_brand, create_project, create_request, propose_visual_change, transition_request
 from packages.database.db import Base
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.database.custom_software_models import ServiceCustomer, ServiceRequest, ServiceStatusEvent
 from packages.database import models, custom_software_models
 from apps.api.custom_software_router import status_token, token_request_id
-from packages.custom_software.architectures import architecture_plan, catalog
-from packages.custom_software.sandbox import SandboxRunner, SandboxUnavailable, generation_plan
+from packages.software_projects.planning.architectures import architecture_plan, catalog
+from packages.runtime_plugins.sandbox import SandboxRunner, SandboxUnavailable, generation_plan
 
 
 class BrandTests(unittest.TestCase):

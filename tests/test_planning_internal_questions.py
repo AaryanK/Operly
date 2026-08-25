@@ -1,4 +1,4 @@
-from packages.custom_software.planning_orchestrator import _is_operly_internal_question
+from packages.software_projects.planning.planning_orchestrator import _is_operly_internal_question
 
 
 def test_operly_internal_architecture_questions_are_not_owner_questions():

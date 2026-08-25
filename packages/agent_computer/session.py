@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from packages.agent_computer.runner_client import AgentComputerRunnerClient
-from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
+from packages.runtime_plugins.sandbox import SandboxFailure, SandboxUnavailable
 from packages.database.artifact_models import AgentRunRecord
 from packages.database.db import session_scope
 

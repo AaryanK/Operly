@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.custom_software_router import _validated_preview_target
-from packages.custom_software.runner_adapters import FakeRunnerAdapter
-from packages.custom_software.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy
-from packages.custom_software.runner_service import (
+from packages.runtime_plugins.runner_adapters import FakeRunnerAdapter
+from packages.runtime_plugins.runner_contracts import BuildSubmission, HealthCheck, NetworkPolicy
+from packages.runtime_plugins.runner_service import (
     RunnerStateError,
     _event,
     active_preview,
@@ -19,7 +19,7 @@ from packages.custom_software.runner_service import (
     owned_build,
     stop_preview,
 )
-from packages.custom_software.source_bundles import BundlePolicyError, SourceFile, build_bundle
+from packages.software_projects.source_bundle import BundlePolicyError, SourceFile, build_bundle
 from packages.database.custom_software_models import (
     GeneratedSourceBundle,
     RunnerBuildRecord,

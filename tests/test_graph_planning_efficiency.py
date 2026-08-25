@@ -1,7 +1,7 @@
 import asyncio
 
-from packages.custom_software.live_planning import StructuredModelResult
-from packages.custom_software.planning_orchestrator import RecursiveRepairPlanningOrchestrator
+from packages.software_projects.planning.live_planning import StructuredModelResult
+from packages.software_projects.planning.planning_orchestrator import RecursiveRepairPlanningOrchestrator
 
 
 REQUIREMENTS = {

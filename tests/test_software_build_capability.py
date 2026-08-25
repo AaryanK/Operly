@@ -8,7 +8,7 @@ from zipfile import ZipFile
 from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.capabilities.software_build_provider import SoftwareBuildProvider, _runner_verified
-from packages.custom_software.source_bundles import SourceBundle, SourceFile
+from packages.software_projects.source_bundle import SourceBundle, SourceFile
 from packages.software_projects import delivery as delivery_module
 
 

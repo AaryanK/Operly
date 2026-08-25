@@ -5,13 +5,13 @@ from unittest.mock import patch
 
 import pytest
 
-from packages.coding_harness.contract_guidance import (
+from packages.software_projects.coding.contract_guidance import (
     generation_contract_packets,
     relational_migration_contract_packet,
     source_contract_repair_packet,
 )
-from packages.coding_harness.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
-from packages.coding_harness.source_service import _plan_specification
+from packages.runtime_plugins.runtime_resolution import RuntimeResolutionError, validate_runtime_contract
+from packages.software_projects.coding.source_service import _plan_specification
 from packages.relational_data.contracts import RELATIONAL_CAPABILITY_ID, RelationalMigration
 
 
@@ -51,7 +51,7 @@ def test_runtime_resolution_appends_machine_repair_packet_for_relational_failure
                 "migrations/001_init.json: CreateTable.columns Field required"
             )
 
-    with patch("packages.coding_harness.runtime_resolution._registry", return_value=RejectingRegistry()):
+    with patch("packages.runtime_plugins.runtime_resolution._registry", return_value=RejectingRegistry()):
         with pytest.raises(RuntimeResolutionError) as raised:
             validate_runtime_contract(object())
 

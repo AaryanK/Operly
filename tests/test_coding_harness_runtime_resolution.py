@@ -1,7 +1,7 @@
 import pytest
 
-from packages.coding_harness.runtime_resolution import RuntimeResolutionError, infer_runtime_profile, validate_runtime_contract
-from packages.custom_software.source_bundles import SourceFile, build_bundle
+from packages.runtime_plugins.runtime_resolution import RuntimeResolutionError, infer_runtime_profile, validate_runtime_contract
+from packages.software_projects.source_bundle import SourceFile, build_bundle
 
 
 def _bundle(files):

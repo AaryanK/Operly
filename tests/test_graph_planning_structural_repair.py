@@ -1,4 +1,4 @@
-from packages.custom_software.graph_planning import (
+from packages.software_projects.planning.graph_planning import (
     CapabilityGraph,
     RequirementsAnalysis,
     _deterministic_graph_repair,

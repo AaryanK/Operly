@@ -7,7 +7,7 @@ import os
 
 import aiohttp
 
-from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable, validate_runner_url
+from packages.runtime_plugins.sandbox import SandboxFailure, SandboxUnavailable, validate_runner_url
 
 
 class AgentComputerRunnerClient:

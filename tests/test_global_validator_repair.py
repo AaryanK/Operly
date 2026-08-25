@@ -1,13 +1,13 @@
 import json
 import unittest
 
-from packages.custom_software.global_repair import (
+from packages.software_projects.planning.global_repair import (
     GlobalRepairOutput,
     GlobalRepairPlanningOrchestrator,
     global_finding_records,
     validate_global_repair_output,
 )
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     FailureClass,
     GlobalValidatorOutput,
     PlanningBlocked,

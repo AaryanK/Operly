@@ -5,17 +5,17 @@ import json
 import posixpath
 from typing import Any
 
-from packages.coding_harness.interaction_contracts import (
+from packages.runtime_plugins.interaction_contracts import (
     InteractionContractError,
     validate_interaction_contract,
 )
-from packages.custom_software.runner_contracts import (
+from packages.runtime_plugins.runner_contracts import (
     BuildSubmission,
     HealthCheck,
     NetworkPolicy,
     ResourcePolicy,
 )
-from packages.custom_software.runtime_profiles import runtime_profile
+from packages.runtime_plugins.runtime_profiles import runtime_profile
 from packages.runtime_plugins.contracts import (
     DependencyPolicy,
     RuntimeMatch,

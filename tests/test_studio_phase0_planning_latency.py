@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel
 
-from packages.custom_software.live_planning import PlanningContextPacket
-from packages.custom_software.model_planning_client import (
+from packages.software_projects.planning.live_planning import PlanningContextPacket
+from packages.software_projects.planning.model_planning_client import (
     ModelPlanningClient,
     _planning_call_timeout,
     _planning_max_models,

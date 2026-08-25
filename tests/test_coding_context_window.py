@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from packages.coding_harness.context_window import (
+from packages.software_projects.coding.context_window import (
     COMPACTION_MARKER,
     ContextBoundCodingClient,
     compact_messages,

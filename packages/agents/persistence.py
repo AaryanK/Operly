@@ -63,7 +63,7 @@ async def _destroy_computer_after_commit(sandbox_id: str | None) -> None:
         return
     try:
         from packages.agent_computer.runner_client import AgentComputerRunnerClient
-        from packages.custom_software.sandbox import SandboxFailure, SandboxUnavailable
+        from packages.runtime_plugins.sandbox import SandboxFailure, SandboxUnavailable
 
         try:
             await AgentComputerRunnerClient().destroy(clean)

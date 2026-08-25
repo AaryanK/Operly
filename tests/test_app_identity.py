@@ -13,8 +13,8 @@ from packages.app_identity.contracts import (
     RegisterRequest,
 )
 from packages.app_identity.store import AppIdentityError, AppIdentityStore
-from packages.coding_harness.source_service import _plan_specification
-from packages.custom_software.runner_contracts import (
+from packages.software_projects.coding.source_service import _plan_specification
+from packages.runtime_plugins.runner_contracts import (
     BuildSubmission,
     HealthCheck,
     NetworkPolicy,

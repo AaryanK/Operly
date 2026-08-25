@@ -1,7 +1,7 @@
 import pytest
 
-from packages.coding_harness.model_client import SemanticFailoverCodingClient
-from packages.coding_harness.opencode_agent import OpenCodeStyleCodingAgent
+from packages.software_projects.coding.model_client import SemanticFailoverCodingClient
+from packages.software_projects.coding.opencode_agent import OpenCodeStyleCodingAgent
 from packages.model_runtime.contracts import InferenceResult, ModelTraits
 from packages.model_runtime.registry import ModelChatAdapter, ModelPool
 

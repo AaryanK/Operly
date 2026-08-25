@@ -18,15 +18,15 @@ from uuid import uuid4
 from pydantic import ValidationError
 from sqlalchemy import and_, desc, or_, select
 
-from packages.coding_harness.execution_loop import build_with_repair
-from packages.custom_software.compiler_planning import PLANNING_ENGINE_VERSION as PLANNING_ENGINE
-from packages.custom_software.live_planning import PlanningBlocked, PlanningMode, PlannerUnavailable
-from packages.custom_software.model_planning_client import planning_mode
-from packages.custom_software.plan_service import _persist_first_version, _run_live_plan, _store_clarification, approve, plan_version
-from packages.custom_software.planner import build_software_plan
-from packages.custom_software.planning_orchestrator import PlanningNeedsUserInput
-from packages.custom_software.runner_adapters import ExternalRunnerAdapter
-from packages.custom_software.schema import SoftwarePlan
+from packages.software_projects.coding.execution_loop import build_with_repair
+from packages.software_projects.planning.compiler_planning import PLANNING_ENGINE_VERSION as PLANNING_ENGINE
+from packages.software_projects.planning.live_planning import PlanningBlocked, PlanningMode, PlannerUnavailable
+from packages.software_projects.planning.model_planning_client import planning_mode
+from packages.software_projects.planning.plan_service import _persist_first_version, _run_live_plan, _store_clarification, approve, plan_version
+from packages.software_projects.planning.planner import build_software_plan
+from packages.software_projects.planning.planning_orchestrator import PlanningNeedsUserInput
+from packages.runtime_plugins.runner_adapters import ExternalRunnerAdapter
+from packages.software_projects.planning.schema import SoftwarePlan
 from packages.database.custom_software_models import SoftwarePlanRecord, SoftwarePlanVersion
 from packages.database.db import SessionFactory, init_db
 from packages.database.product_models import SolutionJob, SolutionRecord

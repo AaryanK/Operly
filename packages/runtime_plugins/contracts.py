@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from packages.custom_software.runner_contracts import NetworkPolicy, ResourcePolicy
+from packages.runtime_plugins.runner_contracts import NetworkPolicy, ResourcePolicy
 
 
 @dataclass(frozen=True, slots=True)

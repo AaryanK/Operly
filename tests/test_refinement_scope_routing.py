@@ -1,4 +1,4 @@
-from packages.custom_software.live_planning import (
+from packages.software_projects.planning.live_planning import (
     PlanningBudget,
     ProposedNode,
     hard_refinement_errors,

@@ -1,7 +1,7 @@
 import asyncio
 
-from packages.custom_software.graph_coverage import CoverageAwareGraphPlanningOrchestrator
-from packages.custom_software.live_planning import StructuredModelResult
+from packages.software_projects.planning.graph_coverage import CoverageAwareGraphPlanningOrchestrator
+from packages.software_projects.planning.live_planning import StructuredModelResult
 
 
 REQUIREMENTS = {

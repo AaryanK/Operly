@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from packages.custom_software import live_planning
-from packages.custom_software.provider_planning import (
+from packages.software_projects.planning.provider_planning import (
     ProviderPlanningClient,
     provider_planning_mode,
 )
@@ -27,7 +27,7 @@ class ProviderNeutralPlanningTests(unittest.IsolatedAsyncioTestCase):
             },
             clear=True,
         ), patch(
-            "packages.custom_software.provider_planning.model_client_for_route",
+            "packages.software_projects.planning.provider_planning.model_client_for_route",
             return_value=fake_client,
         ) as factory:
             mode = provider_planning_mode()
@@ -49,10 +49,10 @@ class ProviderNeutralPlanningTests(unittest.IsolatedAsyncioTestCase):
             untrusted_requirements={"prompt": "Build inventory"},
         )
         with patch(
-            "packages.custom_software.provider_planning.model_route",
+            "packages.software_projects.planning.provider_planning.model_route",
             return_value=ModelRoute("openrouter", "stealth/ox-alpha"),
         ), patch(
-            "packages.custom_software.provider_planning.model_client_for_route",
+            "packages.software_projects.planning.provider_planning.model_client_for_route",
             return_value=fake_client,
         ) as factory:
             result = await ProviderPlanningClient().generate_structured(

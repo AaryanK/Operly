@@ -1,8 +1,8 @@
 import unittest
 
-from packages.custom_software.construction import build_preview_evidence
-from packages.custom_software.generated_engines import apply_match_events,calculate_standings
-from packages.custom_software.planner import build_software_plan,revise_plan
+from packages.software_projects.planning.construction import build_preview_evidence
+from packages.software_projects.planning.generated_engines import apply_match_events,calculate_standings
+from packages.software_projects.planning.planner import build_software_plan,revise_plan
 
 
 FIXTURES={

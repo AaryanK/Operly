@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import packages.agents.controller as agent_controller
 import packages.agents.runtime as agent_runtime
-import packages.coding_harness.studio_controller as studio
+import packages.software_projects.coding.studio_controller as studio
 
 
 class FakeDB:

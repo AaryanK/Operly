@@ -3,15 +3,15 @@ from unittest.mock import patch
 from sqlalchemy.ext.asyncio import async_sessionmaker,create_async_engine
 from pydantic import ValidationError
 
-from packages.custom_software.architectures import architecture_plan,compatibility
-from packages.custom_software.planner import build_software_plan
-from packages.custom_software.schema import SoftwarePlan
-from packages.custom_software.plan_service import PlanConflict,approve,create_plan,revise
+from packages.software_projects.planning.architectures import architecture_plan,compatibility
+from packages.software_projects.planning.planner import build_software_plan
+from packages.software_projects.planning.schema import SoftwarePlan
+from packages.software_projects.planning.plan_service import PlanConflict,approve,create_plan,revise
 from packages.database.db import Base
 from packages.database.models import AppUser,Tenant,TenantMember
 from packages.database import models,custom_software_models,architecture_pack_models
-from packages.custom_software.sandbox_jobs import create_job,transition_job
-from packages.custom_software.sandbox import SandboxUnavailable,validate_runner_url
+from packages.runtime_plugins.sandbox_jobs import create_job,transition_job
+from packages.runtime_plugins.sandbox import SandboxUnavailable,validate_runner_url
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse

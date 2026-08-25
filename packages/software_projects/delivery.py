@@ -10,7 +10,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
-from packages.coding_harness.build_service import source_bundle_from_record
+from packages.software_projects.coding.build_service import source_bundle_from_record
 from packages.software_projects.source_service import files_from_row
 
 

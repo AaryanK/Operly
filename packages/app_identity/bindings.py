@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from packages.app_identity.contracts import APP_IDENTITY_BINDING_NAME, APP_IDENTITY_CAPABILITY_ID
 from packages.app_identity.crypto import identity_secret
-from packages.custom_software.runner_contracts import ServiceBindingTransport
+from packages.runtime_plugins.runner_contracts import ServiceBindingTransport
 from packages.relational_data.store import configured_app_data_url
 from packages.relational_data.tokens import BindingGrantError, issue_capability_grant
 

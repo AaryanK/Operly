@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-import packages.custom_software.plan_service as plan_service
+import packages.software_projects.planning.plan_service as plan_service
 
 
 class _Global:

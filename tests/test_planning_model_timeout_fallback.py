@@ -2,7 +2,7 @@ import asyncio
 
 from pydantic import BaseModel
 
-import packages.custom_software.live_planning as live
+import packages.software_projects.planning.live_planning as live
 
 
 class TinyOutput(BaseModel):

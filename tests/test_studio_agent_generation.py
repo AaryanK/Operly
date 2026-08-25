@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import packages.coding_harness.execution_loop as execution_loop
-from packages.coding_harness.objective_audit import audit_generated_source
-from packages.coding_harness.opencode_agent import CapabilityCodingAgent
-from packages.coding_harness.runtime_resolution import validate_source_files
-from packages.coding_harness.studio_controller import source_scoped_idempotency_key
+import packages.software_projects.coding.execution_loop as execution_loop
+from packages.software_projects.coding.objective_audit import audit_generated_source
+from packages.software_projects.coding.opencode_agent import CapabilityCodingAgent
+from packages.runtime_plugins.runtime_resolution import validate_source_files
+from packages.software_projects.coding.studio_controller import source_scoped_idempotency_key
 
 
 OBJECTIVE = (
@@ -506,7 +506,7 @@ def test_source_scoped_runner_key_survives_restart_without_rebinding_new_source(
 
 
 def test_solution_keys_use_generic_coding_runner_loop_without_studio_controller(monkeypatch):
-    import packages.coding_harness.studio_controller as studio
+    import packages.software_projects.coding.studio_controller as studio
 
     source = SimpleNamespace(
         id="source-1",

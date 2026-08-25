@@ -1,7 +1,7 @@
 import asyncio
 
-from packages.coding_harness.opencode_agent import CodingSession, VirtualWorkspace
-from packages.custom_software.source_bundles import SourceFile
+from packages.software_projects.coding.opencode_agent import CodingSession, VirtualWorkspace
+from packages.software_projects.source_bundle import SourceFile
 from packages.studio.agent_runs import (
     VisibleToolRegistry,
     _capability_prompt,

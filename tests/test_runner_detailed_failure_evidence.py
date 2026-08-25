@@ -1,6 +1,6 @@
 import unittest
 
-from packages.custom_software.runner_service import _enrich_failure_evidence
+from packages.runtime_plugins.runner_service import _enrich_failure_evidence
 
 
 class RunnerDetailedFailureEvidenceTests(unittest.TestCase):
