@@ -1,4 +1,4 @@
-"""Authenticated AI runtime-trace reports and run browser endpoints."""
+"""Authenticated canonical AgentRuntime trace reports and run browser endpoints."""
 from __future__ import annotations
 
 import json
@@ -15,19 +15,13 @@ from packages.database.model_trace import _trace_json, conversation_trace_report
 from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.database.models import TenantMember
 from packages.database.principal_models import Principal, PrincipalConversation
-from packages.database.studio_source_models import StudioAgentRun, StudioModelTrace
 from packages.security.surfaces import SurfaceKind
-from packages.studio.model_trace import trace_json as studio_trace_json
 
 router = APIRouter(prefix="/api/runtime-traces", tags=["runtime-traces"])
 
-# AI Debug is an authorization boundary because trace packets can contain complete
-# model-visible context. Private/direct traces remain bound to the authenticated
-# human even when they carry a selected workspace id for delegation. Workspace-wide
-# owner browsing is therefore an explicit allowlist, never "anything not private".
 _PERSONAL_TRACE_SURFACES = frozenset(
     {
-        "private/direct",  # legacy Personal AI / DM trace value
+        "private/direct",
         SurfaceKind.PERSONAL_PRIVATE.value,
         SurfaceKind.DISCORD_DM.value,
         SurfaceKind.WORKSPACE_PRIVATE.value,
@@ -35,11 +29,12 @@ _PERSONAL_TRACE_SURFACES = frozenset(
 )
 _WORKSPACE_TRACE_SURFACES = frozenset(
     {
-        "shared/workspace",  # legacy workspace trace value
+        "shared/workspace",
         SurfaceKind.WORKSPACE_SHARED.value,
         SurfaceKind.DISCORD_GUILD.value,
         SurfaceKind.SYSTEM_TASK.value,
         "solution_generation",
+        "studio",
     }
 )
 
@@ -124,74 +119,6 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
     }
 
 
-def _studio_run_summary(run: StudioAgentRun, rows: list[StudioModelTrace]) -> dict[str, Any]:
-    ordered = sorted(rows, key=lambda row: (row.call_index, row.created_at))
-    models: list[dict[str, str]] = []
-    seen_models: set[tuple[str, str]] = set()
-    input_tokens = output_tokens = total_tokens = 0
-    error_count = 0
-    success_count = 0
-
-    for row in ordered:
-        envelope = _decoded_payload(row.payload_json)
-        payload = envelope.get("payload") if isinstance(envelope.get("payload"), dict) else {}
-        if row.phase == "request" and isinstance(payload, dict):
-            for candidate in payload.get("candidateModels") or []:
-                if not isinstance(candidate, dict):
-                    continue
-                provider = str(candidate.get("provider") or "unknown")
-                model = str(candidate.get("providerModelId") or candidate.get("resourceId") or "unknown")
-                key = (provider, model)
-                if key not in seen_models:
-                    seen_models.add(key)
-                    models.append({"provider": provider, "model": model})
-        elif row.phase == "response" and isinstance(payload, dict):
-            success_count += 1
-            provider = str(payload.get("provider") or "unknown")
-            model = str(payload.get("providerModelId") or payload.get("modelResourceId") or "unknown")
-            key = (provider, model)
-            if key not in seen_models:
-                seen_models.add(key)
-                models.append({"provider": provider, "model": model})
-            in_count, out_count, total_count = _usage_values(payload.get("usage"))
-            input_tokens += in_count
-            output_tokens += out_count
-            total_tokens += total_count
-        elif row.phase == "error":
-            error_count += 1
-
-    status = run.state
-    if status not in {"queued", "running", "succeeded", "failed", "cancelled"}:
-        status = "success" if success_count else "failed" if error_count else status
-    if status == "succeeded":
-        status = "success"
-
-    return {
-        "kind": "studio",
-        "runId": run.id,
-        "conversationId": None,
-        "tenantId": run.tenant_id,
-        "userId": run.created_by,
-        "surface": "studio",
-        "channel": "studio",
-        "components": ["studio_agent"],
-        "status": status,
-        "operation": run.operation,
-        "projectId": run.project_id,
-        "startedAt": (run.started_at or run.created_at).isoformat(),
-        "finishedAt": (run.completed_at or run.started_at or run.created_at).isoformat(),
-        "entryCount": len(ordered),
-        "errorCount": error_count + (1 if run.state == "failed" and not error_count else 0),
-        "successCount": success_count,
-        "modelCandidatesObserved": models,
-        "tokenUsage": {
-            "inputTokens": input_tokens,
-            "outputTokens": output_tokens,
-            "totalTokens": total_tokens,
-        },
-    }
-
-
 async def _tenant_owner(db: AsyncSession, *, user_id: str, tenant_id: str) -> TenantMember:
     membership = await db.scalar(
         select(TenantMember).where(
@@ -257,13 +184,7 @@ async def list_ai_runs(
     account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """List AI executions across the shared runtime and Studio trace stores.
-
-    Workspace mode is owner-only because the entries can contain complete model-visible
-    business context. Without ``tenant_id`` this endpoint returns the signed-in
-    person's private/direct model runs, including runs that delegated into a selected
-    workspace without granting that workspace access to the private conversation.
-    """
+    """List canonical AgentRuntime executions visible to the authenticated account."""
     user_id = account.user.id
     if tenant_id:
         await _tenant_owner(db, user_id=user_id, tenant_id=tenant_id)
@@ -278,43 +199,14 @@ async def list_ai_runs(
     for row in runtime_rows:
         grouped.setdefault(row.run_id, []).append(row)
     runs = [_runtime_run_summary(run_id, rows) for run_id, rows in grouped.items()]
-
-    if tenant_id:
-        studio_runs = list(
-            (
-                await db.scalars(
-                    select(StudioAgentRun)
-                    .where(StudioAgentRun.tenant_id == tenant_id)
-                    .order_by(desc(StudioAgentRun.created_at))
-                    .limit(limit)
-                )
-            ).all()
-        )
-        studio_rows: list[StudioModelTrace] = []
-        if studio_runs:
-            studio_rows = list(
-                (
-                    await db.scalars(
-                        select(StudioModelTrace)
-                        .where(StudioModelTrace.run_id.in_([run.id for run in studio_runs]))
-                        .order_by(StudioModelTrace.created_at.asc())
-                    )
-                ).all()
-            )
-        rows_by_run: dict[str, list[StudioModelTrace]] = {}
-        for row in studio_rows:
-            rows_by_run.setdefault(row.run_id, []).append(row)
-        runs.extend(_studio_run_summary(run, rows_by_run.get(run.id, [])) for run in studio_runs)
-
     runs.sort(key=lambda item: str(item.get("startedAt") or ""), reverse=True)
-    runs = runs[:limit]
     return {
         "scope": "workspace" if tenant_id else "personal",
         "tenantId": tenant_id,
         "redactionApplied": True,
         "hiddenReasoningRedacted": True,
         "runCount": len(runs),
-        "runs": runs,
+        "runs": runs[:limit],
     }
 
 
@@ -322,38 +214,13 @@ async def list_ai_runs(
 async def get_ai_run(
     run_id: str,
     tenant_id: str | None = Query(default=None),
-    kind: str = Query(default="runtime", pattern="^(runtime|studio)$"),
     account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return every persisted, model-visible trace packet for one AI execution."""
+    """Return every persisted model-visible trace packet for one AgentRuntime execution."""
     user_id = account.user.id
     if tenant_id:
         await _tenant_owner(db, user_id=user_id, tenant_id=tenant_id)
-
-    if kind == "studio":
-        if not tenant_id:
-            raise HTTPException(status_code=400, detail="Studio traces require a workspace")
-        run = await db.get(StudioAgentRun, run_id)
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=404, detail="AI run not found")
-        rows = list(
-            (
-                await db.scalars(
-                    select(StudioModelTrace)
-                    .where(StudioModelTrace.tenant_id == tenant_id, StudioModelTrace.run_id == run_id)
-                    .order_by(StudioModelTrace.call_index.asc(), StudioModelTrace.created_at.asc())
-                    .limit(5000)
-                )
-            ).all()
-        )
-        return {
-            **_studio_run_summary(run, rows),
-            "redactionApplied": True,
-            "hiddenReasoningRedacted": True,
-            "instruction": run.instruction,
-            "entries": [studio_trace_json(row) for row in rows],
-        }
 
     filters = [ModelRuntimeTrace.run_id == run_id, *_runtime_visibility_filters(user_id=user_id, tenant_id=tenant_id)]
     rows = list(
@@ -382,13 +249,7 @@ async def get_conversation_runtime_trace(
     account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return model attempts, inputs, outputs, routing metadata, and failures.
-
-    This endpoint is account-authenticated and verifies conversation ownership before
-    returning trace payloads. Workspace traces additionally require a current
-    membership, so leaving a workspace revokes access to its historical debug data.
-    Provider credentials are never recorded; credential-shaped content is redacted.
-    """
+    """Return model attempts, inputs, outputs, routing metadata, and failures."""
     user_id = account.user.id
 
     workspace_conversation = await db.get(AgentConversation, conversation_id)
