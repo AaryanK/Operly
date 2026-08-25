@@ -174,6 +174,18 @@ def assert_min_target(page: Page, selector: str, minimum: float, label: str) -> 
             raise AssertionError(f"{label}: {selector} target below {minimum}px: {box}")
 
 
+def wait_for_visible_text(page: Page, expected: str) -> None:
+    page.wait_for_function(
+        """expected => Array.from(document.querySelectorAll('body *')).some(el => {
+          if (!(el.textContent || '').includes(expected)) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+        })""",
+        expected,
+    )
+
+
 def open_page(page: Page, base_url: str, route: str, expected: str, viewport: tuple[int, int]) -> None:
     failures: list[str] = []
 
@@ -185,7 +197,7 @@ def open_page(page: Page, base_url: str, route: str, expected: str, viewport: tu
         response = page.goto(f"{base_url}{route}", wait_until="networkidle")
         if response is None or response.status >= 400:
             raise AssertionError(f"{route} at {viewport}: HTTP {None if response is None else response.status}")
-        page.get_by_text(expected, exact=False).first.wait_for(state="visible")
+        wait_for_visible_text(page, expected)
         assert_no_horizontal_overflow(page, f"{route} at {viewport}")
         if failures:
             raise AssertionError(f"{route} at {viewport}: page error(s): {failures}")
