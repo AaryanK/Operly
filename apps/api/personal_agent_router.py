@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +20,7 @@ from packages.assets.service import (
     store_workspace_icon,
     workspace_icon_path,
 )
-from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
+from packages.business_brain.attachments import MultimodalProcessor
 from packages.business_brain.personal_agent import get_personal_agent_service
 from packages.database.db import session_scope
 from packages.database.models import AppUser, Tenant, TenantMember
@@ -29,7 +28,9 @@ from packages.security.permissions import resolve_workspace_permissions
 
 
 router = APIRouter(prefix="/api/personal-agent", tags=["personal-agent"])
-attachment_processor = MultimodalProcessor()
+# Size/count policy only. Personal web attachment ingress is artifact-first and does
+# not invoke a perception model before the Personal agent chooses an operation.
+attachment_limits = MultimodalProcessor().limits
 
 
 class PersonalChatInput(BaseModel):
@@ -341,113 +342,75 @@ async def chat_with_attachments(
     files: list[UploadFile] = File(default=[]),
     auth: AccountAuthContext = Depends(get_account_auth_context),
 ):
-    limits = attachment_processor.limits
+    limits = attachment_limits
     if not files:
         raise HTTPException(422, "Attach at least one supported file")
     if len(files) > limits.max_attachments:
         raise HTTPException(413, f"Maximum {limits.max_attachments} attachments")
 
     effective_conversation_id = conversation_id or str(uuid4())
-    inputs: list[AttachmentInput] = []
-    total = 0
-    for index, upload in enumerate(files, 1):
-        raw = await upload.read(limits.max_attachment_bytes + 1)
-        await upload.close()
-        if len(raw) > limits.max_attachment_bytes:
-            raise HTTPException(413, f"{upload.filename or 'Attachment'} is too large")
-        total += len(raw)
-        if total > limits.max_total_bytes:
-            raise HTTPException(413, "Total attachment size limit exceeded")
-        inputs.append(
-            AttachmentInput(
-                index=index,
-                filename=upload.filename or f"attachment-{index}",
-                declared_content_type=upload.content_type,
-                size_bytes=len(raw),
-                content_bytes=raw,
-            )
-        )
-
     uploaded_artifacts: list[dict] = []
+    total = 0
     async with session_scope() as db:
         service = ArtifactService(db)
         scope = _personal_artifact_scope(auth)
-        for item in inputs:
+        for index, upload in enumerate(files, 1):
+            raw = await upload.read(limits.max_attachment_bytes + 1)
+            await upload.close()
+            if len(raw) > limits.max_attachment_bytes:
+                raise HTTPException(413, f"{upload.filename or 'Attachment'} is too large")
+            total += len(raw)
+            if total > limits.max_total_bytes:
+                raise HTTPException(413, "Total attachment size limit exceeded")
             row = await service.create_bytes(
                 scope,
-                filename=item.filename,
-                content_type=item.declared_content_type,
-                content=item.content_bytes,
+                filename=upload.filename or f"attachment-{index}",
+                content_type=upload.content_type,
+                content=raw,
                 source="personal_web_chat_upload",
                 created_by=auth.user.id,
                 metadata={
-                    "ingress": "personal_web_chat_v1",
+                    "ingress": "personal_web_chat_v2",
                     "conversation_id": effective_conversation_id,
                 },
             )
             uploaded_artifacts.append(artifact_json(row))
 
-    bundle = AttachmentBundle(
-        user_request=message.strip() or "Analyze the supplied attachment(s).",
-        attachments=inputs,
-        requested_output_format="message",
-        tenant_id="",
-        actor_id=auth.user.id,
-    )
-    try:
-        with tempfile.TemporaryDirectory(prefix="operly-personal-") as temp_dir:
-            processed = await attachment_processor.process(bundle, temp_dir)
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(422, str(error)) from error
-
-    if not processed.accepted:
-        raise HTTPException(
-            422,
-            {
-                "message": "No supported attachments could be processed",
-                "skipped": processed.skipped,
-                "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
-            },
-        )
-
-    # File contents remain untrusted attachment evidence. The references below are
-    # application-assigned Artifact Store handles so the Personal agent can hand the
-    # same durable bytes to files.process rather than relying on a disappearing temp file.
+    handles = [
+        {
+            "artifact_id": item["artifact_id"],
+            "filename": item["filename"],
+            "content_type": item["content_type"],
+            "size_bytes": item["size_bytes"],
+        }
+        for item in uploaded_artifacts
+    ]
     handle_context = (
-        processed.message
-        + "\n\nOPERLY UPLOAD ARTIFACT REFERENCES (application-assigned handles):\n"
-        + json.dumps(
-            [
-                {
-                    "artifact_id": item["artifact_id"],
-                    "filename": item["filename"],
-                    "content_type": item["content_type"],
-                    "size_bytes": item["size_bytes"],
-                }
-                for item in uploaded_artifacts
-            ],
-            ensure_ascii=False,
-        )
+        "OPERLY UPLOAD ARTIFACT REFERENCES (application-assigned trusted handles):\n"
+        + json.dumps(handles, ensure_ascii=False)
+        + "\nUse files.convert for format-only conversion (for example image to PDF). "
+        + "Use files.process only when the file contents must be understood."
     )
     try:
         result = await get_personal_agent_service().run(
             user_id=auth.user.id,
             display_name=auth.user.display_name,
-            message=message.strip() or "Analyze the supplied attachment(s).",
+            message=message.strip() or "Work with the uploaded attachment(s).",
             conversation_id=effective_conversation_id,
             selected_workspace_id=None,
             attachment_context=handle_context,
-            attachment_names=list(processed.accepted),
+            attachment_names=[item["filename"] for item in uploaded_artifacts],
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     result = await _project_personal_result(auth, result)
     result["attachment_processing"] = {
-        "accepted": processed.accepted,
-        "skipped": processed.skipped,
-        "warnings": processed.warnings,
+        "accepted": [item["filename"] for item in uploaded_artifacts],
+        "skipped": [],
+        "warnings": [],
         "artifacts": uploaded_artifacts,
         "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
+        "ingress": "artifact_store_v2",
     }
     return result
 
