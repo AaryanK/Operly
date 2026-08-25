@@ -43,6 +43,7 @@ on:
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
       - "tests/test_agent_objective_verification.py"
+      - "tests/test_capability_rescue.py"
       - "tests/test_file_authoring_provider.py"
       - "tests/test_gmail_artifact_provider.py"
       - "tests/test_coding_harness_execution_loop.py"
@@ -73,6 +74,7 @@ jobs:
           apps/api/artifact_router.py
           apps/api/system_router.py
           packages/agent_computer/runner_client.py
+          packages/agents/capability_rescue.py
           packages/agents/controller.py
           packages/agents/persistence.py
           packages/agents/run_state.py
@@ -120,6 +122,7 @@ jobs:
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py
           tests/test_agent_objective_verification.py
+          tests/test_capability_rescue.py
           tests/test_file_authoring_provider.py
           tests/test_gmail_artifact_provider.py
           tests/test_coding_harness_execution_loop.py
