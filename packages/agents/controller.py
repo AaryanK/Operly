@@ -6,6 +6,10 @@ import json
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from packages.agents.capability_rescue import (
+    attempt_capability_rescue,
+    has_execution_evidence,
+)
 from packages.agents.persistence import (
     checkpoint_agent_run,
     find_resumable_agent_run,
@@ -201,6 +205,9 @@ class AgentRunController:
         attempts: list[dict[str, Any]] = []
         combined_trace = []
         replans = 0
+        capability_rescue_attempted = False
+        capability_rescues = 0
+        rescued_capability_ids: list[str] = []
 
         try:
             while True:
@@ -214,9 +221,51 @@ class AgentRunController:
                         **metadata,
                         "plan_revision": state.plan.revision if state.plan else 0,
                         "resumed": resumed,
+                        "capability_rescues": capability_rescues,
                     },
                 )
                 combined_trace.extend(result.get("trace") or [])
+
+                # Progressive exposure must not turn into false inability. If a
+                # non-trivial run is about to terminate without any real capability
+                # evidence, perform one bounded semantic search/describe pass through
+                # the same governed harness and let the model reconsider with the
+                # newly exposed schemas. Discovery itself never counts as execution.
+                if (
+                    not capability_rescue_attempted
+                    and not bool(result.get("stopped"))
+                    and str(result.get("stop_reason") or "") == "completed"
+                    and not has_execution_evidence(combined_trace)
+                ):
+                    capability_rescue_attempted = True
+                    rescue = await attempt_capability_rescue(
+                        objective=objective,
+                        messages=messages,
+                        invoke=invoke,
+                        on_observation=observe,
+                    )
+                    combined_trace.extend(rescue.trace)
+                    if rescue.applied:
+                        capability_rescues += 1
+                        rescued_capability_ids.extend(
+                            capability_id
+                            for capability_id in rescue.candidate_ids
+                            if capability_id not in rescued_capability_ids
+                        )
+                        await checkpoint_agent_run(
+                            runtime_run_id=runtime_run_id,
+                            objective=objective,
+                            metadata=metadata,
+                            state=state.as_dict(),
+                            event_type="run.capability_rescued",
+                            lifecycle_state="running",
+                            payload={
+                                "candidate_ids": list(rescue.candidate_ids),
+                                "reason": rescue.reason,
+                                "rescue_count": capability_rescues,
+                            },
+                        )
+                        continue
 
                 goal_verification = None
                 truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
@@ -255,6 +304,7 @@ class AgentRunController:
                         "execution_truth": result.get("execution_truth"),
                         "goal_verification": goal_verification.as_dict() if goal_verification else None,
                         "budget": result.get("budget") or {},
+                        "capability_rescues": capability_rescues,
                     }
                 )
 
@@ -267,6 +317,8 @@ class AgentRunController:
                     result["run_state"] = state.as_dict()
                     result["controller_attempts"] = attempts
                     result["replans"] = replans
+                    result["capability_rescues"] = capability_rescues
+                    result["rescued_capability_ids"] = list(rescued_capability_ids)
                     result["runtime_run_id"] = runtime_run_id
                     result["resumed"] = resumed
                     lifecycle = _lifecycle_state(result)
@@ -283,6 +335,8 @@ class AgentRunController:
                             "stop_reason": result.get("stop_reason"),
                             "stopped": bool(result.get("stopped")),
                             "replans": replans,
+                            "capability_rescues": capability_rescues,
+                            "rescued_capability_ids": list(rescued_capability_ids),
                             "budget": result.get("budget") or {},
                             "resumed": resumed,
                         },
