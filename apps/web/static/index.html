@@ -11,7 +11,7 @@
   <title>OPERLY — AI that can operate</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260824-auth-convergence-v1">
   <link rel="stylesheet" href="/static/regression.css?v=20260825-admin-public-v1">
-  <link rel="stylesheet" href="/static/landing-operly.css?v=20260825-operly-positioning-v1">
+  <link rel="stylesheet" href="/static/landing-operly.css?v=20260825-operly-positioning-v2">
 </head>
 <body>
   <div id="landing" class="screen">
@@ -30,19 +30,37 @@
         <div class="hero-proof" aria-label="Core capabilities"><span>Persistent context</span><span>Connected tools</span><span>Business operations</span><span>Software construction</span><span>Human approvals</span></div>
       </section>
 
-      <section class="operation-preview" aria-label="Example Operly workflow">
+      <section class="operation-preview" aria-label="Examples of Operly operating across capabilities">
         <div class="preview-sidebar"><div class="brand"><img class="brand-mark" src="/static/operly-logo.png" alt="Operly logo"></div><i></i><i></i><i></i><i></i></div>
         <div class="operation-main">
-          <span class="kicker green">One request. Real work.</span>
-          <h3>OPERLY Runtime</h3>
+          <div class="operation-heading"><div><span class="kicker green">One request. Real work.</span><h3>OPERLY Runtime</h3></div><span class="runtime-live"><i></i> Operating</span></div>
           <div class="operation-prompt">“Look through the new leads, find who needs a follow-up, draft the emails and show me anything that needs approval.”</div>
-          <div class="operation-steps">
-            <div class="operation-step"><span class="operation-check">✓</span><b>Read CRM context</b><small>Authorized</small></div>
-            <div class="operation-step"><span class="operation-check">✓</span><b>Checked prior conversations</b><small>Context</small></div>
-            <div class="operation-step"><span class="operation-check">✓</span><b>Prepared Gmail drafts</b><small>Capability</small></div>
-            <div class="operation-step"><span class="operation-check">◉</span><b>2 actions need approval</b><small>Human control</small></div>
+
+          <div class="capability-chain-stack">
+            <article class="chain-card">
+              <div class="chain-card-head"><span>Business operation</span><small>Authorized capability chain</small></div>
+              <div class="capability-chain" aria-label="Discord to Operly to CRM to Gmail to Approval">
+                <span class="chain-node">Discord</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node operly-node"><img src="/static/operly-logo.png" alt="">OPERLY</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node">CRM</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node">Gmail</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node approval-node">Approval</span>
+              </div>
+            </article>
+
+            <article class="chain-card studio-chain-card">
+              <div class="chain-card-head"><span>Software construction</span><small>Persistent project lifecycle</small></div>
+              <div class="capability-chain" aria-label="Prompt to Plan to Source to Build to Preview">
+                <span class="chain-node">Prompt</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node">Plan</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node operly-node">Source</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node">Build</span><span class="chain-link" aria-hidden="true"><i></i></span>
+                <span class="chain-node preview-node">Preview</span>
+              </div>
+            </article>
           </div>
-          <div class="operation-flow"><b>CRM</b><span>→</span><b>Context</b><span>→</span><b>AI</b><span>→</span><b>Gmail</b><span>→</span><b>Approval</b></div>
+
+          <div class="operation-status"><span><i>✓</i> Context loaded</span><span><i>✓</i> Capabilities authorized</span><span><i>◉</i> Approval boundary active</span></div>
         </div>
       </section>
     </main>
