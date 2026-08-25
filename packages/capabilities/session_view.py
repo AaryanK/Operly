@@ -11,6 +11,8 @@ DEFAULT_KERNEL_IDS = frozenset(
     {
         "capability.search",
         "capability.describe",
+        "event.search",
+        "event.describe",
         "context.search",
         "context.get",
         "model.invoke",
@@ -48,6 +50,7 @@ class SessionCapabilityView:
     visible_predicate: Callable[[str], bool] | None = None
     initial_ids: Iterable[str] = ()
     exposed_ids: set[str] = field(default_factory=set)
+    pending_discovery_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.exposed_ids.update(DEFAULT_KERNEL_IDS)
@@ -90,13 +93,33 @@ class SessionCapabilityView:
         metadata = current_trace_metadata()
         effective_stage = str(stage or metadata.get("capability_stage") or "adaptive")
         schemas = []
+        pending = ", ".join(self.pending_discovery_ids[:8])
         for capability_id in sorted(self.exposed_ids):
             if not self._visible(capability_id):
                 continue
             definition = self.registry.definition(capability_id)
             if not self._stage_allows(definition, effective_stage):
                 continue
-            schemas.append(definition.model_tool_schema())
+            schema = definition.model_tool_schema()
+            if pending and capability_id in {"capability.search", "capability.describe"}:
+                function = schema.get("function") if isinstance(schema, dict) else None
+                if isinstance(function, dict):
+                    description = str(function.get("description") or "").rstrip()
+                    if capability_id == "capability.search":
+                        function["description"] = (
+                            description
+                            + " Recent search already found sufficient candidates: "
+                            + pending
+                            + ". Describe/use those candidates before searching again unless they prove unavailable or unsuitable."
+                        )
+                    else:
+                        function["description"] = (
+                            description
+                            + " Recent sufficient search candidates awaiting schema inspection: "
+                            + pending
+                            + "."
+                        )
+            schemas.append(schema)
         return schemas
 
     def expose(self, capability_ids: Iterable[str]) -> None:
@@ -106,16 +129,35 @@ class SessionCapabilityView:
                 self.exposed_ids.add(clean)
 
     def observe(self, capability_id: str, invocation_result: dict[str, Any]) -> None:
-        """Expand exact schemas only after capability.describe.
+        """Track discovery progress and expose exact schemas only after describe.
 
-        capability.search intentionally returns metadata only. describe is the
-        transition from discoverable to model-visible schema and still cannot grant
-        authority because expose() rechecks the session visibility predicate.
+        capability.search returns metadata only. When the search reports a sufficient
+        candidate set, remember those IDs so the next tool surface tells the model to
+        inspect/use them instead of immediately paying for another search. describe is
+        still the only transition from discovered metadata to executable model schema.
         """
-        if capability_id != "capability.describe":
-            return
         observation = invocation_result.get("observation")
         if not isinstance(observation, dict):
+            return
+
+        if capability_id == "capability.search":
+            if (
+                observation.get("sufficient_match") is True
+                and observation.get("search_again_recommended") is False
+            ):
+                ranked = observation.get("ranked_ids") or []
+                if not isinstance(ranked, list):
+                    ranked = []
+                self.pending_discovery_ids = tuple(
+                    str(item).strip()
+                    for item in ranked[:8]
+                    if str(item).strip()
+                )
+            else:
+                self.pending_discovery_ids = ()
+            return
+
+        if capability_id != "capability.describe":
             return
         rows = observation.get("capabilities") or []
         if not isinstance(rows, list):
@@ -126,3 +168,5 @@ class SessionCapabilityView:
             if isinstance(row, dict) and row.get("authorized") is not False
         ]
         self.expose(ids)
+        if ids:
+            self.pending_discovery_ids = ()

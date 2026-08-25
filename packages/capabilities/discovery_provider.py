@@ -9,7 +9,7 @@ import asyncio
 
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
-from packages.capabilities.search_index import CapabilitySearchIndex
+from packages.capabilities.search_index import CapabilitySearchHit, CapabilitySearchIndex
 from packages.security.surfaces import SurfaceKind, capability_surface_allowed
 
 
@@ -19,7 +19,7 @@ class CapabilityDiscoveryProvider(BaseProvider):
         CapabilityDefinition(
             "capability.search",
             "capability_search",
-            "Semantically search capabilities eligible for this authenticated surface. Returns metadata only and never grants permission.",
+            "Semantically search capabilities eligible for this authenticated surface. Returns metadata only and never grants permission. When a result reports sufficient_match=true, describe/use those ranked candidates before searching again unless they prove unavailable or unsuitable.",
             {
                 "type": "object",
                 "properties": {
@@ -80,6 +80,23 @@ class CapabilityDiscoveryProvider(BaseProvider):
             if capability_surface_allowed(definition.id, surface)
         ]
 
+    @staticmethod
+    def _sufficient_match(hits: list[CapabilitySearchHit]) -> bool:
+        if not hits:
+            return False
+        top = hits[0]
+        if top.strategy == "lexical_fast_path":
+            return True
+        second_score = hits[1].score if len(hits) > 1 else 0.0
+        score_margin = top.score - second_score
+        if top.lexical_score >= 4.0 and score_margin >= 1.5:
+            return True
+        if top.semantic_score >= 0.62:
+            second_semantic = hits[1].semantic_score if len(hits) > 1 else 0.0
+            if len(hits) == 1 or (top.semantic_score - second_semantic) >= 0.08:
+                return True
+        return False
+
     async def execute(self, context, capability_name, arguments):
         authority = set((context.invocation or {}).get("authority") or [])
         surface = self._surface(context)
@@ -88,8 +105,8 @@ class CapabilityDiscoveryProvider(BaseProvider):
 
         if capability_name == "capability.search":
             # The eligible set is established synchronously from canonical authority
-            # before ranking. Only the CPU-bound embedding/ranking work leaves the
-            # event loop; the semantic worker receives no authority of its own.
+            # before ranking. Only CPU-bound semantic work leaves the event loop, and
+            # strong lexical matches can now return without invoking embeddings at all.
             hits = await asyncio.to_thread(
                 self.search_index.search,
                 eligible,
@@ -124,8 +141,11 @@ class CapabilityDiscoveryProvider(BaseProvider):
                         "score": hit.score,
                         "semantic_score": hit.semantic_score,
                         "lexical_score": hit.lexical_score,
+                        "ranking_strategy": hit.strategy,
                     }
                 )
+            sufficient = self._sufficient_match(hits)
+            ranked_ids = [row["id"] for row in rows]
             return CapabilityResult(
                 True,
                 False,
@@ -137,7 +157,15 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     "schemas_included": False,
                     "semantic_backend": self.search_index.backend_name,
                     "semantic_degraded_reason": self.search_index.degraded_reason,
-                    "ranked_ids": [row["id"] for row in rows],
+                    "ranking_strategy": hits[0].strategy if hits else "none",
+                    "ranked_ids": ranked_ids,
+                    "sufficient_match": sufficient,
+                    "search_again_recommended": not sufficient,
+                    "next_action": (
+                        "Call capability.describe on the most relevant ranked_ids, then use the resulting schema. Do not call capability.search again for this operation unless these candidates are unavailable or unsuitable."
+                        if sufficient
+                        else "Refine the operation query or filters if none of these candidates fit."
+                    ),
                     "note": "Search ranks only an already-authorized surface-visible candidate set; discovery is not execution authority.",
                 },
             )
