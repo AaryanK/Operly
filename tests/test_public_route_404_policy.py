@@ -1,12 +1,12 @@
-from apps.api.public_safety import _unknown_public_route
+from apps.api.security_headers import _is_known_frontend_fallback
 
 
-def test_arbitrary_extensionless_site_path_is_not_a_valid_shell_route():
-    assert _unknown_public_route("/fdfdsfsafsafsaff") is True
-    assert _unknown_public_route("/totally/made/up/path") is True
+def test_arbitrary_extensionless_site_path_is_not_a_valid_frontend_fallback():
+    assert _is_known_frontend_fallback("/fdfdsfsafsafsaff") is False
+    assert _is_known_frontend_fallback("/totally/made/up/path") is False
 
 
-def test_known_operly_routes_still_reach_their_real_handlers():
+def test_known_operly_shell_routes_remain_valid_frontend_fallbacks():
     for path in (
         "/",
         "/login",
@@ -17,12 +17,12 @@ def test_known_operly_routes_still_reach_their_real_handlers():
         "/channels",
         "/channels/@me",
         "/channels/workspace-id/activity",
-        "/api/approvals/personal",
-        "/static/operly-logo.png",
+        "/assets/index.js",
+        "/favicon.ico",
     ):
-        assert _unknown_public_route(path) is False
+        assert _is_known_frontend_fallback(path) is True
 
 
 def test_trailing_slashes_on_known_routes_are_tolerated():
-    assert _unknown_public_route("/admin/") is False
-    assert _unknown_public_route("/login/") is False
+    assert _is_known_frontend_fallback("/admin/") is True
+    assert _is_known_frontend_fallback("/login/") is True
