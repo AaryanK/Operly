@@ -1,5 +1,6 @@
 from packages.capabilities.action_provider import ActionLifecycleProvider
 from packages.capabilities.app_identity_provider import AppIdentityProvider
+from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
 from packages.capabilities.context_provider import ContextProvider
@@ -67,6 +68,7 @@ def _builtin_providers():
         ReminderProvider(),
         UniversalTaskProvider(),
         PublicWebReadProvider(),
+        ArtifactProvider(),
         FileRuntimeProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
