@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from packages.software_projects import SoftwareProjectService
+from packages.software_projects import ProjectState, SoftwareProjectService
 from packages.solutions.generation_worker import queue_software_generation
 from packages.solutions.manifest import SolutionManifest, derive_solution_manifest
 from packages.solutions.service import LifecycleStatus, RuntimeType, SolutionService, SolutionType
@@ -65,8 +65,12 @@ async def retry_solution_initial_generation(
     if row.preview_state == "ready" and row.lifecycle_status == LifecycleStatus.PREVIEW_READY:
         raise ValueError("This Solution already has a preview-ready software build")
     row, _ = await queue_software_generation(db, row=row, user_id=user_id)
-    project.state = LifecycleStatus.BUILDING
-    await db.flush()
+    await SoftwareProjectService().set_execution_state(
+        db,
+        workspace_id=tenant_id,
+        project_id=project.id,
+        state=ProjectState.BUILDING,
+    )
     return row
 
 
@@ -108,7 +112,8 @@ async def create_solution_from_intent(
         "sourceAuthority": "software_source_versions",
     }
 
-    project = await SoftwareProjectService().create(
+    projects = SoftwareProjectService()
+    project = await projects.create(
         db,
         workspace_id=tenant_id,
         user_id=user_id,
@@ -119,15 +124,20 @@ async def create_solution_from_intent(
             "implementationResolution": decision.as_dict(),
         },
     )
+    record = await projects.record(db, tenant_id, project.id)
     row = await service.create_software_solution(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
-        project=project,
+        project=record,
         objective=clean_objective,
         context=context,
     )
     row, _ = await queue_software_generation(db, row=row, user_id=user_id)
-    project.state = LifecycleStatus.BUILDING
-    await db.flush()
+    await projects.set_execution_state(
+        db,
+        workspace_id=tenant_id,
+        project_id=project.id,
+        state=ProjectState.BUILDING,
+    )
     return row, decision
