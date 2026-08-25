@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from unittest.mock import patch
 
+from packages.agents.capability_rescue import has_execution_evidence
+from packages.agents.runtime import AgentTraceEntry
 from packages.business_brain.agent import AgentService
 from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.context.broker import ContextBroker
@@ -40,6 +42,17 @@ class FakeEmbeddingBackend:
 
     def embed_query(self, text):
         return self._vectors.get(str(text), (0.0, 1.0, 0.0))
+
+
+class FailIfEmbeddedBackend:
+    name = "fail-if-called"
+    degraded_reason = None
+
+    def embed_documents(self, texts):
+        raise AssertionError(f"lexical fast path unexpectedly embedded {len(texts)} documents")
+
+    def embed_query(self, text):
+        raise AssertionError(f"lexical fast path unexpectedly embedded query: {text}")
 
 
 def test_semantic_text_index_uses_injected_embedding_backend():
@@ -85,6 +98,45 @@ def test_capability_search_semantic_backend_never_adds_candidates():
     hits = index.search(allowed, "need-a-meeting", limit=10)
     assert [hit.capability_id for hit in hits] == ["calendar.create_event"]
     assert all(hit.capability_id in {definition.id for definition in allowed} for hit in hits)
+    assert hits[0].strategy == "hybrid_semantic"
+
+
+def test_capability_search_exact_match_skips_embedding_backend_entirely():
+    index = CapabilitySearchIndex(
+        semantic_index=SemanticTextIndex(backend=FailIfEmbeddedBackend())
+    )
+    allowed = [
+        _Definition(
+            id="task.create",
+            name="task_create",
+            display_name="Create durable task",
+            text="create durable workflow task",
+            category="tasks",
+            tags=frozenset({"workflow", "tasks"}),
+        ),
+        _Definition(
+            id="crm.create_lead",
+            name="crm_create_lead",
+            display_name="Create CRM lead",
+            text="create a CRM lead",
+            category="crm",
+        ),
+    ]
+
+    hits = index.search(allowed, "task.create", limit=10)
+
+    assert hits
+    assert hits[0].capability_id == "task.create"
+    assert hits[0].strategy == "lexical_fast_path"
+    assert hits[0].semantic_score == 0.0
+
+
+def test_event_discovery_does_not_count_as_root_execution_evidence():
+    trace = [
+        AgentTraceEntry("event.search", {"query": "crm contact"}, {"ok": True}),
+        AgentTraceEntry("event.describe", {"event_id": "crm.contact.created"}, {"ok": True}),
+    ]
+    assert has_execution_evidence(trace) is False
 
 
 def test_context_authority_predicate_fails_closed_without_read_authority():
