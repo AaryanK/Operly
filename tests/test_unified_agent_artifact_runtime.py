@@ -29,7 +29,7 @@ from packages.capabilities.registry import CapabilityRegistry
 from packages.database.artifact_models import ArtifactRecord, AgentRunEventRecord, AgentRunRecord
 from packages.database.company_models import BusinessActionRecord, BusinessEventRecord
 from packages.database.db import Base
-from packages.database.models import AppUser, Approval, Tenant
+from packages.database.models import AppUser, Approval, Task, Tenant
 
 
 @pytest_asyncio.fixture
@@ -42,6 +42,7 @@ async def runtime_db():
                 tables=[
                     Tenant.__table__,
                     AppUser.__table__,
+                    Task.__table__,
                     Approval.__table__,
                     BusinessActionRecord.__table__,
                     BusinessEventRecord.__table__,
