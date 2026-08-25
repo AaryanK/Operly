@@ -23,12 +23,13 @@
 .message-content tr:last-child td { border-bottom: 0; }
 .message-content tbody tr:hover td { background: rgba(109,93,252,.028); }
 .chat-artifacts { display: grid; gap: 8px; margin-top: 12px; max-width: 620px; }
-.artifact-chip { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid rgba(109,93,252,.2); border-radius: 12px; background: linear-gradient(180deg, rgba(250,249,255,.98), rgba(245,243,255,.9)); color: var(--ui-ink); text-decoration: none; box-shadow: 0 5px 18px rgba(31,27,67,.05); transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease; }
-.artifact-chip:hover { border-color: rgba(109,93,252,.42); transform: translateY(-1px); box-shadow: 0 8px 24px rgba(57,43,127,.09); }
-.artifact-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: rgba(109,93,252,.1); color: var(--ui-accent-strong); font-size: 18px; font-weight: 800; }
+.artifact-chip { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--ui-line-strong); border-radius: 12px; background: linear-gradient(155deg, var(--ui-panel-muted), var(--ui-panel)); color: var(--ui-ink); text-decoration: none; box-shadow: 0 8px 22px rgba(0,0,0,.16); transition: border-color .16s ease, background .16s ease, transform .16s ease, box-shadow .16s ease; }
+.artifact-chip:hover { border-color: color-mix(in srgb, var(--ui-accent) 44%, var(--ui-line-strong)); background: linear-gradient(155deg, color-mix(in srgb, var(--ui-panel-muted) 88%, var(--ui-accent) 12%), var(--ui-panel)); transform: translateY(-1px); box-shadow: 0 12px 30px rgba(0,0,0,.22); }
+.artifact-chip:focus-visible { outline: 3px solid color-mix(in srgb, var(--ui-accent) 22%, transparent); outline-offset: 2px; border-color: var(--ui-accent); }
+.artifact-icon { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid color-mix(in srgb, var(--ui-accent) 24%, transparent); border-radius: 10px; background: var(--ui-accent-soft); color: var(--ui-accent-strong); font-size: 18px; font-weight: 800; }
 .artifact-copy { min-width: 0; display: grid; gap: 2px; }
-.artifact-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.artifact-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #747b8b; font-size: 11px; }
+.artifact-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-ink); font-size: 13px; }
+.artifact-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-muted); font-size: 11px; }
 .artifact-action { color: var(--ui-accent-strong); font-size: 11px; font-weight: 800; }
 @media (max-width: 680px) {
   .message-content table { min-width: 380px; }
