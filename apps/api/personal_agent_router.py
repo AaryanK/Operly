@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -10,6 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
+from packages.artifacts.delivery import artifacts_by_assistant_message, project_agent_result
+from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.assets.service import (
     remove_workspace_icon,
     store_workspace_icon,
@@ -17,6 +23,7 @@ from packages.assets.service import (
 )
 from packages.business_brain.attachments import AttachmentBundle, AttachmentInput, MultimodalProcessor
 from packages.business_brain.personal_agent import get_personal_agent_service
+from packages.database.db import session_scope
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.security.permissions import resolve_workspace_permissions
 
@@ -49,6 +56,15 @@ class WorkspacePresentationPatch(BaseModel):
 
 def _clean(value: str, limit: int) -> str:
     return " ".join(str(value or "").replace("\x00", "").split()).strip()[:limit]
+
+
+def _personal_artifact_scope(auth: AccountAuthContext) -> ArtifactScope:
+    return ArtifactScope("personal", f"personal:{auth.user.id}", owner_user_id=auth.user.id)
+
+
+async def _project_personal_result(auth: AccountAuthContext, result: dict) -> dict:
+    async with session_scope() as db:
+        return await project_agent_result(db, _personal_artifact_scope(auth), result)
 
 
 def _workspace_icon_url(workspace_id: str, key: str) -> str:
@@ -306,7 +322,7 @@ async def chat(
     auth: AccountAuthContext = Depends(get_account_auth_context),
 ):
     try:
-        return await get_personal_agent_service().run(
+        result = await get_personal_agent_service().run(
             user_id=auth.user.id,
             display_name=auth.user.display_name,
             message=payload.message,
@@ -315,6 +331,7 @@ async def chat(
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    return await _project_personal_result(auth, result)
 
 
 @router.post("/chat-with-attachments")
@@ -330,6 +347,7 @@ async def chat_with_attachments(
     if len(files) > limits.max_attachments:
         raise HTTPException(413, f"Maximum {limits.max_attachments} attachments")
 
+    effective_conversation_id = conversation_id or str(uuid4())
     inputs: list[AttachmentInput] = []
     total = 0
     for index, upload in enumerate(files, 1):
@@ -350,6 +368,25 @@ async def chat_with_attachments(
             )
         )
 
+    uploaded_artifacts: list[dict] = []
+    async with session_scope() as db:
+        service = ArtifactService(db)
+        scope = _personal_artifact_scope(auth)
+        for item in inputs:
+            row = await service.create_bytes(
+                scope,
+                filename=item.filename,
+                content_type=item.declared_content_type,
+                content=item.content_bytes,
+                source="personal_web_chat_upload",
+                created_by=auth.user.id,
+                metadata={
+                    "ingress": "personal_web_chat_v1",
+                    "conversation_id": effective_conversation_id,
+                },
+            )
+            uploaded_artifacts.append(artifact_json(row))
+
     bundle = AttachmentBundle(
         user_request=message.strip() or "Analyze the supplied attachment(s).",
         attachments=inputs,
@@ -369,25 +406,48 @@ async def chat_with_attachments(
             {
                 "message": "No supported attachments could be processed",
                 "skipped": processed.skipped,
+                "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
             },
         )
 
+    # File contents remain untrusted attachment evidence. The references below are
+    # application-assigned Artifact Store handles so the Personal agent can hand the
+    # same durable bytes to files.process rather than relying on a disappearing temp file.
+    handle_context = (
+        processed.message
+        + "\n\nOPERLY UPLOAD ARTIFACT REFERENCES (application-assigned handles):\n"
+        + json.dumps(
+            [
+                {
+                    "artifact_id": item["artifact_id"],
+                    "filename": item["filename"],
+                    "content_type": item["content_type"],
+                    "size_bytes": item["size_bytes"],
+                }
+                for item in uploaded_artifacts
+            ],
+            ensure_ascii=False,
+        )
+    )
     try:
         result = await get_personal_agent_service().run(
             user_id=auth.user.id,
             display_name=auth.user.display_name,
             message=message.strip() or "Analyze the supplied attachment(s).",
-            conversation_id=conversation_id,
+            conversation_id=effective_conversation_id,
             selected_workspace_id=None,
-            attachment_context=processed.message,
+            attachment_context=handle_context,
             attachment_names=list(processed.accepted),
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    result = await _project_personal_result(auth, result)
     result["attachment_processing"] = {
         "accepted": processed.accepted,
         "skipped": processed.skipped,
         "warnings": processed.warnings,
+        "artifacts": uploaded_artifacts,
+        "artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
     }
     return result
 
@@ -408,9 +468,30 @@ async def messages(
     auth: AccountAuthContext = Depends(get_account_auth_context),
 ):
     try:
-        return await get_personal_agent_service().messages(
+        rows = await get_personal_agent_service().messages(
             user_id=auth.user.id,
             conversation_id=conversation_id,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+    message_objects = [
+        SimpleNamespace(
+            id=row.get("id"),
+            role=row.get("role"),
+            created_at=datetime.fromisoformat(str(row.get("created_at"))),
+        )
+        for row in rows
+        if row.get("created_at")
+    ]
+    async with session_scope() as db:
+        artifacts_by_message = await artifacts_by_assistant_message(
+            db,
+            _personal_artifact_scope(auth),
+            conversation_id=conversation_id,
+            messages=message_objects,
+        )
+    return [
+        {**row, "artifacts": artifacts_by_message.get(str(row.get("id")), [])}
+        for row in rows
+    ]
