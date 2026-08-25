@@ -36,16 +36,19 @@ class ChannelResponse:
     status: str = "ok"
     tenant_options: list[dict[str, str]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    base_message: str = field(init=False, default="")
 
     def __post_init__(self) -> None:
-        """Keep generated files visible even in text-only channel adapters.
+        """Keep a transport-neutral message while preserving text-only fallback.
 
-        Rich adapters may upload/render ``artifacts`` directly. Older adapters that
-        only send ``message`` still receive authenticated Operly download links, so a
-        durable artifact can never disappear merely because the surface has not added
-        a native file-card implementation yet.
+        Rich adapters such as Discord need the original prose so they can attach the
+        actual artifact bytes without also printing redundant download links. Older
+        text-only adapters may continue reading ``message`` and receive authenticated
+        Operly download links as a compatibility fallback.
         """
+        self.base_message = str(self.message or "").strip()
         if not self.artifacts:
+            self.message = self.base_message
             return
         links: list[str] = []
         for artifact in self.artifacts[:10]:
@@ -54,4 +57,6 @@ class ChannelResponse:
             if url:
                 links.append(f"• {filename}: {url}")
         if links:
-            self.message = (str(self.message or "").rstrip() + "\n\nFiles:\n" + "\n".join(links)).strip()
+            self.message = (self.base_message.rstrip() + "\n\nFiles:\n" + "\n".join(links)).strip()
+        else:
+            self.message = self.base_message
