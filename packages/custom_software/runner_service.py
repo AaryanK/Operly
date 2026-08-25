@@ -152,6 +152,14 @@ CLASSIFICATION_ALIASES = {
     "acceptance_check_failure": "acceptance_test_failure",
     "acceptance_failed": "acceptance_test_failure",
 }
+GENERIC_FAILURE_MESSAGES = {
+    "test_failure": {"Python tests failed", "Node tests failed"},
+    "build_failure": {"Python static analysis failed", "Frontend build failed"},
+}
+FAILURE_EVENT_STATES = {
+    "test_failure": {"testing"},
+    "build_failure": {"building", "static_analysis"},
+}
 
 
 class RunnerStateError(ValueError):
@@ -191,6 +199,48 @@ def _failure_classification(result):
         if result.get(key) is False:
             return classification
     return "unknown_failure"
+
+
+def _enrich_failure_evidence(result, response, classification):
+    """Promote bounded runner gate output when the result only has a generic error.
+
+    The isolated runner already returns bounded per-phase event messages. Older
+    runner builds summarized test/build failures as only ``Python tests failed`` or
+    similar, which left the coding repair loop without the assertion/trace it needs.
+    Preserve the canonical result shape while copying the last relevant gate event
+    into failureEvidence. Runner events remain the source of truth and are redacted
+    before they become durable/model-visible evidence.
+    """
+    if not isinstance(result, dict) or not classification:
+        return result
+    evidence = result.get("failureEvidence")
+    if not isinstance(evidence, dict):
+        return result
+    generic = GENERIC_FAILURE_MESSAGES.get(classification)
+    states = FAILURE_EVENT_STATES.get(classification)
+    if not generic or not states:
+        return result
+    current = str(evidence.get("message") or "").strip()
+    if current and current not in generic:
+        return result
+    events = response.get("events") if isinstance(response, dict) else None
+    if not isinstance(events, list):
+        return result
+    for event in reversed(events):
+        if not isinstance(event, dict) or str(event.get("state") or "") not in states:
+            continue
+        detail = _redact(event.get("message") or "").strip()
+        if not detail or detail in generic:
+            continue
+        enriched_result = dict(result)
+        enriched_evidence = dict(evidence)
+        enriched_evidence["message"] = detail
+        enriched_evidence["runnerEventState"] = str(event.get("state"))
+        if event.get("exitCode") is not None:
+            enriched_evidence["runnerExitCode"] = event.get("exitCode")
+        enriched_result["failureEvidence"] = enriched_evidence
+        return enriched_result
+    return result
 
 
 def _failure_state_for(current_state, classification):
@@ -327,6 +377,8 @@ async def apply_runner_response(db, row, response, submission):
         )
     )
     classification = None if preview_ready else _failure_classification(result)
+    if classification:
+        result = _enrich_failure_evidence(result, response, classification)
     phase_paths = {
         "build_failure": ["provisioning", "source_staging", "static_analysis", "building"],
         "test_failure": ["provisioning", "source_staging", "static_analysis", "building", "testing"],
