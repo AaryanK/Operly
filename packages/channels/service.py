@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.artifacts.delivery import project_agent_result
+from packages.artifacts.service import ArtifactScope
 from packages.business_brain import AgentInput, get_agent_service
 from packages.business_brain.conversation_artifacts import artifact_context, recent_artifacts
 from packages.business_brain.personal_agent import get_personal_agent_service
@@ -20,6 +22,14 @@ class TenantResolution:
     user_id: str | None
     allow_tenant_context: bool
     options: list[dict[str, str]]
+
+
+def _workspace_artifact_scope(tenant_id: str) -> ArtifactScope:
+    return ArtifactScope("workspace", tenant_id, tenant_id=tenant_id)
+
+
+def _personal_artifact_scope(user_id: str) -> ArtifactScope:
+    return ArtifactScope("personal", f"personal:{user_id}", owner_user_id=user_id)
 
 
 class ChannelService:
@@ -191,11 +201,17 @@ class ChannelService:
                     conversation_id=f"{envelope.provider}:{envelope.external_conversation_id}",
                     selected_workspace_id=resolved.tenant_id,
                 )
+                result = await project_agent_result(
+                    db,
+                    _personal_artifact_scope(resolved.user_id),
+                    result,
+                )
                 return ChannelResponse(
                     message=result["message"],
                     conversation_id=result.get("conversation_id"),
                     user_id=resolved.user_id,
                     status="ok",
+                    artifacts=list(result.get("artifacts") or []),
                 )
 
             if resolved.tenant_id is None:
@@ -298,6 +314,11 @@ class ChannelService:
                     "retained_artifacts": bool(attachment_prompt),
                 },
             )
+            result = await project_agent_result(
+                db,
+                _workspace_artifact_scope(resolved.tenant_id),
+                result,
+            )
 
         return ChannelResponse(
             message=result["message"],
@@ -305,4 +326,5 @@ class ChannelService:
             tenant_id=resolved.tenant_id,
             user_id=resolved.user_id,
             role=resolved.role,
+            artifacts=list(result.get("artifacts") or []),
         )
