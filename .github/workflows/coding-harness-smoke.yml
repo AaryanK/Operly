@@ -55,6 +55,7 @@ on:
       - "tests/test_studio_agent_generation.py"
       - "tests/test_studio_agent_controller.py"
       - "tests/test_studio_real_capability_contracts.py"
+      - "tests/test_studio_behavior_first_finish_gate.py"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
@@ -109,6 +110,7 @@ on:
       - "tests/test_studio_agent_generation.py"
       - "tests/test_studio_agent_controller.py"
       - "tests/test_studio_real_capability_contracts.py"
+      - "tests/test_studio_behavior_first_finish_gate.py"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -131,6 +133,7 @@ jobs:
           packages/coding_harness/context_window.py
           packages/coding_harness/contract_guidance.py
           packages/coding_harness/objective_audit.py
+          packages/coding_harness/opencode_agent.py
           packages/coding_harness/source_service.py
           packages/coding_harness/execution_loop.py
           packages/solutions/generation_worker.py
@@ -171,3 +174,4 @@ jobs:
           tests/test_studio_agent_generation.py
           tests/test_studio_agent_controller.py
           tests/test_studio_real_capability_contracts.py
+          tests/test_studio_behavior_first_finish_gate.py
