@@ -1,4 +1,4 @@
-"""Adaptive structured planning for objectives that actually need decomposition."""
+"""Adaptive structured planning only after execution evidence shows it is useful."""
 from __future__ import annotations
 
 import json
@@ -13,81 +13,27 @@ from packages.model_runtime.registry import model_for_role
 from packages.model_runtime.trace_events import RuntimeTraceEvent
 
 
-_ACTION_WORDS = frozenset(
-    {
-        "analyze",
-        "research",
-        "find",
-        "compare",
-        "create",
-        "generate",
-        "write",
-        "edit",
-        "update",
-        "send",
-        "email",
-        "schedule",
-        "deploy",
-        "test",
-        "monitor",
-        "track",
-        "publish",
-        "report",
-    }
-)
-_COMPLEXITY_MARKERS = (
-    " and then ",
-    " then ",
-    " after that ",
-    " once ",
-    " before ",
-    " across ",
-    " workflow",
-    " multiple ",
-    " several ",
-    " parallel",
-)
-
-
 @dataclass(frozen=True, slots=True)
 class ComplexityDecision:
+    """Compatibility shape retained while callers migrate off pre-execution gates."""
+
     planning_required: bool
     score: int
     reasons: tuple[str, ...]
 
 
 class ObjectiveComplexityGate:
-    """Cheap deterministic fast path so simple requests pay no planner call."""
+    """Deprecated compatibility facade: Operly now starts direct instead of keyword-routing.
+
+    Complexity is learned from actual execution evidence. The controller invokes the
+    planner only after a capability-backed attempt is incomplete/failed or another
+    bounded runtime condition requires decomposition.
+    """
 
     @staticmethod
     def evaluate(objective: str) -> ComplexityDecision:
-        text = " ".join(str(objective or "").lower().split())
-        if not text:
-            return ComplexityDecision(False, 0, ())
-        score = 0
-        reasons: list[str] = []
-        words = set(re.findall(r"[a-z0-9_-]+", text))
-        actions = sorted(words & _ACTION_WORDS)
-        if len(actions) >= 3:
-            score += 3
-            reasons.append("multiple_actions")
-        elif len(actions) == 2:
-            score += 1
-            reasons.append("two_actions")
-        markers = [marker.strip() for marker in _COMPLEXITY_MARKERS if marker in f" {text} "]
-        if markers:
-            score += min(3, len(markers) + 1)
-            reasons.append("dependency_language")
-        if len(text) >= 320:
-            score += 2
-            reasons.append("long_objective")
-        elif len(text) >= 180:
-            score += 1
-            reasons.append("medium_objective")
-        if text.count(",") >= 3 or text.count(";") >= 2:
-            score += 1
-            reasons.append("many_clauses")
-        return ComplexityDecision(score >= 3, score, tuple(reasons))
+        del objective
+        return ComplexityDecision(False, 0, ("direct_first",))
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:
@@ -121,7 +67,7 @@ def _bounded_strings(value: Any, *, limit: int, item_chars: int = 500) -> tuple[
 
 
 class AdaptivePlanner:
-    """Use a small reasoning model for a bounded implementation-ready run plan."""
+    """Direct first; use a small reasoning model only when evidence demands a plan."""
 
     def __init__(self, *, max_tasks: int = 8) -> None:
         self.max_tasks = max(1, min(int(max_tasks), 12))
@@ -180,9 +126,12 @@ class AdaptivePlanner:
         ids = {task.id for task in tasks}
         for task in tasks:
             task.dependencies = tuple(dep for dep in task.dependencies if dep in ids and dep != task.id)
+        success_criteria = _bounded_strings(payload.get("success_criteria"), limit=8)
+        if not success_criteria:
+            success_criteria = (objective[:700],)
         return RunPlan(
             objective=objective,
-            success_criteria=_bounded_strings(payload.get("success_criteria"), limit=8),
+            success_criteria=success_criteria,
             tasks=tasks,
             planning_required=True,
             revision=revision,
@@ -196,8 +145,9 @@ class AdaptivePlanner:
     ) -> dict[str, Any]:
         model = model_for_role("requirements_analyst")
         system = (
-            "You are OPERLY's bounded workflow planner. Return JSON only; do not provide chain-of-thought. "
-            "Decompose only when it materially helps execution. Identify what context is needed, what operations are needed, dependencies, parallelizable work, and observable success criteria. "
+            "You are OPERLY's bounded recovery planner. Return JSON only; do not provide chain-of-thought. "
+            "A direct capability-backed attempt has already produced incomplete/failing evidence. Decompose only what remains, preserving the literal root objective. "
+            "Identify missing context, required operations, dependencies, parallelizable work, and observable success criteria. "
             "Do not invent capability IDs; use capability intents such as 'search email' or 'create calendar event'. Keep the plan concise."
         )
         user = {
@@ -208,7 +158,7 @@ class AdaptivePlanner:
                 "tasks": [
                     {
                         "id": "task-1",
-                        "objective": "bounded sub-objective",
+                        "objective": "bounded remaining sub-objective",
                         "dependencies": [],
                         "success_criteria": [],
                         "context_intents": [],
@@ -232,7 +182,7 @@ class AdaptivePlanner:
                     max_models=2,
                     max_output_tokens=3000,
                 ),
-                metadata={"runtime_component": "adaptive_planner"},
+                metadata={"runtime_component": "adaptive_replanner"},
             )
         )
         return _parse_json_object(str(result.message.get("content") or ""))
@@ -243,33 +193,18 @@ class AdaptivePlanner:
         *,
         trace_metadata: dict[str, Any] | None = None,
     ) -> RunPlan:
-        decision = ObjectiveComplexityGate.evaluate(objective)
-        if not decision.planning_required:
-            return RunPlan(
-                objective=objective,
-                success_criteria=(),
-                tasks=[],
-                planning_required=False,
-                revision=0,
-            )
-        try:
-            payload = await self._infer_plan(objective=objective)
-            plan = self._normalize_plan(objective, payload, revision=0)
-        except (LookupError, RuntimeError, ValueError):
-            plan = self._fallback(objective)
-        await emit_runtime_trace_event(
-            RuntimeTraceEvent.PLAN_CREATED,
-            {
-                "planning_required": True,
-                "complexity_score": decision.score,
-                "complexity_reasons": list(decision.reasons),
-                "task_count": len(plan.tasks),
-                "task_ids": [task.id for task in plan.tasks],
-            },
-            metadata=dict(trace_metadata or {}),
-            component="agent-run-controller",
+        # No lexical/keyword complexity routing. AgentRuntime gets the first attempt;
+        # controller evidence verification decides whether a semantic replan is worth
+        # paying for. Informational turns therefore avoid planner/verifier cost unless
+        # they actually invoke capabilities.
+        del trace_metadata
+        return RunPlan(
+            objective=objective,
+            success_criteria=(),
+            tasks=[],
+            planning_required=False,
+            revision=0,
         )
-        return plan
 
     async def replan(
         self,
@@ -297,6 +232,7 @@ class AdaptivePlanner:
             {
                 "revision": revision,
                 "reason": str(reason)[:500],
+                "strategy": "evidence_triggered",
                 "task_count": len(plan.tasks),
                 "task_ids": [task.id for task in plan.tasks],
             },
