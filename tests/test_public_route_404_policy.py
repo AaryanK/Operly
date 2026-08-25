@@ -1,28 +1,35 @@
-from apps.api.security_headers import _is_known_frontend_fallback
+import asyncio
+
+from apps.api.main import frontend
 
 
-def test_arbitrary_extensionless_site_path_is_not_a_valid_frontend_fallback():
-    assert _is_known_frontend_fallback("/fdfdsfsafsafsaff") is False
-    assert _is_known_frontend_fallback("/totally/made/up/path") is False
+def response_for(path: str):
+    return asyncio.run(frontend(path))
 
 
-def test_known_operly_shell_routes_remain_valid_frontend_fallbacks():
+def test_arbitrary_site_paths_return_a_real_404():
     for path in (
-        "/",
-        "/login",
-        "/signup",
-        "/admin",
-        "/privacy",
-        "/terms",
-        "/channels",
-        "/channels/@me",
-        "/channels/workspace-id/activity",
-        "/assets/index.js",
-        "/favicon.ico",
+        "fdfdsfsafsafsaff",
+        "totally/made/up/path",
+        "made-up.js",
+        "admin/not-a-real-page",
     ):
-        assert _is_known_frontend_fallback(path) is True
+        response = response_for(path)
+        assert response.status_code == 404
+        assert response.headers["x-robots-tag"] == "noindex, nofollow"
 
 
-def test_trailing_slashes_on_known_routes_are_tolerated():
-    assert _is_known_frontend_fallback("/admin/") is True
-    assert _is_known_frontend_fallback("/login/") is True
+def test_known_public_and_authenticated_shell_routes_still_load():
+    for path in (
+        "",
+        "login",
+        "login/",
+        "signup",
+        "privacy",
+        "terms",
+        "admin",
+        "channels",
+        "channels/@me",
+        "channels/workspace-id/activity",
+    ):
+        assert response_for(path).status_code == 200
