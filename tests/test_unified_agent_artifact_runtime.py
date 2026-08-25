@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
-import tempfile
 from contextlib import asynccontextmanager
 from email import policy
 from email.parser import BytesParser
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -25,7 +24,7 @@ from packages.database.db import Base
 from packages.database.models import Tenant
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def runtime_db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -120,6 +119,7 @@ async def test_artifacts_are_scope_isolated_and_integrity_checked(runtime_db):
 @pytest.mark.asyncio
 async def test_agent_run_checkpoint_is_durable_and_scope_bound(runtime_db):
     db, factory = runtime_db
+    del db
 
     @asynccontextmanager
     async def local_session_scope():
@@ -162,7 +162,6 @@ async def test_agent_run_checkpoint_is_durable_and_scope_bound(runtime_db):
                 metadata={**metadata, "tenant_id": "tenant-b"},
             )
 
-    # Use a fresh session to prove persistence rather than identity-map reuse.
     async with factory() as inspect_db:
         row = await inspect_db.get(AgentRunRecord, "run-durable-1")
         events = list(
@@ -226,7 +225,6 @@ async def test_400_invoice_north_star_generates_xlsx_pdf_and_drafts_email(runtim
     assert result.evidence["processed_count"] == 400
     assert result.evidence["success_count"] == 400
     assert result.evidence["failure_count"] == 0
-    # 1+...+400 = 80,200
     assert result.evidence["sums"]["subtotal"] == pytest.approx(80200.0)
     assert result.evidence["sums"]["tax"] == pytest.approx(8020.0)
     assert result.evidence["sums"]["total"] == pytest.approx(88220.0)
