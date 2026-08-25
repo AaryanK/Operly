@@ -1,0 +1,201 @@
+.source-inspector-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(6 4 12 / 72%);
+  backdrop-filter: blur(6px);
+}
+
+.source-inspector {
+  width: min(1120px, 100%);
+  height: min(780px, calc(100vh - 48px));
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ui-line, currentColor);
+  border-radius: 22px;
+  background: var(--ui-panel, Canvas);
+  color: var(--ui-ink, CanvasText);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 38%);
+}
+
+.source-inspector-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--ui-line, currentColor);
+}
+
+.source-inspector-header h2 {
+  margin: 4px 0 0;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+}
+
+.source-inspector-header p {
+  margin: 6px 0 0;
+  color: var(--ui-muted, inherit);
+  font-size: 0.82rem;
+}
+
+.source-inspector-close {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 1px solid var(--ui-line, currentColor);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.65rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.source-inspector-close:hover,
+.source-inspector-close:focus-visible {
+  background: var(--ui-hover, rgb(127 127 127 / 10%));
+}
+
+.source-inspector-state {
+  margin: auto;
+  max-width: 680px;
+  padding: 32px;
+  text-align: center;
+  color: var(--ui-muted, inherit);
+}
+
+.source-inspector-state.inline-error {
+  margin: auto;
+}
+
+.source-inspector-body {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
+}
+
+.source-file-list {
+  min-width: 0;
+  overflow: auto;
+  padding: 10px;
+  border-right: 1px solid var(--ui-line, currentColor);
+  background: var(--ui-canvas, transparent);
+}
+
+.source-file-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.source-file-list button:hover,
+.source-file-list button:focus-visible {
+  background: var(--ui-hover, rgb(127 127 127 / 10%));
+}
+
+.source-file-list button.active {
+  border-color: var(--ui-accent, currentColor);
+  background: var(--ui-accent-soft, rgb(127 127 127 / 12%));
+}
+
+.source-file-list button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+}
+
+.source-file-list button small {
+  flex: 0 0 auto;
+  color: var(--ui-muted, inherit);
+  font-size: 0.68rem;
+}
+
+.source-file-viewer {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-file-toolbar {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--ui-line, currentColor);
+  color: var(--ui-muted, inherit);
+  font-size: 0.75rem;
+}
+
+.source-file-toolbar strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-ink, inherit);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-file-viewer pre {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 18px;
+  background: var(--ui-code-bg, var(--ui-canvas, transparent));
+  color: var(--ui-ink, inherit);
+  font: 12.5px/1.62 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.source-file-viewer code {
+  font: inherit;
+}
+
+@media (max-width: 720px) {
+  .source-inspector-backdrop {
+    padding: 10px;
+  }
+
+  .source-inspector {
+    height: calc(100vh - 20px);
+    min-height: 0;
+    border-radius: 16px;
+  }
+
+  .source-inspector-header {
+    padding: 16px;
+  }
+
+  .source-inspector-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 30vh) minmax(0, 1fr);
+  }
+
+  .source-file-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-line, currentColor);
+  }
+}
