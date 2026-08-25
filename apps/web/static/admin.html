@@ -8,6 +8,7 @@
   <link rel="icon" type="image/png" href="/static/operly-logo.png">
   <title>Operly · Platform Admin</title>
   <link rel="stylesheet" href="/static/admin.css?v=20260825-platform-admin-v1">
+  <link rel="stylesheet" href="/static/admin-ai-usage.css?v=20260825-ai-usage-v1">
 </head>
 <body>
   <section id="admin-login" class="admin-login hidden" aria-labelledby="admin-login-title">
@@ -37,6 +38,7 @@
       <div class="sidebar-caption">Platform admin</div>
       <nav aria-label="Admin sections">
         <button class="nav-item active" data-admin-tab="overview"><span>⌁</span>Overview</button>
+        <button class="nav-item" data-admin-tab="ai-usage"><span>◒</span>AI Usage</button>
         <button class="nav-item" data-admin-tab="users"><span>◎</span>Users</button>
         <button class="nav-item" data-admin-tab="workspaces"><span>◇</span>Workspaces</button>
       </nav>
@@ -105,6 +107,44 @@
           </article>
         </section>
 
+        <section id="admin-tab-ai-usage" class="admin-tab hidden">
+          <div class="usage-toolbar">
+            <div>
+              <span class="panel-kicker">Model activity</span>
+              <div class="usage-range" aria-label="AI usage time range">
+                <button type="button" data-usage-range="1h">1H</button>
+                <button type="button" data-usage-range="24h" class="active">24H</button>
+                <button type="button" data-usage-range="7d">7D</button>
+                <button type="button" data-usage-range="30d">30D</button>
+                <button type="button" data-usage-range="all">All</button>
+              </div>
+            </div>
+            <div id="ai-usage-coverage" class="usage-toolbar-copy">Waiting for model calls</div>
+          </div>
+
+          <div id="ai-usage-error" class="notice error usage-error hidden" role="alert"></div>
+
+          <div class="metric-grid usage-metrics">
+            <article class="metric-card"><span>Total tokens</span><strong id="ai-total-tokens">—</strong><small>input + output</small></article>
+            <article class="metric-card"><span>Input tokens</span><strong id="ai-input-tokens">—</strong><small>prompt/context</small></article>
+            <article class="metric-card"><span>Output tokens</span><strong id="ai-output-tokens">—</strong><small>model completion</small></article>
+            <article class="metric-card"><span>Tracked calls</span><strong id="ai-tracked-calls">—</strong><small>calls with usage metadata</small></article>
+            <article class="metric-card"><span>Models</span><strong id="ai-model-count">—</strong><small>observed in this range</small></article>
+          </div>
+
+          <article class="panel" style="margin-bottom:18px">
+            <div class="panel-heading"><div><span class="panel-kicker">Usage</span><h2>Tokens over time</h2></div><span class="panel-meta">All models</span></div>
+            <div id="ai-usage-chart" class="usage-chart" aria-label="Token usage over time"></div>
+          </article>
+
+          <article class="panel usage-model-table">
+            <div class="panel-heading"><div><span class="panel-kicker">Models</span><h2>Tokens by model</h2></div><span class="panel-meta">Highest usage first</span></div>
+            <div class="usage-model-head"><span>Model</span><span>Input</span><span>Output</span><span>Total</span><span>Share</span></div>
+            <div id="ai-usage-model-rows"></div>
+            <p class="usage-note">Counts come from Operly's persisted model traces. Calls made before a provider exposed usage metadata may appear in call coverage without historical token counts.</p>
+          </article>
+        </section>
+
         <section id="admin-tab-users" class="admin-tab hidden">
           <div class="section-toolbar"><div><span class="panel-kicker">Accounts</span><h2>Users</h2><p>Platform-wide account state, activity, location and workspace membership.</p></div><label class="search-field"><span>Search</span><input id="user-search" type="search" placeholder="Name, email, country…"></label></div>
           <article class="panel table-panel"><div id="users-table" class="data-table"></div></article>
@@ -119,5 +159,6 @@
   </div>
 
   <script src="/static/admin.js?v=20260825-platform-admin-v1"></script>
+  <script src="/static/admin-ai-usage.js?v=20260825-ai-usage-v1"></script>
 </body>
 </html>

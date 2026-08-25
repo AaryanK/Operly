@@ -419,7 +419,21 @@ class OllamaClient:
                     retryable=True,
                 )
 
-            return message
+            result = dict(message)
+            prompt_tokens = body.get("prompt_eval_count")
+            completion_tokens = body.get("eval_count")
+            input_count = int(prompt_tokens) if isinstance(prompt_tokens, (int, float)) and not isinstance(prompt_tokens, bool) else 0
+            output_count = int(completion_tokens) if isinstance(completion_tokens, (int, float)) and not isinstance(completion_tokens, bool) else 0
+            if input_count or output_count:
+                result["usage"] = {
+                    "prompt_tokens": input_count,
+                    "completion_tokens": output_count,
+                    "total_tokens": input_count + output_count,
+                }
+            done_reason = body.get("done_reason")
+            if isinstance(done_reason, str):
+                result["finish_reason"] = done_reason
+            return result
 
     @staticmethod
     def _backoff_seconds(attempt: int) -> float:

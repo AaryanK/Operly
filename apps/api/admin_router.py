@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.admin_ai_usage import build_admin_ai_usage
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.database.models import (
     AppUser,
@@ -455,3 +456,12 @@ async def admin_geography(
         admin_user_id=account.user.id,
     )
     return {"days": days, **summary}
+
+
+@router.get("/ai-usage")
+async def admin_ai_usage(
+    range_name: str = Query(default="24h", alias="range"),
+    _: AccountAuthContext = Depends(require_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await build_admin_ai_usage(db, range_name)
