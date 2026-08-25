@@ -6,7 +6,11 @@ import json
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from packages.agents.persistence import checkpoint_agent_run, load_agent_run
+from packages.agents.persistence import (
+    checkpoint_agent_run,
+    find_resumable_agent_run,
+    load_agent_run,
+)
 from packages.agents.planning import AdaptivePlanner
 from packages.agents.run_state import CompactRunState
 from packages.agents.runtime import AgentRuntime, ObservationHook
@@ -114,16 +118,17 @@ class AgentRunController:
     ) -> dict[str, Any]:
         metadata = dict(inference_metadata or {})
         requested_run_id = str(metadata.get("runtime_run_id") or "").strip()
-        runtime_run_id = requested_run_id or str(uuid4())
+        existing = None
+        if requested_run_id:
+            runtime_run_id = requested_run_id
+            existing = await load_agent_run(runtime_run_id, metadata=metadata)
+        else:
+            existing = await find_resumable_agent_run(objective=objective, metadata=metadata)
+            runtime_run_id = str((existing or {}).get("run_id") or uuid4())
         metadata["runtime_run_id"] = runtime_run_id
         metadata["runtime_controller"] = "adaptive"
 
         resumed = False
-        existing = (
-            await load_agent_run(runtime_run_id, metadata=metadata)
-            if requested_run_id
-            else None
-        )
         if existing is not None and str(existing.get("state") or "").lower() == "completed":
             raise RuntimeError("Durable agent run is already completed; reuse its artifacts/results instead of repeating side effects")
         if existing is not None and _resumable_state(existing.get("state") or ""):
@@ -147,6 +152,7 @@ class AgentRunController:
                     "checkpoint_revision": state.revision,
                     "artifact_refs": sorted(state.artifact_refs)[-50:],
                     "pending_approval_ids": sorted(state.pending_approval_ids)[-20:],
+                    "implicit_resume": not bool(requested_run_id),
                 },
             )
         else:
