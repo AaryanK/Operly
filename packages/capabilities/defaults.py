@@ -3,6 +3,7 @@ from packages.capabilities.app_identity_provider import AppIdentityProvider
 from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.business_provider import UnifiedBusinessProvider
 from packages.capabilities.calendar_semantics_provider import CalendarSemanticsProvider
+from packages.capabilities.computer_provider import AgentComputerProvider
 from packages.capabilities.context_provider import ContextProvider
 from packages.capabilities.crm_read_provider import CRMReadProvider
 from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
@@ -78,6 +79,7 @@ def _builtin_providers():
         PublicWebReadProvider(),
         ArtifactProvider(),
         FileRuntimeProvider(),
+        AgentComputerProvider(),
         MessagingProvider(),
         MessageCurationProvider(),
         UnifiedSolutionProvider(),
