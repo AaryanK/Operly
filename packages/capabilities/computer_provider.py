@@ -19,6 +19,7 @@ from packages.capabilities.providers import BaseProvider
 _MAX_INPUTS = 20
 _MAX_TRANSPORT_BYTES = 20 * 1024 * 1024
 _MAX_OUTPUTS = 20
+_MAX_BASH_CHARS = 50_000
 
 
 def _run_id(context) -> str | None:
@@ -86,7 +87,7 @@ class AgentComputerProvider(BaseProvider):
             "computer.run_command",
             "computer_run_command",
             (
-                "Run a bounded argv command inside Operly's isolated Agent Computer. Inputs are scoped artifacts, "
+                "Run one bounded argv command inside Operly's isolated Agent Computer. Inputs are scoped artifacts, "
                 "outputs must be explicitly declared, production credentials are never mounted, and network egress is blocked."
             ),
             {
@@ -120,6 +121,45 @@ class AgentComputerProvider(BaseProvider):
                     "convert files in sandbox",
                     "use ffmpeg",
                     "use poppler",
+                }
+            ),
+        ),
+        CapabilityDefinition(
+            "computer.run_bash",
+            "computer_run_bash",
+            (
+                "Run a bounded Bash script inside Operly's disposable isolated Agent Computer. Use it for temporary CLI work "
+                "such as inspecting supplied artifacts, running local build/test tools, or producing declared outputs. The "
+                "sandbox receives no production credentials, external network is blocked, only explicit output_paths are "
+                "persisted, and the sandbox is destroyed after the invocation."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string", "minLength": 1, "maxLength": _MAX_BASH_CHARS},
+                    **_common_input,
+                },
+                "required": ["script"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="low",
+            permissions=("computer:execute", "files:process"),
+            approval_policy=ApprovalPolicy.AUTO,
+            execution_mode=ExecutionMode.ISOLATED_RUNNER,
+            execution_timeout_seconds=650,
+            reversible=True,
+            category="computer",
+            display_name="Run Bash in Agent Computer",
+            tags=frozenset({"computer", "bash", "cli", "sandbox", "files", "artifacts"}),
+            semantic_operations=frozenset(
+                {
+                    "run bash",
+                    "use command line",
+                    "run cli tools",
+                    "run local build commands",
+                    "run local tests",
+                    "process artifacts with shell tools",
                 }
             ),
         ),
@@ -177,7 +217,8 @@ class AgentComputerProvider(BaseProvider):
         return persisted
 
     async def execute(self, context, capability_name: str, arguments: dict[str, Any]) -> CapabilityResult:
-        if capability_name not in {"computer.run_python", "computer.run_command"}:
+        supported = {"computer.run_python", "computer.run_command", "computer.run_bash"}
+        if capability_name not in supported:
             return CapabilityResult(False, False, {"reason": "unsupported_computer_capability"})
         try:
             artifact_ids = [str(item) for item in arguments.get("artifact_ids") or []]
@@ -190,6 +231,14 @@ class AgentComputerProvider(BaseProvider):
             }
             if capability_name == "computer.run_python":
                 payload["code"] = str(arguments.get("code") or "")
+            elif capability_name == "computer.run_bash":
+                script = str(arguments.get("script") or "")
+                if not script.strip() or len(script) > _MAX_BASH_CHARS:
+                    raise ValueError("Bash script is required and bounded")
+                # The runner already executes argv as uid 10001 inside an isolated,
+                # disposable sandbox. Bash is an ergonomic projection over that same
+                # security boundary, not a new shell on the Operly control plane.
+                payload["argv"] = ["bash", "-lc", script]
             else:
                 payload["argv"] = [str(item) for item in arguments.get("argv") or []]
             response = await self.runner.execute(payload)
@@ -204,6 +253,7 @@ class AgentComputerProvider(BaseProvider):
                 "artifacts": generated,
                 "isolation": response.get("isolation"),
                 "network": response.get("network"),
+                "ephemeral": True,
                 "side_effects": False,
             }
             return CapabilityResult(bool(response.get("ok")), bool(generated), evidence, generated[0]["artifact_id"] if generated else None)
@@ -212,7 +262,7 @@ class AgentComputerProvider(BaseProvider):
 
     async def verify(self, context, capability_name: str, arguments: dict[str, Any], result: CapabilityResult) -> CapabilityResult:
         del arguments
-        if capability_name not in {"computer.run_python", "computer.run_command"} or not result.success:
+        if capability_name not in {"computer.run_python", "computer.run_command", "computer.run_bash"} or not result.success:
             return CapabilityResult(False, result.changed, result.evidence)
         ids = list(result.evidence.get("artifact_ids") or [])
         if ids:
@@ -234,6 +284,7 @@ class AgentComputerProvider(BaseProvider):
                 "artifact_ids": ids,
                 "isolation": result.evidence.get("isolation"),
                 "network": result.evidence.get("network"),
+                "ephemeral": True,
                 "verified": bool(valid),
             },
             result.external_reference,
