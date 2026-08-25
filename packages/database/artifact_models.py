@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from packages.database.db import Base
@@ -47,6 +47,11 @@ class ArtifactRecord(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "(scope_kind = 'workspace' AND tenant_id IS NOT NULL AND owner_user_id IS NULL) OR "
+            "(scope_kind = 'personal' AND tenant_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_operly_artifact_scope_owner",
+        ),
         Index("ix_operly_artifact_scope_created", "scope_kind", "scope_id", "created_at"),
         Index("ix_operly_artifact_scope_sha", "scope_kind", "scope_id", "sha256"),
     )
@@ -79,6 +84,11 @@ class AgentRunRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "(scope_kind = 'workspace' AND tenant_id IS NOT NULL AND owner_user_id IS NULL) OR "
+            "(scope_kind = 'personal' AND tenant_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_agent_runs_scope_owner",
+        ),
         Index("ix_agent_run_scope_updated", "scope_kind", "scope_id", "updated_at"),
     )
 
