@@ -71,6 +71,7 @@ class CapabilitySearchIndex:
 
     def __init__(self, *, semantic_index: SemanticTextIndex | None = None) -> None:
         self.semantic_index = semantic_index or SemanticTextIndex()
+        self._runtime_degraded_reason: str | None = None
 
     @property
     def backend_name(self) -> str:
@@ -78,7 +79,7 @@ class CapabilitySearchIndex:
 
     @property
     def degraded_reason(self) -> str | None:
-        return self.semantic_index.degraded_reason
+        return self._runtime_degraded_reason or self.semantic_index.degraded_reason
 
     @staticmethod
     def _lexical_score(definition, query: str) -> float:
@@ -138,6 +139,27 @@ class CapabilitySearchIndex:
             return True
         return top >= _MODERATE_LEXICAL_SCORE and margin >= _FAST_LEXICAL_MARGIN
 
+    @staticmethod
+    def _lexical_hits(
+        scores: list[tuple[str, float]],
+        *,
+        limit: int,
+        strategy: str,
+    ) -> list[CapabilitySearchHit]:
+        ranked = [
+            CapabilitySearchHit(
+                capability_id=capability_id,
+                score=round(score, 6),
+                semantic_score=0.0,
+                lexical_score=round(score, 6),
+                strategy=strategy,
+            )
+            for capability_id, score in scores
+            if score > 0.0
+        ]
+        ranked.sort(key=lambda item: (-item.score, item.capability_id))
+        return ranked[: max(1, min(int(limit), 20))]
+
     def search(
         self,
         definitions: Sequence,
@@ -165,29 +187,22 @@ class CapabilitySearchIndex:
             str(definition.id): self._lexical_score(definition, clean_query)
             for definition in eligible
         }
-
-        # Exact IDs/names and unambiguous strong lexical matches are already enough to
-        # choose a candidate set. Do not initialize or invoke the embedding backend in
-        # that case; this is the hot path for agent follow-up discovery such as
-        # `task.create`, `event.search`, or an operation named in a previous result.
         lexical_pairs = [
             (capability_id, score)
             for capability_id, score in lexical_scores.items()
             if score > 0.0
         ]
+
+        # Exact IDs/names and unambiguous strong lexical matches are already enough to
+        # choose a candidate set. Do not initialize or invoke the embedding backend in
+        # that case; this is the hot path for agent follow-up discovery such as
+        # `task.create`, `event.search`, or an operation named in a previous result.
         if clean_query and self._use_lexical_fast_path(eligible, clean_query, lexical_pairs):
-            ranked = [
-                CapabilitySearchHit(
-                    capability_id=capability_id,
-                    score=round(score, 6),
-                    semantic_score=0.0,
-                    lexical_score=round(score, 6),
-                    strategy="lexical_fast_path",
-                )
-                for capability_id, score in lexical_pairs
-            ]
-            ranked.sort(key=lambda item: (-item.score, item.capability_id))
-            return ranked[: max(1, min(int(limit), 20))]
+            return self._lexical_hits(
+                lexical_pairs,
+                limit=limit,
+                strategy="lexical_fast_path",
+            )
 
         semantic_scores: dict[str, float] = {}
         if eligible and clean_query:
@@ -198,14 +213,29 @@ class CapabilitySearchIndex:
                 )
                 for definition in eligible
             ]
-            semantic_scores = {
-                match.key: match.score
-                for match in self.semantic_index.rank(
-                    documents,
-                    clean_query,
-                    limit=len(documents),
+            try:
+                semantic_scores = {
+                    match.key: match.score
+                    for match in self.semantic_index.rank(
+                        documents,
+                        clean_query,
+                        limit=len(documents),
+                    )
+                }
+                self._runtime_degraded_reason = None
+            except Exception as error:
+                # Capability discovery is a read-only control-plane primitive. A local
+                # embedding/index failure must not make the entire agent tool loop fail.
+                # Return deterministic lexical candidates and expose the degraded state
+                # so callers/telemetry can see why semantic ranking was skipped.
+                self._runtime_degraded_reason = (
+                    f"semantic_search_failed:{type(error).__name__}"
                 )
-            }
+                return self._lexical_hits(
+                    lexical_pairs,
+                    limit=limit,
+                    strategy="lexical_degraded",
+                )
 
         ranked: list[CapabilitySearchHit] = []
         for definition in eligible:
