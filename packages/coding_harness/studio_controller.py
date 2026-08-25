@@ -177,6 +177,39 @@ def _provenance(row: Any) -> dict[str, Any]:
         return {}
 
 
+def _structural_gap_count(audit: dict[str, Any]) -> int:
+    """Count gaps that usually require architectural rewrites, not tiny repairs."""
+    total = 0
+    for key in ("behaviorGaps", "capabilityUsageGaps", "authorityGaps"):
+        value = audit.get(key)
+        if isinstance(value, (list, tuple)):
+            total += len(value)
+    return total
+
+
+def _should_regenerate_stale_source(
+    audit: dict[str, Any],
+    *,
+    generation_attempt: int,
+    repairs: list[dict[str, Any]],
+    already_regenerated: bool,
+) -> bool:
+    """Prefer a clean build when a retry inherits a broadly invalid old bundle.
+
+    Incremental repair remains the default for first attempts and localized regressions.
+    A later Solution retry gets one clean regeneration only when the deterministic audit
+    reports multiple architectural product/capability gaps. This avoids spending the
+    coding agent's bounded turn budget trying to transform a mock-heavy legacy tree one
+    tiny edit at a time.
+    """
+    if audit.get("verified") or generation_attempt <= 1 or repairs or already_regenerated:
+        return False
+    behavior = audit.get("behaviorGaps") if isinstance(audit.get("behaviorGaps"), list) else []
+    capabilities = audit.get("capabilityUsageGaps") if isinstance(audit.get("capabilityUsageGaps"), list) else []
+    authority = audit.get("authorityGaps") if isinstance(audit.get("authorityGaps"), list) else []
+    return _structural_gap_count(audit) >= 3 or (bool(behavior) and bool(capabilities or authority))
+
+
 async def _repair_history(db, tenant_id: str, plan_row: Any, runtime_run_id: str) -> list[dict[str, Any]]:
     """Recover repair budget/history from immutable source provenance after restart."""
     try:
@@ -229,12 +262,17 @@ async def run_studio_generation(
     """Run one Solution attempt under the shared durable AgentRunController."""
     objective = _objective(plan)
     runtime_run_id = str(metadata.get("runtime_run_id") or idempotency_key)[:120]
+    try:
+        generation_attempt = max(1, int(metadata.get("generation_attempt") or 1))
+    except (TypeError, ValueError):
+        generation_attempt = 1
     repair_budget = max(0, min(int(max_repairs), 6))
     controller = AgentRunController(planner=_StudioPlanner(plan), max_replans=0)
     control_model = _StudioControlModel()
     final_result: dict[str, Any] = {}
     transient_history: list[dict[str, Any]] = []
     terminal_error: Exception | None = None
+    regenerated_stale_source = False
 
     async def history() -> list[dict[str, Any]]:
         durable = await _repair_history(db, tenant_id, plan_row, runtime_run_id)
@@ -264,7 +302,7 @@ async def run_studio_generation(
         return updated
 
     async def advance(_name: str, _arguments: dict[str, Any], _call_id: str | None):
-        nonlocal terminal_error
+        nonlocal terminal_error, regenerated_stale_source
         source = await latest_source(
             db,
             tenant_id,
@@ -294,6 +332,49 @@ async def run_studio_generation(
         repairs = await history()
         audit = audit_generated_source(plan, source)
         if not audit["verified"]:
+            if _should_regenerate_stale_source(
+                audit,
+                generation_attempt=generation_attempt,
+                repairs=repairs,
+                already_regenerated=regenerated_stale_source,
+            ):
+                previous_version = getattr(source, "source_version", None)
+                regenerated_stale_source = True
+                await _notify(
+                    progress_callback,
+                    "source_generation",
+                    "running",
+                    {
+                        "planId": getattr(plan_row, "id", None),
+                        "fromSourceVersion": previous_version,
+                        "reason": "structural_objective_reset",
+                        "objectiveAudit": audit,
+                    },
+                )
+                source, result = await generate_source_for_plan(
+                    db, tenant_id, user_id, plan_row, plan, client=client
+                )
+                await db.commit()
+                await db.refresh(source)
+                await _notify(
+                    progress_callback,
+                    "source_generation",
+                    "succeeded",
+                    {
+                        "sourceBundleId": getattr(source, "id", None),
+                        "sourceVersion": getattr(source, "source_version", None),
+                        "fromSourceVersion": previous_version,
+                        "reason": "structural_objective_reset",
+                        "changedPaths": getattr(result, "changed_paths", []) or [],
+                    },
+                )
+                return {
+                    "ok": True,
+                    "status": "RUNNING",
+                    "artifact_refs": [str(getattr(source, "id", ""))],
+                    "objectiveAudit": audit,
+                    "message": "Structurally stale source replaced with a clean generation; objective audit is next.",
+                }
             if len(repairs) >= repair_budget:
                 terminal_error = RuntimeError(f"Generated source does not satisfy approved objective: {audit['message']}")
                 await _notify(progress_callback, "source_repair", "failed", audit)
