@@ -35,6 +35,7 @@ ObservationHook = Callable[
 # Metadata/reasoning helpers are not proof that the root operational objective ran.
 _META_CAPABILITIES = frozenset(
     {
+        "runtime.context",
         "capability.search",
         "capability.describe",
         "event.search",
