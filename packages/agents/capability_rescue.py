@@ -37,6 +37,8 @@ _META_CAPABILITIES = frozenset(
     {
         "capability.search",
         "capability.describe",
+        "event.search",
+        "event.describe",
         "context.search",
         "context.get",
         "model.invoke",
