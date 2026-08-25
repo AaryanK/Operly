@@ -15,9 +15,11 @@ from apps.api.schemas import ApprovalDecision
 from packages.actions.service import ActionService
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
 from packages.capabilities.defaults import default_registry
+from packages.capabilities.personal_google_provider import PersonalGoogleCapabilityProvider
 from packages.database.company_models import BusinessActionRecord
 from packages.database.models import Approval
 from packages.database.product_models import SolutionImprovementProposal
+from packages.security.execution_context import PERSONAL_EXECUTION_PERMISSIONS
 from packages.tasks.runtime import resume_task_after_approval
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
@@ -41,13 +43,12 @@ async def _serialize_approval(db: AsyncSession, row: Approval) -> dict:
         and action.tenant_id == row.tenant_id
         and action.owner_user_id == row.owner_user_id
     ):
-        action_arguments = _json_object(action.arguments_json)
         details.update(
             {
                 "business_action_id": action.id,
                 "objective": action.objective,
                 "capability": action.capability,
-                "arguments": action_arguments,
+                "arguments": _json_object(action.arguments_json),
                 "rationale": action.rationale,
                 "expected_outcome": action.expected_outcome,
                 "risk_level": action.risk_level,
@@ -73,6 +74,32 @@ async def _serialize_approval(db: AsyncSession, row: Approval) -> dict:
 
 async def _serialize_rows(db: AsyncSession, rows: list[Approval]) -> list[dict]:
     return [await _serialize_approval(db, row) for row in rows]
+
+
+async def _personal_action_registry(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    capability: str,
+):
+    """Rebuild the same governed account-owned provider registry used at proposal time.
+
+    Personal approvals must never fall back to a workspace registry: doing so could
+    either make the approved action fail to resolve or, worse, select credentials from
+    the wrong ownership namespace. Today approval-backed Personal side effects are the
+    account-owned Google capabilities, so reconstruct that registry explicitly and
+    fail closed for anything else until another Personal provider gains approvals.
+    """
+    google = PersonalGoogleCapabilityProvider()
+    if google.supports(capability):
+        return await google.registry_for(db, user_id=user_id)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "PERSONAL_APPROVAL_PROVIDER_UNAVAILABLE",
+            "message": "This Personal approval cannot be resumed safely because its provider is unavailable.",
+        },
+    )
 
 
 @router.get("")
@@ -138,10 +165,15 @@ async def decide_personal_approval(
     business_action_id = details.get("business_action_id")
     task_resumed = 0
     if business_action_id:
+        registry = await _personal_action_registry(
+            db,
+            user_id=auth.user.id,
+            capability=row.action,
+        )
         service = ActionService(
             db,
-            default_registry(),
-            authority=set(ROLE_AUTHORITY.get("owner", set())),
+            registry,
+            authority=set(PERSONAL_EXECUTION_PERMISSIONS),
             actor_id=auth.user.id,
         )
         try:
@@ -214,7 +246,7 @@ async def decide_approval(
                 )
             else:
                 await service.reject(auth.tenant.id, business_action_id)
-                await resume_task_after_approval(
+                task_resumed = await resume_task_after_approval(
                     db,
                     approval_id,
                     approved=False,
