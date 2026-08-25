@@ -6,7 +6,7 @@ import json
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from packages.agents.persistence import checkpoint_agent_run
+from packages.agents.persistence import checkpoint_agent_run, load_agent_run
 from packages.agents.planning import AdaptivePlanner
 from packages.agents.run_state import CompactRunState
 from packages.agents.runtime import AgentRuntime, ObservationHook
@@ -78,6 +78,10 @@ def _lifecycle_state(result: dict[str, Any]) -> str:
     return "completed"
 
 
+def _resumable_state(value: str) -> bool:
+    return str(value or "").lower() in {"running", "waiting_approval", "failed"}
+
+
 class AgentRunController:
     """Plan only when useful, run the micro-loop, compact state, and replan on evidence.
 
@@ -109,22 +113,55 @@ class AgentRunController:
         inference_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         metadata = dict(inference_metadata or {})
-        runtime_run_id = str(metadata.get("runtime_run_id") or uuid4())
+        requested_run_id = str(metadata.get("runtime_run_id") or "").strip()
+        runtime_run_id = requested_run_id or str(uuid4())
         metadata["runtime_run_id"] = runtime_run_id
         metadata["runtime_controller"] = "adaptive"
 
-        plan = await self.planner.plan(objective, trace_metadata=metadata)
-        state = CompactRunState(objective=objective, plan=plan)
-        _replace_runtime_state_message(messages, state)
-        await checkpoint_agent_run(
-            runtime_run_id=runtime_run_id,
-            objective=objective,
-            metadata=metadata,
-            state=state.as_dict(),
-            event_type="run.started",
-            lifecycle_state="running",
-            payload={"plan": state.plan.as_dict() if state.plan else None},
+        resumed = False
+        existing = (
+            await load_agent_run(runtime_run_id, metadata=metadata)
+            if requested_run_id
+            else None
         )
+        if existing is not None and str(existing.get("state") or "").lower() == "completed":
+            raise RuntimeError("Durable agent run is already completed; reuse its artifacts/results instead of repeating side effects")
+        if existing is not None and _resumable_state(existing.get("state") or ""):
+            checkpoint = existing.get("checkpoint") if isinstance(existing.get("checkpoint"), dict) else {}
+            state = CompactRunState.from_dict(checkpoint, fallback_objective=objective)
+            if state.objective and objective and state.objective.strip() != objective.strip():
+                raise ValueError("Durable agent run objective does not match the requested resume objective")
+            if state.plan is None:
+                state.plan = await self.planner.plan(objective, trace_metadata=metadata)
+            resumed = True
+            _replace_runtime_state_message(messages, state)
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="run.resumed",
+                lifecycle_state="running",
+                payload={
+                    "previous_state": existing.get("state"),
+                    "checkpoint_revision": state.revision,
+                    "artifact_refs": sorted(state.artifact_refs)[-50:],
+                    "pending_approval_ids": sorted(state.pending_approval_ids)[-20:],
+                },
+            )
+        else:
+            plan = await self.planner.plan(objective, trace_metadata=metadata)
+            state = CompactRunState(objective=objective, plan=plan)
+            _replace_runtime_state_message(messages, state)
+            await checkpoint_agent_run(
+                runtime_run_id=runtime_run_id,
+                objective=objective,
+                metadata=metadata,
+                state=state.as_dict(),
+                event_type="run.started",
+                lifecycle_state="running",
+                payload={"plan": state.plan.as_dict() if state.plan else None},
+            )
 
         async def observe(
             capability_id: str,
@@ -150,8 +187,6 @@ class AgentRunController:
                 },
             )
             if on_observation is not None:
-                # Preserve AgentRuntime's observation-hook contract exactly. The
-                # controller may summarize state, but it must not erase caller data.
                 await _resolve(on_observation(capability_id, arguments, observation))
 
         attempts: list[dict[str, Any]] = []
@@ -169,6 +204,7 @@ class AgentRunController:
                     inference_metadata={
                         **metadata,
                         "plan_revision": state.plan.revision if state.plan else 0,
+                        "resumed": resumed,
                     },
                 )
                 combined_trace.extend(result.get("trace") or [])
@@ -190,6 +226,7 @@ class AgentRunController:
                     result["controller_attempts"] = attempts
                     result["replans"] = replans
                     result["runtime_run_id"] = runtime_run_id
+                    result["resumed"] = resumed
                     lifecycle = _lifecycle_state(result)
                     await checkpoint_agent_run(
                         runtime_run_id=runtime_run_id,
@@ -204,6 +241,7 @@ class AgentRunController:
                             "stopped": bool(result.get("stopped")),
                             "replans": replans,
                             "budget": result.get("budget") or {},
+                            "resumed": resumed,
                         },
                         error=(
                             str(result.get("stop_reason") or "run failed")
@@ -237,7 +275,7 @@ class AgentRunController:
                 state=state.as_dict(),
                 event_type="run.failed",
                 lifecycle_state="failed",
-                payload={"error_type": type(error).__name__},
+                payload={"error_type": type(error).__name__, "resumed": resumed},
                 error=str(error),
             )
             raise
