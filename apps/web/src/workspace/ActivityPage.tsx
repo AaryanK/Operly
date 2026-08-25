@@ -13,6 +13,7 @@ const when = (value: unknown) => {
   try { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(raw)); }
   catch { return raw; }
 };
+const failureMessage = (result: PromiseRejectedResult, fallback: string) => result.reason instanceof Error ? result.reason.message : fallback;
 
 function PageHeader({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return <header className="surface-header page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div></header>;
@@ -58,6 +59,9 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
         tasks: tasksResult.status === "fulfilled" ? tasksResult.value : [],
         approvals: approvalsResult.status === "fulfilled" ? approvalsResult.value : [],
       });
+      if (approvalsResult.status === "rejected") {
+        setError(`Approvals could not be loaded: ${failureMessage(approvalsResult, "approval service unavailable")}`);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load workspace activity");
     } finally {
@@ -97,8 +101,8 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
     {loading && <div className="loading-panel">Loading activity…</div>}
     {error && <div className="inline-error page-error">{error}</div>}
     {data && <section className="activity-columns">
-      <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Human control</span><h2>Approvals</h2></div><span>{pending.length} pending</span></div>{data.approvals.length ? <div className="row-list">{data.approvals.slice(0, 12).map((item) => <div className="data-row stacked approval-row" key={text(item.id)}><div><Status value={item.status} /><strong>{text(item.action, "Action")}</strong><ApprovalSubstance item={item} /></div>{text(item.status) === "pending" && <div className="row-actions"><button disabled={decisionBusy === text(item.id)} onClick={() => approval(text(item.id), "rejected")}>Reject</button><button className="primary-button" disabled={decisionBusy === text(item.id)} onClick={() => approval(text(item.id), "approved")}>{decisionBusy === text(item.id) ? "Working…" : "Approve"}</button></div>}</div>)}</div> : <Empty>No approvals yet.</Empty>}</article>
-      <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Execution</span><h2>Tasks</h2></div><span>{openTasks.length} open</span></div>{data.tasks.length ? <div className="row-list">{data.tasks.slice(0, 14).map((item) => <div className="data-row" key={text(item.id)}><div><strong>{text(item.title, "Task")}</strong><small>{item.due_at ? `Due ${when(item.due_at)}` : titleCase(item.status)}</small></div>{text(item.status) !== "completed" ? <button className="icon-action" onClick={() => complete(text(item.id))}>✓</button> : <Status value="completed" />}</div>)}</div> : <Empty>No tasks yet.</Empty>}</article>
+      <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Human control</span><h2>Approvals</h2></div><span>{pending.length} pending</span></div>{data.approvals.length ? <div className="row-list">{data.approvals.slice(0, 12).map((item) => <div className="data-row stacked approval-row" key={text(item.id)}><div><Status value={item.status} /><strong>{text(item.action, "Action")}</strong><ApprovalSubstance item={item} /></div>{text(item.status) === "pending" && <div className="row-actions"><button type="button" disabled={decisionBusy === text(item.id)} onClick={() => approval(text(item.id), "rejected")}>Reject</button><button type="button" className="primary-button" disabled={decisionBusy === text(item.id)} onClick={() => approval(text(item.id), "approved")}>{decisionBusy === text(item.id) ? "Working…" : "Approve"}</button></div>}</div>)}</div> : <Empty>No approvals yet.</Empty>}</article>
+      <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Execution</span><h2>Tasks</h2></div><span>{openTasks.length} open</span></div>{data.tasks.length ? <div className="row-list">{data.tasks.slice(0, 14).map((item) => <div className="data-row" key={text(item.id)}><div><strong>{text(item.title, "Task")}</strong><small>{item.due_at ? `Due ${when(item.due_at)}` : titleCase(item.status)}</small></div>{text(item.status) !== "completed" ? <button type="button" className="icon-action" onClick={() => complete(text(item.id))}>✓</button> : <Status value="completed" />}</div>)}</div> : <Empty>No tasks yet.</Empty>}</article>
       <article className="data-card full-span"><div className="card-heading"><div><span className="eyebrow">Channels</span><h2>Recent messages</h2></div><span>{data.messages.length}</span></div>{data.messages.length ? <div className="row-list">{data.messages.slice(0, 16).map((item) => <div className="message-row" key={text(item.id)}><span className="mini-avatar">{text(item.author_name, "?").slice(0, 1).toUpperCase()}</span><div><strong>{text(item.author_name, "Unknown")}</strong><p>{text(item.content)}</p></div><time>{when(item.created_at)}</time></div>)}</div> : <Empty>No messages yet.</Empty>}</article>
     </section>}
   </main>;
