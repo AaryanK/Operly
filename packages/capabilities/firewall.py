@@ -112,7 +112,6 @@ class ActionBackedCapabilityFirewall:
     ) -> tuple[str, str | None, str, str | None, list[dict[str, Any]]]:
         principal = str(
             metadata.get("initiator_id")
-            or execution_context.principal_id
             or effective_principal_key(execution_context)
             or ""
         ).strip() or None
@@ -209,7 +208,7 @@ class ActionBackedCapabilityFirewall:
             )
 
         metadata = dict(request.metadata)
-        principal_key = execution_context.principal_id or effective_principal_key(execution_context)
+        principal_key = effective_principal_key(execution_context)
         if principal_key:
             metadata["principal_id"] = principal_key
         delegated = delegation_authority(execution_context)
