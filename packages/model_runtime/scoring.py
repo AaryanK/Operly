@@ -3,6 +3,10 @@
 Every provider/model pair is an independent route. Scores combine static model-card
 traits with live success, latency, failure, and exploration evidence so routing can
 self-correct instead of relying on a fixed primary/fallback order.
+
+Zero-cost routing is enabled by default: a route must pass the centralized free
+policy to enter the ranked pool. Unknown-cost and paid routes are therefore never
+selected merely because they benchmark well.
 """
 from __future__ import annotations
 
@@ -12,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Iterable, Protocol
+
+from packages.model_runtime.free_policy import route_is_zero_cost
 
 
 class ScorableModel(Protocol):
@@ -134,6 +140,10 @@ class ModelScorer:
         with self._lock:
             ranked: list[tuple[int, RankedModelRoute]] = []
             for index, model in enumerate(models):
+                if not route_is_zero_cost(model):
+                    # Cost safety is an eligibility rule, not a weak scoring hint.
+                    # Paid or unknown-cost routes cannot win via quality/latency.
+                    continue
                 state = self.state_for(model)
                 available = state.cooldown_until <= now
                 if not include_cooling and not available:
@@ -143,8 +153,6 @@ class ModelScorer:
                     score=self._score(model, state, task_type=task, now=now),
                     available=available,
                 )))
-            # Stable input order is the final tie breaker, preserving explicit/bootstrap
-            # order until live evidence is strong enough to move a route.
             ranked.sort(key=lambda item: (-item[1].score, item[0]))
             return [row for _, row in ranked]
 
