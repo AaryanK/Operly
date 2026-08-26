@@ -10,7 +10,7 @@ from typing import Any
 
 import aiohttp
 
-from packages.model_runtime.catalog import ModelResource
+from packages.model_runtime.catalog import ModelResource, provider_is_configured
 from packages.model_runtime.discovery import register_model_discoverer
 
 
@@ -32,6 +32,14 @@ def _is_free(model_id: str, pricing: dict[str, Any]) -> bool:
     return bool(core) and all(value == 0.0 for value in core if value is not None)
 
 
+def _per_million(pricing: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _number(pricing.get(key))
+        if value is not None:
+            return value * 1_000_000.0
+    return None
+
+
 def _capabilities(item: dict[str, Any]) -> frozenset[str]:
     architecture = item.get("architecture") or {}
     inputs = {
@@ -50,7 +58,6 @@ def _capabilities(item: dict[str, Any]) -> frozenset[str]:
         if str(value).strip()
     }
     capabilities: set[str] = set()
-
     if "text" in inputs or "text" in outputs:
         capabilities.add("text")
     if "image" in inputs:
@@ -75,14 +82,11 @@ def _capabilities(item: dict[str, Any]) -> frozenset[str]:
         capabilities.add("reasoning")
     if "structured_outputs" in parameters or "response_format" in parameters:
         capabilities.add("structured_output")
-
-    searchable = " ".join(
-        [
-            str(item.get("name") or ""),
-            str(item.get("description") or ""),
-            str(item.get("id") or ""),
-        ]
-    ).lower()
+    searchable = " ".join([
+        str(item.get("name") or ""),
+        str(item.get("description") or ""),
+        str(item.get("id") or ""),
+    ]).lower()
     if any(token in searchable for token in ("coding", "coder", "software engineering", "code generation")):
         capabilities.add("coding")
     if "translat" in searchable:
@@ -93,7 +97,6 @@ def _capabilities(item: dict[str, Any]) -> frozenset[str]:
         capabilities.add("transcription")
     if "text-to-speech" in searchable or "speech synthesis" in searchable:
         capabilities.add("speech")
-
     return frozenset(capabilities)
 
 
@@ -123,40 +126,45 @@ def resource_from_openrouter_model(item: dict[str, Any]) -> ModelResource | None
         normalized_context = int(context_length) if context_length is not None else None
     except (TypeError, ValueError):
         normalized_context = None
-
+    free = _is_free(model_id, pricing)
     return ModelResource(
         id=model_id,
         provider="openrouter",
         name=str(item.get("name") or model_id).strip(),
+        canonical_id=model_id.removesuffix(":free"),
         capabilities=_capabilities(item),
-        free=_is_free(model_id, pricing),
+        free=free,
         priority=50,
         context_length=normalized_context,
         input_modalities=input_modalities,
         output_modalities=output_modalities,
         supported_parameters=parameters,
+        tags=frozenset({"discovered"}),
+        locality="remote",
+        billing_mode="free-route" if free else "usage",
+        input_cost_per_million=_per_million(pricing, "prompt", "input"),
+        output_cost_per_million=_per_million(pricing, "completion", "output"),
     )
 
 
 async def discover_openrouter_models() -> list[ModelResource]:
+    if not provider_is_configured("openrouter"):
+        return []
     url = os.getenv("OPEN_ROUTER_MODELS_URL", "https://openrouter.ai/api/v1/models").strip()
     timeout = max(2.0, min(float(os.getenv("OPEN_ROUTER_DISCOVERY_TIMEOUT_SECONDS", "15")), 60.0))
     key = (
         os.getenv("OPEN_ROUTER_API", "").strip()
         or os.getenv("OPENROUTER_API_KEY", "").strip()
         or os.getenv("OPEN_ROUTER_API_KEY", "").strip()
+        or os.getenv("openrouter_api_key", "").strip()
     )
-    headers = {"Accept": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {key}"}
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     async with aiohttp.ClientSession(timeout=client_timeout) as session:
         async with session.get(url, headers=headers) as response:
             if response.status >= 400:
                 raise RuntimeError(f"OpenRouter model discovery failed with status {response.status}")
             payload = await response.json()
-
     rows = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise RuntimeError("OpenRouter model discovery returned an invalid catalog")
