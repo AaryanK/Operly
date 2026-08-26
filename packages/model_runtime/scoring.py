@@ -4,9 +4,9 @@ Every provider/model pair is an independent route. Scores combine static model-c
 traits with live success, latency, failure, and exploration evidence so routing can
 self-correct instead of relying on a fixed primary/fallback order.
 
-Zero-cost routing is enabled by default: a route must be explicitly tagged ``free``
-to enter the ranked pool. Unknown-cost and paid routes are therefore never selected
-merely because they benchmark well.
+Zero-cost routing is enabled by default: a route must pass the centralized free
+policy to enter the ranked pool. Unknown-cost and paid routes are therefore never
+selected merely because they benchmark well.
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Iterable, Protocol
+
+from packages.model_runtime.free_policy import route_is_zero_cost
 
 
 class ScorableModel(Protocol):
@@ -55,11 +57,6 @@ def _bounded_float(name: str, default: float, minimum: float, maximum: float) ->
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(value, maximum))
-
-
-def _free_only_enabled() -> bool:
-    value = os.getenv("OPERLY_FREE_MODELS_ONLY", "1").strip().lower()
-    return value not in {"0", "false", "no", "off"}
 
 
 def _route_key(model: ScorableModel) -> str:
@@ -140,12 +137,10 @@ class ModelScorer:
     ) -> list[RankedModelRoute]:
         task = _task_name(task_type)
         now = time.monotonic()
-        free_only = _free_only_enabled()
         with self._lock:
             ranked: list[tuple[int, RankedModelRoute]] = []
             for index, model in enumerate(models):
-                tags = set(getattr(model, "tags", frozenset()) or ())
-                if free_only and "free" not in tags:
+                if not route_is_zero_cost(model):
                     # Cost safety is an eligibility rule, not a weak scoring hint.
                     # Paid or unknown-cost routes cannot win via quality/latency.
                     continue
