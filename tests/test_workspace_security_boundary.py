@@ -149,7 +149,7 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("gmail:read", execution.permissions)
         self.assertNotIn("workspace:roles:manage", execution.permissions)
 
-    async def test_unknown_channel_space_does_not_create_workspace_installation(self):
+    async def test_unknown_channel_space_creates_only_a_provisional_guest_workspace(self):
         async with self.sessions() as db:
             resolution = await ChannelService.resolve(
                 db,
@@ -162,13 +162,24 @@ class WorkspaceSecurityBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     text="hello",
                 ),
             )
+            installation = await db.scalar(
+                select(ChannelInstallation).where(
+                    ChannelInstallation.external_space_id == "unknown-server"
+                )
+            )
             installation_count = await db.scalar(
                 select(func.count(ChannelInstallation.id))
             )
 
-        self.assertIsNone(resolution.tenant_id)
-        self.assertFalse(resolution.allow_tenant_context)
-        self.assertEqual(int(installation_count or 0), 0)
+        self.assertIsNotNone(resolution.tenant_id)
+        self.assertTrue(resolution.is_guest_workspace)
+        self.assertTrue(resolution.principal_id.startswith("guest:"))
+        self.assertIsNotNone(installation)
+        self.assertTrue(installation.provisional)
+        self.assertEqual(installation.tenant_id, resolution.tenant_id)
+        self.assertEqual(int(installation_count or 0), 1)
+        self.assertNotIn("gmail:read", resolution.effective_permissions)
+        self.assertNotIn("workspace:roles:manage", resolution.effective_permissions)
 
     async def test_authenticated_user_can_create_an_additional_workspace(self):
         user_id, tenant_id = await self.seed_owner()
