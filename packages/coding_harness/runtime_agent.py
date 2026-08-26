@@ -1,13 +1,14 @@
 """Software-specialized adapter over the canonical Operly AgentRuntime.
 
-Studio is a surface, not an agent runtime.  This module preserves the bounded virtual
-source workspace and software-specific tools, while delegating the model/tool loop to
-``packages.agents.runtime.AgentRuntime``.  Planning, retries and completion truth stay
-outside the model; executable verification remains in the isolated runner.
+Studio is a surface, not an agent runtime. This module preserves the bounded virtual
+source workspace and software-specific tools while delegating the reason/act/observe
+loop to ``packages.agents.runtime.AgentRuntime``. Executable verification remains in
+the isolated runner and the model never owns completion truth.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import os
@@ -20,6 +21,7 @@ from packages.coding_harness.opencode_agent import (
     AgentTrace,
     BUILD_SYSTEM,
     PLAN_SYSTEM,
+    SOURCE_INSPECTION_TOOLS,
     CodingAgentNeedsUserInput,
     CodingHarnessError,
     CodingHarnessResult,
@@ -39,7 +41,7 @@ from packages.model_runtime.trace_context import current_trace_metadata
 
 
 class AgentRuntimeCodingAgent:
-    """Software worker whose only model loop is the canonical ``AgentRuntime``."""
+    """Software worker whose only reason/act/observe loop is canonical AgentRuntime."""
 
     def __init__(
         self,
@@ -53,6 +55,8 @@ class AgentRuntimeCodingAgent:
         self.max_steps = max(4, min(max_steps or configured, 120))
         configured_seconds = int(os.getenv("OPERLY_CODING_AGENT_MAX_SECONDS", "240"))
         self.max_seconds = max(30, min(configured_seconds, 900))
+        configured_slice = int(os.getenv("OPERLY_CODING_AGENT_MODEL_SLICE_SECONDS", "90"))
+        self.model_slice_seconds = max(1, min(configured_slice, self.max_seconds))
         self.registry = registry or CodingToolRegistry()
         self.doom_loop_threshold = 3
         self.progress_callback = progress_callback
@@ -234,24 +238,33 @@ class AgentRuntimeCodingAgent:
         ).strip() not in {"0", "false", "False"}
         tools = self.registry.for_mode(mode, visual=bool(editor_context), web=web_enabled)
         call_signatures: list[str] = []
+        current_turn_tools: list[str] = []
         call_index = 0
+        inspection_only_turns = 0
 
+        initial_message_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
         await self._progress(
             {
                 "step": 0,
                 "phase": "model_input",
                 "summary": (
-                    f"Canonical AgentRuntime input prepared: {len(spec)} specification chars · "
-                    f"{len(files)} workspace file{'s' if len(files) != 1 else ''} · "
-                    f"{len(tools)} tool{'s' if len(tools) != 1 else ''}."
+                    f"Model input prepared: {len(spec)} specification chars · {len(files)} "
+                    f"workspace file{'s' if len(files) != 1 else ''} · {len(tools)} "
+                    f"tool{'s' if len(tools) != 1 else ''}."
                 ),
                 "detail": {
                     "mode": mode,
                     "runtime": "AgentRuntime",
+                    "systemPrompt": "PLAN_SYSTEM" if mode == "plan" else "BUILD_SYSTEM",
+                    "systemChars": len(system),
+                    "specificationChars": len(spec),
+                    "specificationDigest": hashlib.sha256(spec.encode("utf-8")).hexdigest(),
+                    "taskChars": len(task_text),
                     "workspaceFileCount": len(files),
                     "workspaceFiles": files[:50],
                     "editorContextAvailable": bool(editor_context),
                     "toolNames": list(tools),
+                    "initialMessageChars": initial_message_chars,
                 },
             }
         )
@@ -267,6 +280,7 @@ class AgentRuntimeCodingAgent:
             nonlocal call_index
             del call_id
             call_index += 1
+            current_turn_tools.append(name)
             args = dict(arguments or {})
             signature = _tool_signature(name, args)
             call_signatures.append(signature)
@@ -327,6 +341,126 @@ class AgentRuntimeCodingAgent:
                 return {**result, "status": "VERIFIED", "verified": True}
             return result
 
+        owner = self
+
+        class SoftwareModelAdapter:
+            """Response shim only; AgentRuntime still owns the iterative tool loop."""
+
+            async def chat(self, working_messages, tool_schemas=None):
+                nonlocal inspection_only_turns
+
+                if session.finished:
+                    return {
+                        "role": "assistant",
+                        "content": session.summary or "Software stage completed and verified.",
+                    }
+
+                if current_turn_tools:
+                    inspection_only = all(
+                        name in SOURCE_INSPECTION_TOOLS for name in current_turn_tools
+                    )
+                    if (
+                        require_change
+                        and mode in {"edit", "repair"}
+                        and not session.changed_paths()
+                        and inspection_only
+                    ):
+                        inspection_only_turns += 1
+                    else:
+                        inspection_only_turns = 0
+                    current_turn_tools.clear()
+
+                if inspection_only_turns >= 2:
+                    working_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have spent two model turns inspecting without changing the workspace. "
+                                "Use the current specification, source observations, and tool results already "
+                                "available and make the requested source change now. Do not reread unchanged "
+                                "source. If a material blocker truly prevents implementation, use the question tool."
+                            ),
+                        }
+                    )
+                    await owner._progress(
+                        {
+                            "step": call_index,
+                            "phase": "guardrail",
+                            "summary": (
+                                "No source progress across two inspection turns; asking the coding "
+                                "model to act on its existing context."
+                            ),
+                            "detail": {"inspectionTurns": 2},
+                        }
+                    )
+                    inspection_only_turns = 0
+
+                for nudge in range(3):
+                    await owner._progress(
+                        {
+                            "step": call_index + 1,
+                            "phase": "model",
+                            "summary": (
+                                "Reviewing the approved requirements and choosing the next coding actions."
+                            ),
+                            "detail": {
+                                "messageCount": len(working_messages),
+                                "messageChars": len(
+                                    json.dumps(
+                                        working_messages,
+                                        ensure_ascii=False,
+                                        default=str,
+                                    )
+                                ),
+                            },
+                        }
+                    )
+                    try:
+                        assistant = await asyncio.wait_for(
+                            owner.client.chat(working_messages, tool_schemas or []),
+                            timeout=max(0.001, float(owner.model_slice_seconds)),
+                        )
+                    except asyncio.TimeoutError as error:
+                        detail = (
+                            f" Last validation issue: {session.last_validation_error}"
+                            if session.last_validation_error
+                            else ""
+                        )
+                        raise CodingHarnessError(
+                            "Coding model did not respond within the bounded generation window."
+                            + detail
+                        ) from error
+
+                    content = str(assistant.get("content") or "").strip()
+                    if content and content not in session.notes:
+                        session.notes.append(content)
+                    calls = assistant.get("tool_calls") or []
+                    if calls:
+                        return assistant
+
+                    if mode != "plan" and owner._can_implicit_finish(
+                        session, require_change
+                    ):
+                        session.summary = content or "Source tree authored."
+                        session.finished = True
+                        return assistant
+
+                    if nudge >= 2:
+                        return assistant
+                    finish_name = "finish_plan" if mode == "plan" else "finish"
+                    working_messages.append(assistant)
+                    working_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue with project tools. Inspect or modify the actual workspace as "
+                                f"needed, then call {finish_name}."
+                            ),
+                        }
+                    )
+
+                return {"role": "assistant", "content": ""}
+
         inherited = current_trace_metadata()
         runtime_metadata = {
             **dict(inherited or {}),
@@ -347,7 +481,7 @@ class AgentRuntimeCodingAgent:
         try:
             outcome = await asyncio.wait_for(
                 runtime.run(
-                    model=self.client,
+                    model=SoftwareModelAdapter(),
                     messages=messages,
                     schemas=schemas,
                     invoke=invoke,
@@ -367,13 +501,6 @@ class AgentRuntimeCodingAgent:
             ) from error
 
         session.messages = list(outcome.get("messages") or messages)
-        for message in session.messages:
-            if str(message.get("role") or "") != "assistant":
-                continue
-            content = str(message.get("content") or "").strip()
-            if content and content not in session.notes:
-                session.notes.append(content)
-
         if not session.finished and mode != "plan" and self._can_implicit_finish(
             session, require_change
         ):
