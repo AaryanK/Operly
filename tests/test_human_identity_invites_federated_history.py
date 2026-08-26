@@ -3,10 +3,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from apps.api.workspace_router import _require_role_assignment_authority
 from packages.capabilities.firewall import CapabilityInvocationResult
 from packages.channels.identity import IdentityService
 from packages.connectors.google_provider import GMAIL_READONLY
@@ -34,6 +36,13 @@ class HumanIdentityInviteHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.engine.dispose()
+
+    def test_only_owner_can_assign_workspace_owner_role(self):
+        with self.assertRaises(HTTPException) as denied:
+            _require_role_assignment_authority(SimpleNamespace(role="member_admin"), "owner")
+        self.assertEqual(denied.exception.status_code, 403)
+        _require_role_assignment_authority(SimpleNamespace(role="member_admin"), "employee")
+        _require_role_assignment_authority(SimpleNamespace(role="owner"), "owner")
 
     async def test_workspace_invite_accepts_new_human_once(self):
         async with self.sessions() as db:
