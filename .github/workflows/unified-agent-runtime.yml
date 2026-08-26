@@ -35,9 +35,9 @@ on:
       - "packages/security/execution_context.py"
       - "packages/security/permissions.py"
       - "packages/coding_harness/execution_loop.py"
+      - "packages/coding_harness/runtime_agent.py"
       - "packages/coding_harness/contract_guidance.py"
       - "packages/coding_harness/objective_audit.py"
-      - "packages/coding_harness/studio_controller.py"
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_action_effect_policy.py"
@@ -56,7 +56,7 @@ on:
       - "tests/test_gmail_artifact_provider.py"
       - "tests/test_coding_harness_execution_loop.py"
       - "tests/test_studio_agent_generation.py"
-      - "tests/test_studio_agent_controller.py"
+      - "tests/test_studio_canonical_agent_runtime.py"
       - "tests/test_studio_real_capability_contracts.py"
       - ".github/workflows/unified-agent-runtime.yml"
   workflow_dispatch:
@@ -109,9 +109,9 @@ jobs:
             packages/database/artifact_models.py \
             packages/database/schema.py \
             packages/coding_harness/execution_loop.py \
+            packages/coding_harness/runtime_agent.py \
             packages/coding_harness/contract_guidance.py \
             packages/coding_harness/objective_audit.py \
-            packages/coding_harness/studio_controller.py \
             alembic/versions/0041_agent_artifacts.py
       - name: Test shared Railway Sandbox computer contracts
         working-directory: apps/sandbox_runner
@@ -145,5 +145,5 @@ jobs:
           tests/test_gmail_artifact_provider.py
           tests/test_coding_harness_execution_loop.py
           tests/test_studio_agent_generation.py
-          tests/test_studio_agent_controller.py
+          tests/test_studio_canonical_agent_runtime.py
           tests/test_studio_real_capability_contracts.py
