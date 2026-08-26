@@ -1,5 +1,6 @@
 """Operly agent factory control plane."""
 
+from .bindings import AuthorizedContextBindings, FactoryCapabilityIntentResolver
 from .compiler import FactoryBlueprint, FactoryBlueprintCompiler
 from .context_injector import ContextInjectionPolicy, StageContextInjector
 from .contracts import (
@@ -26,6 +27,7 @@ __all__ = [
     "AcceptanceContract",
     "AgentFactoryControlPlane",
     "AgentRuntimeWorker",
+    "AuthorizedContextBindings",
     "ContextCapsule",
     "ContextInjectionPolicy",
     "ControlPlaneValidator",
@@ -33,6 +35,7 @@ __all__ = [
     "DefectRepairPlanner",
     "FactoryBlueprint",
     "FactoryBlueprintCompiler",
+    "FactoryCapabilityIntentResolver",
     "FactoryEvidenceLedger",
     "FactoryExecutionResult",
     "FactoryRunResponse",
