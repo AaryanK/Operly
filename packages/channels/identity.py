@@ -10,6 +10,8 @@ from packages.database.channel_models import (
     ExternalIdentity,
 )
 from packages.database.models import AppUser, DiscordGuild, Tenant, TenantMember
+from packages.database.principal_models import ExternalPrincipalBinding, Principal
+from packages.security.principals import PrincipalError, PrincipalService
 
 
 class IdentityLinkConflict(ValueError):
@@ -57,23 +59,65 @@ class IdentityService:
             )
 
         if existing:
-            existing.display_name = display_name or existing.display_name
-            existing.metadata_json = json.dumps(metadata or {}, separators=(",", ":"))
-            existing.verified_at = datetime.utcnow()
-            await db.flush()
-            return existing
+            row = existing
+            row.display_name = display_name or row.display_name
+            row.metadata_json = json.dumps(metadata or {}, separators=(",", ":"))
+            row.verified_at = datetime.utcnow()
+        else:
+            row = ExternalIdentity(
+                user_id=user_id,
+                provider=provider,
+                provider_subject=str(external_user_id),
+                display_name=display_name,
+                metadata_json=json.dumps(metadata or {}, separators=(",", ":")),
+                verified_at=datetime.utcnow(),
+            )
+            db.add(row)
+        await db.flush()
 
-        row = ExternalIdentity(
-            user_id=user_id,
-            provider=provider,
-            provider_subject=str(external_user_id),
-            display_name=display_name,
-            metadata_json=json.dumps(metadata or {}, separators=(",", ":")),
-            verified_at=datetime.utcnow(),
-        )
-        db.add(row)
+        try:
+            await PrincipalService.bind_external_identity(
+                db,
+                user_id=user_id,
+                provider=provider,
+                provider_subject=str(external_user_id),
+                display_name=display_name,
+                metadata=metadata,
+            )
+        except PrincipalError as error:
+            raise IdentityLinkConflict(str(error)) from error
         await db.flush()
         return row
+
+    @classmethod
+    async def unlink_external_identity(
+        cls,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        identity_id: str,
+    ) -> bool:
+        row = await db.scalar(
+            select(ExternalIdentity).where(
+                ExternalIdentity.id == identity_id,
+                ExternalIdentity.user_id == user_id,
+            )
+        )
+        if row is None:
+            return False
+        binding = await db.scalar(
+            select(ExternalPrincipalBinding).where(
+                ExternalPrincipalBinding.provider == row.provider,
+                ExternalPrincipalBinding.provider_subject == row.provider_subject,
+            )
+        )
+        if binding is not None:
+            principal = await db.get(Principal, binding.principal_id)
+            if principal is not None and principal.user_id == user_id:
+                await db.delete(binding)
+        await db.delete(row)
+        await db.flush()
+        return True
 
     @staticmethod
     async def membership(
