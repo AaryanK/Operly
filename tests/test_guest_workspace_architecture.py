@@ -120,7 +120,6 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("discord:read", execution.permissions)
         self.assertNotIn("files:process", execution.permissions)
-        # The Operly guest ceiling independently blocks unrelated full-workspace tools.
         self.assertNotIn("gmail:read", execution.permissions)
 
     async def test_source_admin_gets_guest_management_not_full_operly_authority(self):
@@ -185,6 +184,53 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(resolved.user_id)
         self.assertTrue(str(resolved.principal_id).startswith("guest:"))
         self.assertTrue(resolved.allow_tenant_context)
+
+    async def test_guest_attachment_ingress_fails_closed_without_platform_file_permission(self):
+        envelope = ChannelEnvelope(
+            provider="discord",
+            external_user_id="555",
+            external_space_id="666",
+            external_conversation_id="777",
+            actor_name="Raju",
+            text="read this",
+            space_name="Research Group",
+            is_direct=False,
+            metadata={"has_attachments": True},
+        )
+        async with self.sessions() as db:
+            resolved = await ChannelService.resolve(db, envelope)
+            await db.commit()
+
+        self.assertTrue(resolved.is_guest_workspace)
+        self.assertFalse(resolved.allow_tenant_context)
+        self.assertFalse(resolved.can_process_files)
+
+    async def test_guest_attachment_ingress_requires_platform_and_policy_authority(self):
+        envelope = ChannelEnvelope(
+            provider="discord",
+            external_user_id="888",
+            external_space_id="999",
+            external_conversation_id="1000",
+            actor_name="Allowed User",
+            text="read this",
+            space_name="Research Group",
+            is_direct=False,
+            metadata={
+                "has_attachments": True,
+                "_operly_platform_permissions": [
+                    "discord:read",
+                    "discord:write",
+                    "files:process",
+                ],
+            },
+        )
+        async with self.sessions() as db:
+            resolved = await ChannelService.resolve(db, envelope)
+            await db.commit()
+
+        self.assertTrue(resolved.is_guest_workspace)
+        self.assertTrue(resolved.allow_tenant_context)
+        self.assertTrue(resolved.can_process_files)
 
 
 if __name__ == "__main__":
