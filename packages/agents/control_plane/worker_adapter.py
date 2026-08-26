@@ -102,11 +102,16 @@ class AgentRuntimeWorker:
         invoke: CapabilityInvoker,
         model_resolver: Callable[[str], Any] | None = None,
         max_steps: int = 8,
+        inference_metadata: dict[str, Any] | None = None,
     ) -> None:
         self.schemas = schemas
         self.invoke = invoke
         self.model_resolver = model_resolver or model_for_role
         self.max_steps = max(1, min(int(max_steps), 24))
+        # Factory/run identity is application-controlled correlation, never model
+        # authority. Every disposable stage shares the root runtime_run_id while its
+        # own stage/attempt fields remain distinct in the trace.
+        self.inference_metadata = dict(inference_metadata or {})
 
     async def _stage_schemas(self, capsule: ContextCapsule) -> list[dict[str, Any]]:
         available = list(await _resolve(self.schemas()) or [])
@@ -114,11 +119,7 @@ class AgentRuntimeWorker:
         # If the injector could not resolve a stage intent ahead of time, keep only the
         # discovery kernel rather than dumping the whole authorized registry. The
         # worker can discover/describe an additional operation just in time.
-        return [
-            schema
-            for schema in available
-            if _schema_id(schema) in allowed
-        ]
+        return [schema for schema in available if _schema_id(schema) in allowed]
 
     @staticmethod
     def _messages(stage: StageSpec, capsule: ContextCapsule, defect: Defect | None) -> list[dict[str, Any]]:
@@ -128,10 +129,9 @@ class AgentRuntimeWorker:
             "Use only supplied tools/context. Do not claim the whole user request is complete. "
             "Return concise stage output; durable results must be represented by tool evidence or artifact references."
         )
-        capsule_payload = capsule.as_dict()
         user_payload: dict[str, Any] = {
             "stage": stage.as_dict(),
-            "context_capsule": capsule_payload,
+            "context_capsule": capsule.as_dict(),
             "worker_contract": {
                 "do_only_stage": True,
                 "do_not_replay_prior_worker_history": True,
@@ -166,6 +166,7 @@ class AgentRuntimeWorker:
             schemas=schemas,
             invoke=self.invoke,
             inference_metadata={
+                **self.inference_metadata,
                 "runtime_component": "factory_worker",
                 "factory_stage_id": stage.id,
                 "factory_attempt": attempt,
