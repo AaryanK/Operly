@@ -1,8 +1,8 @@
 """Deterministic DAG execution for disposable Operly workers.
 
-This runner owns sequencing, bounded parallelism, retries and completion state.  It
+This runner owns sequencing, bounded parallelism, retries and completion state. It
 never grants authority; worker/context callbacks are expected to be backed by the
-existing governed capability/context seams.  A worker may propose work, but only the
+existing governed capability/context seams. A worker may propose work, but only the
 control plane can mark a stage passed after validators return evidence.
 """
 from __future__ import annotations
@@ -46,6 +46,20 @@ async def _resolve(value):
     return await value if inspect.isawaitable(value) else value
 
 
+def _worker_waiting_status(status: str) -> StageStatus | None:
+    value = str(status or "").strip().lower()
+    if value in {"waiting_approval", "awaiting_approval"}:
+        return StageStatus.WAITING_APPROVAL
+    if value in {
+        "waiting_external",
+        "pending_evidence",
+        "waiting_external_completion",
+        "pending_external",
+    }:
+        return StageStatus.WAITING_EXTERNAL
+    return None
+
+
 @dataclass(slots=True)
 class StageAttempt:
     stage_id: str
@@ -73,6 +87,7 @@ class FactoryExecutionResult:
     token_usage: int
     cost_usd: float
     completed: bool
+    waiting: bool
     blocked: bool
     stop_reason: str
 
@@ -87,6 +102,7 @@ class FactoryExecutionResult:
             "token_usage": self.token_usage,
             "cost_usd": round(self.cost_usd, 6),
             "completed": self.completed,
+            "waiting": self.waiting,
             "blocked": self.blocked,
             "stop_reason": self.stop_reason,
         }
@@ -160,8 +176,12 @@ class FactoryStageRunner:
                     validator_id=spec.id,
                     expected=outcome.get("expected", spec.expected),
                     observed=outcome.get("observed", outcome.get("error")),
-                    evidence_refs=tuple(str(item) for item in (outcome.get("evidence_refs") or ())),
-                    failure_class=str(outcome.get("failure_class") or "validation_failed")[:120],
+                    evidence_refs=tuple(
+                        str(item) for item in (outcome.get("evidence_refs") or ())
+                    ),
+                    failure_class=str(
+                        outcome.get("failure_class") or "validation_failed"
+                    )[:120],
                     strategy=result.strategy,
                     retryable=bool(outcome.get("retryable", True)),
                     repair_depth=repair_depth,
@@ -179,7 +199,16 @@ class FactoryStageRunner:
         facts: dict[str, Any],
         total_attempt_counter: list[int],
         defect_counts: Counter[str],
-    ) -> tuple[StageStatus, list[StageAttempt], list[Defect], set[str], set[str], int, int, float]:
+    ) -> tuple[
+        StageStatus,
+        list[StageAttempt],
+        list[Defect],
+        set[str],
+        set[str],
+        int,
+        int,
+        float,
+    ]:
         stage = original_stage
         attempts: list[StageAttempt] = []
         defects_all: list[Defect] = []
@@ -193,7 +222,16 @@ class FactoryStageRunner:
 
         for attempt_index in range(1, self.budget.max_attempts_per_stage + 1):
             if total_attempt_counter[0] >= self.budget.max_total_attempts:
-                return StageStatus.BLOCKED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.BLOCKED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
             total_attempt_counter[0] += 1
 
             capsule = await self.context_injector.build(
@@ -213,7 +251,9 @@ class FactoryStageRunner:
                     "capability_ids": list(capsule.capability_ids),
                 },
             )
-            result = await _resolve(self.worker(stage, capsule, attempt_index, previous_defect))
+            result = await _resolve(
+                self.worker(stage, capsule, attempt_index, previous_defect)
+            )
             if not isinstance(result, StageWorkerResult):
                 raise TypeError("Factory worker must return StageWorkerResult")
 
@@ -252,7 +292,46 @@ class FactoryStageRunner:
                 attempts.append(attempt)
                 defects_all.append(defect)
                 await self._event("stage.blocked", defect.as_dict())
-                return StageStatus.BLOCKED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.BLOCKED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
+
+            waiting_status = _worker_waiting_status(result.status)
+            if waiting_status is not None:
+                attempts.append(StageAttempt(stage.id, attempt_index, result, []))
+                await self._event(
+                    "stage.waiting",
+                    {
+                        "stage_id": stage.id,
+                        "attempt": attempt_index,
+                        "status": waiting_status.value,
+                        "strategy": result.strategy,
+                        "action_id": result.evidence.get("action_id"),
+                        "approval_id": result.evidence.get("approval_id"),
+                        "continuation_kind": result.evidence.get("continuation_kind"),
+                        "job_id": result.evidence.get("job_id"),
+                        "project_id": result.evidence.get("project_id"),
+                        "artifact_refs": list(result.artifacts),
+                        "evidence_refs": list(result.evidence_refs),
+                    },
+                )
+                return (
+                    waiting_status,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
 
             defects = await self._validate(
                 stage=stage,
@@ -274,7 +353,16 @@ class FactoryStageRunner:
                         "evidence_refs": list(result.evidence_refs),
                     },
                 )
-                return StageStatus.PASSED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.PASSED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
 
             if not defects:
                 defects = [
@@ -297,7 +385,10 @@ class FactoryStageRunner:
             for defect in defects:
                 defect_counts[defect.fingerprint] += 1
                 await self._event("defect.created", defect.as_dict())
-                if defect_counts[defect.fingerprint] >= self.budget.repeated_failure_threshold:
+                if (
+                    defect_counts[defect.fingerprint]
+                    >= self.budget.repeated_failure_threshold
+                ):
                     terminal = replace(defect, retryable=False)
                     await self._event(
                         "repair.repeated_failure_blocked",
@@ -308,19 +399,47 @@ class FactoryStageRunner:
                     )
                     break
             if terminal is not None:
-                return StageStatus.BLOCKED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.BLOCKED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
 
             previous_defect = defects[0]
             if self.repair is None or repair_depth >= self.budget.max_repair_depth:
-                return StageStatus.FAILED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.FAILED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
 
             repair_depth += 1
-            revised = await _resolve(self.repair(stage, previous_defect, repair_depth))
+            revised = await _resolve(
+                self.repair(stage, previous_defect, repair_depth)
+            )
             if revised is None:
-                return StageStatus.FAILED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+                return (
+                    StageStatus.FAILED,
+                    attempts,
+                    defects_all,
+                    stage_artifacts,
+                    stage_evidence,
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
             if revised.id != original_stage.id:
                 raise ValueError("Repair planner cannot change a stage identity")
-            # Dependencies are factory topology, not something a repair worker may rewrite.
             stage = replace(revised, dependencies=original_stage.dependencies)
             await self._event(
                 "repair.planned",
@@ -332,7 +451,16 @@ class FactoryStageRunner:
                 },
             )
 
-        return StageStatus.FAILED, attempts, defects_all, stage_artifacts, stage_evidence, external_actions, token_usage, cost_usd
+        return (
+            StageStatus.FAILED,
+            attempts,
+            defects_all,
+            stage_artifacts,
+            stage_evidence,
+            external_actions,
+            token_usage,
+            cost_usd,
+        )
 
     async def run(
         self,
@@ -361,8 +489,10 @@ class FactoryStageRunner:
             if not ready:
                 break
 
-            # Parallelism is explicit. Non-parallel stages form a deterministic barrier.
-            first_serial = next((stage for stage in ready if not stage.can_parallelize), None)
+            first_serial = next(
+                (stage for stage in ready if not stage.can_parallelize),
+                None,
+            )
             batch = [first_serial] if first_serial is not None else ready[: self.max_parallelism]
             for stage in batch:
                 statuses[stage.id] = StageStatus.RUNNING
@@ -402,22 +532,45 @@ class FactoryStageRunner:
                 total_tokens += tokens
                 total_cost += cost
 
-            if any(status in {StageStatus.BLOCKED, StageStatus.FAILED} for status in statuses.values()):
-                # Dependents of a failed station must never run with missing inputs.
+            if any(status.waiting for status in statuses.values()):
+                break
+
+            if any(
+                status in {StageStatus.BLOCKED, StageStatus.FAILED}
+                for status in statuses.values()
+            ):
                 failed_ids = {
                     stage_id
                     for stage_id, status in statuses.items()
                     if status in {StageStatus.BLOCKED, StageStatus.FAILED}
                 }
                 for stage in graph.stages:
-                    if statuses[stage.id] is StageStatus.PENDING and set(stage.dependencies) & failed_ids:
+                    if (
+                        statuses[stage.id] is StageStatus.PENDING
+                        and set(stage.dependencies) & failed_ids
+                    ):
                         statuses[stage.id] = StageStatus.BLOCKED
                 break
 
-        completed = all(status is StageStatus.PASSED for status in statuses.values())
-        blocked = any(status is StageStatus.BLOCKED for status in statuses.values())
+        completed = all(
+            status is StageStatus.PASSED for status in statuses.values()
+        )
+        waiting_approval = any(
+            status is StageStatus.WAITING_APPROVAL for status in statuses.values()
+        )
+        waiting_external = any(
+            status is StageStatus.WAITING_EXTERNAL for status in statuses.values()
+        )
+        waiting = waiting_approval or waiting_external
+        blocked = any(
+            status is StageStatus.BLOCKED for status in statuses.values()
+        )
         if completed:
             stop_reason = "completed"
+        elif waiting_approval:
+            stop_reason = "waiting_approval"
+        elif waiting_external:
+            stop_reason = "waiting_external"
         elif blocked:
             stop_reason = "blocked"
         elif any(status is StageStatus.FAILED for status in statuses.values()):
@@ -425,13 +578,23 @@ class FactoryStageRunner:
         else:
             stop_reason = "incomplete_graph"
 
+        event_type = (
+            "factory.completed"
+            if completed
+            else "factory.waiting"
+            if waiting
+            else "factory.stopped"
+        )
         await self._event(
-            "factory.completed" if completed else "factory.stopped",
+            event_type,
             {
                 "completed": completed,
+                "waiting": waiting,
                 "blocked": blocked,
                 "stop_reason": stop_reason,
-                "statuses": {key: value.value for key, value in statuses.items()},
+                "statuses": {
+                    key: value.value for key, value in statuses.items()
+                },
                 "attempt_count": len(attempts),
                 "defect_count": len(defects),
             },
@@ -446,6 +609,7 @@ class FactoryStageRunner:
             token_usage=total_tokens,
             cost_usd=total_cost,
             completed=completed,
+            waiting=waiting,
             blocked=blocked,
             stop_reason=stop_reason,
         )
