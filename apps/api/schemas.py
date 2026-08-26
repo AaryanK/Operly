@@ -10,14 +10,12 @@ class StrictInput(BaseModel):
 class LoginInput(StrictInput):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
-    workspace_invite_token: str | None = Field(default=None, min_length=20, max_length=500)
 
 
 class SignupInput(StrictInput):
     display_name: str = Field(min_length=1, max_length=200)
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
-    workspace_invite_token: str | None = Field(default=None, min_length=20, max_length=500)
 
 
 class ChallengeInput(StrictInput):
@@ -52,7 +50,6 @@ class ChangePasswordInput(StrictInput):
 
 class GoogleCredentialInput(StrictInput):
     credential: str = Field(min_length=100, max_length=16_384)
-    workspace_invite_token: str | None = Field(default=None, min_length=20, max_length=500)
 
 
 class WorkspaceSwitchInput(StrictInput):
