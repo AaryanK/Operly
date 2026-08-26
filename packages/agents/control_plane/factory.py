@@ -28,17 +28,29 @@ class FactoryRunResponse:
     blueprint: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
+        if self.execution.completed:
+            truth_status = "VERIFIED"
+        elif self.execution.stop_reason == "waiting_approval":
+            truth_status = "WAITING_APPROVAL"
+        elif self.execution.stop_reason == "waiting_external":
+            truth_status = "PENDING_EVIDENCE"
+        elif self.execution.blocked:
+            truth_status = "BLOCKED"
+        else:
+            truth_status = "FAILED"
         return {
             "runtime_run_id": self.runtime_run_id,
             "message": self.message,
             "execution_truth": {
-                "status": "VERIFIED" if self.execution.completed else "BLOCKED" if self.execution.blocked else "FAILED",
+                "status": truth_status,
                 "completed": self.execution.completed,
                 "verified": self.execution.completed,
+                "pending": self.execution.waiting,
             },
             "factory": self.execution.as_dict(),
             "blueprint": self.blueprint,
-            "stopped": not self.execution.completed,
+            # Waiting is a durable pause, not a stopped/failed job.
+            "stopped": not self.execution.completed and not self.execution.waiting,
             "stop_reason": self.execution.stop_reason,
         }
 
@@ -90,6 +102,13 @@ class AgentFactoryControlPlane:
                 if not attempt.defects and attempt.result.summary.strip()
             ]
             return passed[-1][:24_000] if passed else "Completed and verified."
+        if execution.stop_reason == "waiting_approval":
+            return "Approval is required before the current stage can continue."
+        if execution.stop_reason == "waiting_external":
+            return (
+                "Work has been accepted and is still in progress. Operly is waiting "
+                "for terminal completion evidence before continuing the remaining stages."
+            )
         if execution.defects:
             last = execution.defects[-1]
             return (
@@ -97,7 +116,10 @@ class AgentFactoryControlPlane:
                 f"Stage {last.stage_id} failed {last.validator_id}: expected "
                 f"{last.expected!r}, observed {last.observed!r}."
             )[:24_000]
-        return f"Operly stopped before the objective was verified ({execution.stop_reason})."
+        return (
+            "Operly stopped before the objective was verified "
+            f"({execution.stop_reason})."
+        )
 
     async def run(
         self,
