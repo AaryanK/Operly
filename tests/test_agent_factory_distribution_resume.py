@@ -210,6 +210,68 @@ async def test_waiting_stage_resumes_from_terminal_evidence_without_repeating_si
 
 
 @pytest.mark.asyncio
+async def test_rejected_waiting_action_is_terminal_and_never_repaired_or_replayed():
+    calls = []
+    repairs = []
+
+    async def worker(stage, capsule, attempt, defect):
+        del capsule, attempt, defect
+        calls.append(stage.id)
+        raise AssertionError("terminal approval evidence must not invoke a worker")
+
+    async def repair(stage, defect, depth):
+        repairs.append((stage.id, defect.failure_class, depth))
+        raise AssertionError("terminal approval rejection must never enter repair")
+
+    graph = StageGraph(
+        (
+            StageSpec("action", "Send approved message"),
+            StageSpec("after", "Continue after send", dependencies=("action",)),
+        )
+    )
+    result = await FactoryStageRunner(
+        context_injector=StageContextInjector(),
+        worker=worker,
+        validator=ControlPlaneValidator(),
+        repair=repair,
+        repair_budget=RepairBudget(max_attempts_per_stage=4, max_repair_depth=3),
+    ).run(
+        graph=graph,
+        acceptance=AcceptanceContract(()),
+        resume_statuses={
+            "action": StageStatus.WAITING_APPROVAL,
+            "after": StageStatus.PENDING,
+        },
+        resume_results={
+            "action": StageWorkerResult(
+                status="rejected",
+                strategy="durable_action:messaging.send",
+                evidence={
+                    "terminal": True,
+                    "action_status": "REJECTED",
+                    "action_id": "action-1",
+                    "approval_id": "approval-1",
+                },
+                evidence_refs=("action:action-1",),
+            )
+        },
+    )
+
+    assert calls == []
+    assert repairs == []
+    assert result.completed is False
+    assert result.waiting is False
+    assert result.blocked is True
+    assert result.stop_reason == "blocked"
+    assert result.statuses["action"] is StageStatus.BLOCKED
+    assert result.statuses["after"] is StageStatus.BLOCKED
+    assert len(result.attempts) == 1
+    assert result.attempts[0].source == "resume"
+    assert result.attempts[0].defects[0].retryable is False
+    assert result.attempts[0].defects[0].failure_class == "terminal_action_outcome"
+
+
+@pytest.mark.asyncio
 async def test_resume_result_cannot_skip_a_nonwaiting_stage():
     graph = StageGraph((StageSpec("one", "Do one thing"),))
 
