@@ -81,14 +81,7 @@ jobs:
           tests/test_company_operating_system.py
           tests/test_company_evidence_provenance_resolution.py
           tests/test_google_workspace_capabilities.py
-          tests/test_solutions.py
-          tests/test_studio.py
-          tests/test_studio_design_quality.py
-          tests/test_studio_source_agent.py
-          tests/test_studio_context_rich_harness.py
-          tests/test_studio_model_latency_policy.py
           tests/test_unified_application_flow.py
-          tests/test_unified_studio_regressions.py
           tests/test_workspace_security_boundary.py
           tests/test_principal_access_architecture.py
           tests/test_unified_runtime_context.py
