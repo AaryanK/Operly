@@ -36,6 +36,8 @@ on:
       - "tests/test_capability_exposure_reliability.py"
       - "tests/test_capability_surface_parity.py"
       - "tests/test_channel_context.py"
+      - "tests/test_channel_attachment_ingress.py"
+      - "tests/test_connector_presentation_tools.py"
       - "tests/test_dm_workspace_switch.py"
       - "tests/test_space_binding_transfer.py"
       - "tests/test_connector_runtime.py"
@@ -87,7 +89,6 @@ jobs:
           apps/api/personal_agent_router.py
           apps/api/personal_connectors_router.py
           apps/api/solutions_router.py
-          apps/api/studio_router.py
           apps/api/studio_run_history_router.py
           apps/api/studio_source_router.py
           apps/api/workspace_router.py
@@ -142,6 +143,8 @@ jobs:
           packages/channels/linking.py
           packages/channels/guest_chat.py
           packages/channels/space_bindings.py
+          packages/channels/presentation.py
+          packages/channels/attachment_ingress.py
           packages/channels/service.py
           packages/context/service.py
           packages/security/delegation_context.py
@@ -163,6 +166,7 @@ jobs:
           packages/connectors/discord/bot_shared.py
           packages/connectors/discord/provider.py
           packages/connectors/discord/scheduled_tasks.py
+          packages/connectors/discord/transport.py
           packages/capabilities/agent_harness.py
           packages/capabilities/defaults.py
           packages/capabilities/context_provider.py
@@ -216,6 +220,8 @@ jobs:
           tests/test_capability_exposure_reliability.py
           tests/test_capability_surface_parity.py
           tests/test_channel_context.py
+          tests/test_channel_attachment_ingress.py
+          tests/test_connector_presentation_tools.py
           tests/test_dm_workspace_switch.py
           tests/test_space_binding_transfer.py
           tests/test_connector_runtime.py
