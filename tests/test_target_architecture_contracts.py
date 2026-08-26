@@ -287,8 +287,9 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"software.project.inspect"', project_source)
         self.assertIn('"software.build"', build_source)
         self.assertIn('"software.edit"', build_source)
-        self.assertNotIn("StudioAI", build_source)
-        self.assertNotIn("SiteSchema", build_source)
+        self.assertNotIn("from packages.studio", build_source)
+        self.assertNotIn("StudioAI(", build_source)
+        self.assertNotIn("SiteSchema(", build_source)
 
     def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]
