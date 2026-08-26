@@ -12,6 +12,7 @@ from packages.model_runtime.ollama_client import OllamaClient
 from packages.model_runtime.openai_compatible_client import OpenAICompatibleClient
 from packages.model_runtime.openrouter_client import OpenRouterClient
 from packages.model_runtime.portfolio import ModelRoute
+from packages.model_runtime.provider_policy import provider_is_active
 
 
 class ModelClient(Protocol):
@@ -44,6 +45,10 @@ def register_model_provider(
 
 def model_client_for_route(route: ModelRoute) -> ModelClient:
     key = str(route.provider or "").strip().lower()
+    if not provider_is_active(key):
+        raise RuntimeError(
+            f"Model provider {key or '<empty>'} is currently on hold by OPERLY model policy"
+        )
     factory = _PROVIDER_FACTORIES.get(key)
     if factory is None:
         installed = ", ".join(sorted(_PROVIDER_FACTORIES)) or "none"
