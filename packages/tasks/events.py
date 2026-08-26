@@ -62,6 +62,10 @@ def event_context(event: Any) -> dict:
         "executor_type": getattr(event, "executor_type", event.actor_type),
         "executor_id": getattr(event, "executor_id", event.actor_id),
         "delegation_chain": list(getattr(event, "delegation_chain", ()) or ()),
+        # Full provenance is directly workflow-addressable, e.g.
+        # execution_path.entry.surface == "slack" or
+        # execution_path.mediation.mode == "ai".
+        "execution_path": dict(getattr(event, "execution_path", {}) or {}),
         "source": event.source,
         "payload": event.payload,
         "correlation_id": event.correlation_id,
