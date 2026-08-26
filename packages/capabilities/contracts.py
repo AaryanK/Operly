@@ -15,6 +15,26 @@ class ExecutionMode(StrEnum):
     ISOLATED_RUNNER = "isolated_runner"
 
 
+class CapabilityEffect(StrEnum):
+    """Declared effect class used by the policy engine before execution."""
+
+    AUTO = "auto"
+    READ = "read"
+    COMPUTE = "compute"
+    WRITE = "write"
+    EXTERNAL_WRITE = "external_write"
+    DESTRUCTIVE = "destructive"
+
+
+class DataEgress(StrEnum):
+    """Whether invoking a capability can move scoped data across a trust boundary."""
+
+    AUTO = "auto"
+    NONE = "none"
+    SAME_SCOPE = "same_scope"
+    EXTERNAL = "external"
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityDefinition:
     """Universal capability specification.
@@ -24,6 +44,11 @@ class CapabilityDefinition:
     and may use plugin/tags/semantic_operations for discovery and composition.
     ``execution_timeout_seconds`` is an application-enforced upper bound for one
     provider invocation; the firewall clamps it again before execution.
+
+    ``effect`` and ``data_egress`` are policy metadata, not authority. Existing
+    capabilities may leave them AUTO while they migrate; policy derives a conservative
+    class from risk/execution/integration metadata. New consequential capabilities
+    should declare them explicitly.
     """
 
     id: str
@@ -42,6 +67,8 @@ class CapabilityDefinition:
     integration_provider: str | None = None
     credential_scopes: tuple[str, ...] = ()
     reversible: bool = False
+    effect: CapabilityEffect = CapabilityEffect.AUTO
+    data_egress: DataEgress = DataEgress.AUTO
     category: str | None = None
     display_name: str | None = None
     event_capabilities: tuple[str, ...] = ()
@@ -55,6 +82,30 @@ class CapabilityDefinition:
     @property
     def risk(self) -> str:
         return self.risk_level
+
+    @property
+    def effective_effect(self) -> CapabilityEffect:
+        if self.effect is not CapabilityEffect.AUTO:
+            return self.effect
+        risk = str(self.risk_level or "").strip().lower()
+        if risk == "read_only":
+            return CapabilityEffect.READ
+        if self.execution_mode is ExecutionMode.ISOLATED_RUNNER and not self.integration_provider:
+            return CapabilityEffect.COMPUTE
+        # AUTO is intentionally not guessed as EXTERNAL_WRITE from the presence of an
+        # integration alone because many external providers are read-only. Medium/high
+        # risk remains a write-class operation until the provider declares more detail.
+        if risk in {"medium", "high", "critical"}:
+            return CapabilityEffect.WRITE
+        return CapabilityEffect.COMPUTE
+
+    @property
+    def effective_data_egress(self) -> DataEgress:
+        if self.data_egress is not DataEgress.AUTO:
+            return self.data_egress
+        if self.effective_effect in {CapabilityEffect.EXTERNAL_WRITE, CapabilityEffect.DESTRUCTIVE}:
+            return DataEgress.EXTERNAL if self.integration_provider else DataEgress.SAME_SCOPE
+        return DataEgress.NONE
 
     def model_tool_schema(self) -> dict[str, Any]:
         return {
