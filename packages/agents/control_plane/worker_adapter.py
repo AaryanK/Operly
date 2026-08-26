@@ -6,6 +6,7 @@ replaying a previous worker's conversation or chain of thought.
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 from collections.abc import Callable
@@ -35,6 +36,7 @@ _KERNEL_CAPABILITIES = frozenset(
         "runtime.context",
     }
 )
+_FACTORY_CAUSATION_PREFIX = "factory"
 
 
 async def _resolve(value):
@@ -52,6 +54,47 @@ def _strings(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value if str(item).strip()]
     return []
+
+
+def _short_hash(value: str, *, size: int = 12) -> str:
+    return hashlib.sha256(str(value).encode()).hexdigest()[: max(6, min(int(size), 24))]
+
+
+def factory_action_call_id(
+    runtime_run_id: str,
+    stage_id: str,
+    attempt: int,
+    call_id: str | None,
+) -> str:
+    """Create a bounded action causation ID that points back to the root Factory run.
+
+    The model-facing tool-call ID is left untouched. Only the application-side
+    capability invocation receives this correlation ID, so provider/action records can
+    durably locate the paused Factory run without leaking stage state into the model
+    protocol. The format remains below BusinessActionRecord.TRACE_ID_LENGTH.
+    """
+
+    run_id = str(runtime_run_id or "").strip()
+    if not run_id:
+        return str(call_id or "").strip()
+    return (
+        f"{_FACTORY_CAUSATION_PREFIX}:{run_id}:"
+        f"{_short_hash(stage_id)}:{max(1, int(attempt))}:"
+        f"{_short_hash(str(call_id or 'generated'))}"
+    )[:160]
+
+
+def factory_run_id_from_causation(causation_id: str | None) -> str | None:
+    """Extract a root Factory run ID from an application-generated causation ID."""
+
+    value = str(causation_id or "").strip()
+    if not value.startswith(f"{_FACTORY_CAUSATION_PREFIX}:"):
+        return None
+    parts = value.split(":", 5)
+    if len(parts) < 3:
+        return None
+    run_id = parts[1].strip()
+    return run_id or None
 
 
 def _extract_handles(trace: list[Any]) -> tuple[set[str], set[str], dict[str, Any]]:
@@ -164,15 +207,25 @@ class AgentRuntimeWorker:
         defect: Defect | None,
     ) -> StageWorkerResult:
         model = self.model_resolver(stage.assigned_role)
+        runtime_run_id = str(self.inference_metadata.get("runtime_run_id") or "").strip()
 
         async def schemas():
             return await self._stage_schemas(capsule)
+
+        async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
+            correlated_call_id = factory_action_call_id(
+                runtime_run_id,
+                stage.id,
+                attempt,
+                call_id,
+            )
+            return await _resolve(self.invoke(name, arguments, correlated_call_id or call_id))
 
         result = await AgentRuntime(max_steps=self.max_steps).run(
             model=model,
             messages=self._messages(stage, capsule, defect),
             schemas=schemas,
-            invoke=self.invoke,
+            invoke=invoke,
             inference_metadata={
                 **self.inference_metadata,
                 "runtime_component": "factory_worker",
