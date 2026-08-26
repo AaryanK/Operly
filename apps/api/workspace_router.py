@@ -57,6 +57,15 @@ async def _require_workspace_permission(
     raise HTTPException(status_code=403, detail="Workspace permission denied")
 
 
+def _require_role_assignment_authority(auth: AuthContext, role_key: str) -> None:
+    """Keep workspace ownership a stronger boundary than delegated member admin."""
+    if role_key == "owner" and auth.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can assign the owner role",
+        )
+
+
 async def _role_exists(db: AsyncSession, tenant_id: str, role_key: str) -> bool:
     if role_key in DEFAULT_ROLE_AUTHORITY:
         return True
@@ -166,6 +175,7 @@ async def create_workspace_invitation(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not await _role_exists(db, auth.tenant.id, role_key):
         raise HTTPException(status_code=422, detail="Workspace role not found")
+    _require_role_assignment_authority(auth, role_key)
     try:
         row, token = await WorkspaceInvitationService.create(
             db,
@@ -369,6 +379,7 @@ async def add_workspace_member(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not await _role_exists(db, auth.tenant.id, role_key):
         raise HTTPException(status_code=422, detail="Workspace role not found")
+    _require_role_assignment_authority(auth, role_key)
     try:
         email = normalize_email(payload.email)
     except ValueError as error:
@@ -429,6 +440,7 @@ async def set_workspace_member_role(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not await _role_exists(db, auth.tenant.id, role_key):
         raise HTTPException(status_code=422, detail="Workspace role not found")
+    _require_role_assignment_authority(auth, role_key)
     membership = await db.scalar(
         select(TenantMember).where(
             TenantMember.tenant_id == auth.tenant.id,
@@ -437,6 +449,11 @@ async def set_workspace_member_role(
     )
     if membership is None:
         raise HTTPException(status_code=404, detail="Workspace member not found")
+    if membership.role == "owner" and auth.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can change an owner's role",
+        )
     if membership.role == "owner" and role_key != "owner":
         owners = await db.scalar(
             select(func.count(TenantMember.id)).where(
