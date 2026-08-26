@@ -27,9 +27,54 @@ class BusinessEvent:
     metadata: dict[str, Any] = field(default_factory=dict)
     scope_kind: str = field(default="workspace", kw_only=True)
     owner_user_id: str | None = field(default=None, kw_only=True)
+    # ``actor_*`` remains the legacy effective executor. New workflows should use
+    # initiator/executor explicitly whenever attribution matters.
+    initiator_type: str = field(default="system", kw_only=True)
+    initiator_id: str | None = field(default=None, kw_only=True)
+    executor_type: str = field(default="system", kw_only=True)
+    executor_id: str | None = field(default=None, kw_only=True)
+    delegation_chain: tuple[dict[str, Any], ...] = field(default=(), kw_only=True)
+
+
+def _loads(value: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _actor_chain(
+    metadata: dict[str, Any],
+    *,
+    actor_type: str,
+    actor_id: str | None,
+) -> tuple[str, str | None, str, str | None, tuple[dict[str, Any], ...]]:
+    raw = metadata.get("actor_chain")
+    raw = raw if isinstance(raw, dict) else {}
+    initiator = raw.get("initiator")
+    initiator = initiator if isinstance(initiator, dict) else {}
+    executor = raw.get("executor")
+    executor = executor if isinstance(executor, dict) else {}
+    chain = raw.get("delegation")
+    chain = chain if isinstance(chain, list) else []
+    delegation = tuple(item for item in chain if isinstance(item, dict))
+    return (
+        str(initiator.get("type") or actor_type or "system"),
+        str(initiator.get("id") or "").strip() or actor_id,
+        str(executor.get("type") or actor_type or "system"),
+        str(executor.get("id") or "").strip() or actor_id,
+        delegation,
+    )
 
 
 def _event(row: BusinessEventRecord) -> BusinessEvent:
+    metadata = _loads(row.metadata_json)
+    initiator_type, initiator_id, executor_type, executor_id, delegation = _actor_chain(
+        metadata,
+        actor_type=row.actor_type,
+        actor_id=row.actor_id,
+    )
     return BusinessEvent(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -38,12 +83,17 @@ def _event(row: BusinessEventRecord) -> BusinessEvent:
         actor_type=row.actor_type,
         actor_id=row.actor_id,
         source=row.source,
-        payload=json.loads(row.payload_json),
+        payload=_loads(row.payload_json),
         correlation_id=row.correlation_id,
         causation_id=row.causation_id,
-        metadata=json.loads(row.metadata_json),
+        metadata=metadata,
         scope_kind=row.scope_kind,
         owner_user_id=row.owner_user_id,
+        initiator_type=initiator_type,
+        initiator_id=initiator_id,
+        executor_type=executor_type,
+        executor_id=executor_id,
+        delegation_chain=delegation,
     )
 
 
@@ -51,6 +101,47 @@ def _scope(*, tenant_id: str | None, owner_user_id: str | None) -> str:
     if bool(tenant_id) == bool(owner_user_id):
         raise ValueError("Event must belong to exactly one Personal or Workspace scope")
     return "workspace" if tenant_id else "personal"
+
+
+def _normalize_actor_chain(
+    *,
+    actor_type: str,
+    actor_id: str | None,
+    initiator_type: str | None,
+    initiator_id: str | None,
+    executor_type: str | None,
+    executor_id: str | None,
+    delegation_chain: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+) -> tuple[str, str | None, str, str | None, dict[str, Any]]:
+    effective_executor_type = str(executor_type or actor_type or "system")
+    effective_executor_id = str(executor_id or actor_id or "").strip() or None
+    effective_initiator_type = str(initiator_type or actor_type or effective_executor_type)
+    effective_initiator_id = (
+        str(initiator_id or actor_id or effective_executor_id or "").strip() or None
+    )
+    delegation = [
+        dict(item)
+        for item in (delegation_chain or ())
+        if isinstance(item, dict)
+    ]
+    chain = {
+        "initiator": {
+            "type": effective_initiator_type,
+            "id": effective_initiator_id,
+        },
+        "executor": {
+            "type": effective_executor_type,
+            "id": effective_executor_id,
+        },
+        "delegation": delegation,
+    }
+    return (
+        effective_initiator_type,
+        effective_initiator_id,
+        effective_executor_type,
+        effective_executor_id,
+        chain,
+    )
 
 
 async def append_event(
@@ -66,22 +157,44 @@ async def append_event(
     correlation_id: str | None = None,
     causation_id: str | None = None,
     metadata: dict[str, Any] | None = None,
+    initiator_type: str | None = None,
+    initiator_id: str | None = None,
+    executor_type: str | None = None,
+    executor_id: str | None = None,
+    delegation_chain: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> BusinessEvent:
-    payload_json = json.dumps(payload or {}, sort_keys=True)
-    metadata_json = json.dumps(metadata or {}, sort_keys=True)
     scope_kind = _scope(tenant_id=tenant_id, owner_user_id=owner_user_id)
+    (
+        _initiator_type,
+        _initiator_id,
+        effective_executor_type,
+        effective_executor_id,
+        actor_chain,
+    ) = _normalize_actor_chain(
+        actor_type=actor_type,
+        actor_id=actor_id,
+        initiator_type=initiator_type,
+        initiator_id=initiator_id,
+        executor_type=executor_type,
+        executor_id=executor_id,
+        delegation_chain=delegation_chain,
+    )
+    event_metadata = dict(metadata or {})
+    # Canonical provenance is application state. Callers may add unrelated metadata,
+    # but cannot replace the actor chain assembled from explicit trusted arguments.
+    event_metadata["actor_chain"] = actor_chain
     row = BusinessEventRecord(
         scope_kind=scope_kind,
         tenant_id=tenant_id,
         owner_user_id=owner_user_id,
         event_type=event_type,
-        actor_type=actor_type,
-        actor_id=actor_id,
+        actor_type=effective_executor_type,
+        actor_id=effective_executor_id,
         source=source,
-        payload_json=payload_json,
+        payload_json=json.dumps(payload or {}, sort_keys=True),
         correlation_id=correlation_id,
         causation_id=causation_id,
-        metadata_json=metadata_json,
+        metadata_json=json.dumps(event_metadata, sort_keys=True),
     )
     db.add(row)
     await db.flush()
