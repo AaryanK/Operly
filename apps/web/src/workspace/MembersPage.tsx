@@ -129,8 +129,6 @@ export function MembersPage({ workspace }: { workspace: WorkspaceSummary }) {
         setInvitations(invitationRows);
         setCanManageInvitations(true);
       } catch {
-        // Viewing members only needs workspace:read. Management controls stay hidden
-        // unless the invitation endpoint proves workspace:members:manage authority.
         setInvitations([]);
         setCanManageInvitations(false);
       }
@@ -157,9 +155,8 @@ export function MembersPage({ workspace }: { workspace: WorkspaceSummary }) {
   async function refreshAndCopyInvitation(invitation: WorkspaceInvitation) {
     setError(null); setNotice(null); setInviteUrl(null);
     try {
-      // Raw invitation secrets are intentionally never stored. To let an owner recover
-      // a link later, rotate it: invalidate the previous secret and issue a replacement
-      // with the exact same target and role before copying the new URL.
+      // Invitation secrets are hash-only. Recovering a pending link therefore rotates
+      // it: the old token is revoked and a fresh same-target/same-role link is issued.
       await api(`/workspace/invitations/${encodeURIComponent(invitation.id)}`, { method: "DELETE" });
       const replacement = await api<InviteResult>("/workspace/invitations", {
         method: "POST",
