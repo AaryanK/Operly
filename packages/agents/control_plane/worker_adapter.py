@@ -37,6 +37,17 @@ _KERNEL_CAPABILITIES = frozenset(
     }
 )
 _FACTORY_CAUSATION_PREFIX = "factory"
+_TERMINAL_CAPABILITY_STATUSES = frozenset(
+    {
+        "rejected",
+        "denied",
+        "cancelled",
+        "expired",
+        "failed",
+        "verification_failed",
+        "unverified",
+    }
+)
 
 
 async def _resolve(value):
@@ -252,10 +263,21 @@ class AgentRuntimeWorker:
         status = str(
             (truth or {}).get("status") or result.get("stop_reason") or "completed"
         ).lower()
+        observed_capability_status = str(
+            compact_evidence.get("status")
+            or compact_evidence.get("lifecycle_status")
+            or ""
+        ).strip().lower()
+        # AgentRuntime intentionally has a small lifecycle vocabulary. Preserve terminal
+        # action truth found in capability observations so the Factory cannot mistake a
+        # rejected/denied/failed durable action for an ordinary reasoning completion.
+        if observed_capability_status in _TERMINAL_CAPABILITY_STATUSES:
+            status = observed_capability_status
+            compact_evidence["terminal"] = True
         # A capability may truthfully accept durable work while terminal evidence is
         # still pending. That is neither success nor a defect and must pause the
         # Factory rather than triggering validation/repair.
-        if bool(compact_evidence.get("deferred")):
+        elif bool(compact_evidence.get("deferred")):
             status = "waiting_external"
         elif status in {"pending_evidence", "waiting_external_completion"}:
             status = "waiting_external"
