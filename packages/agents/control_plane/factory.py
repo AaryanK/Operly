@@ -110,10 +110,18 @@ class AgentFactoryControlPlane:
         facts: dict[str, Any] | None = None,
     ) -> FactoryRunResponse:
         runtime_run_id = str(metadata.get("runtime_run_id") or uuid4())
-        run_metadata = {**dict(metadata), "runtime_run_id": runtime_run_id, "runtime_controller": "factory"}
+        run_metadata = {
+            **dict(metadata),
+            "runtime_run_id": runtime_run_id,
+            "runtime_controller": "factory",
+        }
         blueprint = await self.compiler.compile(
             objective,
-            ingress_metadata={**dict(ingress_metadata or {}), "channel": metadata.get("channel"), "surface": metadata.get("surface")},
+            ingress_metadata={
+                **dict(ingress_metadata or {}),
+                "channel": metadata.get("channel"),
+                "surface": metadata.get("surface"),
+            },
         )
         ledger = FactoryEvidenceLedger(
             runtime_run_id=runtime_run_id,
@@ -132,6 +140,7 @@ class AgentFactoryControlPlane:
             invoke=self.invoke,
             model_resolver=self.model_resolver,
             max_steps=self.max_worker_steps,
+            inference_metadata=run_metadata,
         )
         validator = ControlPlaneValidator(
             python_test=self.python_validator,
