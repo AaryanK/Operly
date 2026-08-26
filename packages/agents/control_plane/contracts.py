@@ -1,7 +1,7 @@
 """Model-neutral contracts for the Operly agent factory control plane.
 
 The control plane owns the root objective, acceptance criteria, stage graph, context
-capsules, repair budgets and defects.  Workers are intentionally ephemeral consumers
+capsules, repair budgets and defects. Workers are intentionally ephemeral consumers
 of these contracts; no worker owns authorization, job state or completion truth.
 """
 from __future__ import annotations
@@ -22,9 +22,15 @@ class ValidatorKind(StrEnum):
 class StageStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    WAITING_EXTERNAL = "waiting_external"
     PASSED = "passed"
     BLOCKED = "blocked"
     FAILED = "failed"
+
+    @property
+    def waiting(self) -> bool:
+        return self in {StageStatus.WAITING_APPROVAL, StageStatus.WAITING_EXTERNAL}
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +140,6 @@ class StageGraph:
                 raise ValueError(f"Unknown dependencies for {stage.id}: {sorted(unknown)}")
             if stage.id in stage.dependencies:
                 raise ValueError(f"Stage {stage.id} cannot depend on itself")
-        # Kahn-style cycle check. Keep this deterministic and independent of a model.
         remaining = {stage.id: set(stage.dependencies) for stage in self.stages}
         while remaining:
             ready = {stage_id for stage_id, deps in remaining.items() if not deps}
@@ -152,7 +157,11 @@ class StageGraph:
         raise LookupError(stage_id)
 
     def ready(self, statuses: dict[str, StageStatus]) -> tuple[StageSpec, ...]:
-        passed = {stage_id for stage_id, status in statuses.items() if status is StageStatus.PASSED}
+        passed = {
+            stage_id
+            for stage_id, status in statuses.items()
+            if status is StageStatus.PASSED
+        }
         return tuple(
             stage
             for stage in self.stages
@@ -214,7 +223,9 @@ class RepairBudget:
             max_runtime_seconds=max(1, min(int(self.max_runtime_seconds), 86_400)),
             max_tokens=max(1_000, min(int(self.max_tokens), 10_000_000)),
             max_cost_usd=max(0.0, min(float(self.max_cost_usd), 100_000.0)),
-            repeated_failure_threshold=max(1, min(int(self.repeated_failure_threshold), 10)),
+            repeated_failure_threshold=max(
+                1, min(int(self.repeated_failure_threshold), 10)
+            ),
         )
 
 
@@ -286,7 +297,12 @@ class StageWorkerResult:
         }
 
 
-def bounded_strings(value: Iterable[Any] | None, *, limit: int, item_chars: int = 500) -> tuple[str, ...]:
+def bounded_strings(
+    value: Iterable[Any] | None,
+    *,
+    limit: int,
+    item_chars: int = 500,
+) -> tuple[str, ...]:
     return tuple(
         str(item).strip()[:item_chars]
         for item in list(value or ())[:limit]
