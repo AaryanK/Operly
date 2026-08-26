@@ -1,13 +1,15 @@
 """Zero-cost eligibility policy for Operly model routing.
 
 A model is routable only when its provider/model route is known to be free under
-the current provider plan. This is intentionally fail-closed: unknown billing
-status means ineligible, even if the model would otherwise score highly.
+the current provider plan and the provider is currently active. This is intentionally
+fail-closed: unknown billing or held providers are ineligible even if they score well.
 """
 from __future__ import annotations
 
 import os
 from typing import Protocol
+
+from packages.model_runtime.provider_policy import provider_is_active
 
 
 class FreeRoute(Protocol):
@@ -62,7 +64,6 @@ NVIDIA_FREE_MODELS = frozenset(
 )
 
 # For now Operly should only route Ollama traffic through these three models.
-# Other free Ollama cloud models remain intentionally excluded from scoring.
 OLLAMA_FREE_MODELS = frozenset(
     {
         "gpt-oss:20b",
@@ -78,15 +79,16 @@ def free_only_enabled() -> bool:
 
 
 def route_is_zero_cost(model: FreeRoute) -> bool:
+    provider = str(getattr(model, "provider", "") or "").strip().lower()
+    if not provider_is_active(provider):
+        return False
     if not free_only_enabled():
         return True
-    provider = str(getattr(model, "provider", "") or "").strip().lower()
     model_id = str(getattr(model, "provider_model_id", "") or "").strip()
     tags = set(getattr(model, "tags", frozenset()) or ())
     if "free" not in tags:
         return False
     if provider == "openrouter":
-        # OpenRouter discovery derives this tag from zero token pricing / :free.
         return True
     if provider == "groq":
         return model_id in GROQ_FREE_MODELS
@@ -96,5 +98,4 @@ def route_is_zero_cost(model: FreeRoute) -> bool:
         return model_id in NVIDIA_FREE_MODELS
     if provider == "ollama":
         return model_id in OLLAMA_FREE_MODELS
-    # New providers are fail-closed until their free-tier semantics are added here.
     return False
