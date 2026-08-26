@@ -3,6 +3,10 @@
 Every provider/model pair is an independent route. Scores combine static model-card
 traits with live success, latency, failure, and exploration evidence so routing can
 self-correct instead of relying on a fixed primary/fallback order.
+
+Zero-cost routing is enabled by default: a route must be explicitly tagged ``free``
+to enter the ranked pool. Unknown-cost and paid routes are therefore never selected
+merely because they benchmark well.
 """
 from __future__ import annotations
 
@@ -51,6 +55,11 @@ def _bounded_float(name: str, default: float, minimum: float, maximum: float) ->
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(value, maximum))
+
+
+def _free_only_enabled() -> bool:
+    value = os.getenv("OPERLY_FREE_MODELS_ONLY", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _route_key(model: ScorableModel) -> str:
@@ -131,9 +140,15 @@ class ModelScorer:
     ) -> list[RankedModelRoute]:
         task = _task_name(task_type)
         now = time.monotonic()
+        free_only = _free_only_enabled()
         with self._lock:
             ranked: list[tuple[int, RankedModelRoute]] = []
             for index, model in enumerate(models):
+                tags = set(getattr(model, "tags", frozenset()) or ())
+                if free_only and "free" not in tags:
+                    # Cost safety is an eligibility rule, not a weak scoring hint.
+                    # Paid or unknown-cost routes cannot win via quality/latency.
+                    continue
                 state = self.state_for(model)
                 available = state.cooldown_until <= now
                 if not include_cooling and not available:
@@ -143,8 +158,6 @@ class ModelScorer:
                     score=self._score(model, state, task_type=task, now=now),
                     available=available,
                 )))
-            # Stable input order is the final tie breaker, preserving explicit/bootstrap
-            # order until live evidence is strong enough to move a route.
             ranked.sort(key=lambda item: (-item[1].score, item[0]))
             return [row for _, row in ranked]
 
