@@ -60,7 +60,7 @@ SEARCH_SCHEMA = _schema(
 DESCRIBE_SCHEMA = _schema(
     "capability.describe",
     "Inspect and expose exact schemas for discovered authorized capabilities.",
-    {"ids": {"type": "array", "items": {"type": "string"}},
+    {"ids": {"type": "array", "items": {"type": "string"}}},
     ("ids",),
 )
 RUNTIME_CONTEXT_SCHEMA = _schema(
