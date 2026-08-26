@@ -1,5 +1,9 @@
+import asyncio
 import unittest
+from types import SimpleNamespace
 
+from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
+from packages.capabilities.registry import CapabilityRegistry
 from packages.channels.presentation import connector_tool_context, connector_tools, format_for_channel
 
 
@@ -30,6 +34,24 @@ class ConnectorPresentationToolTests(unittest.TestCase):
         self.assertNotIn("| --- |", rendered)
         self.assertIn("**A**", rendered)
         self.assertIn("**Value:** 1", rendered)
+
+    def test_connector_presentation_is_a_discoverable_read_only_tool(self):
+        provider = CapabilityDiscoveryProvider(CapabilityRegistry())
+        context = SimpleNamespace(
+            tenant_id="personal:user-1",
+            invocation={
+                "channel": "discord",
+                "surface": "discord_dm",
+                "authority": [],
+                "metadata": {"origin_provider": "discord"},
+            },
+        )
+        result = asyncio.run(provider.execute(context, "connector.presentation", {}))
+        self.assertTrue(result.success)
+        presentation = result.evidence["presentation"]
+        self.assertEqual(presentation["provider"], "discord")
+        self.assertEqual(presentation["attachment_strategy"], "native_attachment")
+        self.assertFalse(result.evidence["authorization_granted"])
 
 
 if __name__ == "__main__":
