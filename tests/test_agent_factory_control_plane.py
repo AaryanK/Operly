@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from packages.agents.control_plane import (
@@ -31,9 +29,18 @@ def test_stage_graph_rejects_cycles():
 def test_acceptance_contract_runs_deterministic_before_semantic():
     contract = AcceptanceContract(
         (
-            ValidatorSpec("semantic", "looks good", ValidatorKind.SEMANTIC, "semantic_evidence"),
-            ValidatorSpec("provider", "provider confirmed", ValidatorKind.PROVIDER, "provider_verified"),
-            ValidatorSpec("det", "count matches", ValidatorKind.DETERMINISTIC, "artifact_count"),
+            ValidatorSpec(
+                "semantic", "looks good", ValidatorKind.SEMANTIC, "semantic_evidence"
+            ),
+            ValidatorSpec(
+                "provider",
+                "provider confirmed",
+                ValidatorKind.PROVIDER,
+                "provider_verified",
+            ),
+            ValidatorSpec(
+                "det", "count matches", ValidatorKind.DETERMINISTIC, "artifact_count"
+            ),
         )
     )
     assert [item.id for item in contract.ordered()] == ["det", "provider", "semantic"]
@@ -92,9 +99,11 @@ async def test_context_injector_is_reference_first_and_stage_scoped():
     assert capsule.capability_ids == ("files.read",)
     assert capsule.artifact_refs == ("artifact:menu",)
     assert searched == [("approved summer menu", 5)]
-    # Materialization is deliberate and bounded; search results themselves are not copied.
     assert materialized
-    assert all(item["content"].startswith("materialized:") for item in capsule.materialized)
+    assert all(
+        item["content"].startswith("materialized:")
+        for item in capsule.materialized
+    )
 
 
 @pytest.mark.asyncio
@@ -181,6 +190,7 @@ async def test_stage_runner_uses_fresh_capsules_and_repairs_from_defect():
     result = await runner.run(graph=graph, acceptance=contract)
 
     assert result.completed is True
+    assert result.waiting is False
     assert result.statuses == {
         "build": StageStatus.PASSED,
         "final-check": StageStatus.PASSED,
@@ -188,6 +198,75 @@ async def test_stage_runner_uses_fresh_capsules_and_repairs_from_defect():
     assert [item["stage"] for item in calls] == ["build", "build", "final-check"]
     assert calls[1]["defect"] == "validation_failed"
     assert "pdf:good" in result.artifacts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("worker_status", "expected_stage_status", "expected_reason"),
+    [
+        ("waiting_approval", StageStatus.WAITING_APPROVAL, "waiting_approval"),
+        ("waiting_external", StageStatus.WAITING_EXTERNAL, "waiting_external"),
+    ],
+)
+async def test_stage_runner_pauses_waiting_stage_without_validating_or_blocking_dependents(
+    worker_status,
+    expected_stage_status,
+    expected_reason,
+):
+    validator_calls = 0
+
+    async def worker(stage, capsule, attempt, defect):
+        del capsule, attempt, defect
+        if stage.id == "action":
+            return StageWorkerResult(
+                status=worker_status,
+                strategy="provider-action",
+                evidence={
+                    "action_id": "action-1",
+                    "approval_id": "approval-1" if worker_status == "waiting_approval" else None,
+                    "job_id": "job-1" if worker_status == "waiting_external" else None,
+                },
+            )
+        raise AssertionError("dependent stage must not run while prerequisite is waiting")
+
+    async def validator(spec, stage, result):
+        del spec, stage, result
+        nonlocal validator_calls
+        validator_calls += 1
+        return {"passed": False}
+
+    graph = StageGraph(
+        (
+            StageSpec("action", "Perform action", validation_ids=("final",)),
+            StageSpec("after", "Continue after action", dependencies=("action",)),
+        )
+    )
+    result = await FactoryStageRunner(
+        context_injector=StageContextInjector(),
+        worker=worker,
+        validator=validator,
+    ).run(
+        graph=graph,
+        acceptance=AcceptanceContract(
+            (
+                ValidatorSpec(
+                    "final",
+                    "Action is terminal",
+                    ValidatorKind.PROVIDER,
+                    "provider_verified",
+                ),
+            )
+        ),
+    )
+
+    assert validator_calls == 0
+    assert result.completed is False
+    assert result.waiting is True
+    assert result.blocked is False
+    assert result.stop_reason == expected_reason
+    assert result.statuses["action"] is expected_stage_status
+    assert result.statuses["after"] is StageStatus.PENDING
+    assert result.defects == []
 
 
 @pytest.mark.asyncio
@@ -207,11 +286,11 @@ async def test_stage_runner_stops_repeated_same_failure_and_strategy():
 
     async def repair(stage, defect, depth):
         del defect, depth
-        # Bad repair planner returns the same strategy/objective shape. The factory
-        # must still stop once the identical defect fingerprint repeats.
         return stage
 
-    graph = StageGraph((StageSpec("one", "Need four items", validation_ids=("count",)),))
+    graph = StageGraph(
+        (StageSpec("one", "Need four items", validation_ids=("count",)),)
+    )
     contract = AcceptanceContract(
         (
             ValidatorSpec(
@@ -237,6 +316,7 @@ async def test_stage_runner_stops_repeated_same_failure_and_strategy():
     ).run(graph=graph, acceptance=contract)
 
     assert result.completed is False
+    assert result.waiting is False
     assert result.blocked is True
     assert attempts == 2
     assert result.statuses["one"] is StageStatus.BLOCKED
