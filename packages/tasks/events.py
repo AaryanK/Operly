@@ -52,8 +52,16 @@ def event_context(event: Any) -> dict:
         "id": event.id,
         "event_type": event.event_type,
         "occurred_at": event.occurred_at.isoformat(),
+        # Legacy actor fields remain available, but actor-sensitive workflows should
+        # prefer initiator/executor so “Raju did this” differs from “Raju's Operly
+        # executed this on Raju's request”.
         "actor_type": event.actor_type,
         "actor_id": event.actor_id,
+        "initiator_type": getattr(event, "initiator_type", event.actor_type),
+        "initiator_id": getattr(event, "initiator_id", event.actor_id),
+        "executor_type": getattr(event, "executor_type", event.actor_type),
+        "executor_id": getattr(event, "executor_id", event.actor_id),
+        "delegation_chain": list(getattr(event, "delegation_chain", ()) or ()),
         "source": event.source,
         "payload": event.payload,
         "correlation_id": event.correlation_id,
