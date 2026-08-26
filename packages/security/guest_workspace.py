@@ -1,16 +1,16 @@
 """Fail-closed authority for provisional external-platform workspaces.
 
 A provisional ChannelInstallation is Operly's Guest Workspace projection of an
-existing Discord/Slack/WhatsApp/etc. space.  It is still a workspace for event,
+existing Discord/Slack/WhatsApp/etc. space. It is still a workspace for event,
 workflow and capability scoping, but it does not inherit the full Operly workspace
 permission universe.
 
-Effective guest authority is the intersection of:
-1. what the current source-platform interaction is allowed to do,
-2. the guest-workspace administrator policy stored by Operly, and
-3. Operly's provider-specific guest ceiling.
+Guest authority combines two different classes of permission:
+- a narrow Operly-native baseline (agent/workflow/current-conversation features), and
+- source-platform capabilities proven by the connector for the current principal.
 
-The model never participates in this calculation.
+The workspace-admin policy can narrow either class, and the Operly guest ceiling is an
+absolute maximum. The language model never participates in this calculation.
 """
 from __future__ import annotations
 
@@ -25,37 +25,38 @@ from packages.database.channel_models import ChannelInstallation
 from packages.security.permissions import KNOWN_PERMISSIONS
 
 
-_GUEST_COMMON_BASELINE = frozenset(
+# Guest members get Operly assistance/workflows, but not arbitrary workspace audit,
+# tenant memory, CRM, Gmail, Calendar, Studio, software-generation or connector access.
+_GUEST_OPERLY_BASELINE = frozenset(
     {
         "model:invoke",
         "workspace:read",
-        "messages:read",
-        "actions:read",
         "tasks:read",
         "tasks:write",
-        "context:tenant:read",
         "context:conversation:read",
         "context:conversation:write",
     }
 )
 
-_PROVIDER_BASELINES: dict[str, frozenset[str]] = {
-    "discord": _GUEST_COMMON_BASELINE | {"discord:read", "discord:write"},
-    "slack": _GUEST_COMMON_BASELINE | {"messaging:read", "messaging:write"},
-    "whatsapp": _GUEST_COMMON_BASELINE | {"messaging:read", "messaging:write"},
+# Platform capabilities are never guessed. If the source connector cannot prove them,
+# the user still has the Operly-native baseline but receives no platform read/write/file
+# tool merely because the request claims to originate from that provider.
+_PROVIDER_FALLBACK: dict[str, frozenset[str]] = {
+    "discord": frozenset(),
+    "slack": frozenset(),
+    "whatsapp": frozenset(),
 }
 
 # A Guest Workspace deliberately cannot discover arbitrary CRM, Gmail, Calendar,
-# website, software-generation, computer, or connector authority merely because
-# those capabilities exist elsewhere in Operly.  A full workspace claim/binding is
-# the boundary for those domains.
+# website, software-generation, computer, or unrelated connector authority merely
+# because those capabilities exist elsewhere in Operly. A full workspace claim/binding
+# is the boundary for those domains.
 _GUEST_COMMON_CEILING = frozenset(
     {
         "model:invoke",
         "workspace:read",
         "workspace:settings:manage",
         "workspace:channels:manage",
-        "messages:read",
         "actions:read",
         "tasks:read",
         "tasks:write",
@@ -74,10 +75,15 @@ _PROVIDER_CEILINGS: dict[str, frozenset[str]] = {
     "whatsapp": _GUEST_COMMON_CEILING | {"messaging:read", "messaging:write"},
 }
 
+# A source-platform administrator can administer the Guest Workspace's Operly layer,
+# inspect its audit stream and manage shared guest context/workflows. This still does
+# not grant full-workspace CRM/Gmail/Calendar/etc. authority.
 _ADMIN_ADDITIONS = frozenset(
     {
         "workspace:settings:manage",
         "workspace:channels:manage",
+        "actions:read",
+        "context:tenant:read",
         "context:tenant:write",
     }
 )
@@ -126,11 +132,11 @@ async def resolve_guest_workspace_authority(
 ) -> GuestWorkspaceAuthority | None:
     """Resolve one principal's authority in an auto-created Guest Workspace.
 
-    ``_operly_platform_permissions`` and ``_operly_platform_admin`` are trusted
-    adapter fields.  When an adapter has not implemented a richer platform mapping
-    yet, the provider baseline is intentionally narrow.  The baseline never includes
-    file processing; file access therefore requires an explicit trusted platform
-    permission and cannot be inferred by the model.
+    ``_operly_platform_permissions`` and ``_operly_platform_admin`` are reserved
+    connector-adapter fields. They must be produced by trusted ingress code from the
+    source platform's live permission state, never from model output. When no source
+    authority is available, platform capabilities fail closed while the narrow
+    Operly-native guest baseline remains usable.
     """
     provider_key = str(provider or "").strip().lower()
     space_id = str(external_space_id or "").strip()
@@ -154,10 +160,13 @@ async def resolve_guest_workspace_authority(
     platform_admin = metadata.get("_operly_platform_admin") is True
     supplied = metadata.get("_operly_platform_permissions")
     if isinstance(supplied, (list, tuple, set, frozenset)):
-        platform_permissions = _clean_permissions(supplied)
+        source_permissions = _clean_permissions(supplied)
     else:
-        platform_permissions = set(_PROVIDER_BASELINES.get(provider_key, _GUEST_COMMON_BASELINE))
+        source_permissions = set(_PROVIDER_FALLBACK.get(provider_key, frozenset()))
 
+    # Source-platform permission state controls platform-derived tools. Operly-native
+    # guest assistance is separately enabled by the Guest Workspace baseline/policy.
+    platform_permissions = set(_GUEST_OPERLY_BASELINE) | source_permissions
     if platform_admin:
         platform_permissions |= set(_ADMIN_ADDITIONS)
 
@@ -173,8 +182,6 @@ async def resolve_guest_workspace_authority(
     if isinstance(allow, list):
         policy_permissions = _clean_permissions(allow) & ceiling
     else:
-        # No explicit allow-list means the platform authority is the maximum; admin
-        # policy can still remove individual permissions through deny.
         policy_permissions = set(ceiling)
 
     effective = (platform_permissions & policy_permissions) - deny
@@ -202,7 +209,7 @@ async def set_guest_workspace_policy(
     """Persist a Guest Workspace policy after the caller proves admin authority.
 
     This function intentionally does not decide whether the caller is an admin; the
-    ingress/capability boundary must establish that before calling it.  Keeping the
+    ingress/capability boundary must establish that before calling it. Keeping the
     mutation separate prevents request payloads or models from self-asserting admin.
     """
     installation = await db.get(ChannelInstallation, installation_id)
