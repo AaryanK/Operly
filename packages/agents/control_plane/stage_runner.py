@@ -1,9 +1,9 @@
 """Deterministic DAG execution for disposable Operly workers.
 
-This runner owns sequencing, bounded parallelism, retries and completion state. It
-never grants authority; worker/context callbacks are expected to be backed by the
-existing governed capability/context seams. A worker may propose work, but only the
-control plane can mark a stage passed after validators return evidence.
+This runner owns sequencing, bounded parallelism, retries, promotion and completion
+state. It never grants authority. Worker outputs are audit data until the exact stage
+attempt passes its acceptance validators; only then are artifact/evidence refs promoted
+for downstream dependency consumption.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import asyncio
 import inspect
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from .contracts import (
     AcceptanceContract,
@@ -60,17 +60,36 @@ def _worker_waiting_status(status: str) -> StageStatus | None:
     return None
 
 
+def _stage_status(value: StageStatus | str | None) -> StageStatus:
+    if isinstance(value, StageStatus):
+        return value
+    try:
+        return StageStatus(str(value or StageStatus.PENDING.value))
+    except ValueError:
+        return StageStatus.PENDING
+
+
+def _ref_set(values: Iterable[Any] | None) -> set[str]:
+    return {
+        str(item).strip()
+        for item in (values or ())
+        if str(item).strip()
+    }
+
+
 @dataclass(slots=True)
 class StageAttempt:
     stage_id: str
     attempt: int
     result: StageWorkerResult
     defects: list[Defect] = field(default_factory=list)
+    source: str = "worker"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "stage_id": self.stage_id,
             "attempt": self.attempt,
+            "source": self.source,
             "result": self.result.as_dict(),
             "defects": [item.as_dict() for item in self.defects],
         }
@@ -83,6 +102,8 @@ class FactoryExecutionResult:
     defects: list[Defect]
     artifacts: set[str]
     evidence_refs: set[str]
+    stage_artifacts: dict[str, set[str]]
+    stage_evidence_refs: dict[str, set[str]]
     external_actions: int
     token_usage: int
     cost_usd: float
@@ -98,6 +119,13 @@ class FactoryExecutionResult:
             "defects": [item.as_dict() for item in self.defects],
             "artifacts": sorted(self.artifacts),
             "evidence_refs": sorted(self.evidence_refs),
+            "stage_artifacts": {
+                key: sorted(value) for key, value in sorted(self.stage_artifacts.items())
+            },
+            "stage_evidence_refs": {
+                key: sorted(value)
+                for key, value in sorted(self.stage_evidence_refs.items())
+            },
             "external_actions": self.external_actions,
             "token_usage": self.token_usage,
             "cost_usd": round(self.cost_usd, 6),
@@ -151,11 +179,14 @@ class FactoryStageRunner:
         result: StageWorkerResult,
         contract: AcceptanceContract,
         repair_depth: int,
-    ) -> list[Defect]:
+    ) -> tuple[list[Defect], set[str]]:
         defects: list[Defect] = []
+        validation_evidence: set[str] = set()
         for spec in self._validators_for(stage, contract):
             outcome = dict(await _resolve(self.validator(spec, stage, result)) or {})
             passed = bool(outcome.get("passed"))
+            evidence_refs = _ref_set(outcome.get("evidence_refs"))
+            validation_evidence.update(evidence_refs)
             await self._event(
                 "validator.completed",
                 {
@@ -165,7 +196,7 @@ class FactoryStageRunner:
                     "passed": passed,
                     "expected": outcome.get("expected", spec.expected),
                     "observed": outcome.get("observed"),
-                    "evidence_refs": list(outcome.get("evidence_refs") or ()),
+                    "evidence_refs": sorted(evidence_refs),
                 },
             )
             if passed or not spec.required:
@@ -176,9 +207,7 @@ class FactoryStageRunner:
                     validator_id=spec.id,
                     expected=outcome.get("expected", spec.expected),
                     observed=outcome.get("observed", outcome.get("error")),
-                    evidence_refs=tuple(
-                        str(item) for item in (outcome.get("evidence_refs") or ())
-                    ),
+                    evidence_refs=tuple(sorted(evidence_refs)),
                     failure_class=str(
                         outcome.get("failure_class") or "validation_failed"
                     )[:120],
@@ -187,7 +216,7 @@ class FactoryStageRunner:
                     repair_depth=repair_depth,
                 )
             )
-        return defects
+        return defects, validation_evidence
 
     async def _run_one(
         self,
@@ -195,10 +224,11 @@ class FactoryStageRunner:
         original_stage: StageSpec,
         contract: AcceptanceContract,
         inherited_context_refs: set[str],
-        artifacts: set[str],
+        input_artifacts: set[str],
         facts: dict[str, Any],
         total_attempt_counter: list[int],
         defect_counts: Counter[str],
+        resume_result: StageWorkerResult | None = None,
     ) -> tuple[
         StageStatus,
         list[StageAttempt],
@@ -209,16 +239,17 @@ class FactoryStageRunner:
         int,
         float,
     ]:
+        """Run one station without promoting unverified attempt outputs."""
+
         stage = original_stage
         attempts: list[StageAttempt] = []
         defects_all: list[Defect] = []
-        stage_artifacts: set[str] = set()
-        stage_evidence: set[str] = set()
         external_actions = 0
         token_usage = 0
         cost_usd = 0.0
         previous_defect: Defect | None = None
         repair_depth = 0
+        pending_resume_result = resume_result
 
         for attempt_index in range(1, self.budget.max_attempts_per_stage + 1):
             if total_attempt_counter[0] >= self.budget.max_total_attempts:
@@ -226,8 +257,8 @@ class FactoryStageRunner:
                     StageStatus.BLOCKED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
@@ -237,31 +268,64 @@ class FactoryStageRunner:
             capsule = await self.context_injector.build(
                 stage,
                 inherited_context_refs=inherited_context_refs,
-                artifact_refs=artifacts | stage_artifacts,
+                artifact_refs=input_artifacts,
                 facts=facts,
             )
+            source = "resume" if pending_resume_result is not None else "worker"
             await self._event(
                 "stage.started",
                 {
                     "stage_id": stage.id,
                     "attempt": attempt_index,
+                    "source": source,
                     "repair_depth": repair_depth,
                     "context_refs": list(capsule.context_refs),
                     "artifact_refs": list(capsule.artifact_refs),
                     "capability_ids": list(capsule.capability_ids),
                 },
             )
-            result = await _resolve(
-                self.worker(stage, capsule, attempt_index, previous_defect)
-            )
+
+            if pending_resume_result is not None:
+                result = pending_resume_result
+                pending_resume_result = None
+                await self._event(
+                    "stage.resumed",
+                    {
+                        "stage_id": stage.id,
+                        "attempt": attempt_index,
+                        "status": result.status,
+                        "strategy": result.strategy,
+                        "artifact_refs": list(result.artifacts),
+                        "evidence_refs": list(result.evidence_refs),
+                    },
+                )
+            else:
+                result = await _resolve(
+                    self.worker(stage, capsule, attempt_index, previous_defect)
+                )
+
             if not isinstance(result, StageWorkerResult):
                 raise TypeError("Factory worker must return StageWorkerResult")
 
-            stage_artifacts.update(result.artifacts)
-            stage_evidence.update(result.evidence_refs)
             external_actions += max(0, int(result.external_actions))
             token_usage += max(0, int(result.token_usage))
             cost_usd += max(0.0, float(result.cost_usd))
+
+            await self._event(
+                "stage.attempted",
+                {
+                    "stage_id": stage.id,
+                    "attempt": attempt_index,
+                    "source": source,
+                    "status": result.status,
+                    "strategy": result.strategy,
+                    "artifact_refs": list(result.artifacts),
+                    "evidence_refs": list(result.evidence_refs),
+                    "external_actions": max(0, int(result.external_actions)),
+                    "token_usage": max(0, int(result.token_usage)),
+                    "cost_usd": max(0.0, float(result.cost_usd)),
+                },
+            )
 
             budget_exceeded = (
                 external_actions > self.budget.max_external_actions
@@ -288,16 +352,17 @@ class FactoryStageRunner:
                     retryable=False,
                     repair_depth=repair_depth,
                 )
-                attempt = StageAttempt(stage.id, attempt_index, result, [defect])
-                attempts.append(attempt)
+                attempts.append(
+                    StageAttempt(stage.id, attempt_index, result, [defect], source=source)
+                )
                 defects_all.append(defect)
                 await self._event("stage.blocked", defect.as_dict())
                 return (
                     StageStatus.BLOCKED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
@@ -305,7 +370,9 @@ class FactoryStageRunner:
 
             waiting_status = _worker_waiting_status(result.status)
             if waiting_status is not None:
-                attempts.append(StageAttempt(stage.id, attempt_index, result, []))
+                attempts.append(
+                    StageAttempt(stage.id, attempt_index, result, [], source=source)
+                )
                 await self._event(
                     "stage.waiting",
                     {
@@ -326,39 +393,48 @@ class FactoryStageRunner:
                     waiting_status,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
                 )
 
-            defects = await self._validate(
+            defects, validator_evidence = await self._validate(
                 stage=stage,
                 result=result,
                 contract=contract,
                 repair_depth=repair_depth,
             )
-            attempt = StageAttempt(stage.id, attempt_index, result, defects)
+            attempt = StageAttempt(
+                stage.id,
+                attempt_index,
+                result,
+                defects,
+                source=source,
+            )
             attempts.append(attempt)
 
             if not defects and str(result.status).lower() not in {"failed", "blocked"}:
+                promoted_artifacts = _ref_set(result.artifacts)
+                promoted_evidence = _ref_set(result.evidence_refs) | validator_evidence
                 await self._event(
                     "stage.passed",
                     {
                         "stage_id": stage.id,
                         "attempt": attempt_index,
+                        "source": source,
                         "strategy": result.strategy,
-                        "artifacts": list(result.artifacts),
-                        "evidence_refs": list(result.evidence_refs),
+                        "artifacts": sorted(promoted_artifacts),
+                        "evidence_refs": sorted(promoted_evidence),
                     },
                 )
                 return (
                     StageStatus.PASSED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    promoted_artifacts,
+                    promoted_evidence,
                     external_actions,
                     token_usage,
                     cost_usd,
@@ -398,13 +474,14 @@ class FactoryStageRunner:
                         },
                     )
                     break
+
             if terminal is not None:
                 return (
                     StageStatus.BLOCKED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
@@ -416,24 +493,22 @@ class FactoryStageRunner:
                     StageStatus.FAILED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
                 )
 
             repair_depth += 1
-            revised = await _resolve(
-                self.repair(stage, previous_defect, repair_depth)
-            )
+            revised = await _resolve(self.repair(stage, previous_defect, repair_depth))
             if revised is None:
                 return (
                     StageStatus.FAILED,
                     attempts,
                     defects_all,
-                    stage_artifacts,
-                    stage_evidence,
+                    set(),
+                    set(),
                     external_actions,
                     token_usage,
                     cost_usd,
@@ -455,12 +530,28 @@ class FactoryStageRunner:
             StageStatus.FAILED,
             attempts,
             defects_all,
-            stage_artifacts,
-            stage_evidence,
+            set(),
+            set(),
             external_actions,
             token_usage,
             cost_usd,
         )
+
+    @staticmethod
+    def _dependency_artifacts(
+        stage: StageSpec,
+        *,
+        initial_artifacts: set[str],
+        stage_artifacts: dict[str, set[str]],
+        trusted_stage_inputs: dict[str, set[str]],
+    ) -> set[str]:
+        """Return only root inputs, trusted explicit inputs and dependency outputs."""
+
+        inputs = set(initial_artifacts)
+        inputs.update(trusted_stage_inputs.get(stage.id, set()))
+        for dependency in stage.dependencies:
+            inputs.update(stage_artifacts.get(dependency, set()))
+        return inputs
 
     async def run(
         self,
@@ -469,14 +560,63 @@ class FactoryStageRunner:
         acceptance: AcceptanceContract,
         initial_context_refs: set[str] | None = None,
         initial_artifact_refs: set[str] | None = None,
+        stage_input_artifact_refs: dict[str, Iterable[str]] | None = None,
         facts: dict[str, Any] | None = None,
+        resume_statuses: dict[str, StageStatus | str] | None = None,
+        prior_stage_artifacts: dict[str, Iterable[str]] | None = None,
+        prior_stage_evidence_refs: dict[str, Iterable[str]] | None = None,
+        resume_results: dict[str, StageWorkerResult] | None = None,
     ) -> FactoryExecutionResult:
         statuses = {stage.id: StageStatus.PENDING for stage in graph.stages}
+        prior_statuses = {
+            str(stage_id): _stage_status(status)
+            for stage_id, status in dict(resume_statuses or {}).items()
+            if str(stage_id) in statuses
+        }
+        resume_results = dict(resume_results or {})
+
+        for stage_id in resume_results:
+            if stage_id not in statuses:
+                raise ValueError(f"Unknown resume stage: {stage_id}")
+            if prior_statuses.get(stage_id) not in {
+                StageStatus.WAITING_APPROVAL,
+                StageStatus.WAITING_EXTERNAL,
+            }:
+                raise ValueError(
+                    f"Resume evidence is only valid for a waiting stage: {stage_id}"
+                )
+
+        for stage_id, status in prior_statuses.items():
+            if status is StageStatus.PASSED:
+                statuses[stage_id] = StageStatus.PASSED
+            elif status.waiting:
+                statuses[stage_id] = (
+                    StageStatus.PENDING if stage_id in resume_results else status
+                )
+            elif status is StageStatus.RUNNING:
+                statuses[stage_id] = StageStatus.PENDING
+            elif status in {StageStatus.BLOCKED, StageStatus.FAILED}:
+                statuses[stage_id] = status
+
         attempts: list[StageAttempt] = []
         defects: list[Defect] = []
-        context_refs = set(initial_context_refs or ())
-        artifacts = set(initial_artifact_refs or ())
-        evidence_refs: set[str] = set()
+        context_refs = _ref_set(initial_context_refs)
+        initial_artifacts = _ref_set(initial_artifact_refs)
+        trusted_stage_inputs = {
+            str(stage_id): _ref_set(refs)
+            for stage_id, refs in dict(stage_input_artifact_refs or {}).items()
+            if str(stage_id) in statuses
+        }
+        stage_artifacts: dict[str, set[str]] = {}
+        stage_evidence_refs: dict[str, set[str]] = {}
+
+        for stage_id, refs in dict(prior_stage_artifacts or {}).items():
+            if stage_id in statuses and statuses[stage_id] is StageStatus.PASSED:
+                stage_artifacts[stage_id] = _ref_set(refs)
+        for stage_id, refs in dict(prior_stage_evidence_refs or {}).items():
+            if stage_id in statuses and statuses[stage_id] is StageStatus.PASSED:
+                stage_evidence_refs[stage_id] = _ref_set(refs)
+
         total_attempt_counter = [0]
         defect_counts: Counter[str] = Counter()
         total_external_actions = 0
@@ -489,11 +629,22 @@ class FactoryStageRunner:
             if not ready:
                 break
 
+            if resume_results:
+                resumable = [stage for stage in ready if stage.id in resume_results]
+                if resumable:
+                    ready = resumable
+                elif any(status.waiting for status in statuses.values()):
+                    break
+
             first_serial = next(
                 (stage for stage in ready if not stage.can_parallelize),
                 None,
             )
-            batch = [first_serial] if first_serial is not None else ready[: self.max_parallelism]
+            batch = (
+                [first_serial]
+                if first_serial is not None
+                else ready[: self.max_parallelism]
+            )
             for stage in batch:
                 statuses[stage.id] = StageStatus.RUNNING
 
@@ -503,10 +654,16 @@ class FactoryStageRunner:
                         original_stage=stage,
                         contract=acceptance,
                         inherited_context_refs=context_refs,
-                        artifacts=artifacts,
+                        input_artifacts=self._dependency_artifacts(
+                            stage,
+                            initial_artifacts=initial_artifacts,
+                            stage_artifacts=stage_artifacts,
+                            trusted_stage_inputs=trusted_stage_inputs,
+                        ),
                         facts=run_facts,
                         total_attempt_counter=total_attempt_counter,
                         defect_counts=defect_counts,
+                        resume_result=resume_results.pop(stage.id, None),
                     )
                     for stage in batch
                 )
@@ -517,8 +674,8 @@ class FactoryStageRunner:
                     status,
                     stage_attempts,
                     stage_defects,
-                    stage_artifacts,
-                    stage_evidence,
+                    promoted_artifacts,
+                    promoted_evidence,
                     external_actions,
                     tokens,
                     cost,
@@ -526,8 +683,12 @@ class FactoryStageRunner:
                 statuses[stage.id] = status
                 attempts.extend(stage_attempts)
                 defects.extend(stage_defects)
-                artifacts.update(stage_artifacts)
-                evidence_refs.update(stage_evidence)
+                if status is StageStatus.PASSED:
+                    stage_artifacts[stage.id] = set(promoted_artifacts)
+                    stage_evidence_refs[stage.id] = set(promoted_evidence)
+                else:
+                    stage_artifacts.pop(stage.id, None)
+                    stage_evidence_refs.pop(stage.id, None)
                 total_external_actions += external_actions
                 total_tokens += tokens
                 total_cost += cost
@@ -562,9 +723,7 @@ class FactoryStageRunner:
             status is StageStatus.WAITING_EXTERNAL for status in statuses.values()
         )
         waiting = waiting_approval or waiting_external
-        blocked = any(
-            status is StageStatus.BLOCKED for status in statuses.values()
-        )
+        blocked = any(status is StageStatus.BLOCKED for status in statuses.values())
         if completed:
             stop_reason = "completed"
         elif waiting_approval:
@@ -577,6 +736,13 @@ class FactoryStageRunner:
             stop_reason = "failed"
         else:
             stop_reason = "incomplete_graph"
+
+        promoted_artifacts = set(initial_artifacts)
+        for refs in stage_artifacts.values():
+            promoted_artifacts.update(refs)
+        promoted_evidence: set[str] = set()
+        for refs in stage_evidence_refs.values():
+            promoted_evidence.update(refs)
 
         event_type = (
             "factory.completed"
@@ -592,19 +758,23 @@ class FactoryStageRunner:
                 "waiting": waiting,
                 "blocked": blocked,
                 "stop_reason": stop_reason,
-                "statuses": {
-                    key: value.value for key, value in statuses.items()
-                },
+                "statuses": {key: value.value for key, value in statuses.items()},
                 "attempt_count": len(attempts),
                 "defect_count": len(defects),
+                "stage_artifacts": {
+                    key: sorted(value)
+                    for key, value in sorted(stage_artifacts.items())
+                },
             },
         )
         return FactoryExecutionResult(
             statuses=statuses,
             attempts=attempts,
             defects=defects,
-            artifacts=artifacts,
-            evidence_refs=evidence_refs,
+            artifacts=promoted_artifacts,
+            evidence_refs=promoted_evidence,
+            stage_artifacts=stage_artifacts,
+            stage_evidence_refs=stage_evidence_refs,
             external_actions=total_external_actions,
             token_usage=total_tokens,
             cost_usd=total_cost,
