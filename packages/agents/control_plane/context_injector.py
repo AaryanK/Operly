@@ -1,8 +1,8 @@
 """Stage-scoped context compilation for the Operly factory control plane.
 
-The injector knows the authorized context universe; workers do not.  It searches by
+The injector knows the authorized context universe; workers do not. It searches by
 stage intent, returns references first, materializes only a bounded subset, and never
-widens authority.  Existing ContextBroker/ContextService remain the storage/retrieval
+widens authority. Existing ContextBroker/ContextService remain the storage/retrieval
 primitives; this module is the orchestration seam above them.
 """
 from __future__ import annotations
@@ -104,10 +104,15 @@ class StageContextInjector:
                     return output
         return output
 
-    async def _materialize_bounded(self, refs: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    async def _materialize_bounded(
+        self,
+        refs: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], ...]:
         if self.materialize is None or self.policy.max_materialized_refs <= 0:
             return ()
-        # Prefer smaller, higher-ranked references so the first capsule remains cheap.
+        # Explicit/inherited refs receive a high score before this function is called.
+        # The materializer must still reauthorize every locator; refs are never bearer
+        # tokens. Smaller high-ranked references are preferred inside the hard budget.
         ordered = sorted(
             refs,
             key=lambda item: (
@@ -122,19 +127,25 @@ class StageContextInjector:
             if _ref_id(item)
         ]
         rows = list(await _resolve(self.materialize(candidate_ids)) or [])
+        by_ref = {
+            _ref_id(row): dict(row)
+            for row in rows
+            if isinstance(row, dict) and _ref_id(row)
+        }
         output: list[dict[str, Any]] = []
         used_chars = 0
-        for row in rows:
-            if not isinstance(row, dict):
+        # Preserve priority/request order even if the backing store reorders rows.
+        for ref in candidate_ids:
+            item = by_ref.get(ref)
+            if item is None:
                 continue
-            item = dict(row)
             size = _serialized_chars(item)
             remaining = self.policy.max_materialized_chars - used_chars
             if remaining <= 0:
                 break
             if size > remaining:
-                # Never cut opaque structured data into invalid JSON. Keep the ref only;
-                # the worker can ask context.get later if it truly needs the payload.
+                # Never cut opaque structured data into invalid JSON. Keep only the
+                # ref in the capsule when materialization would break the budget.
                 continue
             output.append(item)
             used_chars += size
@@ -151,7 +162,12 @@ class StageContextInjector:
         discovered = await self._search_refs(stage.context_intents)
         refs: list[str] = []
         seen: set[str] = set()
-        for value in [*inherited_context_refs, *(_ref_id(item) for item in discovered)]:
+        inherited = [
+            str(value or "").strip()
+            for value in inherited_context_refs
+            if str(value or "").strip()
+        ]
+        for value in [*inherited, *(_ref_id(item) for item in discovered)]:
             clean = str(value or "").strip()
             if clean and clean not in seen:
                 seen.add(clean)
@@ -164,14 +180,34 @@ class StageContextInjector:
             resolved = await _resolve(self.resolve_capabilities(stage.capability_intents))
             capability_ids = [str(item) for item in (resolved or []) if str(item).strip()]
 
-        materialized_candidates = [item for item in discovered if _ref_id(item) in set(refs)]
-        materialized = await self._materialize_bounded(materialized_candidates)
+        # Root/application-selected refs are materialization candidates too. They are
+        # not blindly injected: the authorized materializer rechecks each ref, and the
+        # same hard count/character budgets apply. This lets retained attachments or
+        # other exact referents enter only the stage capsule that needs them without
+        # replaying a conversation transcript.
+        candidate_by_ref = {
+            _ref_id(item): dict(item)
+            for item in discovered
+            if _ref_id(item) in set(refs)
+        }
+        for ref in refs:
+            if ref not in candidate_by_ref:
+                candidate_by_ref[ref] = {
+                    "ref": ref,
+                    "score": 2.0,
+                    "estimated_tokens": 1,
+                }
+        materialized = await self._materialize_bounded(
+            [candidate_by_ref[ref] for ref in refs if ref in candidate_by_ref]
+        )
 
         bounded_facts = tuple(
             (str(key)[:120], value)
             for key, value in list((facts or {}).items())[:24]
         )
-        artifacts = tuple(dict.fromkeys(str(item) for item in artifact_refs if str(item).strip()))[:32]
+        artifacts = tuple(
+            dict.fromkeys(str(item) for item in artifact_refs if str(item).strip())
+        )[:32]
         return ContextCapsule(
             stage_id=stage.id,
             objective=stage.objective,
