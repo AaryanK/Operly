@@ -155,8 +155,9 @@ export function MembersPage({ workspace }: { workspace: WorkspaceSummary }) {
   async function refreshAndCopyInvitation(invitation: WorkspaceInvitation) {
     setError(null); setNotice(null); setInviteUrl(null);
     try {
-      // Invitation secrets are hash-only. Recovering a pending link therefore rotates
-      // it: the old token is revoked and a fresh same-target/same-role link is issued.
+      // Invitation secrets are hash-only. Recovering a pending link rotates it rather
+      // than storing a plaintext bearer token: the previous link is invalidated first,
+      // then an equivalent fresh one is created and copied.
       await api(`/workspace/invitations/${encodeURIComponent(invitation.id)}`, { method: "DELETE" });
       const replacement = await api<InviteResult>("/workspace/invitations", {
         method: "POST",
