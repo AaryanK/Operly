@@ -61,14 +61,12 @@ NVIDIA_FREE_MODELS = frozenset(
     }
 )
 
+# For now Operly should only route Ollama traffic through these three models.
+# Other free Ollama cloud models remain intentionally excluded from scoring.
 OLLAMA_FREE_MODELS = frozenset(
     {
-        "gemma4:31b",
-        "gpt-oss:120b",
         "gpt-oss:20b",
-        "nemotron-3-super",
-        "nemotron-3-nano:30b",
-        "nemotron-3-ultra",
+        "gemma4:31b",
         "minimax-m3",
     }
 )
