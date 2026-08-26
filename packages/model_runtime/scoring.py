@@ -86,52 +86,40 @@ class ModelScorer:
             return state
 
     def _score(self, model: ScorableModel, state: RouteScoreState, *, task_type: str, now: float) -> float:
-        # Static cards are only a prior. Runtime evidence becomes the dominant signal.
         priority = max(0, min(int(getattr(model, "priority", 100)), 200))
         prior = 18.0 * (1.0 - priority / 200.0)
-
         quality_class = str(getattr(getattr(model, "traits", None), "quality_class", "") or "").lower()
         quality = {"high": 12.0, "balanced": 8.0, "medium": 6.0, "low": 2.0}.get(quality_class, 5.0)
-
         reliability = 36.0 * max(0.0, min(state.success_ewma, 1.0))
         task_reliability = 10.0 * max(
-            0.0,
-            min(state.task_success_ewma.get(task_type, state.success_ewma), 1.0),
+            0.0, min(state.task_success_ewma.get(task_type, state.success_ewma), 1.0)
         )
-
         observed_latency = state.latency_ewma_ms
         if observed_latency is None:
             observed_latency = getattr(model, "verified_latency_ms", None)
-        if observed_latency is None:
-            latency = 5.0
-        else:
-            # 15 points near zero latency, smoothly tending toward zero for slow routes.
-            latency = 15.0 / (1.0 + max(float(observed_latency), 0.0) / 1500.0)
-
+        latency = (
+            5.0 if observed_latency is None
+            else 15.0 / (1.0 + max(float(observed_latency), 0.0) / 1500.0)
+        )
         tags = set(getattr(model, "tags", frozenset()) or ())
         cost = 4.0 if "free" in tags else 1.5
-
-        # UCB-style exploration means untried/recovered models keep receiving probes
-        # without introducing random, non-reproducible routing behavior.
         exploration_strength = _bounded_float(
             "OPERLY_MODEL_EXPLORATION_STRENGTH", 8.0, 0.0, 30.0
         )
-        exploration = exploration_strength * math.sqrt(
-            math.log(self._total_attempts + 2.0) / (state.attempts + 1.0)
+        exploration = min(
+            exploration_strength * math.sqrt(
+                math.log(self._total_attempts + 2.0) / (state.attempts + 1.0)
+            ),
+            15.0,
         )
-        exploration = min(exploration, 15.0)
-
         failure_penalty = min(30.0, state.consecutive_failures * 8.0)
         if state.cooldown_until > now:
             return -10_000.0
-
-        # A model that has not been called recently gets a small recovery/probe bonus.
         recovery_window = _bounded_float(
             "OPERLY_MODEL_RECOVERY_WINDOW_SECONDS", 300.0, 30.0, 3600.0
         )
         idle_seconds = max(0.0, now - state.last_called_at) if state.last_called_at else recovery_window
         recovery = min(4.0, 4.0 * idle_seconds / recovery_window)
-
         return prior + quality + reliability + task_reliability + latency + cost + exploration + recovery - failure_penalty
 
     def rank(
@@ -144,21 +132,21 @@ class ModelScorer:
         task = _task_name(task_type)
         now = time.monotonic()
         with self._lock:
-            ranked: list[RankedModelRoute] = []
-            for model in models:
+            ranked: list[tuple[int, RankedModelRoute]] = []
+            for index, model in enumerate(models):
                 state = self.state_for(model)
                 available = state.cooldown_until <= now
                 if not include_cooling and not available:
                     continue
-                ranked.append(
-                    RankedModelRoute(
-                        model=model,
-                        score=self._score(model, state, task_type=task, now=now),
-                        available=available,
-                    )
-                )
-            ranked.sort(key=lambda row: (-row.score, _route_key(row.model)))
-            return ranked
+                ranked.append((index, RankedModelRoute(
+                    model=model,
+                    score=self._score(model, state, task_type=task, now=now),
+                    available=available,
+                )))
+            # Stable input order is the final tie breaker, preserving explicit/bootstrap
+            # order until live evidence is strong enough to move a route.
+            ranked.sort(key=lambda item: (-item[1].score, item[0]))
+            return [row for _, row in ranked]
 
     def record_success(
         self,
@@ -180,8 +168,7 @@ class ModelScorer:
             if latency_ms is not None:
                 latency = max(0.0, float(latency_ms))
                 state.latency_ewma_ms = (
-                    latency
-                    if state.latency_ewma_ms is None
+                    latency if state.latency_ewma_ms is None
                     else 0.75 * state.latency_ewma_ms + 0.25 * latency
                 )
             state.consecutive_failures = 0
@@ -211,14 +198,12 @@ class ModelScorer:
             if latency_ms is not None:
                 latency = max(0.0, float(latency_ms))
                 state.latency_ewma_ms = (
-                    latency
-                    if state.latency_ewma_ms is None
+                    latency if state.latency_ewma_ms is None
                     else 0.8 * state.latency_ewma_ms + 0.2 * latency
                 )
             state.consecutive_failures += 1
             state.last_called_at = now
             state.last_classification = kind
-
             base_cooldown = _bounded_float(
                 "OPERLY_MODEL_POOL_COOLDOWN_SECONDS", 45.0, 5.0, 600.0
             )
@@ -231,8 +216,7 @@ class ModelScorer:
                 "model_unavailable": 2.0,
             }.get(kind, 0.5)
             state.cooldown_until = max(
-                state.cooldown_until,
-                now + base_cooldown * multiplier,
+                state.cooldown_until, now + base_cooldown * multiplier
             )
 
     def snapshot(self) -> dict[str, dict[str, object]]:
