@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +10,8 @@ from apps.api.schemas import (
     MemoryCreate,
     TaskCreate,
     WorkspaceCreateInput,
+    WorkspaceInvitationAcceptInput,
+    WorkspaceInvitationCreateInput,
     WorkspaceMemberAddInput,
     WorkspaceMemberRoleInput,
     WorkspaceRoleCreateInput,
@@ -22,9 +26,18 @@ from packages.security.permissions import (
     resolve_workspace_permissions,
     validate_permissions,
 )
+from packages.security.workspace_invitations import (
+    WorkspaceInvitationError,
+    WorkspaceInvitationService,
+)
 from packages.workspace.service import WorkspaceService
 
 router = APIRouter(prefix="/api", tags=["workspace"])
+
+
+def _invite_url(token: str) -> str:
+    base = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+    return f"{base}/join#invite={token}"
 
 
 async def _require_workspace_permission(
@@ -79,6 +92,121 @@ async def create_workspace(
         "role": "owner",
         "current": False,
     }
+
+
+@router.get("/workspace-invitations/inspect")
+async def inspect_workspace_invitation(
+    token: str = Query(..., min_length=20, max_length=500),
+    db: AsyncSession = Depends(get_db),
+):
+    info = await WorkspaceInvitationService.inspect(db, token=token)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Workspace invitation is invalid or expired")
+    return info.as_dict(reveal_email=False)
+
+
+@router.post("/workspace-invitations/accept")
+async def accept_workspace_invitation(
+    payload: WorkspaceInvitationAcceptInput,
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        membership = await WorkspaceInvitationService.accept(
+            db,
+            token=payload.token,
+            user_id=auth.user.id,
+        )
+    except WorkspaceInvitationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    await db.commit()
+    return {
+        "ok": True,
+        "workspace_id": membership.tenant_id,
+        "role": membership.role,
+    }
+
+
+@router.get("/workspace/invitations")
+async def list_workspace_invitations(
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_workspace_permission(db, auth, "workspace:members:manage")
+    rows = await WorkspaceInvitationService.list_for_workspace(
+        db,
+        tenant_id=auth.tenant.id,
+    )
+    return [
+        {
+            "id": row.id,
+            "target_email": row.target_email,
+            "role": row.role,
+            "status": row.status,
+            "source": row.source,
+            "expires_at": row.expires_at.isoformat(),
+            "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
+            "accepted_by_user_id": row.accepted_by_user_id,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+@router.post("/workspace/invitations", status_code=201)
+async def create_workspace_invitation(
+    payload: WorkspaceInvitationCreateInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_workspace_permission(db, auth, "workspace:members:manage")
+    try:
+        role_key = normalize_role_key(payload.role)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not await _role_exists(db, auth.tenant.id, role_key):
+        raise HTTPException(status_code=422, detail="Workspace role not found")
+    try:
+        row, token = await WorkspaceInvitationService.create(
+            db,
+            tenant_id=auth.tenant.id,
+            role=role_key,
+            invited_by_user_id=auth.user.id,
+            target_email=payload.target_email,
+            ttl_days=payload.ttl_days,
+            source="operly_web",
+        )
+    except (ValueError, WorkspaceInvitationError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await db.commit()
+    return {
+        "id": row.id,
+        "workspace_id": row.tenant_id,
+        "target_email": row.target_email,
+        "role": row.role,
+        "expires_at": row.expires_at.isoformat(),
+        "invite_url": _invite_url(token),
+        "token": token,
+    }
+
+
+@router.delete("/workspace/invitations/{invitation_id}")
+async def revoke_workspace_invitation(
+    invitation_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_workspace_permission(db, auth, "workspace:members:manage")
+    try:
+        row = await WorkspaceInvitationService.revoke(
+            db,
+            tenant_id=auth.tenant.id,
+            invitation_id=invitation_id,
+        )
+    except WorkspaceInvitationError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    await db.commit()
+    return {"ok": True, "id": row.id, "status": row.status}
 
 
 @router.get("/workspace/roles")
@@ -247,10 +375,26 @@ async def add_workspace_member(
         raise HTTPException(status_code=422, detail=str(error)) from error
     user = await db.scalar(select(AppUser).where(AppUser.email == email))
     if user is None or not user.active:
-        raise HTTPException(
-            status_code=404,
-            detail="Operly user not found. Invite-by-email onboarding is not enabled yet.",
+        row, token = await WorkspaceInvitationService.create(
+            db,
+            tenant_id=auth.tenant.id,
+            role=role_key,
+            invited_by_user_id=auth.user.id,
+            target_email=email,
+            source="workspace_member_add",
         )
+        await db.commit()
+        return {
+            "membership_created": False,
+            "invitation": {
+                "id": row.id,
+                "email": email,
+                "role": role_key,
+                "expires_at": row.expires_at.isoformat(),
+                "invite_url": _invite_url(token),
+                "token": token,
+            },
+        }
     membership = TenantMember(
         tenant_id=auth.tenant.id,
         user_id=user.id,
@@ -263,6 +407,7 @@ async def add_workspace_member(
         await db.rollback()
         raise HTTPException(status_code=409, detail="User is already a workspace member") from error
     return {
+        "membership_created": True,
         "user_id": user.id,
         "display_name": user.display_name,
         "email": user.email,
