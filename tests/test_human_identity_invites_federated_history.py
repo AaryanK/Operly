@@ -1,11 +1,18 @@
+import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from packages.capabilities.firewall import CapabilityInvocationResult
 from packages.channels.identity import IdentityService
+from packages.connectors.google_provider import GMAIL_READONLY
 from packages.context.broker import ContextBroker
+from packages.context.federation import FederatedHistoryService
+from packages.database.account_connector_models import AccountConnector
 from packages.database.company_models import BusinessEventRecord
 from packages.database.db import Base
 from packages.database.models import AppUser, Message, Tenant, TenantMember
@@ -250,3 +257,102 @@ class HumanIdentityInviteHistoryTests(unittest.IsolatedAsyncioTestCase):
             serialized = str(materialized)
             self.assertIn("Authorized falcon workspace discussion", serialized)
             self.assertNotIn("ULTRASECRET", serialized)
+
+    async def test_federated_history_fans_out_across_all_authorized_google_accounts(self):
+        async with self.sessions() as db:
+            user = AppUser(email="human@example.test", display_name="Human", active=True)
+            db.add(user)
+            await db.flush()
+            user_id = user.id
+            first = AccountConnector(
+                user_id=user_id,
+                connector_type="google_workspace",
+                provider="google",
+                display_name="Personal Gmail",
+                status="connected",
+                enabled=True,
+                provider_account_id="personal@example.test",
+                granted_scopes_json=json.dumps([GMAIL_READONLY]),
+            )
+            second = AccountConnector(
+                user_id=user_id,
+                connector_type="google_workspace",
+                provider="google",
+                display_name="Research Gmail",
+                status="connected",
+                enabled=True,
+                provider_account_id="research@example.test",
+                granted_scopes_json=json.dumps([GMAIL_READONLY]),
+            )
+            db.add_all([first, second])
+            await db.flush()
+            connector_names = {first.id: first.display_name, second.id: second.display_name}
+            await db.commit()
+
+        async with self.sessions() as db:
+            runtime = SimpleNamespace(
+                db=db,
+                invocation={
+                    "channel": "web",
+                    "surface": SurfaceKind.PERSONAL_PRIVATE.value,
+                    "authority": sorted(PERSONAL_EXECUTION_PERMISSIONS),
+                    "metadata": {
+                        "_surface_kind": SurfaceKind.PERSONAL_PRIVATE.value,
+                        "is_direct": True,
+                        "shared_surface": False,
+                    },
+                },
+            )
+
+            async def invoke(request, execution):
+                self.assertEqual(execution.user_id, user_id)
+                connector_id = request.arguments["connector_id"]
+                account_name = connector_names[connector_id]
+                return CapabilityInvocationResult(
+                    ok=True,
+                    capability_id=request.capability_id,
+                    status="VERIFIED",
+                    observation={
+                        "connector_id": connector_id,
+                        "provider_account_id": f"{connector_id}@example.test",
+                        "account_display_name": account_name,
+                        "query": request.arguments["query"],
+                        "messages": [
+                            {
+                                "id": f"message-{connector_id}",
+                                "thread_id": f"thread-{connector_id}",
+                                "from": "sender@example.test",
+                                "to": "human@example.test",
+                                "subject": f"Falcon update from {account_name}",
+                                "date": "Wed, 26 Aug 2026 12:00:00 -0500",
+                                "snippet": f"Falcon history in {account_name}",
+                                "label_ids": ["INBOX"],
+                            }
+                        ],
+                    },
+                )
+
+            mocked = AsyncMock(side_effect=invoke)
+            with patch.object(FederatedHistoryService._gmail_firewall, "invoke", new=mocked):
+                refs = await FederatedHistoryService.search(
+                    runtime,
+                    tenant_id=f"personal:{user_id}",
+                    user_id=user_id,
+                    conversation_id=None,
+                    authority=set(PERSONAL_EXECUTION_PERMISSIONS),
+                    surface=SurfaceKind.PERSONAL_PRIVATE,
+                    query="falcon",
+                    limit=20,
+                )
+
+            self.assertEqual(mocked.await_count, 2)
+            searched_connector_ids = {
+                call.args[0].arguments["connector_id"] for call in mocked.await_args_list
+            }
+            self.assertEqual(searched_connector_ids, set(connector_names))
+            gmail_refs = [ref for ref in refs if ref.source == "gmail"]
+            self.assertEqual(len(gmail_refs), 2)
+            self.assertEqual(
+                {ref.scope for ref in gmail_refs},
+                {f"provider:google:{connector_id}" for connector_id in connector_names},
+            )
