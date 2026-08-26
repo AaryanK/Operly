@@ -15,6 +15,7 @@ from .contracts import (
     ValidatorKind,
     ValidatorSpec,
 )
+from .evidence import FactoryEvidenceLedger
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner, StageAttempt
 from .validation import ControlPlaneValidator
 from .worker_adapter import AgentRuntimeWorker
@@ -28,6 +29,7 @@ __all__ = [
     "Defect",
     "FactoryBlueprint",
     "FactoryBlueprintCompiler",
+    "FactoryEvidenceLedger",
     "FactoryExecutionResult",
     "FactoryStageRunner",
     "ObjectiveSpec",
