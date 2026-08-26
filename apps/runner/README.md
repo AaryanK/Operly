@@ -86,6 +86,38 @@ or connector secrets on the runner host. Future runtime capabilities must contin
 to use scoped semantic service bindings/capability-gateway credentials rather than
 copying provider secrets into generated containers.
 
+## Local development with the same control-plane protocol
+
+For local development, keep the Operly API/worker on the exact same
+`ExternalRunnerAdapter` path used in production and run the development sidecar as a
+separate process. The sidecar speaks the same signed `/v1/builds` protocol but uses
+the existing process-isolated test runners underneath. It is not production
+isolation and is hard-disabled outside `development`/`test`.
+
+Use one strong local-only token in both processes:
+
+```powershell
+$env:OPERLY_ENV="development"
+$env:OPERLY_ENABLE_LOCAL_RUNNER_SIDECAR="1"
+$env:OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER="1"
+$env:OPERLY_TEST_RUNNER_ALLOW_DEPENDENCY_INSTALL="1"
+$env:OPERLY_SANDBOX_RUNNER_URL="http://127.0.0.1:8091"
+$env:OPERLY_LOCAL_RUNNER_PUBLIC_BASE_URL="http://127.0.0.1:8091"
+$env:OPERLY_SANDBOX_RUNNER_TOKEN="replace-with-at-least-32-random-characters"
+
+uv run uvicorn apps.runner.dev_main:app --host 127.0.0.1 --port 8091
+```
+
+Run the Operly API and durable solution worker with the same environment variables.
+`software.build`, `software.edit`, runner polling, evidence persistence, and preview
+URLs then cross the same `ExternalRunnerAdapter` HTTP/HMAC boundary they use on the
+VPS. Only the implementation behind that boundary changes.
+
+The loopback HTTP exception is intentionally narrow: it requires both
+`OPERLY_ENV=development|test` and `OPERLY_ENABLE_LOCAL_RUNNER_SIDECAR=1`, accepts
+only literal loopback hosts, and does not permit LAN/private runner addresses.
+Production continues to require the HTTPS/public-host/allowlist policy above.
+
 ## Runner protocol
 
 Authenticated control endpoints:
@@ -100,8 +132,10 @@ DELETE /v1/previews/{preview_id}
 ```
 
 All requests use the #116 bearer + HMAC request signature contract and all control
-responses are HMAC-signed. `POST /v1/builds` is idempotent and returns `queued`
-quickly; execution proceeds outside the request timeout and is polled durably.
+responses are HMAC-signed. The production `POST /v1/builds` endpoint is idempotent
+and returns `queued` quickly; execution proceeds outside the request timeout and is
+polled durably. The development sidecar preserves the same request/response contract
+and evidence shape while using test-only subprocess isolation.
 
 `supportsDeploy` remains false. This runner proves isolated preview execution only;
 production deployment/rollback is a later platform layer.
