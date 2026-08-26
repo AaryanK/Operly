@@ -80,9 +80,6 @@ async def test_runner_test_failure_is_not_reported_as_source_generation():
                 "packages.solutions.generation_worker._ensure_plan",
                 new=AsyncMock(return_value=(plan_row, plan)),
             ), patch(
-                "packages.solutions.generation_worker._bind_project",
-                new=AsyncMock(),
-            ), patch(
                 "packages.solutions.generation_worker.build_with_repair",
                 new=fake_build,
             ):
