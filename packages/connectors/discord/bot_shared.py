@@ -23,6 +23,7 @@ from packages.channels.identity import IdentityService
 from packages.channels.linking import IdentityLinkService
 from packages.channels.service import ChannelService
 from packages.connectors.discord.scheduled_tasks import run_harness_task_job
+from packages.connectors.discord.transport import collect_discord_attachments, send_discord_response
 from packages.database.agent_models import AttachmentAudit
 from packages.database.channel_models import ChannelInstallation
 from packages.database.db import init_db, session_scope
@@ -346,11 +347,12 @@ async def _run_attachment_plugin(bundle, temp_dir, *, channel: str, is_direct: b
 
 
 async def process_discord_attachments(message, tenant_id, prompt, *, shared_message_store: bool):
-    """Ingest attachments, persist derived context, then let caller run the agent.
+    """Legacy shared-workspace attachment preprocessor.
 
-    This function intentionally does not present the attachment analyst's prose as
-    the final assistant answer. The derived artifact is consumed by ChannelService
-    on the same user turn, where the normal capability/approval harness is present.
+    Personal Discord DMs no longer use this path; their files enter Personal artifact
+    scope through the transport-neutral ChannelEnvelope and normal ``files.process``
+    capability. Shared/full/guest workspace attachment behavior remains here during
+    the migration so existing server continuity is preserved.
     """
     if await attachment_already_processed(message.id):
         return True
@@ -598,8 +600,7 @@ async def on_message(message: discord.Message):
         ) + "]"
 
     # Server messages are shared channel records. DMs are intentionally not copied
-    # into the tenant-wide Message table; the linked user's AgentConversation and
-    # private context remain the authority for DM history.
+    # into the tenant-wide Message table; Personal AI owns DM history/artifacts.
     if tenant_id:
         await store_message(message, tenant_id, stored_content, is_bot=False)
 
@@ -613,34 +614,44 @@ async def on_message(message: discord.Message):
         if message.attachments:
             async with session_scope() as db:
                 resolved = await ChannelService.resolve(db, envelope)
-            if envelope.is_direct and not resolved.user_id:
-                await send_chunks(message, "Link your Discord identity first with `!operly link` before sending private files.")
-                return
-            if not resolved.tenant_id or not resolved.allow_tenant_context:
-                await send_chunks(message, "Link your Discord identity to an authorized member of this Operly workspace before processing business files.")
-                return
-            async with message.channel.typing():
-                ingested = await process_discord_attachments(
-                    message,
-                    resolved.tenant_id,
-                    prompt,
-                    shared_message_store=message.guild is not None,
-                )
-            if not ingested:
-                return
-            # Do not return here. The ingestion plugin persisted bounded derived
-            # context; the exact same user turn now enters ChannelService and the
-            # normal capability/approval harness.
+
+            if envelope.is_direct:
+                if not resolved.user_id:
+                    await send_chunks(
+                        message,
+                        "Link your Discord identity first with `!operly link` before sending private files.",
+                    )
+                    return
+                # Personal files are now canonical Personal artifacts. The Discord
+                # adapter only authenticates/downloads bytes; ChannelService persists
+                # them under the resolved user before Personal AI receives handles.
+                envelope.attachments = await collect_discord_attachments(message)
+            else:
+                if not resolved.tenant_id or not resolved.allow_tenant_context:
+                    await send_chunks(
+                        message,
+                        "This Discord workspace does not authorize file processing for your current identity.",
+                    )
+                    return
+                async with message.channel.typing():
+                    ingested = await process_discord_attachments(
+                        message,
+                        resolved.tenant_id,
+                        prompt,
+                        shared_message_store=True,
+                    )
+                if not ingested:
+                    return
 
         async with message.channel.typing():
             response = await ChannelService.handle(envelope)
 
-        sent = await send_chunks(message, response.message)
+        sent = await send_discord_response(message, response)
         if message.guild is not None and response.tenant_id:
             await store_message(
                 sent,
                 response.tenant_id,
-                response.message,
+                response.base_message or response.message,
                 is_bot=True,
             )
         if response.status == "ok":

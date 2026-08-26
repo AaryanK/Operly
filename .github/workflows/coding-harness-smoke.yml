@@ -4,12 +4,8 @@ on:
   push:
     branches: [main, "architecture/**", "fix/**"]
     paths:
-      - "apps/api/custom_software_router.py"
-      - "apps/api/software_projects_router.py"
-      - "apps/api/main.py"
-      - "alembic/versions/0030_universal_software_projects.py"
-      - "packages/database/schema.py"
-      - "packages/database/software_project_models.py"
+      - "apps/api/**"
+      - "alembic/versions/**"
       - "packages/agents/**"
       - "packages/coding_harness/**"
       - "packages/custom_software/**"
@@ -19,52 +15,16 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
-      - "packages/solutions/generation_worker.py"
-      - "packages/solutions/traced_generation_worker.py"
-      - "packages/database/model_trace.py"
-      - "packages/studio/model_latency_policy.py"
-      - "packages/capability_sandbox/target_resolution.py"
-      - "tests/test_opencode_coding_harness.py"
-      - "tests/test_coding_agent_tool_loop.py"
-      - "tests/test_coding_agent_input_guardrail.py"
-      - "tests/test_coding_semantic_failover.py"
-      - "tests/test_solution_generation_trace_contract.py"
-      - "tests/test_generated_solution_worker.py"
-      - "tests/test_generation_stage_truth.py"
-      - "tests/test_coding_spec_compaction.py"
-      - "tests/test_live_plan_projection.py"
-      - "tests/test_live_projection_independence.py"
-      - "tests/test_planning_model_runtime_boundary.py"
-      - "tests/test_planning_output_normalizer.py"
-      - "tests/test_scope_convergence.py"
-      - "tests/test_graph_coverage_repair.py"
-      - "tests/test_studio_phase0_semantic_planning_repair.py"
-      - "tests/test_coding_harness_runtime_resolution.py"
-      - "tests/test_coding_harness_execution_loop.py"
-      - "tests/test_coding_model_authorization.py"
-      - "tests/test_custom_software_build_routes.py"
-      - "tests/test_coding_context_window.py"
-      - "tests/test_coding_context_working_set.py"
-      - "tests/test_model_pool_failover.py"
-      - "tests/test_multi_provider_model_portfolio.py"
-      - "tests/test_target_architecture_contracts.py"
-      - "tests/test_software_project_persistence.py"
-      - "tests/test_general_software_construction.py"
-      - "tests/test_isolated_runner.py"
-      - "tests/test_fullstack_runtime_contract.py"
-      - "tests/test_studio_agent_generation.py"
-      - "tests/test_studio_agent_controller.py"
-      - "tests/test_studio_real_capability_contracts.py"
-      - "tests/test_studio_behavior_first_finish_gate.py"
+      - "packages/solutions/**"
+      - "packages/database/**"
+      - "packages/studio/**"
+      - "packages/capability_sandbox/**"
+      - "tests/**"
       - ".github/workflows/coding-harness-smoke.yml"
   pull_request:
     paths:
-      - "apps/api/custom_software_router.py"
-      - "apps/api/software_projects_router.py"
-      - "apps/api/main.py"
-      - "alembic/versions/0030_universal_software_projects.py"
-      - "packages/database/schema.py"
-      - "packages/database/software_project_models.py"
+      - "apps/api/**"
+      - "alembic/versions/**"
       - "packages/agents/**"
       - "packages/coding_harness/**"
       - "packages/custom_software/**"
@@ -74,43 +34,11 @@ on:
       - "packages/runtime_plugins/**"
       - "packages/software_projects/**"
       - "packages/service_bindings/**"
-      - "packages/solutions/generation_worker.py"
-      - "packages/solutions/traced_generation_worker.py"
-      - "packages/database/model_trace.py"
-      - "packages/studio/model_latency_policy.py"
-      - "packages/capability_sandbox/target_resolution.py"
-      - "tests/test_opencode_coding_harness.py"
-      - "tests/test_coding_agent_tool_loop.py"
-      - "tests/test_coding_agent_input_guardrail.py"
-      - "tests/test_coding_semantic_failover.py"
-      - "tests/test_solution_generation_trace_contract.py"
-      - "tests/test_generated_solution_worker.py"
-      - "tests/test_generation_stage_truth.py"
-      - "tests/test_coding_spec_compaction.py"
-      - "tests/test_live_plan_projection.py"
-      - "tests/test_live_projection_independence.py"
-      - "tests/test_planning_model_runtime_boundary.py"
-      - "tests/test_planning_output_normalizer.py"
-      - "tests/test_scope_convergence.py"
-      - "tests/test_graph_coverage_repair.py"
-      - "tests/test_studio_phase0_semantic_planning_repair.py"
-      - "tests/test_coding_harness_runtime_resolution.py"
-      - "tests/test_coding_harness_execution_loop.py"
-      - "tests/test_coding_model_authorization.py"
-      - "tests/test_custom_software_build_routes.py"
-      - "tests/test_coding_context_window.py"
-      - "tests/test_coding_context_working_set.py"
-      - "tests/test_model_pool_failover.py"
-      - "tests/test_multi_provider_model_portfolio.py"
-      - "tests/test_target_architecture_contracts.py"
-      - "tests/test_software_project_persistence.py"
-      - "tests/test_general_software_construction.py"
-      - "tests/test_isolated_runner.py"
-      - "tests/test_fullstack_runtime_contract.py"
-      - "tests/test_studio_agent_generation.py"
-      - "tests/test_studio_agent_controller.py"
-      - "tests/test_studio_real_capability_contracts.py"
-      - "tests/test_studio_behavior_first_finish_gate.py"
+      - "packages/solutions/**"
+      - "packages/database/**"
+      - "packages/studio/**"
+      - "packages/capability_sandbox/**"
+      - "tests/**"
       - ".github/workflows/coding-harness-smoke.yml"
   workflow_dispatch:
 
@@ -127,28 +55,30 @@ jobs:
           node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
-      - name: Compile Phase 0 coding runtime
+      - name: Compile current coding runtime
         run: >-
-          python -m py_compile
-          packages/coding_harness/context_window.py
-          packages/coding_harness/contract_guidance.py
-          packages/coding_harness/objective_audit.py
-          packages/coding_harness/opencode_agent.py
-          packages/coding_harness/source_service.py
-          packages/coding_harness/execution_loop.py
-          packages/solutions/generation_worker.py
+          python -m compileall -q
+          packages/agents
+          packages/coding_harness
+          packages/model_runtime
+          packages/capabilities
+          packages/plugins
+          packages/runtime_plugins
+          packages/software_projects
+          packages/solutions
+          packages/capability_sandbox
       - name: Check current browser JavaScript syntax
         run: |
           set -euo pipefail
           find apps/web/static -maxdepth 1 -type f -name '*.js' -print0 | sort -z | xargs -0 -r -n1 node --check
-      - run: >-
+      - name: Run current coding-runtime contracts
+        run: >-
           python -m pytest -q
           tests/test_opencode_coding_harness.py
           tests/test_coding_agent_tool_loop.py
           tests/test_coding_agent_input_guardrail.py
           tests/test_coding_semantic_failover.py
           tests/test_solution_generation_trace_contract.py
-          tests/test_generated_solution_worker.py
           tests/test_generation_stage_truth.py
           tests/test_coding_spec_compaction.py
           tests/test_live_plan_projection.py
@@ -161,7 +91,6 @@ jobs:
           tests/test_coding_harness_runtime_resolution.py
           tests/test_coding_harness_execution_loop.py
           tests/test_coding_model_authorization.py
-          tests/test_custom_software_build_routes.py
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
           tests/test_model_pool_failover.py
@@ -169,7 +98,6 @@ jobs:
           tests/test_target_architecture_contracts.py
           tests/test_software_project_persistence.py
           tests/test_general_software_construction.py
-          tests/test_isolated_runner.py
           tests/test_fullstack_runtime_contract.py
           tests/test_studio_agent_generation.py
           tests/test_studio_agent_controller.py

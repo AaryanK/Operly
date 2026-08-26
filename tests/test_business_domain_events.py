@@ -213,7 +213,7 @@ def test_create_contact_emits_event_and_wakes_matching_workflow_task():
     asyncio.run(scenario())
 
 
-def test_verified_capability_wakes_workflow_that_mixes_studio_and_internal_plugins():
+def test_verified_capability_wakes_workflow_that_mixes_software_and_connector_plugins():
     async def scenario():
         bootstrap_builtin_plugins()
         manifests = default_plugin_runtime().manifests
@@ -224,20 +224,20 @@ def test_verified_capability_wakes_workflow_that_mixes_studio_and_internal_plugi
                     {
                         "id": "inspect_solution",
                         "type": "invoke",
-                        "capability": "studio.public_url",
+                        "capability": "software.project.inspect",
                         "arguments": {"project_id": "$trigger.payload.action_id"},
                     },
                     {
                         "id": "notify",
                         "type": "invoke",
                         "capability": "discord.send_dm",
-                        "arguments": {"message": "$inspect_solution.public_url"},
+                        "arguments": {"message": "$inspect_solution.project.id"},
                     },
                 ]
             }
         )
         capabilities = _invoke_capabilities(workflow)
-        assert capabilities == {"studio.public_url", "discord.send_dm"}
+        assert capabilities == {"software.project.inspect", "discord.send_dm"}
         assert all(manifests.owner_for_capability(item) is not None for item in capabilities)
 
         engine, Session = await _database()
@@ -261,7 +261,7 @@ def test_verified_capability_wakes_workflow_that_mixes_studio_and_internal_plugi
                 await db.flush()
                 payload = {
                     "version": 3,
-                    "objective": "Run a mixed Studio/plugin workflow in real time.",
+                    "objective": "Run a mixed software/plugin workflow in real time.",
                     "trigger": {
                         "kind": "event",
                         "event_id": "action.verified",
