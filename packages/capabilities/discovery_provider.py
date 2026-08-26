@@ -10,6 +10,7 @@ import asyncio
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
 from packages.capabilities.search_index import CapabilitySearchHit, CapabilitySearchIndex
+from packages.channels.presentation import connector_tool_context
 from packages.security.surfaces import SurfaceKind, capability_surface_allowed
 
 
@@ -58,6 +59,36 @@ class CapabilityDiscoveryProvider(BaseProvider):
             tags=frozenset({"kernel", "discovery"}),
             semantic_operations=frozenset({"describe tool", "describe capability", "get tool schema"}),
         ),
+        CapabilityDefinition(
+            "connector.presentation",
+            "connector_presentation",
+            "Return the small last-mile presentation/transport contract for a connector such as Discord, Slack, WhatsApp, Web, Email or Gmail. Use when output must be shaped for another platform (text dialect, size limit, HTML support, rich blocks, native-file or MIME attachment strategy). This describes formatting/transport only and grants no connector authority.",
+            {
+                "type": "object",
+                "properties": {
+                    "provider": {
+                        "type": "string",
+                        "maxLength": 80,
+                        "description": "Connector/provider to target. Omit to inspect the current interaction channel.",
+                    }
+                },
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            approval_policy=ApprovalPolicy.AUTO,
+            plugin_id="operly.core.discovery",
+            category="connector",
+            tags=frozenset({"connector", "presentation", "format", "transport"}),
+            semantic_operations=frozenset({
+                "format for platform",
+                "format for discord",
+                "format for slack",
+                "format email html",
+                "attach file to email",
+                "connector output format",
+            }),
+        ),
     )
 
     def __init__(self, registry) -> None:
@@ -98,8 +129,29 @@ class CapabilityDiscoveryProvider(BaseProvider):
         return False
 
     async def execute(self, context, capability_name, arguments):
-        authority = set((context.invocation or {}).get("authority") or [])
+        invocation = context.invocation or {}
+        authority = set(invocation.get("authority") or [])
         surface = self._surface(context)
+
+        if capability_name == "connector.presentation":
+            metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
+            provider = str(
+                arguments.get("provider")
+                or metadata.get("origin_provider")
+                or invocation.get("channel")
+                or "web"
+            ).strip().lower()
+            return CapabilityResult(
+                True,
+                False,
+                {
+                    "presentation": connector_tool_context(provider),
+                    "surface": surface.value,
+                    "authorization_granted": False,
+                    "note": "Presentation metadata describes last-mile formatting/transport only; connector authorization is resolved separately at execution.",
+                },
+            )
+
         eligible = self._eligible_definitions(context, authority)
         eligible_by_id = {definition.id: definition for definition in eligible}
 
