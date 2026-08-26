@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 
 import packages.coding_harness.runtime_agent as runtime_module
+import packages.coding_harness.studio_controller as removed_studio_runtime
 from packages.coding_harness import AgentRuntimeCodingAgent
 from packages.coding_harness.opencode_agent import (
     CapabilityCodingAgent as DirectCapabilityCodingAgent,
@@ -15,6 +18,19 @@ def test_all_software_agent_exports_resolve_to_canonical_runtime_adapter():
     assert DirectOpenCodeStyleCodingAgent is AgentRuntimeCodingAgent
     assert SourceServiceCodingAgent is AgentRuntimeCodingAgent
     assert SoftwareBuildCodingAgent is AgentRuntimeCodingAgent
+
+
+def test_removed_studio_runtime_is_only_a_fail_closed_compatibility_tombstone():
+    first = SimpleNamespace(source_version=7, bundle_digest="sha256:" + "1" * 64, id="s1")
+    same = SimpleNamespace(source_version=7, bundle_digest="sha256:" + "1" * 64, id="s1")
+    assert removed_studio_runtime.source_scoped_idempotency_key("build", first) == (
+        removed_studio_runtime.source_scoped_idempotency_key("build", same)
+    )
+
+    with pytest.raises(RuntimeError, match="Studio-specific agent orchestration was removed"):
+        import asyncio
+
+        asyncio.run(removed_studio_runtime.run_studio_generation())
 
 
 @pytest.mark.asyncio
