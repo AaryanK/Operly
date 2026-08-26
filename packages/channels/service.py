@@ -7,6 +7,7 @@ from packages.artifacts.service import ArtifactScope
 from packages.business_brain import AgentInput, get_agent_service
 from packages.business_brain.conversation_artifacts import artifact_context, recent_artifacts
 from packages.business_brain.personal_agent import get_personal_agent_service
+from packages.channels.attachment_ingress import ingest_channel_attachments
 from packages.channels.envelope import ChannelEnvelope, ChannelResponse
 from packages.channels.guest_chat import get_guest_conversation_service
 from packages.channels.identity import IdentityService
@@ -305,6 +306,13 @@ class ChannelService:
             if envelope.is_direct and resolved.user_id:
                 user = await db.get(AppUser, resolved.user_id)
                 display_name = user.display_name if user else envelope.actor_name
+                personal_scope = _personal_artifact_scope(resolved.user_id)
+                attachment_prompt, attachment_names = await ingest_channel_attachments(
+                    db,
+                    envelope=envelope,
+                    scope=personal_scope,
+                    created_by=resolved.user_id,
+                )
                 await IdentityService.upsert_conversation_state(
                     db,
                     provider=envelope.provider,
@@ -317,6 +325,8 @@ class ChannelService:
                         "direct": True,
                         "personal_scope": True,
                         "workspace_focus_only": bool(resolved.tenant_id),
+                        "origin_provider": envelope.provider,
+                        "attachment_count": len(attachment_names),
                     },
                 )
                 await db.commit()
@@ -326,10 +336,12 @@ class ChannelService:
                     message=envelope.text,
                     conversation_id=f"{envelope.provider}:{envelope.external_conversation_id}",
                     selected_workspace_id=resolved.tenant_id,
+                    attachment_context=attachment_prompt or None,
+                    attachment_names=attachment_names,
                 )
                 result = await project_agent_result(
                     db,
-                    _personal_artifact_scope(resolved.user_id),
+                    personal_scope,
                     result,
                 )
                 return ChannelResponse(
