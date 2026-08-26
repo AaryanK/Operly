@@ -2,17 +2,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
-from .compiler import FactoryBlueprintCompiler
+from packages.agents.persistence import load_agent_run
+
+from .compiler import FactoryBlueprint, FactoryBlueprintCompiler
 from .context_injector import (
     CapabilityResolver,
     ContextMaterialize,
     ContextSearch,
     StageContextInjector,
 )
-from .contracts import RepairBudget
+from .contracts import (
+    AcceptanceContract,
+    ObjectiveSpec,
+    RepairBudget,
+    StageGraph,
+    StageSpec,
+    StageWorkerResult,
+    ValidatorKind,
+    ValidatorSpec,
+)
 from .evidence import FactoryEvidenceLedger
 from .repair import DefectRepairPlanner
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner
@@ -49,10 +60,107 @@ class FactoryRunResponse:
             },
             "factory": self.execution.as_dict(),
             "blueprint": self.blueprint,
-            # Waiting is a durable pause, not a stopped/failed job.
             "stopped": not self.execution.completed and not self.execution.waiting,
             "stop_reason": self.execution.stop_reason,
         }
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple, set)):
+        return ()
+    return tuple(str(item) for item in value if str(item).strip())
+
+
+def _blueprint_from_checkpoint(checkpoint: dict[str, Any]) -> FactoryBlueprint:
+    """Rebuild frozen contracts from persisted factory state without model inference."""
+
+    factory = checkpoint.get("factory")
+    if not isinstance(factory, dict):
+        raise ValueError("Factory checkpoint is missing control-plane state")
+
+    objective_data = factory.get("objective_spec")
+    acceptance_data = factory.get("acceptance")
+    graph_data = factory.get("graph")
+    if not isinstance(objective_data, dict):
+        raise ValueError("Factory checkpoint is missing objective_spec")
+    if not isinstance(acceptance_data, dict):
+        raise ValueError("Factory checkpoint is missing acceptance contract")
+    if not isinstance(graph_data, dict):
+        raise ValueError("Factory checkpoint is missing stage graph")
+
+    objective_text = str(
+        objective_data.get("objective")
+        or checkpoint.get("objective")
+        or ""
+    ).strip()
+    if not objective_text:
+        raise ValueError("Factory checkpoint objective is empty")
+    objective = ObjectiveSpec(
+        objective=objective_text,
+        deliverables=_strings(objective_data.get("deliverables")),
+        constraints=_strings(objective_data.get("constraints")),
+        required_side_effects=_strings(objective_data.get("required_side_effects")),
+    )
+
+    validators: list[ValidatorSpec] = []
+    for raw in acceptance_data.get("validators") or ():
+        if not isinstance(raw, dict):
+            continue
+        try:
+            kind = ValidatorKind(str(raw.get("kind") or "deterministic"))
+        except ValueError as exc:
+            raise ValueError("Factory checkpoint contains an invalid validator kind") from exc
+        validator_id = str(raw.get("id") or "").strip()
+        criterion = str(raw.get("criterion") or "").strip()
+        if not validator_id or not criterion:
+            raise ValueError("Factory checkpoint contains an invalid validator")
+        validators.append(
+            ValidatorSpec(
+                id=validator_id,
+                criterion=criterion,
+                kind=kind,
+                validator=str(raw.get("validator") or "evidence_present").strip(),
+                expected=(
+                    dict(raw.get("expected"))
+                    if isinstance(raw.get("expected"), dict)
+                    else {}
+                ),
+                parameters=(
+                    dict(raw.get("parameters"))
+                    if isinstance(raw.get("parameters"), dict)
+                    else {}
+                ),
+                required=bool(raw.get("required", True)),
+            )
+        )
+    acceptance = AcceptanceContract(tuple(validators))
+
+    stages: list[StageSpec] = []
+    for raw in graph_data.get("stages") or ():
+        if not isinstance(raw, dict):
+            continue
+        stages.append(
+            StageSpec(
+                id=str(raw.get("id") or "").strip(),
+                objective=str(raw.get("objective") or "").strip(),
+                dependencies=_strings(raw.get("dependencies")),
+                context_intents=_strings(raw.get("context_intents")),
+                capability_intents=_strings(raw.get("capability_intents")),
+                input_refs=_strings(raw.get("input_refs")),
+                validation_ids=_strings(raw.get("validation_ids")),
+                assigned_role=str(raw.get("assigned_role") or "business_agent"),
+                can_parallelize=bool(raw.get("can_parallelize")),
+                max_output_chars=max(
+                    1000,
+                    min(int(raw.get("max_output_chars") or 12_000), 100_000),
+                ),
+            )
+        )
+    return FactoryBlueprint(
+        objective=objective,
+        acceptance=acceptance,
+        graph=StageGraph(tuple(stages)),
+    )
 
 
 class AgentFactoryControlPlane:
@@ -121,6 +229,51 @@ class AgentFactoryControlPlane:
             f"({execution.stop_reason})."
         )
 
+    def _runner(
+        self,
+        *,
+        run_metadata: dict[str, Any],
+        ledger: FactoryEvidenceLedger,
+    ) -> FactoryStageRunner:
+        injector = StageContextInjector(
+            search=self.context_search,
+            materialize=self.context_materialize,
+            resolve_capabilities=self.capability_resolver,
+        )
+        worker = AgentRuntimeWorker(
+            schemas=self.schemas,
+            invoke=self.invoke,
+            model_resolver=self.model_resolver,
+            max_steps=self.max_worker_steps,
+            inference_metadata=run_metadata,
+        )
+        validator = ControlPlaneValidator(
+            python_test=self.python_validator,
+            semantic=self.semantic_validator,
+        )
+        return FactoryStageRunner(
+            context_injector=injector,
+            worker=worker,
+            validator=validator,
+            repair=self.repair_planner,
+            event_sink=ledger.append,
+            repair_budget=self.repair_budget,
+            max_parallelism=self.max_parallelism,
+        )
+
+    @staticmethod
+    def _response(
+        runtime_run_id: str,
+        blueprint: FactoryBlueprint,
+        execution: FactoryExecutionResult,
+    ) -> FactoryRunResponse:
+        return FactoryRunResponse(
+            runtime_run_id=runtime_run_id,
+            message=AgentFactoryControlPlane._message(execution),
+            execution=execution,
+            blueprint=blueprint.as_dict(),
+        )
+
     async def run(
         self,
         *,
@@ -129,6 +282,7 @@ class AgentFactoryControlPlane:
         ingress_metadata: dict[str, Any] | None = None,
         initial_context_refs: set[str] | None = None,
         initial_artifact_refs: set[str] | None = None,
+        stage_input_artifact_refs: dict[str, Iterable[str]] | None = None,
         facts: dict[str, Any] | None = None,
     ) -> FactoryRunResponse:
         runtime_run_id = str(metadata.get("runtime_run_id") or uuid4())
@@ -150,44 +304,126 @@ class AgentFactoryControlPlane:
             objective=objective,
             metadata=run_metadata,
         )
-        await ledger.start(blueprint)
-
-        injector = StageContextInjector(
-            search=self.context_search,
-            materialize=self.context_materialize,
-            resolve_capabilities=self.capability_resolver,
+        await ledger.start(
+            blueprint,
+            initial_context_refs=initial_context_refs,
+            initial_artifact_refs=initial_artifact_refs,
+            stage_input_artifact_refs=stage_input_artifact_refs,
         )
-        worker = AgentRuntimeWorker(
-            schemas=self.schemas,
-            invoke=self.invoke,
-            model_resolver=self.model_resolver,
-            max_steps=self.max_worker_steps,
-            inference_metadata=run_metadata,
-        )
-        validator = ControlPlaneValidator(
-            python_test=self.python_validator,
-            semantic=self.semantic_validator,
-        )
-        runner = FactoryStageRunner(
-            context_injector=injector,
-            worker=worker,
-            validator=validator,
-            repair=self.repair_planner,
-            event_sink=ledger.append,
-            repair_budget=self.repair_budget,
-            max_parallelism=self.max_parallelism,
-        )
-        execution = await runner.run(
+        execution = await self._runner(
+            run_metadata=run_metadata,
+            ledger=ledger,
+        ).run(
             graph=blueprint.graph,
             acceptance=blueprint.acceptance,
             initial_context_refs=initial_context_refs,
             initial_artifact_refs=initial_artifact_refs,
+            stage_input_artifact_refs=stage_input_artifact_refs,
             facts=facts,
         )
         await ledger.finish(execution)
-        return FactoryRunResponse(
-            runtime_run_id=runtime_run_id,
-            message=self._message(execution),
-            execution=execution,
-            blueprint=blueprint.as_dict(),
+        return self._response(runtime_run_id, blueprint, execution)
+
+    async def resume(
+        self,
+        *,
+        runtime_run_id: str,
+        metadata: dict[str, Any],
+        stage_result: StageWorkerResult,
+        stage_id: str | None = None,
+        facts: dict[str, Any] | None = None,
+    ) -> FactoryRunResponse:
+        """Resume the exact waiting station from terminal provider/approval evidence.
+
+        The frozen objective/acceptance/DAG are loaded from the durable checkpoint.
+        The waiting side effect is never re-issued by a worker; ``stage_result`` is
+        validated as the terminal result for that station, then downstream work may
+        continue under freshly resolved authority/context.
+        """
+
+        clean_run_id = str(runtime_run_id or "").strip()
+        if not clean_run_id:
+            raise ValueError("runtime_run_id is required")
+        run_metadata = {
+            **dict(metadata),
+            "runtime_run_id": clean_run_id,
+            "runtime_controller": "factory",
+        }
+        loaded = await load_agent_run(clean_run_id, metadata=run_metadata)
+        if loaded is None:
+            raise LookupError("Factory run was not found in the current execution scope")
+        checkpoint = loaded.get("checkpoint")
+        if not isinstance(checkpoint, dict):
+            raise ValueError("Factory run has no resumable checkpoint")
+        blueprint = _blueprint_from_checkpoint(checkpoint)
+        factory_state = checkpoint.get("factory")
+        if not isinstance(factory_state, dict):
+            raise ValueError("Factory run has no resumable state")
+
+        statuses = (
+            dict(factory_state.get("statuses"))
+            if isinstance(factory_state.get("statuses"), dict)
+            else {}
         )
+        waiting_stages = (
+            dict(factory_state.get("waiting_stages"))
+            if isinstance(factory_state.get("waiting_stages"), dict)
+            else {}
+        )
+        selected_stage = str(stage_id or "").strip()
+        if not selected_stage:
+            if len(waiting_stages) != 1:
+                raise ValueError(
+                    "stage_id is required when a Factory run has multiple/no waiting stages"
+                )
+            selected_stage = next(iter(waiting_stages))
+        waiting_status = str(statuses.get(selected_stage) or "")
+        if waiting_status not in {"waiting_approval", "waiting_external"}:
+            raise ValueError("Factory resume target is not currently waiting")
+
+        initial_context_refs = set(_strings(factory_state.get("initial_context_refs")))
+        initial_artifact_refs = set(_strings(factory_state.get("initial_artifact_refs")))
+        stage_input_artifact_refs = {
+            str(key): tuple(value)
+            for key, value in dict(
+                factory_state.get("stage_input_artifact_refs") or {}
+            ).items()
+            if isinstance(value, (list, tuple, set))
+        }
+        prior_stage_artifacts = {
+            str(key): tuple(value)
+            for key, value in dict(factory_state.get("stage_artifacts") or {}).items()
+            if isinstance(value, (list, tuple, set))
+        }
+        prior_stage_evidence_refs = {
+            str(key): tuple(value)
+            for key, value in dict(
+                factory_state.get("stage_evidence_refs") or {}
+            ).items()
+            if isinstance(value, (list, tuple, set))
+        }
+
+        ledger = FactoryEvidenceLedger(
+            runtime_run_id=clean_run_id,
+            objective=blueprint.objective.objective,
+            metadata=run_metadata,
+            initial_projection=checkpoint,
+        )
+        await ledger.resume(blueprint, stage_id=selected_stage)
+        execution = await self._runner(
+            run_metadata=run_metadata,
+            ledger=ledger,
+        ).run(
+            graph=blueprint.graph,
+            acceptance=blueprint.acceptance,
+            initial_context_refs=initial_context_refs,
+            initial_artifact_refs=initial_artifact_refs,
+            stage_input_artifact_refs=stage_input_artifact_refs,
+            facts=facts,
+            resume_statuses=statuses,
+            prior_stage_artifacts=prior_stage_artifacts,
+            prior_stage_evidence_refs=prior_stage_evidence_refs,
+            resume_results={selected_stage: stage_result},
+        )
+        await ledger.finish(execution)
+        return self._response(clean_run_id, blueprint, execution)
