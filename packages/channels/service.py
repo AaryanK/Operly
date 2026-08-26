@@ -27,6 +27,8 @@ class TenantResolution:
     workspace_mode: str = "full"
     installation_id: str | None = None
     effective_permissions: frozenset[str] = frozenset()
+    platform_permissions: frozenset[str] = frozenset()
+    platform_admin: bool = False
 
     @property
     def is_guest_workspace(self) -> bool:
@@ -53,6 +55,33 @@ class ChannelService:
         haystack = " ".join(str(text or "").lower().split())
         candidates = [tenant.name, tenant.slug or ""]
         return any(value and " ".join(value.lower().split()) in haystack for value in candidates)
+
+    @staticmethod
+    async def _trusted_guest_metadata(envelope: ChannelEnvelope) -> dict:
+        """Build reserved Guest Workspace authority fields from connector state.
+
+        Reserved ``_operly_platform_*`` values from an incoming envelope are discarded
+        first. A client/model therefore cannot self-assert source-platform authority.
+        Each connector must derive these values from its own authenticated runtime.
+        """
+        metadata = dict(envelope.metadata)
+        metadata.pop("_operly_platform_permissions", None)
+        metadata.pop("_operly_platform_admin", None)
+
+        if str(envelope.provider or "").strip().lower() == "discord":
+            from packages.connectors.discord.authority import resolve_discord_authority
+
+            authority = await resolve_discord_authority(
+                {
+                    **metadata,
+                    "external_space_id": envelope.external_space_id,
+                    "external_user_id": envelope.external_user_id,
+                }
+            )
+            if authority is not None:
+                metadata["_operly_platform_permissions"] = sorted(authority.permissions)
+                metadata["_operly_platform_admin"] = authority.is_admin
+        return metadata
 
     @classmethod
     async def _resolve_direct_tenant(
@@ -187,20 +216,18 @@ class ChannelService:
                 )
                 principal_id = f"guest:{guest.id}"
 
+            trusted_metadata = await cls._trusted_guest_metadata(envelope)
             guest_authority = await resolve_guest_workspace_authority(
                 db,
                 workspace_id=installation.tenant_id,
                 provider=envelope.provider,
                 external_space_id=envelope.external_space_id,
                 principal_id=principal_id,
-                interaction_metadata=envelope.metadata,
+                interaction_metadata=trusted_metadata,
             )
             effective = (
                 guest_authority.effective_permissions if guest_authority is not None else frozenset()
             )
-            # Some connector adapters ingest attachments before ChannelService.handle.
-            # Fail closed at this earlier resolution seam when the guest authority does
-            # not include file processing, rather than relying on the later tool filter.
             has_attachments = bool(envelope.metadata.get("has_attachments"))
             allow_interaction = not has_attachments or "files:process" in effective
             return TenantResolution(
@@ -213,6 +240,12 @@ class ChannelService:
                 workspace_mode="guest",
                 installation_id=installation.id,
                 effective_permissions=frozenset(effective),
+                platform_permissions=(
+                    guest_authority.platform_permissions
+                    if guest_authority is not None
+                    else frozenset()
+                ),
+                platform_admin=bool(guest_authority and guest_authority.platform_admin),
             )
 
         return TenantResolution(
@@ -399,8 +432,16 @@ class ChannelService:
             "dm_execution_anchor": None,
             "retained_artifact_count": len(attachment_names) if attachment_prompt else 0,
         }
+        # Reserved authority fields are emitted only after the connector-backed resolve
+        # above. Original envelope values cannot survive this assignment.
+        request_metadata.pop("_operly_platform_permissions", None)
+        request_metadata.pop("_operly_platform_admin", None)
         if resolved.is_guest_workspace and resolved.principal_id:
             request_metadata["_guest_principal_id"] = resolved.principal_id
+            request_metadata["_operly_platform_permissions"] = sorted(
+                resolved.platform_permissions
+            )
+            request_metadata["_operly_platform_admin"] = resolved.platform_admin
 
         result = await get_agent_service().run(
             AgentInput(
