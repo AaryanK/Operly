@@ -41,6 +41,7 @@ on:
       - "tests/test_action_effect_policy.py"
       - "tests/test_agent_factory_bindings.py"
       - "tests/test_agent_factory_control_plane.py"
+      - "tests/test_agent_factory_distribution_resume.py"
       - "tests/test_agent_factory_worker_adapter.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
@@ -127,6 +128,7 @@ jobs:
           tests/test_action_effect_policy.py
           tests/test_agent_factory_bindings.py
           tests/test_agent_factory_control_plane.py
+          tests/test_agent_factory_distribution_resume.py
           tests/test_agent_factory_worker_adapter.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
