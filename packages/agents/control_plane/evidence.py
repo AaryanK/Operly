@@ -67,6 +67,10 @@ class FactoryEvidenceLedger:
             )
 
     async def append(self, event_type: str, payload: dict[str, Any]) -> None:
+        # FactoryStageRunner emits a terminal in-memory event for generic consumers;
+        # ``finish`` below owns the single durable terminal checkpoint/event.
+        if event_type in {"factory.completed", "factory.stopped"}:
+            return
         async with self._lock:
             factory = self._projection.setdefault("factory", {})
             stage_id = str(payload.get("stage_id") or "").strip()
