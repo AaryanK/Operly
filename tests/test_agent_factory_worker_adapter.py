@@ -73,6 +73,33 @@ class DeferredRuntime(FakeRuntime):
         }
 
 
+class RejectedRuntime(FakeRuntime):
+    async def run(self, **kwargs):
+        FakeRuntime.seen_messages.append(list(kwargs["messages"]))
+        FakeRuntime.seen_tools.append(await kwargs["schemas"]())
+        FakeRuntime.seen_metadata.append(dict(kwargs["inference_metadata"]))
+        return {
+            "message": "I could not run the action.",
+            # AgentRuntime may not classify every durable action status itself. The
+            # worker adapter must preserve the terminal status from the observation.
+            "execution_truth": None,
+            "trace": [
+                SimpleNamespace(
+                    capability_id="messaging.send",
+                    observation={
+                        "status": "REJECTED",
+                        "action_id": "action-1",
+                        "approval_id": "approval-1",
+                        "observation": {},
+                    },
+                )
+            ],
+            "stop_reason": "completed",
+            "stopped": False,
+            "budget": {},
+        }
+
+
 def _tool(name):
     return {
         "type": "function",
@@ -187,3 +214,31 @@ async def test_deferred_verified_capability_becomes_waiting_external(monkeypatch
     assert result.evidence["job_id"] == "job-1"
     assert result.evidence["project_id"] == "project-1"
     assert FakeRuntime.seen_metadata[-1]["runtime_run_id"] == "factory-run-2"
+
+
+@pytest.mark.asyncio
+async def test_terminal_capability_observation_cannot_become_completed_worker_result(monkeypatch):
+    monkeypatch.setattr(worker_module, "AgentRuntime", RejectedRuntime)
+    _reset_runtime_observations()
+
+    adapter = AgentRuntimeWorker(
+        schemas=lambda: [_tool("messaging.send")],
+        invoke=lambda *_args: {},
+        model_resolver=lambda _role: object(),
+        inference_metadata={"runtime_run_id": "factory-run-3"},
+    )
+    result = await adapter(
+        StageSpec("send", "Send message"),
+        ContextCapsule(
+            stage_id="send",
+            objective="Send message",
+            capability_ids=("messaging.send",),
+        ),
+        1,
+        None,
+    )
+
+    assert result.status == "rejected"
+    assert result.evidence["terminal"] is True
+    assert result.evidence["status"] == "REJECTED"
+    assert result.evidence["action_id"] == "action-1"
