@@ -191,7 +191,8 @@ class AttachmentPluginTests(unittest.TestCase):
 
 
 class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
-    async def test_attachment_turn_continues_into_channel_agent_after_ingestion(self):
+    async def test_personal_attachment_turn_uses_connector_ingress_then_channel_agent(self):
+        from packages.channels.envelope import ChannelAttachment
         from packages.connectors.discord import bot_shared
 
         class _Typing:
@@ -223,13 +224,22 @@ class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
         resolution = SimpleNamespace(
             user_id="u-1",
             tenant_id="t-1",
-            allow_tenant_context=True,
+            allow_tenant_context=False,
         )
         response = SimpleNamespace(
             message="approval created",
-            tenant_id="t-1",
+            base_message="approval created",
+            tenant_id=None,
             status="ok",
         )
+        collected = [
+            ChannelAttachment(
+                filename="input.pdf",
+                content_type="application/pdf",
+                size_bytes=4,
+                content_bytes=b"%PDF",
+            )
+        ]
 
         with patch.object(bot_shared, "handle_operly_command", AsyncMock(return_value=False)), patch.object(
             bot_shared, "server_tenant", AsyncMock(return_value=None)
@@ -238,18 +248,20 @@ class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             bot_shared.ChannelService, "resolve", AsyncMock(return_value=resolution)
         ), patch.object(
-            bot_shared, "process_discord_attachments", AsyncMock(return_value=True)
-        ) as ingest, patch.object(
+            bot_shared, "collect_discord_attachments", AsyncMock(return_value=collected)
+        ) as collect, patch.object(
             bot_shared.ChannelService, "handle", AsyncMock(return_value=response)
         ) as handle, patch.object(
-            bot_shared, "send_chunks", AsyncMock(return_value=SimpleNamespace())
+            bot_shared, "send_discord_response", AsyncMock(return_value=SimpleNamespace())
         ), patch.object(
             bot_shared, "schedule_new_pending_jobs", AsyncMock()
         ):
             await bot_shared.on_message(message)
 
-        ingest.assert_awaited_once()
+        collect.assert_awaited_once_with(message)
         handle.assert_awaited_once()
+        envelope = handle.await_args.args[0]
+        self.assertEqual(envelope.attachments, collected)
 
 
 if __name__ == "__main__":
