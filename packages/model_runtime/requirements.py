@@ -1,15 +1,19 @@
-"""Capability/constraint-driven model selection.
-
-Roles remain a compatibility and observability label. New execution paths select
-models from concrete inference requirements so a mixed task does not have to be
-force-fit into one semantic bucket before the model portfolio can be consulted.
-"""
+"""Capability/constraint-driven adaptive model selection."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
-from packages.model_runtime.contracts import InferenceBudget, Model, ModelSelector
+from packages.model_runtime.contracts import (
+    InferenceBudget,
+    InferenceRequest,
+    InferenceResult,
+    Model,
+    ModelSelector,
+    ModelTraits,
+)
+from packages.model_runtime.discovery import refresh_model_discovery
 from packages.model_runtime.registry import (
     ConfiguredModel,
     ModelChatAdapter,
@@ -32,19 +36,13 @@ class ModelRequirements:
     def selector(self) -> ModelSelector:
         return ModelSelector(
             requires=frozenset(
-                str(item).strip().lower()
-                for item in self.requires
-                if str(item).strip()
+                str(item).strip().lower() for item in self.requires if str(item).strip()
             ),
             prefer_tags=frozenset(
-                str(item).strip().lower()
-                for item in self.prefer_tags
-                if str(item).strip()
+                str(item).strip().lower() for item in self.prefer_tags if str(item).strip()
             ),
             avoid_tags=frozenset(
-                str(item).strip().lower()
-                for item in self.avoid_tags
-                if str(item).strip()
+                str(item).strip().lower() for item in self.avoid_tags if str(item).strip()
             ),
             prefer_free=self.prefer_free,
         )
@@ -70,101 +68,7 @@ def _context_rank(model: ConfiguredModel, minimum: int | None) -> int:
     return 0 if int(available) >= int(minimum) else 2
 
 
-def _provider_diverse(
-    candidates: Iterable[ConfiguredModel],
-    limit: int,
-) -> list[ConfiguredModel]:
-    rows = list(candidates)
-    selected: list[ConfiguredModel] = []
-    seen: set[str] = set()
-    for model in rows:
-        if model.provider in seen:
-            continue
-        selected.append(model)
-        seen.add(model.provider)
-        if len(selected) >= limit:
-            return selected
-    for model in rows:
-        if model in selected:
-            continue
-        selected.append(model)
-        if len(selected) >= limit:
-            break
-    return selected
-
-
-def _flatten(model: Model) -> list[ConfiguredModel]:
-    if isinstance(model, ConfiguredModel):
-        return [model]
-    if isinstance(model, ModelPool):
-        return [item for item in model.models if isinstance(item, ConfiguredModel)]
-    return []
-
-
-def _compatible_fallbacks(
-    selected: list[ConfiguredModel],
-    *,
-    requirements: ModelRequirements,
-    fallback_role: str | None,
-    limit: int,
-) -> list[ConfiguredModel]:
-    """Backfill pool slots without bypassing concrete model constraints.
-
-    The legacy role chain is a compatibility source, never an escape hatch from
-    `requires`, `avoid_tags`, or context-window constraints. This is especially
-    important for small-worker pools: an explicit `heavy` exclusion must survive
-    provider failover, otherwise a routine turn could silently become a deep-model
-    invocation.
-    """
-    if not fallback_role or len(selected) >= limit:
-        return selected
-    try:
-        fallback_models = _flatten(model_for_role(fallback_role))
-    except (LookupError, RuntimeError):
-        return selected
-
-    required = set(requirements.requires)
-    avoided = set(requirements.avoid_tags)
-    minimum = requirements.min_context_tokens
-    seen = {
-        (str(model.provider), str(model.provider_model_id))
-        for model in selected
-    }
-    for model in fallback_models:
-        identity = (str(model.provider), str(model.provider_model_id))
-        if identity in seen:
-            continue
-        if not required.issubset(set(model.capabilities)):
-            continue
-        if avoided & set(model.tags):
-            continue
-        if minimum and _context_rank(model, minimum) >= 2:
-            continue
-        selected.append(model)
-        seen.add(identity)
-        if len(selected) >= limit:
-            break
-    return selected
-
-
-def model_for_requirements(
-    requirements: ModelRequirements,
-    *,
-    fallback_role: str | None = None,
-) -> Model:
-    """Resolve a provider-diverse model pool from concrete requirements.
-
-    Known models that cannot meet the requested context window are excluded.
-    Models with unknown context metadata remain eligible after known-good models;
-    this avoids turning incomplete catalog metadata into a hard outage.
-
-    Compatibility `role:*` resources are deliberately excluded from the dynamic
-    candidate scan. They are mutable process-local projections of role/env state
-    and can remain in the registry after a prior lookup. Mixing those stale rows
-    into capability selection caused duplicate/stale Studio fallbacks. The current
-    role chain is consulted only by `_compatible_fallbacks` after dynamic selection,
-    and must obey the same concrete requirements.
-    """
+def _eligible_models(requirements: ModelRequirements) -> list[ConfiguredModel]:
     registry = default_model_registry()
     candidates = [
         model
@@ -173,9 +77,9 @@ def model_for_requirements(
     ]
     minimum = requirements.min_context_tokens
     if minimum:
-        candidates = [
-            model for model in candidates if _context_rank(model, minimum) < 2
-        ]
+        candidates = [model for model in candidates if _context_rank(model, minimum) < 2]
+        # Known-good context windows remain a static prior. ModelPool's live scorer
+        # performs the final route ranking immediately before inference.
         candidates.sort(
             key=lambda model: (
                 _context_rank(model, minimum),
@@ -185,28 +89,53 @@ def model_for_requirements(
                 model.id,
             )
         )
+    return candidates
 
-    limit = max(1, int(requirements.max_models or 1))
-    selected = _provider_diverse(candidates, limit)
-    selected = _compatible_fallbacks(
-        selected,
-        requirements=requirements,
-        fallback_role=fallback_role,
-        limit=limit,
-    )
-    if selected:
-        return (
-            selected[0]
-            if len(selected) == 1
-            else ModelPool(selected, id="requirements:dynamic")
-        )
-    # An unconstrained caller may still use the old role chain as a final migration
-    # fallback. If the caller explicitly excluded a model class, never erase that
-    # policy merely to keep the request alive.
-    if fallback_role and not requirements.avoid_tags:
-        return model_for_role(fallback_role)
-    required = ", ".join(sorted(requirements.requires)) or "text"
-    raise LookupError(f"No model satisfies inference requirements: {required}")
+
+class AdaptiveRequirementsModel:
+    """Refresh the global model index and score all eligible routes per call."""
+
+    def __init__(
+        self,
+        requirements: ModelRequirements,
+        *,
+        fallback_role: str | None = None,
+    ) -> None:
+        self.requirements = requirements
+        self.fallback_role = fallback_role
+        self.id = "adaptive-requirements"
+        self.tags = requirements.prefer_tags
+        self.capabilities = requirements.requires
+        self.traits = ModelTraits(context_tokens=requirements.min_context_tokens)
+
+    async def infer(self, request: InferenceRequest) -> InferenceResult:
+        try:
+            ttl = float(os.getenv("OPERLY_MODEL_DISCOVERY_TTL_SECONDS", "600"))
+        except ValueError:
+            ttl = 600.0
+        await refresh_model_discovery(ttl_seconds=max(0.0, ttl))
+        candidates = _eligible_models(self.requirements)
+        if candidates:
+            # max_models is an invocation batch limit, not an index truncation. Every
+            # eligible model remains available for future ranking/exploration.
+            return await ModelPool(
+                candidates,
+                id="requirements:dynamic",
+                batch_size=max(1, int(self.requirements.max_models or 1)),
+            ).infer(request)
+        if self.fallback_role and not self.requirements.avoid_tags:
+            return await model_for_role(self.fallback_role).infer(request)
+        required = ", ".join(sorted(self.requirements.requires)) or "text"
+        raise LookupError(f"No model satisfies inference requirements: {required}")
+
+
+def model_for_requirements(
+    requirements: ModelRequirements,
+    *,
+    fallback_role: str | None = None,
+) -> Model:
+    """Return a live requirements facade instead of pre-truncating a static pool."""
+    return AdaptiveRequirementsModel(requirements, fallback_role=fallback_role)
 
 
 def model_chat_client_for_requirements(
