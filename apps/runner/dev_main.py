@@ -35,6 +35,7 @@ class _Job:
     adapter: RunnerAdapter
     response: dict
     preview_id: str | None = None
+    preview_token: str | None = None
     internal_preview_url: str | None = None
 
 
@@ -70,6 +71,8 @@ def _config() -> tuple[str, str]:
         or host not in {"127.0.0.1", "localhost"}
         or parsed.username
         or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.params
         or parsed.query
         or parsed.fragment
     ):
@@ -169,14 +172,14 @@ def _select_adapter(submission: BuildSubmission) -> RunnerAdapter:
     return fullstack if submission.stackId == FULLSTACK_RUNTIME_ID else standard
 
 
-def _publish_preview(response: dict) -> tuple[dict, str | None, str | None]:
+def _publish_preview(response: dict) -> tuple[dict, str | None, str | None, str | None]:
     response = dict(response)
     preview = response.get("preview")
     if not isinstance(preview, dict):
-        return response, None, None
+        return response, None, None, None
     internal = str(preview.get("targetUrl") or "").strip()
     if not internal:
-        return response, None, None
+        return response, None, None, None
     _, public_base_url = _config()
     preview_id = str(preview.get("id") or "preview-" + secrets.token_hex(8))
     token = secrets.token_urlsafe(24)
@@ -186,7 +189,14 @@ def _publish_preview(response: dict) -> tuple[dict, str | None, str | None]:
         "id": preview_id,
         "targetUrl": f"{public_base_url}/preview/{token}/",
     }
-    return response, preview_id, internal
+    return response, preview_id, token, internal
+
+
+def _revoke_preview(item: _Job) -> None:
+    if item.preview_token:
+        _previews.pop(item.preview_token, None)
+    item.preview_token = None
+    item.internal_preview_url = None
 
 
 @app.exception_handler(HTTPException)
@@ -266,11 +276,12 @@ async def create_build(request: Request):
     job_id = str(response.get("jobId") or "").strip()
     if not job_id:
         return _signed_json({"error": "Runner backend did not return a jobId"}, 503)
-    response, preview_id, internal_preview = _publish_preview(response)
+    response, preview_id, preview_token, internal_preview = _publish_preview(response)
     _jobs[job_id] = _Job(
         adapter=adapter,
         response=response,
         preview_id=preview_id,
+        preview_token=preview_token,
         internal_preview_url=internal_preview,
     )
     _idempotency[submission.idempotencyKey] = job_id
@@ -293,6 +304,8 @@ async def cancel_build(job_id: str, request: Request):
     if item is None:
         return _signed_json({"error": "Build not found"}, 404)
     result = dict(await item.adapter.cancel(job_id) or {})
+    _revoke_preview(item)
+    item.preview_id = None
     item.response = {"jobId": job_id, **result}
     return _signed_json(item.response)
 
@@ -304,6 +317,8 @@ async def cleanup_build(job_id: str, request: Request):
     if item is None:
         return _signed_json({"error": "Build not found"}, 404)
     result = dict(await item.adapter.cleanup(job_id) or {})
+    _revoke_preview(item)
+    item.preview_id = None
     item.response = {"jobId": job_id, **result}
     return _signed_json(item.response)
 
@@ -315,6 +330,9 @@ async def stop_preview(preview_id: str, request: Request):
     if item is None:
         return _signed_json({"state": "cleaned"})
     result = dict(await item.adapter.stop_preview(preview_id) or {})
+    _revoke_preview(item)
+    item.preview_id = None
+    item.response = {**item.response, "preview": None}
     return _signed_json(result)
 
 
