@@ -42,8 +42,8 @@ def validate_runner_url(url:str)->str:
 
     # Development/test may deliberately exercise the exact production HTTP
     # adapter against a separate loopback runner sidecar. This exception is
-    # explicit and fail-closed: it never enables LAN/private addresses and it
-    # can never activate in production.
+    # explicit and fail-closed: it never enables LAN/private addresses, accepts
+    # only a bare origin, and can never activate in production.
     if (
         _local_runner_sidecar_enabled()
         and parsed.scheme == "http"
@@ -51,6 +51,10 @@ def validate_runner_url(url:str)->str:
         and _literal_loopback(host)
         and not parsed.username
         and not parsed.password
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
     ):
         return url.rstrip("/")
 
