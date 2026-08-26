@@ -20,6 +20,7 @@ from .evidence import FactoryEvidenceLedger
 from .factory import AgentFactoryControlPlane, FactoryRunResponse
 from .repair import DefectRepairPlanner
 from .sandbox_validation import SandboxPythonValidator
+from .semantic_validation import EvidenceBoundedSemanticValidator
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner, StageAttempt
 from .validation import ControlPlaneValidator
 from .worker_adapter import AgentRuntimeWorker
@@ -34,6 +35,7 @@ __all__ = [
     "ControlPlaneValidator",
     "Defect",
     "DefectRepairPlanner",
+    "EvidenceBoundedSemanticValidator",
     "FactoryBlueprint",
     "FactoryBlueprintCompiler",
     "FactoryCapabilityIntentResolver",
