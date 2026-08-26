@@ -7,12 +7,14 @@ from packages.coding_harness.opencode_agent import (
     OpenCodeStyleCodingAgent as DirectOpenCodeStyleCodingAgent,
 )
 from packages.coding_harness.source_service import OpenCodeStyleCodingAgent as SourceServiceCodingAgent
+from packages.capabilities.software_build_provider import CapabilityCodingAgent as SoftwareBuildCodingAgent
 
 
 def test_all_software_agent_exports_resolve_to_canonical_runtime_adapter():
     assert DirectCapabilityCodingAgent is AgentRuntimeCodingAgent
     assert DirectOpenCodeStyleCodingAgent is AgentRuntimeCodingAgent
     assert SourceServiceCodingAgent is AgentRuntimeCodingAgent
+    assert SoftwareBuildCodingAgent is AgentRuntimeCodingAgent
 
 
 @pytest.mark.asyncio
