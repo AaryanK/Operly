@@ -72,11 +72,12 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
     "production",
     "prod",
 }
-WEB_ASSET_REVISION = "20260825-approval-surfaces-v1"
+WEB_ASSET_REVISION = "20260826-workspace-invites-v1"
 PUBLIC_FRONTEND_ROUTES = {
     "",
     "login",
     "signup",
+    "join",
     "verify-email",
     "forgot-password",
     "reset-password",

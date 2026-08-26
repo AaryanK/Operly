@@ -62,6 +62,8 @@ on:
       - "tests/test_account_scope_resolver.py"
       - "tests/test_scope_aware_actions.py"
       - "tests/test_scope_aware_action_migration.py"
+      - "tests/test_human_identity_invites_federated_history.py"
+      - "tests/test_provider_history_adapter_registry.py"
       - ".github/workflows/runtime-hardening.yml"
   workflow_dispatch:
 
@@ -104,6 +106,9 @@ jobs:
           packages/capabilities/workflow_contracts.py
           packages/connectors/discord/task_delivery.py
           packages/context/broker.py
+          packages/context/federation.py
+          packages/context/history_adapters.py
+          packages/context/provider_history.py
           packages/context/service.py
           packages/database/company_models.py
           packages/database/models.py
@@ -169,6 +174,8 @@ jobs:
           tests/test_account_scope_resolver.py
           tests/test_scope_aware_actions.py
           tests/test_scope_aware_action_migration.py
+          tests/test_human_identity_invites_federated_history.py
+          tests/test_provider_history_adapter_registry.py
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db

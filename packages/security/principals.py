@@ -64,6 +64,87 @@ class PrincipalService:
         return principal, binding
 
     @classmethod
+    async def identity_principal(cls, db: AsyncSession, user_id: str) -> Principal:
+        """Return the preferred runtime principal for one canonical AppUser human."""
+        human = await db.scalar(
+            select(Principal).where(
+                Principal.kind == "human",
+                Principal.user_id == user_id,
+                Principal.status == "active",
+            )
+        )
+        if human is not None:
+            return human
+        return await cls.user_principal(db, user_id)
+
+    @classmethod
+    async def bind_external_identity(
+        cls,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        provider: str,
+        provider_subject: str,
+        display_name: str | None = None,
+        metadata: dict | None = None,
+    ) -> ExternalPrincipalBinding:
+        """Bind a verified provider subject to one authenticated Operly human.
+
+        Linking identities never merges authorization. Workspace/provider authority
+        continues to be resolved independently for every operation.
+        """
+        existing = await cls.external_principal(
+            db,
+            provider=provider,
+            provider_subject=str(provider_subject),
+        )
+        if existing:
+            principal, binding = existing
+            if principal.kind == "guest" and principal.status == "active":
+                await cls.claim_guest(
+                    db,
+                    guest_principal_id=principal.id,
+                    user_id=user_id,
+                    provider=provider,
+                    provider_subject=str(provider_subject),
+                )
+                rebound = await cls.external_principal(
+                    db,
+                    provider=provider,
+                    provider_subject=str(provider_subject),
+                )
+                if rebound is None:
+                    raise PrincipalError("External identity binding disappeared")
+                _, binding = rebound
+            elif principal.user_id != user_id:
+                raise PrincipalError(
+                    "This external identity is already linked to another Operly user"
+                )
+            binding.verified = True
+            binding.display_name = display_name or binding.display_name
+            if metadata is not None:
+                binding.metadata_json = json.dumps(
+                    metadata, separators=(",", ":"), sort_keys=True
+                )
+            await db.flush()
+            return binding
+
+        principal = await cls.identity_principal(db, user_id)
+        binding = ExternalPrincipalBinding(
+            principal_id=principal.id,
+            provider=provider,
+            provider_subject=str(provider_subject),
+            display_name=display_name,
+            verified=True,
+            metadata_json=json.dumps(
+                metadata or {}, separators=(",", ":"), sort_keys=True
+            ),
+        )
+        db.add(binding)
+        await db.flush()
+        return binding
+
+    @classmethod
     async def resolve_or_create_guest(
         cls,
         db: AsyncSession,
@@ -113,7 +194,7 @@ class PrincipalService:
         guest = await db.get(Principal, guest_principal_id)
         if guest is None or guest.kind != "guest" or guest.status != "active":
             raise PrincipalError("Guest session is unavailable")
-        user_principal = await cls.user_principal(db, user_id)
+        user_principal = await cls.identity_principal(db, user_id)
         binding = await db.scalar(
             select(ExternalPrincipalBinding).where(
                 ExternalPrincipalBinding.provider == provider,

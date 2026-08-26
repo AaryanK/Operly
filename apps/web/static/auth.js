@@ -2,6 +2,7 @@ const AUTH_ROUTES = {
   "/": "#landing",
   "/login": "#login",
   "/signup": "#signup",
+  "/join": "#login",
   "/verify-email": "#verify-email",
   "/forgot-password": "#forgot-password",
   "/reset-password": "#reset-password",
@@ -9,6 +10,7 @@ const AUTH_ROUTES = {
 };
 
 const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);
+const WORKSPACE_INVITE_STORAGE_KEY = "operly_workspace_invite";
 
 function setFormMessage(id, message, kind = "error") {
   const element = $(id);
@@ -36,6 +38,74 @@ function canonicalWorkspacePath(workspaceId, section = "home") {
 
 function handoff(path) {
   window.location.replace(path);
+}
+
+function workspaceInviteToken() {
+  return sessionStorage.getItem(WORKSPACE_INVITE_STORAGE_KEY) || "";
+}
+
+function clearWorkspaceInvite() {
+  sessionStorage.removeItem(WORKSPACE_INVITE_STORAGE_KEY);
+}
+
+function extractWorkspaceInvite() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get("invite");
+  if (!token) return workspaceInviteToken();
+  sessionStorage.setItem(WORKSPACE_INVITE_STORAGE_KEY, token);
+  history.replaceState(history.state || {}, "", `${location.pathname}${location.search}`);
+  return token;
+}
+
+function inviteBanner(message, kind = "success") {
+  ["#login-form", "#signup-form"].forEach((selector) => {
+    const form = $(selector);
+    if (!form) return;
+    let banner = form.querySelector("[data-workspace-invite-banner]");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.dataset.workspaceInviteBanner = "true";
+      const heading = form.querySelector("h1");
+      if (heading) heading.insertAdjacentElement("afterend", banner);
+      else form.prepend(banner);
+    }
+    banner.className = message ? kind : "hidden";
+    banner.textContent = message || "";
+  });
+}
+
+async function inspectWorkspaceInvite() {
+  const token = workspaceInviteToken();
+  if (!token) return null;
+  try {
+    const info = await api(`/workspace-invitations/inspect?token=${encodeURIComponent(token)}`);
+    inviteBanner(`You’ve been invited to ${info.workspace_name} as ${info.role}. Sign in or create an account to join.`);
+    return info;
+  } catch (error) {
+    clearWorkspaceInvite();
+    inviteBanner(error.message || "This workspace invitation is invalid or expired.", "error");
+    return null;
+  }
+}
+
+async function acceptWorkspaceInviteIfPresent() {
+  const token = workspaceInviteToken();
+  if (!token) return null;
+  const result = await api("/workspace-invitations/accept", {
+    method: "POST",
+    body: JSON.stringify({ token })
+  });
+  clearWorkspaceInvite();
+  return result;
+}
+
+async function enterAfterAuthentication(preferredScope = null) {
+  const invitation = await acceptWorkspaceInviteIfPresent();
+  if (invitation?.workspace_id) {
+    handoff(canonicalWorkspacePath(invitation.workspace_id));
+    return;
+  }
+  await enterAuthenticatedScope(preferredScope);
 }
 
 async function enterAuthenticatedWorkspace() {
@@ -97,6 +167,7 @@ function navigate(path, workflow = {}) {
   state.linkToken = null;
   history.pushState({ workflow }, "", path);
   showRoute(path);
+  if (workspaceInviteToken() && ["/login", "/signup"].includes(path)) inspectWorkspaceInvite().catch(() => {});
 }
 
 function openVerificationRecovery(email, message) {
@@ -173,6 +244,10 @@ async function handleGoogleCredential(result) {
       body: JSON.stringify({ credential: result.credential })
     });
     state.me = null;
+    if (workspaceInviteToken()) {
+      await enterAfterAuthentication(response.scope);
+      return;
+    }
     if (response.new_account) {
       state.workflow = { scope: response.scope || "personal" };
       history.replaceState({ workflow: state.workflow }, "", "/onboarding");
@@ -211,6 +286,7 @@ $$("[data-toggle-password]").forEach((button) => button.addEventListener("click"
 window.addEventListener("popstate", async () => {
   state.linkToken = null;
   extractLinkToken();
+  extractWorkspaceInvite();
   if (location.pathname === "/personal") {
     try { await enterAuthenticatedPersonal(); return; } catch { history.replaceState({}, "", "/login"); }
   }
@@ -218,6 +294,9 @@ window.addEventListener("popstate", async () => {
     try { await enterAuthenticatedScope(); return; } catch { history.replaceState({}, "", "/login"); }
   }
   showRoute();
+  if (workspaceInviteToken() && ["/join", "/login", "/signup"].includes(location.pathname)) {
+    inspectWorkspaceInvite().catch(() => {});
+  }
 });
 
 $("#login-form").addEventListener("submit", async (event) => {
@@ -233,7 +312,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         password: $("#login-password").value
       })
     });
-    await enterAuthenticatedScope(response.scope);
+    await enterAfterAuthentication(response.scope);
   } catch (error) {
     if (error.details?.code === "EMAIL_NOT_VERIFIED") {
       openVerificationRecovery(
@@ -295,6 +374,10 @@ $("#verify-form").addEventListener("submit", async (event) => {
         };
     const response = await api("/auth/verify-email", { method: "POST", body: JSON.stringify(payload) });
     state.linkToken = null;
+    if (workspaceInviteToken()) {
+      await enterAfterAuthentication(response.scope);
+      return;
+    }
     state.workflow = { ...state.workflow, scope: response.scope || "personal" };
     history.replaceState({ workflow: state.workflow }, "", "/onboarding");
     showRoute("/onboarding");
@@ -374,7 +457,7 @@ $("#reset-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({ ...proof, password: $("#reset-password-input").value })
     });
     state.linkToken = null;
-    await enterAuthenticatedScope(response.scope);
+    await enterAfterAuthentication(response.scope);
   } catch (error) {
     setFormMessage("#reset-error", error.message);
   } finally {
@@ -383,12 +466,35 @@ $("#reset-form").addEventListener("submit", async (event) => {
 });
 
 $("#open-workspace").addEventListener("click", async () => {
-  try { await enterAuthenticatedScope(state.workflow.scope || null); }
+  try { await enterAfterAuthentication(state.workflow.scope || null); }
   catch (error) { setFormMessage("#login-error", error.message); navigate("/login"); }
 });
 
 async function initializeAuth() {
   extractLinkToken();
+  extractWorkspaceInvite();
+
+  if (location.pathname === "/join") {
+    const invitation = await inspectWorkspaceInvite();
+    if (!invitation) {
+      history.replaceState({}, "", "/login");
+      await refreshAuthBootstrap().catch(() => {});
+      showRoute("/login");
+      return;
+    }
+    try {
+      await api("/auth/workspaces");
+      await enterAfterAuthentication();
+      return;
+    } catch {
+      state.me = null;
+      history.replaceState({ workflow: { workspace_invite: true } }, "", "/login");
+      await refreshAuthBootstrap().catch(() => {});
+      showRoute("/login");
+      await inspectWorkspaceInvite();
+      return;
+    }
+  }
 
   if (location.pathname === "/personal") {
     try {
@@ -418,7 +524,11 @@ async function initializeAuth() {
 
   if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname)) {
     try {
-      await enterAuthenticatedScope();
+      if (workspaceInviteToken()) {
+        await enterAfterAuthentication();
+      } else {
+        await enterAuthenticatedScope();
+      }
       return;
     } catch {
       state.me = null;
@@ -428,6 +538,9 @@ async function initializeAuth() {
   if (AUTH_ROUTES[location.pathname]) {
     await refreshAuthBootstrap().catch(() => {});
     showRoute();
+    if (workspaceInviteToken() && ["/login", "/signup"].includes(location.pathname)) {
+      await inspectWorkspaceInvite();
+    }
     if (location.pathname === "/verify-email" && state.linkToken) {
       $("#verify-form").requestSubmit();
     }

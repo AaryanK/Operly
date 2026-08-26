@@ -80,6 +80,16 @@ class WorkspaceMemberRoleInput(StrictInput):
     role: str = Field(min_length=1, max_length=30)
 
 
+class WorkspaceInvitationCreateInput(StrictInput):
+    target_email: str | None = Field(default=None, min_length=3, max_length=320)
+    role: str = Field(default="employee", min_length=1, max_length=30)
+    ttl_days: int = Field(default=7, ge=1, le=30)
+
+
+class WorkspaceInvitationAcceptInput(StrictInput):
+    token: str = Field(min_length=20, max_length=500)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     due_at: datetime | None = None
