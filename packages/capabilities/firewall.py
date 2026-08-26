@@ -1,8 +1,8 @@
 """Canonical capability invocation seam.
 
 Authorization, schema validation, action lifecycle, and provenance converge here so
-provider plugins cannot accidentally bypass the same execution contract used by
-agents, Studio, MCP, scheduled workflows, or delegated software runtimes.
+provider plugins cannot bypass the same execution contract used by agents, Studio,
+MCP, scheduled workflows, humans, or delegated software runtimes.
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from packages.actions.attributed_service import AttributedActionService
 from packages.actions.lifecycle import lifecycle_truth, normalize_lifecycle_status
-from packages.actions.service import ActionService
 from packages.capabilities.validation import PluginSchemaError, validate_arguments
 from packages.database.db import session_scope
 from packages.security.delegation import (
@@ -100,9 +100,40 @@ class ActionBackedCapabilityFirewall:
             "owner_type": "workspace",
             "owner_id": execution_context.workspace_id,
             "scope_id": execution_context.scope_id,
+            "workspace_mode": execution_context.workspace_mode,
             "surface": execution_context.surface.value,
             **delegated,
         }
+
+    @staticmethod
+    def _actor_chain(
+        metadata: dict[str, Any],
+        execution_context: ExecutionContext,
+    ) -> tuple[str, str | None, str, str | None, list[dict[str, Any]]]:
+        principal = str(
+            metadata.get("initiator_id")
+            or execution_context.principal_id
+            or effective_principal_key(execution_context)
+            or ""
+        ).strip() or None
+        if metadata.get("initiator_type"):
+            initiator_type = str(metadata["initiator_type"])
+        elif principal and principal.startswith("guest:"):
+            initiator_type = "guest"
+        elif execution_context.user_id:
+            initiator_type = "user"
+        else:
+            initiator_type = "principal"
+
+        executor_type = str(metadata.get("executor_type") or initiator_type)
+        executor_id = str(metadata.get("executor_id") or principal or "").strip() or None
+        raw_delegation = metadata.get("delegation_chain")
+        delegation = [
+            dict(item)
+            for item in (raw_delegation if isinstance(raw_delegation, list) else [])
+            if isinstance(item, dict)
+        ]
+        return initiator_type, principal, executor_type, executor_id, delegation
 
     async def evaluate(
         self,
@@ -129,6 +160,9 @@ class ActionBackedCapabilityFirewall:
         request: CapabilityInvocation,
         execution_context: ExecutionContext,
     ) -> CapabilityInvocationResult:
+        # Capability exposure is only a usability optimization. Invocation repeats the
+        # deterministic permission/surface/delegation checks and therefore fails closed
+        # even if a caller fabricates a tool call that the model never saw.
         authority = set(execution_context.permissions)
         authority_source = self._authority(execution_context)
         scope_id = execution_context.scope_id
@@ -175,7 +209,7 @@ class ActionBackedCapabilityFirewall:
             )
 
         metadata = dict(request.metadata)
-        principal_key = effective_principal_key(execution_context)
+        principal_key = execution_context.principal_id or effective_principal_key(execution_context)
         if principal_key:
             metadata["principal_id"] = principal_key
         delegated = delegation_authority(execution_context)
@@ -190,12 +224,29 @@ class ActionBackedCapabilityFirewall:
         metadata["authority_source"] = authority_source
         metadata["scope_kind"] = execution_context.scope_kind.value
         metadata["scope_id"] = scope_id
+        metadata["workspace_mode"] = execution_context.workspace_mode
         if execution_context.focus_workspace_id:
             metadata["focus_workspace_id"] = execution_context.focus_workspace_id
-        # Surface is canonical execution state. Always overwrite caller-supplied
-        # metadata so provider code cannot be tricked into widening private scope.
         metadata["_surface_kind"] = execution_context.surface.value
         metadata["surface"] = execution_context.surface.value
+
+        (
+            initiator_type,
+            initiator_id,
+            executor_type,
+            executor_id,
+            delegation_chain,
+        ) = self._actor_chain(metadata, execution_context)
+        metadata["initiator_type"] = initiator_type
+        metadata["initiator_id"] = initiator_id
+        metadata["executor_type"] = executor_type
+        metadata["executor_id"] = executor_id
+        metadata["delegation_chain"] = delegation_chain
+        metadata["actor_chain"] = {
+            "initiator": {"type": initiator_type, "id": initiator_id},
+            "executor": {"type": executor_type, "id": executor_id},
+            "delegation": delegation_chain,
+        }
 
         async with session_scope() as db:
             temporal = await resolve_temporal_context(
@@ -208,11 +259,16 @@ class ActionBackedCapabilityFirewall:
                 ),
             )
             metadata["temporal_context"] = temporal.as_dict()
-            service = ActionService(
+            service = AttributedActionService(
                 db,
                 self.registry,
                 authority=authority,
                 actor_id=execution_context.user_id,
+                initiator_type=initiator_type,
+                initiator_id=initiator_id,
+                executor_type=executor_type,
+                executor_id=executor_id,
+                delegation_chain=delegation_chain,
             )
             try:
                 action = await service.propose(
