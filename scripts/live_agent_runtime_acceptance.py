@@ -20,9 +20,10 @@ from typing import Any
 
 from packages.agents.capability_rescue import attempt_capability_rescue, has_execution_evidence
 from packages.agents.runtime import AgentRuntime
+from packages.coding_harness.model_client import coding_model_client
 from packages.coding_harness.objective_audit import audit_generated_source
 from packages.coding_harness.opencode_agent import CapabilityCodingAgent
-from packages.model_runtime import model_for_role
+from packages.model_runtime import InferenceBudget, model_for_role
 
 
 SYSTEM = """
@@ -33,6 +34,22 @@ business operation has verified evidence. The initial tool list can be incomplet
 capability.search then capability.describe when an operation you need is not exposed.
 Do not claim success without a verified tool result. Do not invent capability IDs.
 """.strip()
+
+# Keep the acceptance run within the same small/tool-driven completion envelope used
+# by the production agent. Explicit budgets also prevent a provider from rejecting a
+# perfectly small tool turn because a legacy long-form max_tokens reservation was used.
+AGENT_BUDGET = InferenceBudget(
+    timeout_seconds=45.0,
+    attempts_per_model=1,
+    max_models=4,
+    max_output_tokens=2_048,
+)
+CODING_BUDGET = InferenceBudget(
+    timeout_seconds=60.0,
+    attempts_per_model=1,
+    max_models=4,
+    max_output_tokens=4_096,
+)
 
 
 def _schema(name: str, description: str, properties: dict[str, Any] | None = None, required=()):
@@ -163,13 +180,14 @@ async def run_agent_case(
     harness: SyntheticGovernedHarness,
     expected_operations: set[str],
 ) -> dict[str, Any]:
+    print(f"[live-agent] START {name}", flush=True)
     model = model_for_role("business_agent")
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": objective},
     ]
     combined_trace = []
-    result = await AgentRuntime(max_steps=8).run(
+    result = await AgentRuntime(max_steps=8, inference_budget=AGENT_BUDGET).run(
         model=model,
         messages=messages,
         schemas=harness.schemas,
@@ -193,7 +211,7 @@ async def run_agent_case(
         )
         combined_trace.extend(rescue.trace)
         if rescue.applied:
-            followup = await AgentRuntime(max_steps=8).run(
+            followup = await AgentRuntime(max_steps=8, inference_budget=AGENT_BUDGET).run(
                 model=model,
                 messages=messages,
                 schemas=harness.schemas,
@@ -221,7 +239,7 @@ async def run_agent_case(
             f"{name}: live agent did not execute required operations {missing}; "
             f"invocations={[item[0] for item in harness.invocations]}"
         )
-    return {
+    outcome = {
         "name": name,
         "passed": True,
         "executed": sorted(executed),
@@ -229,6 +247,8 @@ async def run_agent_case(
         "stop_reason": result.get("stop_reason"),
         "message": str(result.get("message") or "")[:500],
     }
+    print(f"[live-agent] PASS {name}: {sorted(expected_operations)}", flush=True)
+    return outcome
 
 
 async def live_runtime_suite() -> list[dict[str, Any]]:
@@ -292,6 +312,66 @@ async def live_runtime_suite() -> list[dict[str, Any]]:
                 }
             ),
             expected_operations={"crm.search_contacts", "task.create"},
+        )
+    )
+
+    results.append(
+        await run_agent_case(
+            name="complex-business-workflow",
+            objective=(
+                "Find Acme Corp in the CRM, check stock for SKU-WIDGET, create a follow-up task because stock is low, "
+                "and send a workspace message summarizing the result. Execute every step, not just a plan."
+            ),
+            harness=SyntheticGovernedHarness(
+                capabilities={
+                    "crm.search_contacts": {
+                        "description": "Search current workspace CRM contacts.",
+                        "schema": _schema(
+                            "crm.search_contacts",
+                            "Search CRM contacts.",
+                            {"query": {"type": "string"}},
+                            ("query",),
+                        ),
+                        "evidence": {"contacts": [{"id": "contact-live-1", "name": "Acme Corp"}]},
+                    },
+                    "inventory.get_stock": {
+                        "description": "Read current stock for a workspace inventory SKU.",
+                        "schema": _schema(
+                            "inventory.get_stock",
+                            "Get inventory stock.",
+                            {"sku": {"type": "string"}},
+                            ("sku",),
+                        ),
+                        "evidence": {"sku": "SKU-WIDGET", "quantity": 2},
+                    },
+                    "task.create": {
+                        "description": "Create a governed follow-up task in the workspace.",
+                        "schema": _schema(
+                            "task.create",
+                            "Create a workspace task.",
+                            {"title": {"type": "string"}, "contact_id": {"type": "string"}},
+                            ("title",),
+                        ),
+                        "evidence": {"task_id": "task-live-complex", "created": True},
+                    },
+                    "messaging.send": {
+                        "description": "Send a message to the current authorized workspace destination.",
+                        "schema": _schema(
+                            "messaging.send",
+                            "Send a workspace message.",
+                            {"message": {"type": "string"}},
+                            ("message",),
+                        ),
+                        "evidence": {"message_id": "message-live-1", "sent": True},
+                    },
+                }
+            ),
+            expected_operations={
+                "crm.search_contacts",
+                "inventory.get_stock",
+                "task.create",
+                "messaging.send",
+            },
         )
     )
 
@@ -368,8 +448,23 @@ def qr_specification() -> str:
     )
 
 
+async def _coding_progress(event: dict[str, Any]) -> None:
+    phase = str(event.get("phase") or "")
+    summary = str(event.get("summary") or "")
+    step = event.get("step")
+    tool = event.get("tool")
+    print(
+        f"[live-coding] step={step} phase={phase}"
+        + (f" tool={tool}" if tool else "")
+        + (f" :: {summary}" if summary else ""),
+        flush=True,
+    )
+
+
 async def live_coding_case() -> dict[str, Any]:
-    agent = CapabilityCodingAgent()
+    print("[live-coding] START qr-software-build", flush=True)
+    client = coding_model_client(budget=CODING_BUDGET)
+    agent = CapabilityCodingAgent(client=client, progress_callback=_coding_progress)
     specification = qr_specification()
     result = await agent.build(specification)
     audit = audit_generated_source(json.loads(specification), result.files)
@@ -386,7 +481,7 @@ async def live_coding_case() -> dict[str, Any]:
                 ensure_ascii=False,
             )
         )
-    return {
+    outcome = {
         "name": "qr-software-build",
         "passed": True,
         "model_provider": result.model_provider,
@@ -399,6 +494,11 @@ async def live_coding_case() -> dict[str, Any]:
             "runtimeContractGaps": audit.get("runtimeContractGaps"),
         },
     }
+    print(
+        f"[live-coding] PASS qr-software-build provider={result.model_provider} model={result.model_id}",
+        flush=True,
+    )
+    return outcome
 
 
 async def main() -> int:
@@ -415,7 +515,7 @@ async def main() -> int:
     except Exception as error:  # noqa: BLE001
         failures.append({"suite": "coding-agent", "error": f"{type(error).__name__}: {error}"})
 
-    print(json.dumps({"outcomes": outcomes, "failures": failures}, ensure_ascii=False, indent=2, default=str))
+    print(json.dumps({"outcomes": outcomes, "failures": failures}, ensure_ascii=False, indent=2, default=str), flush=True)
     return 1 if failures else 0
 
 
