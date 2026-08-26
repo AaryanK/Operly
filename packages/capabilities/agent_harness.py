@@ -49,8 +49,8 @@ _DISCORD_CURRENT_CONTEXT = {
     "discord.create_thread",
 }
 
-# Keep the boot surface deliberately tiny. Everything else must be discovered and
-# described before its exact schema is forwarded to a model.
+# Keep boot exposure deliberately tiny. Everything else must be discovered and
+# described before its exact schema reaches the model.
 _DEFAULT_INITIAL_CAPABILITIES = frozenset({"runtime.context"})
 
 
@@ -61,9 +61,11 @@ class PluginInvocationContext:
     role: str
     objective: str
     channel: str = "web"
-    # Keep metadata before surface for positional compatibility with older callers.
     metadata: dict[str, Any] = field(default_factory=dict)
     surface: SurfaceKind | str | None = None
+    # A principal is broader than an AppUser: guest:<id>, user:<id>, service:<id>, ...
+    # Existing callers may omit it and continue using user_id.
+    principal_id: str | None = None
 
     def __post_init__(self) -> None:
         explicit = SurfaceKind.coerce(self.surface)
@@ -72,16 +74,17 @@ class PluginInvocationContext:
             if explicit is not SurfaceKind.UNKNOWN
             else surface_from_legacy_metadata(self.channel, self.metadata)
         )
+        if not self.principal_id and self.user_id:
+            self.principal_id = f"user:{self.user_id}"
 
 
 class PluginAgentHarness:
-    """Agent-facing capability view over one canonical invocation boundary.
+    """Agent-facing view over the one canonical capability invocation boundary.
 
-    Capability visibility is session-scoped and genuinely progressive. The model
-    begins with a tiny discovery/runtime kernel; authorization and surface policy
-    determine the eligible universe, semantic discovery determines relevance, and
-    exact schemas appear only after describe. Execution always crosses the canonical
-    firewall and approval boundary.
+    Capability visibility is session-scoped and progressive. Authorization/surface
+    policy define the eligible universe, semantic discovery determines relevance,
+    and exact schemas appear only after describe. Full members and Guest Workspace
+    principals use the same registry/firewall; only their ExecutionContext differs.
     """
 
     def __init__(self, registry=None):
@@ -121,6 +124,8 @@ class PluginAgentHarness:
             if not provider:
                 return {"configured": True, "healthy": None}
             candidates = by_provider.get(provider, [])
+            # Discord is the current channel capability provider and is not represented
+            # by TenantConnector for a provisional Guest Workspace.
             if provider == "discord":
                 return {"configured": True, "healthy": None}
             if not candidates:
@@ -193,9 +198,7 @@ class PluginAgentHarness:
                     "healthy": False,
                     "missing_scopes": missing_scopes,
                     "reason": "provider_unhealthy",
-                    "next_action": (
-                        "Retry after the provider recovers or reconnect the integration."
-                    ),
+                    "next_action": "Retry after the provider recovers or reconnect the integration.",
                     "retryable": True,
                     "provider_error": last_error,
                 }
@@ -205,16 +208,11 @@ class PluginAgentHarness:
                     "healthy": healthy,
                     "missing_scopes": missing_scopes,
                     "reason": "oauth_scope_missing",
-                    "next_action": (
-                        "Reconnect the integration and grant the required OAuth scope."
-                    ),
+                    "next_action": "Reconnect the integration and grant the required OAuth scope.",
                     "retryable": False,
                 }
             return {"configured": True, "healthy": healthy, "retryable": False}
 
-        # Keep known capabilities registered even when their connector is missing.
-        # Availability explains connector/scope/health state while progressive
-        # discovery prevents unusable schemas from cluttering the model surface.
         return default_registry(None, config_resolver=config_resolver)
 
     def authority(self, role: str) -> set[str]:
@@ -224,8 +222,11 @@ class PluginAgentHarness:
         self,
         context: PluginInvocationContext,
     ) -> ExecutionContext | None:
-        if not context.user_id:
-            return None
+        metadata = dict(context.metadata)
+        if context.principal_id:
+            metadata["principal_id"] = context.principal_id
+            if context.principal_id.startswith("guest:"):
+                metadata["_guest_principal_id"] = context.principal_id
         try:
             async with session_scope() as db:
                 return await resolve_execution_context(
@@ -237,7 +238,7 @@ class PluginAgentHarness:
                     conversation_id=(
                         str(context.metadata.get("_conversation_id") or "") or None
                     ),
-                    metadata=context.metadata,
+                    metadata=metadata,
                     require_membership=True,
                 )
         except ExecutionContextError:
@@ -275,7 +276,7 @@ class PluginAgentHarness:
     @staticmethod
     def _session_key(context: PluginInvocationContext) -> str:
         conversation = str(context.metadata.get("_conversation_id") or "").strip()
-        principal = str(context.user_id or "anonymous")
+        principal = str(context.principal_id or (f"user:{context.user_id}" if context.user_id else "anonymous"))
         surface = SurfaceKind.coerce(context.surface).value
         return ":".join(
             (
@@ -294,9 +295,7 @@ class PluginAgentHarness:
         authority: set[str] | None = None,
         registry=None,
     ) -> SessionCapabilityView:
-        authority = (
-            set(authority) if authority is not None else await self.authority_for(context)
-        )
+        authority = set(authority) if authority is not None else await self.authority_for(context)
         registry = registry or await self.registry_for(context)
         key = self._session_key(context)
         existing = self._session_views.get(key)
@@ -331,7 +330,7 @@ class PluginAgentHarness:
         *,
         limit: int = 6,
     ) -> list[dict[str, Any]]:
-        """Compatibility hook; objective preflight no longer exposes schemas."""
+        del context, limit
         return []
 
     async def schemas(self, context: PluginInvocationContext) -> list[dict[str, Any]]:
@@ -367,9 +366,7 @@ class PluginAgentHarness:
                 "surfaceHidden": False,
                 "exposed": False,
                 "retryable": False,
-                "nextAction": (
-                    "Use capability.search to discover an installed operation."
-                ),
+                "nextAction": "Use capability.search to discover an installed operation.",
                 "reason": "not_registered",
             }
         payload = registry.availability(
@@ -382,24 +379,18 @@ class PluginAgentHarness:
             authority,
             context,
         )
-        payload["surfaceHidden"] = (
-            not surface_allowed and not payload.get("permissionDenied")
-        )
+        payload["surfaceHidden"] = not surface_allowed and not payload.get("permissionDenied")
         if payload["surfaceHidden"]:
             payload["available"] = False
             payload["reason"] = "surface_hidden"
-            payload["nextAction"] = (
-                "Use this capability from an allowed private/workspace surface."
-            )
+            payload["nextAction"] = "Use this capability from an allowed private/workspace surface."
         try:
             view = await self.session_view_for(
                 context,
                 authority=authority,
                 registry=registry,
             )
-            payload["exposed"] = (
-                definition.id in view.exposed_ids and view._visible(definition.id)
-            )
+            payload["exposed"] = definition.id in view.exposed_ids and view._visible(definition.id)
         except Exception:
             payload["exposed"] = False
         return payload
@@ -432,9 +423,7 @@ class PluginAgentHarness:
                     "surfaceHidden": False,
                     "exposed": False,
                     "retryable": False,
-                    "nextAction": (
-                        "Use an authenticated workspace context with sufficient permission."
-                    ),
+                    "nextAction": "Use an authenticated workspace context with sufficient permission.",
                     "reason": "permission_denied",
                 },
             }
@@ -463,10 +452,7 @@ class PluginAgentHarness:
             )
             return {
                 "ok": False,
-                "error": (
-                    "Capability is not exposed in this model session; "
-                    "discover and describe it first"
-                ),
+                "error": "Capability is not exposed in this model session; discover and describe it first",
                 "availability": payload,
             }
 
@@ -491,6 +477,27 @@ class PluginAgentHarness:
         runtime_metadata = dict(context.metadata)
         runtime_metadata["_surface_kind"] = execution.surface.value
         runtime_metadata["surface"] = execution.surface.value
+        runtime_metadata["principal_id"] = execution.principal_id or context.principal_id
+        # This boundary knows the difference between the person who requested work and
+        # the Operly agent that selected/executed a capability. Action/event layers can
+        # persist this chain without asking the model to label itself.
+        runtime_metadata.setdefault(
+            "initiator_type",
+            "user" if context.user_id else "guest",
+        )
+        runtime_metadata.setdefault(
+            "initiator_id",
+            context.principal_id or execution.principal_id,
+        )
+        runtime_metadata["executor_type"] = "agent"
+        runtime_metadata["executor_id"] = "operly:business_agent"
+        runtime_metadata["delegation_chain"] = [
+            {
+                "from": runtime_metadata.get("initiator_id"),
+                "to": "operly:business_agent",
+                "kind": "requested_action",
+            }
+        ]
         if name in {"capability.search", "capability.describe", "context.search", "context.get"}:
             runtime_metadata["authority"] = sorted(authority)
 
@@ -523,25 +530,18 @@ class PluginAgentHarness:
         async def schemas():
             return await self.schemas(context)
 
-        async def invoke(
-            name: str,
-            arguments: dict[str, Any],
-            call_id: str | None,
-        ):
+        async def invoke(name: str, arguments: dict, call_id: str | None):
             return await self.invoke(name, arguments, context, call_id=call_id)
 
         inference_metadata = {
             **dict(context.metadata),
             "tenant_id": context.tenant_id,
             "user_id": context.user_id,
+            "principal_id": context.principal_id,
             "channel": context.channel,
             "surface": SurfaceKind.coerce(context.surface).value,
-            "conversation_id": (
-                str(context.metadata.get("_conversation_id") or "") or None
-            ),
-            "capability_stage": str(
-                context.metadata.get("capability_stage") or "adaptive"
-            ),
+            "conversation_id": str(context.metadata.get("_conversation_id") or "") or None,
+            "capability_stage": str(context.metadata.get("capability_stage") or "adaptive"),
         }
         return await AgentRunController(max_replans=1).run(
             objective=context.objective,
