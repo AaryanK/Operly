@@ -18,14 +18,53 @@ RUNNER_POLICY={"network":"deny_by_default","dependencies":"allowlist_and_lockfil
 class SandboxUnavailable(RuntimeError):pass
 class SandboxFailure(RuntimeError):pass
 
+
+def _local_runner_sidecar_enabled()->bool:
+    return (
+        os.getenv("OPERLY_ENV", "").strip().lower() in {"development", "test"}
+        and os.getenv("OPERLY_ENABLE_LOCAL_RUNNER_SIDECAR", "") == "1"
+    )
+
+
+def _literal_loopback(host:str)->bool:
+    value=str(host or "").strip().lower()
+    if value in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
 def validate_runner_url(url:str)->str:
     parsed=urlparse(url)
-    if parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password:raise SandboxUnavailable("The isolated runner URL must be an authenticated HTTPS origin")
+    host=parsed.hostname or ""
+
+    # Development/test may deliberately exercise the exact production HTTP
+    # adapter against a separate loopback runner sidecar. This exception is
+    # explicit and fail-closed: it never enables LAN/private addresses, accepts
+    # only a bare origin, and can never activate in production.
+    if (
+        _local_runner_sidecar_enabled()
+        and parsed.scheme == "http"
+        and host
+        and _literal_loopback(host)
+        and not parsed.username
+        and not parsed.password
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return url.rstrip("/")
+
+    if parsed.scheme!="https" or not host or parsed.username or parsed.password:raise SandboxUnavailable("The isolated runner URL must be an authenticated HTTPS origin")
     allowed={x.strip().lower() for x in os.getenv("OPERLY_SANDBOX_RUNNER_HOSTS","").split(",") if x.strip()}
-    if allowed and parsed.hostname.lower() not in allowed:raise SandboxUnavailable("The isolated runner host is not allowlisted")
-    if parsed.hostname.lower() in {"localhost","localhost.localdomain"}:raise SandboxUnavailable("Private runner addresses are forbidden")
+    if allowed and host.lower() not in allowed:raise SandboxUnavailable("The isolated runner host is not allowlisted")
+    if host.lower() in {"localhost","localhost.localdomain"}:raise SandboxUnavailable("Private runner addresses are forbidden")
     try:
-        if ipaddress.ip_address(parsed.hostname).is_private or ipaddress.ip_address(parsed.hostname).is_loopback:raise SandboxUnavailable("Private runner addresses are forbidden")
+        address=ipaddress.ip_address(host)
+        if address.is_private or address.is_loopback:raise SandboxUnavailable("Private runner addresses are forbidden")
     except ValueError:pass
     return url.rstrip("/")
 
