@@ -39,6 +39,7 @@ on:
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_action_effect_policy.py"
+      - "tests/test_agent_factory_bindings.py"
       - "tests/test_agent_factory_control_plane.py"
       - "tests/test_agent_factory_worker_adapter.py"
       - "tests/test_artifact_delivery.py"
@@ -124,6 +125,7 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_action_effect_policy.py
+          tests/test_agent_factory_bindings.py
           tests/test_agent_factory_control_plane.py
           tests/test_agent_factory_worker_adapter.py
           tests/test_artifact_delivery.py
