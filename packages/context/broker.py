@@ -98,6 +98,78 @@ class ContextBroker:
         return payload if isinstance(payload, dict) else {}
 
     @classmethod
+    def _allowed_predicate(
+        cls,
+        *,
+        tenant_id: str,
+        user_id: str | None,
+        conversation_id: str | None,
+        authority: set[str],
+        surface: SurfaceKind | str,
+    ):
+        """Legacy single-workspace predicate retained as a security contract seam.
+
+        Federated Personal retrieval now resolves every workspace independently before
+        calling ``_context_allowed_predicate``. Existing callers and regressions still
+        use this helper to prove the original single-workspace fail-closed behavior,
+        so keep it explicit rather than weakening those tests or fabricating federation
+        state synchronously.
+        """
+        surface_kind = SurfaceKind.coerce(surface)
+        current_authority = set(authority)
+        clauses = []
+        if "context:tenant:read" in current_authority:
+            clauses.append(
+                and_(
+                    ContextRecord.scope_type == "tenant",
+                    ContextRecord.visibility == "shared",
+                    ContextRecord.tenant_id == tenant_id,
+                )
+            )
+        if "context:conversation:read" in current_authority and conversation_id:
+            clauses.append(
+                and_(
+                    ContextRecord.scope_type == "conversation",
+                    ContextRecord.visibility == "shared",
+                    ContextRecord.tenant_id == tenant_id,
+                    ContextRecord.conversation_id == conversation_id,
+                )
+            )
+            if user_id and surface_kind.allows_private_conversation:
+                clauses.append(
+                    and_(
+                        ContextRecord.scope_type == "conversation",
+                        ContextRecord.visibility == "private",
+                        ContextRecord.owner_user_id == user_id,
+                        ContextRecord.tenant_id == tenant_id,
+                        ContextRecord.conversation_id == conversation_id,
+                    )
+                )
+        if user_id and "context:human:read" in current_authority:
+            if surface_kind.allows_personal_global:
+                clauses.append(
+                    and_(
+                        ContextRecord.scope_type == "human",
+                        ContextRecord.visibility == "private",
+                        ContextRecord.owner_user_id == user_id,
+                        or_(
+                            ContextRecord.tenant_id.is_(None),
+                            ContextRecord.tenant_id == tenant_id,
+                        ),
+                    )
+                )
+            elif surface_kind.allows_personal_workspace:
+                clauses.append(
+                    and_(
+                        ContextRecord.scope_type == "human",
+                        ContextRecord.visibility == "private",
+                        ContextRecord.owner_user_id == user_id,
+                        ContextRecord.tenant_id == tenant_id,
+                    )
+                )
+        return or_(*clauses) if clauses else None
+
+    @classmethod
     async def _workspace_permissions(
         cls,
         db: AsyncSession,
