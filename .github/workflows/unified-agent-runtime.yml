@@ -11,6 +11,7 @@ on:
       - "apps/web/src/account/PersonalHome.tsx"
       - "apps/web/src/workspace/WorkspaceOperly.tsx"
       - "apps/web/src/ui/artifactDownload.ts"
+      - "packages/actions/policy.py"
       - "packages/agent_computer/**"
       - "packages/agents/**"
       - "packages/artifacts/**"
@@ -37,6 +38,7 @@ on:
       - "packages/coding_harness/studio_controller.py"
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
+      - "tests/test_action_effect_policy.py"
       - "tests/test_agent_factory_control_plane.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
@@ -75,6 +77,7 @@ jobs:
             apps/api/personal_agent_router.py \
             apps/api/artifact_router.py \
             apps/api/system_router.py \
+            packages/actions/policy.py \
             packages/agent_computer/runner_client.py \
             packages/agents/capability_rescue.py \
             packages/agents/controller.py \
@@ -87,6 +90,7 @@ jobs:
             packages/business_brain/attachments/batch_processor.py \
             packages/capabilities/artifact_provider.py \
             packages/capabilities/computer_provider.py \
+            packages/capabilities/contracts.py \
             packages/capabilities/file_runtime_provider.py \
             packages/capabilities/file_authoring_provider.py \
             packages/capabilities/gmail_artifact_provider.py \
@@ -118,6 +122,7 @@ jobs:
           AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
         run: >-
           python -m pytest -q
+          tests/test_action_effect_policy.py
           tests/test_agent_factory_control_plane.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
