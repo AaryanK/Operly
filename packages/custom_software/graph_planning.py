@@ -94,6 +94,27 @@ _UNSAFE_ASSUMPTION_TERMS = (
     "replace existing",
 )
 
+_SCOPE_DATABASE_GROUNDING_TERMS = (
+    "database",
+    "sql",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "persist",
+    "persistence",
+    "storage",
+    "store",
+    "stored",
+    "save",
+    "saved",
+    "durable",
+    "record",
+    "records",
+    "history",
+    "later retrieval",
+)
+
 
 def material_user_questions(questions: list[str], requirement_context: str | None = None) -> list[str]:
     """Return only questions OPERLY cannot safely resolve itself."""
@@ -246,6 +267,31 @@ def _approved_node_validation() -> ValidatorOutput:
     )
 
 
+def _scope_requirement_payload(requirement) -> dict[str, Any]:
+    """Preserve all analyst evidence when validating implementation scope.
+
+    scope_errors historically inspected source_excerpt only. The analyst may place
+    an explicit or essential persistence constraint in the normalized requirement,
+    acceptance criteria, explicit terms, or category, so collapsing back to the
+    excerpt can falsely classify a database-backed implementation as invented.
+    """
+    payload = requirement.model_dump(mode="json")
+    evidence = " ".join(
+        [
+            str(requirement.source_excerpt or ""),
+            str(requirement.normalized_requirement or ""),
+            str(requirement.category or ""),
+            *[str(item) for item in requirement.acceptance_criteria],
+            *[str(item) for item in requirement.explicit_terms],
+        ]
+    )
+    lowered = evidence.lower()
+    if any(term in lowered for term in _SCOPE_DATABASE_GROUNDING_TERMS):
+        evidence += " database"
+    payload["source_excerpt"] = evidence
+    return payload
+
+
 def _graph_errors(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> list[str]:
     errors: list[str] = []
     if len(graph.nodes) > 32:
@@ -280,7 +326,7 @@ def _graph_errors(graph: CapabilityGraph, analysis: RequirementsAnalysis) -> lis
             errors.extend(f"{graph_node.node_id}: {finding}" for finding in readiness)
 
         linked_requirements = [
-            requirement.model_dump(mode="json")
+            _scope_requirement_payload(requirement)
             for requirement in analysis.requirements
             if requirement.requirement_id in linked
         ]
