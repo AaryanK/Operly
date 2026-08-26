@@ -51,8 +51,17 @@ class DelegatedExecutionContext(ExecutionContext):
 
 
 def effective_principal_key(context: ExecutionContext) -> str | None:
+    """Return the canonical namespaced principal for any execution context.
+
+    Delegated contexts intentionally override ``principal_id`` with the raw delegated
+    identifier, so they must be namespaced through ``principal_key`` first. Ordinary
+    contexts can already carry a canonical user/guest/service principal resolved at
+    ingress. Falling back to user_id preserves older callers.
+    """
     if isinstance(context, DelegatedExecutionContext):
         return context.principal_key
+    if context.principal_id:
+        return str(context.principal_id)
     return f"user:{context.user_id}" if context.user_id else None
 
 
@@ -78,9 +87,18 @@ def delegation_authority(context: ExecutionContext) -> dict[str, object]:
             "parent_principal_id": context.parent_principal_id,
             "delegated_capability_ids": sorted(context.delegated_capability_ids),
         }
+    principal_key = effective_principal_key(context)
+    if context.user_id:
+        principal_kind = "user"
+    elif principal_key and principal_key.startswith("guest:"):
+        principal_kind = "guest"
+    elif principal_key:
+        principal_kind = "principal"
+    else:
+        principal_kind = "anonymous"
     return {
-        "principal_kind": "user" if context.user_id else "anonymous",
-        "principal_id": effective_principal_key(context),
+        "principal_kind": principal_kind,
+        "principal_id": principal_key,
         "delegation_id": None,
         "delegator_user_id": None,
         "parent_principal_id": None,
@@ -131,7 +149,7 @@ def delegate_execution_context(
             raise PermissionError("Child delegation cannot widen parent capability authority")
         parent_principal = base.principal_key
     else:
-        parent_principal = f"user:{base.user_id}"
+        parent_principal = effective_principal_key(base) or f"user:{base.user_id}"
 
     return DelegatedExecutionContext(
         workspace_id=base.workspace_id,
@@ -145,6 +163,7 @@ def delegate_execution_context(
         metadata=dict(base.metadata),
         scope_kind=base.scope_kind,
         focus_workspace_id=base.focus_workspace_id,
+        workspace_mode=base.workspace_mode,
         principal_kind=kind,
         principal_id=clean_principal,
         delegation_id=clean_delegation,
