@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from typing import Any
+from typing import Any, Iterable
 
 from packages.agents.persistence import checkpoint_agent_run
 
@@ -99,14 +99,47 @@ class FactoryEvidenceLedger:
                 "pending_approval_ids": [],
             }
 
-    async def start(self, blueprint: FactoryBlueprint) -> None:
+    async def start(
+        self,
+        blueprint: FactoryBlueprint,
+        *,
+        initial_context_refs: Iterable[str] | None = None,
+        initial_artifact_refs: Iterable[str] | None = None,
+        stage_input_artifact_refs: dict[str, Iterable[str]] | None = None,
+    ) -> None:
         async with self._lock:
+            trusted_stage_inputs = {
+                str(stage_id): sorted(
+                    {
+                        str(item).strip()
+                        for item in refs
+                        if str(item).strip()
+                    }
+                )
+                for stage_id, refs in dict(stage_input_artifact_refs or {}).items()
+                if str(stage_id).strip()
+            }
             self._projection["factory"] = {
                 **self._projection["factory"],
                 "state": "running",
                 "objective_spec": blueprint.objective.as_dict(),
                 "acceptance": blueprint.acceptance.as_dict(),
                 "graph": blueprint.graph.as_dict(),
+                "initial_context_refs": sorted(
+                    {
+                        str(item).strip()
+                        for item in (initial_context_refs or ())
+                        if str(item).strip()
+                    }
+                ),
+                "initial_artifact_refs": sorted(
+                    {
+                        str(item).strip()
+                        for item in (initial_artifact_refs or ())
+                        if str(item).strip()
+                    }
+                ),
+                "stage_input_artifact_refs": trusted_stage_inputs,
             }
             await checkpoint_agent_run(
                 runtime_run_id=self.runtime_run_id,
