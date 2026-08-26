@@ -38,6 +38,12 @@ def test_runner_url_allows_only_explicit_loopback_sidecar_in_development(monkeyp
         validate_runner_url("http://192.168.1.10:8091")
     with pytest.raises(SandboxUnavailable):
         validate_runner_url("http://10.0.0.5:8091")
+    with pytest.raises(SandboxUnavailable):
+        validate_runner_url("http://127.0.0.1:8091/base")
+    with pytest.raises(SandboxUnavailable):
+        validate_runner_url("http://127.0.0.1:8091?debug=1")
+    with pytest.raises(SandboxUnavailable):
+        validate_runner_url("http://127.0.0.1:8091#fragment")
 
 
 def test_runner_url_loopback_exception_is_impossible_in_production(monkeypatch):
@@ -76,6 +82,15 @@ def test_dev_sidecar_speaks_signed_external_runner_capabilities_protocol(monkeyp
     assert "operly-fullstack-v1" in payload["profiles"]
     expected = hmac.new(TOKEN.encode(), response.content, hashlib.sha256).hexdigest()
     assert hmac.compare_digest(response.headers["X-Operly-Signature"], expected)
+
+
+def test_dev_sidecar_rejects_non_origin_public_base_url(monkeypatch):
+    _enable_local_sidecar(monkeypatch)
+    monkeypatch.setenv("OPERLY_LOCAL_RUNNER_PUBLIC_BASE_URL", "http://127.0.0.1:8091/base")
+
+    response = TestClient(app).get("/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
 
 
 def test_dev_sidecar_refuses_to_become_ready_in_production(monkeypatch):
