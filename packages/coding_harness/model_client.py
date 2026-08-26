@@ -6,6 +6,7 @@ and cross-provider failover live entirely inside ``packages.model_runtime``.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Protocol
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
@@ -25,6 +26,9 @@ class CodingModelClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
+_MUTATION_TOOLS = frozenset({"write", "edit", "remove", "copy", "move", "patch"})
+
+
 def _history_has_tool_calls(messages: list[dict[str, Any]]) -> bool:
     return any(
         item.get("role") == "assistant" and bool(item.get("tool_calls"))
@@ -41,18 +45,79 @@ def _explicit_tool_progress_nudge(messages: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _tool_call_names(message: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _tool_payload(message: dict[str, Any]) -> dict[str, Any] | None:
+    raw = message.get("content")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _latest_failed_finish(messages: list[dict[str, Any]]) -> tuple[int, dict[str, Any]] | None:
+    """Return the newest rejected deterministic finish gate, if any."""
+
+    for index in range(len(messages) - 1, -1, -1):
+        item = messages[index]
+        if item.get("role") != "tool" or str(item.get("tool_name") or "") != "finish":
+            continue
+        payload = _tool_payload(item)
+        if payload is None:
+            return None
+        if payload.get("ok") is False:
+            return index, payload
+        return None
+    return None
+
+
+def _has_mutation_after(messages: list[dict[str, Any]], index: int) -> bool:
+    return any(
+        item.get("role") == "assistant" and bool(_tool_call_names(item) & _MUTATION_TOOLS)
+        for item in messages[index + 1 :]
+    )
+
+
+def _repair_packet(payload: dict[str, Any]) -> str:
+    """Compact a large validator response into a model-actionable repair packet."""
+
+    audit = payload.get("objectiveAudit")
+    audit = audit if isinstance(audit, dict) else {}
+    compact = {
+        "finishError": str(payload.get("error") or "deterministic finish validation failed")[:1200],
+        "objectiveMessage": str(audit.get("message") or "")[:1200],
+        "behaviorGaps": list(audit.get("behaviorGaps") or [])[:8],
+        "unmetRequirements": list(audit.get("unmetRequirements") or [])[:8],
+        "runtimeContractGaps": list(audit.get("runtimeContractGaps") or [])[:8],
+    }
+    text = json.dumps(compact, ensure_ascii=False, default=str)
+    return text[:6000]
+
+
 class SemanticFailoverCodingClient:
-    """Treat tool-protocol refusal as a model-candidate failure, not task success.
+    """Keep persistent coding sessions moving across model/provider failures.
 
-    Provider calls can succeed while a coding model ignores every supplied tool and
-    returns prose. Before any real project-tool progress, that response cannot be a
-    valid completion. Reject only that model candidate and let the shared ModelPool
-    try another provider/model with the exact same bounded session context.
-
-    Once project tools have run, a no-tool response is returned to the coding agent
-    because the agent may legitimately accept it as implicit completion. If the
-    agent instead issues its explicit continue-with-tools nudge, a repeated no-tool
-    response again becomes safe to classify as a protocol mismatch and fail over.
+    A provider call can technically succeed while its model ignores tools, stops in
+    prose, or repeatedly asks ``finish`` after the deterministic gate has rejected the
+    unchanged workspace. Those are semantic candidate failures, not valid task
+    completions. The shared ModelPool can try another compatible provider/model with
+    the same bounded coding context rather than making the whole SoftwareProject job
+    restart.
     """
 
     def __init__(self, adapter) -> None:
@@ -74,14 +139,57 @@ class SemanticFailoverCodingClient:
         schemas = list(tools or [])
         rejected_resources: set[str] = set()
 
+        failed_finish = _latest_failed_finish(messages)
+        needs_finish_repair = bool(
+            failed_finish is not None
+            and not _has_mutation_after(messages, failed_finish[0])
+        )
+        effective_messages = list(messages)
+        if needs_finish_repair and failed_finish is not None:
+            effective_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The deterministic finish gate just rejected this exact workspace. "
+                        "Do NOT call finish again until you make a concrete source mutation that addresses the reported gap. "
+                        "Use write/edit/remove now; do not reread unchanged files unless the repair packet names an unknown location. "
+                        "Preserve behavior that already passes. Repair packet:\n"
+                        + _repair_packet(failed_finish[1])
+                    ),
+                }
+            )
+
         while True:
-            response = await self.context.chat(messages, schemas)
+            response = await self.context.chat(effective_messages, schemas)
+            names = _tool_call_names(response)
+
+            # A model that immediately repeats finish against an unchanged workspace
+            # is stuck. Reject only that candidate and let the provider-diverse pool
+            # try a different coding model before spending another outer agent turn.
+            if needs_finish_repair and "finish" in names and not (names & _MUTATION_TOOLS):
+                result = getattr(self.adapter, "last_result", None)
+                resource_id = str(getattr(result, "model_resource_id", "") or "")
+                if resource_id and resource_id not in rejected_resources:
+                    rejected_resources.add(resource_id)
+                    if reject_model_result(
+                        getattr(self.adapter, "model", None),
+                        result,
+                        classification="non_convergent_finish",
+                        detail=(
+                            "Coding model repeated finish after deterministic validation rejected "
+                            "the unchanged workspace instead of applying the supplied targeted repair"
+                        ),
+                    ):
+                        continue
+                return response
+
             if not schemas or response.get("tool_calls"):
                 return response
 
             requires_tool_progress = (
                 not _history_has_tool_calls(messages)
-                or _explicit_tool_progress_nudge(messages)
+                or _explicit_tool_progress_nudge(effective_messages)
+                or needs_finish_repair
             )
             if not requires_tool_progress:
                 return response
@@ -158,8 +266,8 @@ def coding_model_client(
     The coding harness states concrete requirements (text + tools + coding) instead
     of resolving one provider role up front. The shared model runtime chooses a
     provider-diverse pool, preserving the configured role chain only as a compatible
-    fallback. Quota, credits, rate limits, provider failures, and tool-protocol
-    mismatches can therefore fail over without restarting the user's coding job.
+    fallback. Quota, credits, rate limits, provider failures, and semantic coding-loop
+    stalls can therefore fail over without restarting the user's coding job.
     """
 
     adapter = model_chat_client_for_requirements(
