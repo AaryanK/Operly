@@ -46,6 +46,36 @@ _META_CAPABILITIES = frozenset(
     }
 )
 
+# A capability attempt that was rejected before real execution is not operational
+# evidence. In particular, a model asking for a capability before progressive
+# exposure has described it must not suppress the rescue path that can expose it.
+_NON_EXECUTION_STATUSES = frozenset(
+    {
+        "DENIED",
+        "FORBIDDEN",
+        "UNAUTHORIZED",
+        "UNAVAILABLE",
+        "INVALID_ARGUMENTS",
+        "INVALID_REQUEST",
+        "NOT_FOUND",
+        "FAILED",
+        "FAILURE",
+        "ERROR",
+        "CANCELLED",
+        "CANCELED",
+    }
+)
+_EXECUTION_STATUSES = frozenset(
+    {
+        "COMPLETED",
+        "SUCCESS",
+        "VERIFIED",
+        "WAITING_APPROVAL",
+        "AWAITING_APPROVAL",
+        "RUNNING",
+    }
+)
+
 # Lexical overlap is only a retrieval confidence signal, never a router. Semantic-only
 # matches remain eligible when the embedding score is strong enough.
 _MIN_LEXICAL_RELEVANCE = 0.75
@@ -66,10 +96,30 @@ async def _resolve(value):
 
 
 def has_execution_evidence(trace: Iterable[Any]) -> bool:
-    """Return whether a trace contains a non-meta capability observation."""
+    """Return whether trace contains successful non-meta operational evidence.
+
+    Merely attempting a capability is not proof that the root objective executed.
+    Explicit denial/failure wins even when an adapter also emits a generic completion
+    field. This keeps progressive capability rescue available after unexposed or
+    invalid calls while preserving verified/waiting/running lifecycle evidence.
+    """
     for entry in trace:
         capability_id = str(getattr(entry, "capability_id", "") or "").strip()
-        if capability_id and capability_id not in _META_CAPABILITIES:
+        if not capability_id or capability_id in _META_CAPABILITIES:
+            continue
+
+        observation = getattr(entry, "observation", {})
+        if not isinstance(observation, dict):
+            continue
+        if observation.get("ok") is False or observation.get("success") is False:
+            continue
+
+        status = str(observation.get("status") or "").strip().upper()
+        if status in _NON_EXECUTION_STATUSES:
+            continue
+        if observation.get("ok") is True or observation.get("success") is True:
+            return True
+        if status in _EXECUTION_STATUSES:
             return True
     return False
 
@@ -112,7 +162,7 @@ def _relevant_candidates(payload: dict[str, Any], *, limit: int) -> list[dict[st
 
 def _candidate_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
-    for row in rows[:4]:
+    for row in rows[:6]:
         availability = row.get("availability") if isinstance(row.get("availability"), dict) else {}
         summary.append(
             {
@@ -178,7 +228,7 @@ async def attempt_capability_rescue(
     messages: list[dict[str, Any]],
     invoke: CapabilityInvoker,
     on_observation: ObservationHook | None = None,
-    max_candidates: int = 4,
+    max_candidates: int = 6,
 ) -> CapabilityRescueResult:
     """Run one semantic search/describe rescue pass without widening authority."""
     clean_objective = str(objective or "").strip()
