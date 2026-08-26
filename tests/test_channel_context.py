@@ -208,10 +208,6 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((first.tenant_id, first.role), (operly_id, "owner"))
         self.assertEqual((second.tenant_id, second.role), (coffee_id, "manager"))
-        # A private DM is rooted in Personal AI, never a workspace chosen from
-        # membership order. All memberships remain visible as account-authorized
-        # options, and an explicit workspace mention becomes only a remembered
-        # focus hint; it does not grant the DM workspace-agent authority.
         self.assertIsNone(personal_dm.tenant_id)
         self.assertFalse(personal_dm.allow_tenant_context)
         self.assertEqual(personal_dm.user_id, aaryan_id)
@@ -222,7 +218,7 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(continued_dm.tenant_id, coffee_id)
         self.assertFalse(continued_dm.allow_tenant_context)
 
-    async def test_new_discord_space_is_provisional_and_unlinked_actor_has_no_authority(self):
+    async def test_new_discord_space_is_provisional_guest_with_narrow_operly_baseline(self):
         async with self.sessions() as db:
             installation = await IdentityService.ensure_installation(
                 db,
@@ -243,8 +239,12 @@ class ChannelContextTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertTrue(installation.provisional)
         self.assertEqual(resolution.tenant_id, installation.tenant_id)
-        self.assertFalse(resolution.allow_tenant_context)
+        self.assertTrue(resolution.is_guest_workspace)
         self.assertEqual(resolution.role, "guest")
+        self.assertIn("model:invoke", resolution.effective_permissions)
+        self.assertIn("context:conversation:read", resolution.effective_permissions)
+        self.assertNotIn("gmail:read", resolution.effective_permissions)
+        self.assertNotIn("context:tenant:read", resolution.effective_permissions)
         self.assertEqual(PluginAgentHarness().authority("guest"), set())
         self.assertEqual(PluginAgentHarness().authority("unknown-role"), set())
 
