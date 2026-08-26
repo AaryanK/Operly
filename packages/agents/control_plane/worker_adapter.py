@@ -87,6 +87,13 @@ def _extract_handles(trace: list[Any]) -> tuple[set[str], set[str], dict[str, An
                     "external_reference",
                     "action_id",
                     "approval_id",
+                    "deferred",
+                    "continuation_kind",
+                    "job_id",
+                    "project_id",
+                    "solution_id",
+                    "build_state",
+                    "lifecycle_status",
                 }:
                     compact[lowered] = value
     return artifacts, evidence_refs, compact
@@ -108,21 +115,19 @@ class AgentRuntimeWorker:
         self.invoke = invoke
         self.model_resolver = model_resolver or model_for_role
         self.max_steps = max(1, min(int(max_steps), 24))
-        # Factory/run identity is application-controlled correlation, never model
-        # authority. Every disposable stage shares the root runtime_run_id while its
-        # own stage/attempt fields remain distinct in the trace.
         self.inference_metadata = dict(inference_metadata or {})
 
     async def _stage_schemas(self, capsule: ContextCapsule) -> list[dict[str, Any]]:
         available = list(await _resolve(self.schemas()) or [])
         allowed = set(capsule.capability_ids) | set(_KERNEL_CAPABILITIES)
-        # If the injector could not resolve a stage intent ahead of time, keep only the
-        # discovery kernel rather than dumping the whole authorized registry. The
-        # worker can discover/describe an additional operation just in time.
         return [schema for schema in available if _schema_id(schema) in allowed]
 
     @staticmethod
-    def _messages(stage: StageSpec, capsule: ContextCapsule, defect: Defect | None) -> list[dict[str, Any]]:
+    def _messages(
+        stage: StageSpec,
+        capsule: ContextCapsule,
+        defect: Defect | None,
+    ) -> list[dict[str, Any]]:
         system = (
             "You are one disposable OPERLY factory worker. Complete only this bounded stage. "
             "The Factory owns the root objective, authorization, retries and completion truth. "
@@ -145,7 +150,10 @@ class AgentRuntimeWorker:
             )
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, default=str)},
+            {
+                "role": "user",
+                "content": json.dumps(user_payload, ensure_ascii=False, default=str),
+            },
         ]
 
     async def __call__(
@@ -175,7 +183,11 @@ class AgentRuntimeWorker:
         )
         trace = list(result.get("trace") or [])
         artifacts, evidence_refs, compact_evidence = _extract_handles(trace)
-        truth = result.get("execution_truth") if isinstance(result.get("execution_truth"), dict) else {}
+        truth = (
+            result.get("execution_truth")
+            if isinstance(result.get("execution_truth"), dict)
+            else {}
+        )
         if truth:
             compact_evidence["execution_truth"] = dict(truth)
         capability_sequence = [
@@ -184,7 +196,16 @@ class AgentRuntimeWorker:
             if str(getattr(entry, "capability_id", "") or "")
         ]
         strategy = " -> ".join(capability_sequence[-8:]) or "reasoning_only"
-        status = str((truth or {}).get("status") or result.get("stop_reason") or "completed").lower()
+        status = str(
+            (truth or {}).get("status") or result.get("stop_reason") or "completed"
+        ).lower()
+        # A capability may truthfully accept durable work while terminal evidence is
+        # still pending. That is neither success nor a defect and must pause the
+        # Factory rather than triggering validation/repair.
+        if bool(compact_evidence.get("deferred")):
+            status = "waiting_external"
+        elif status in {"pending_evidence", "waiting_external_completion"}:
+            status = "waiting_external"
         if bool(result.get("stopped")) and status == "completed":
             status = "failed"
         return StageWorkerResult(
@@ -202,6 +223,8 @@ class AgentRuntimeWorker:
                     ("context.", "capability.", "model.", "runtime.")
                 )
             ),
-            token_usage=int((result.get("budget") or {}).get("approxTokensUsed") or 0),
+            token_usage=int(
+                (result.get("budget") or {}).get("approxTokensUsed") or 0
+            ),
             cost_usd=0.0,
         )
