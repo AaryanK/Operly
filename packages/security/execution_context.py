@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.models import AppUser, Tenant, TenantMember
+from packages.security.guest_workspace import resolve_guest_workspace_authority
 from packages.security.permissions import resolve_workspace_permissions
 from packages.security.surfaces import SurfaceKind, surface_from_legacy_metadata
 
@@ -54,6 +55,11 @@ class ExecutionContext:
     ``workspace_id`` is populated only for workspace authority. A Personal operation
     keeps it ``None``; an optional workspace focus is stored separately and never
     becomes authority merely because the UI or conversation selected it.
+
+    Guest Workspaces deliberately remain ``ScopeKind.WORKSPACE`` so events, workflows,
+    actions and resource ownership use the same workspace namespace. ``workspace_mode``
+    records whether that authority came from a full Operly membership or from a
+    provisional external-platform installation.
     """
 
     workspace_id: str | None
@@ -67,6 +73,8 @@ class ExecutionContext:
     metadata: dict[str, Any] = field(default_factory=dict)
     scope_kind: ScopeKind = ScopeKind.WORKSPACE
     focus_workspace_id: str | None = None
+    principal_id: str | None = None
+    workspace_mode: str = "full"
 
     @property
     def is_member(self) -> bool:
@@ -81,16 +89,24 @@ class ExecutionContext:
         return self.scope_kind is ScopeKind.WORKSPACE
 
     @property
+    def is_guest_workspace(self) -> bool:
+        return self.is_workspace and self.workspace_mode == "guest"
+
+    @property
     def scope_id(self) -> str | None:
         if self.is_personal:
             return f"personal:{self.user_id}" if self.user_id else None
         return self.workspace_id
 
     def can(self, permission: str) -> bool:
-        # Workspace owner remains the existing root-authority shortcut. Personal
-        # authority is allowlisted explicitly above so adding a future workspace
-        # permission cannot silently widen a person's private execution authority.
-        return (self.is_workspace and self.role == "owner") or permission in self.permissions
+        # Workspace owner remains the existing root-authority shortcut only for a
+        # full workspace membership. Guest admins are always restricted to their
+        # explicitly resolved effective permission set.
+        return (
+            self.is_workspace
+            and not self.is_guest_workspace
+            and self.role == "owner"
+        ) or permission in self.permissions
 
 
 class ExecutionContextError(PermissionError):
@@ -107,6 +123,23 @@ def _surface_kind(
     if value is SurfaceKind.UNKNOWN:
         value = surface_from_legacy_metadata(channel, metadata)
     return value
+
+
+def _external_space_id(channel: str, metadata: dict[str, Any]) -> str | None:
+    value = str(metadata.get("external_space_id") or "").strip()
+    if value:
+        return value
+    channel_key = str(channel or "").strip().lower()
+    aliases = {
+        "discord": "discord_guild_id",
+        "slack": "slack_team_id",
+        "whatsapp": "whatsapp_group_id",
+    }
+    key = aliases.get(channel_key)
+    if not key:
+        return None
+    value = str(metadata.get(key) or "").strip()
+    return value or None
 
 
 async def resolve_personal_execution_context(
@@ -164,6 +197,8 @@ async def resolve_personal_execution_context(
         metadata=dict(metadata or {}),
         scope_kind=ScopeKind.PERSONAL,
         focus_workspace_id=resolved_focus,
+        principal_id=f"user:{user.id}",
+        workspace_mode="personal",
     )
 
 
@@ -178,19 +213,22 @@ async def resolve_execution_context(
     metadata: dict[str, Any] | None = None,
     require_membership: bool = True,
 ) -> ExecutionContext:
-    """Resolve workspace membership and permissions from trusted database state.
+    """Resolve full-workspace or Guest-Workspace authority from trusted state.
 
-    Role and permission values are never accepted from the model or request payload.
-    Surface is a first-class application value. During ingress migration, an absent
-    explicit surface may be recovered only through the conservative legacy bridge;
-    missing/invalid web metadata remains UNKNOWN and therefore fails closed for
-    personal/private capability and context access. Membership in the selected
-    workspace is revalidated on every execution boundary.
+    A full Operly Workspace still requires a current ``TenantMember``. A provisional
+    external-platform installation may instead resolve Guest Workspace authority from
+    the source space, its trusted adapter permissions, administrator policy and the
+    Operly guest ceiling.  A non-member can therefore use a Guest Workspace without
+    gaining any authority over a claimed/full workspace.
+
+    Role and permission values are never accepted from the model. Membership, guest
+    installation state and policy are revalidated on every execution boundary.
     """
     workspace = await db.get(Tenant, workspace_id)
     if workspace is None:
         raise ExecutionContextError("Workspace is unavailable")
 
+    request_metadata = dict(metadata or {})
     user = await db.get(AppUser, user_id) if user_id else None
     if user_id and (user is None or not user.active):
         raise ExecutionContextError("Operly user is unavailable")
@@ -204,19 +242,51 @@ async def resolve_execution_context(
             )
         )
 
-    if require_membership and membership is None:
-        raise ExecutionContextError("User is not a member of this workspace")
+    role = "guest"
+    permissions: set[str] = set()
+    principal_id = f"user:{user_id}" if user_id else None
+    workspace_mode = "full"
 
-    role = membership.role if membership is not None else "guest"
-    permissions = (
-        await resolve_workspace_permissions(
+    if membership is not None:
+        role = membership.role
+        permissions = await resolve_workspace_permissions(
             db,
             tenant_id=workspace_id,
             role=role,
         )
-        if membership is not None
-        else set()
-    )
+    else:
+        external_space_id = _external_space_id(channel, request_metadata)
+        guest_principal = str(
+            request_metadata.get("_guest_principal_id")
+            or request_metadata.get("principal_id")
+            or principal_id
+            or ""
+        ).strip()
+        guest = None
+        if external_space_id and guest_principal:
+            guest = await resolve_guest_workspace_authority(
+                db,
+                workspace_id=workspace_id,
+                provider=channel,
+                external_space_id=external_space_id,
+                principal_id=guest_principal,
+                interaction_metadata=request_metadata,
+            )
+        if guest is not None:
+            role = guest.role
+            permissions = set(guest.effective_permissions)
+            principal_id = guest.principal_id
+            workspace_mode = "guest"
+            request_metadata["guest_workspace"] = True
+            request_metadata["guest_installation_id"] = guest.installation_id
+            request_metadata["guest_platform_permissions"] = sorted(
+                guest.platform_permissions
+            )
+            request_metadata["guest_effective_permissions"] = sorted(
+                guest.effective_permissions
+            )
+        elif require_membership:
+            raise ExecutionContextError("User is not a member of this workspace")
 
     return ExecutionContext(
         workspace_id=workspace_id,
@@ -225,9 +295,15 @@ async def resolve_execution_context(
         role=role,
         permissions=frozenset(permissions),
         channel=str(channel or "unknown"),
-        surface=_surface_kind(channel=channel, surface=surface, metadata=metadata),
+        surface=_surface_kind(
+            channel=channel,
+            surface=surface,
+            metadata=request_metadata,
+        ),
         conversation_id=conversation_id,
-        metadata=dict(metadata or {}),
+        metadata=request_metadata,
         scope_kind=ScopeKind.WORKSPACE,
         focus_workspace_id=workspace_id,
+        principal_id=principal_id,
+        workspace_mode=workspace_mode,
     )
