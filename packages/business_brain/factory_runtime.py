@@ -7,7 +7,6 @@ or the Action-backed firewall.
 """
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -23,7 +22,6 @@ from packages.security.execution_context import ExecutionContext
 
 
 _FACTORY_ENV = "OPERLY_WORKSPACE_AGENT_FACTORY"
-_CONVERSATION_ARTIFACT_PREFIX = "conversation-artifact:"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on", "enabled"})
 
 
@@ -35,36 +33,6 @@ def workspace_factory_enabled() -> bool:
     """
 
     return str(os.getenv(_FACTORY_ENV, "0")).strip().lower() in _TRUE_VALUES
-
-
-def retained_context_refs(attachment_context: str | None) -> set[str]:
-    """Extract only retained artifact locators from application-generated context.
-
-    The previous runtime injected the whole retained attachment summary on every turn.
-    The Factory keeps only authorized locators at ingress; AuthorizedContextBindings
-    rechecks tenant/conversation scope before any stage can materialize one.
-    """
-
-    text = str(attachment_context or "").strip()
-    if not text:
-        return set()
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return set()
-    if not isinstance(payload, dict):
-        return set()
-    rows = payload.get("artifacts")
-    if not isinstance(rows, list):
-        return set()
-    output: set[str] = set()
-    for item in rows[:20]:
-        if not isinstance(item, dict):
-            continue
-        artifact_id = str(item.get("artifactId") or "").strip()
-        if artifact_id:
-            output.add(f"{_CONVERSATION_ARTIFACT_PREFIX}{artifact_id}")
-    return output
 
 
 async def run_workspace_factory(
@@ -104,9 +72,8 @@ async def run_workspace_factory(
     )
 
     async def schemas():
-        # The session view has already exposed only capabilities selected by the
-        # application-side intent resolver. PluginAgentHarness applies authority and
-        # surface policy again when producing schemas.
+        # The application-side resolver exposes only the capabilities selected for the
+        # current stage. PluginAgentHarness applies authority/surface policy again.
         return await plugin_harness.schemas(plugin_context)
 
     async def invoke(name: str, arguments: dict, call_id: str | None):
@@ -148,6 +115,9 @@ async def run_workspace_factory(
         "_conversation_id": conversation_id,
     }
     ingress_metadata = {
+        # Names/counts tell the blueprint compiler that attachment context may be
+        # needed; actual retained attachment content is discovered/materialized later
+        # through AuthorizedContextBindings, not injected here.
         "attachment_count": len(request.attachment_names or ()),
         "attachment_names": list(request.attachment_names or ())[:20],
         "has_images": bool(request.images),
@@ -178,7 +148,6 @@ async def run_workspace_factory(
         objective=objective,
         metadata=run_metadata,
         ingress_metadata=ingress_metadata,
-        initial_context_refs=retained_context_refs(request.attachment_context),
         facts=facts,
     )
     payload = response.as_dict()
@@ -186,7 +155,10 @@ async def run_workspace_factory(
         "message": response.message,
         "runtime_run_id": response.runtime_run_id,
         "stop_reason": response.execution.stop_reason,
-        "replans": sum(max(0, attempt.attempt - 1) for attempt in response.execution.attempts),
+        "replans": sum(
+            max(0, attempt.attempt - 1)
+            for attempt in response.execution.attempts
+        ),
         "run_plan": response.blueprint,
         "execution_truth": payload.get("execution_truth"),
         "factory": payload.get("factory"),
