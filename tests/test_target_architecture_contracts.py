@@ -278,17 +278,17 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
             "google-primary",
         )
 
-    def test_studio_capability_surface_uses_canonical_software_runtime(self):
+    def test_studio_surface_uses_canonical_software_runtime(self):
         root = Path(__file__).resolve().parents[1]
-        source = (root / "packages/capabilities/studio_provider.py").read_text()
-        self.assertNotIn("StudioAI", source)
-        self.assertNotIn("SiteSchema", source)
-        self.assertNotIn("source_agent", source)
-        self.assertNotIn("generate_source(", source)
-        self.assertNotIn("edit_source(", source)
-        self.assertIn("SoftwareBuildProvider", source)
-        self.assertIn('delegated_name = "software.build"', source)
-        self.assertIn('delegated_name = "software.edit"', source)
+        self.assertFalse((root / "packages/capabilities/studio_provider.py").exists())
+        project_source = (root / "packages/capabilities/software_project_provider.py").read_text()
+        build_source = (root / "packages/capabilities/software_build_provider.py").read_text()
+        self.assertIn('"software.project.list"', project_source)
+        self.assertIn('"software.project.inspect"', project_source)
+        self.assertIn('"software.build"', build_source)
+        self.assertIn('"software.edit"', build_source)
+        self.assertNotIn("StudioAI", build_source)
+        self.assertNotIn("SiteSchema", build_source)
 
     def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]
