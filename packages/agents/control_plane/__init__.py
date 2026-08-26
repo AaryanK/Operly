@@ -17,9 +17,11 @@ from .contracts import (
 )
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner, StageAttempt
 from .validation import ControlPlaneValidator
+from .worker_adapter import AgentRuntimeWorker
 
 __all__ = [
     "AcceptanceContract",
+    "AgentRuntimeWorker",
     "ContextCapsule",
     "ContextInjectionPolicy",
     "ControlPlaneValidator",
