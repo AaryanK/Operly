@@ -35,6 +35,7 @@ on:
       - "packages/coding_harness/contract_guidance.py"
       - "packages/coding_harness/objective_audit.py"
       - "packages/coding_harness/studio_controller.py"
+      - "scripts/live_agent_runtime_acceptance.py"
       - "requirements.txt"
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_artifact_delivery.py"
@@ -43,6 +44,7 @@ on:
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
       - "tests/test_agent_objective_verification.py"
+      - "tests/test_agent_runtime_business_os_recovery.py"
       - "tests/test_capability_rescue.py"
       - "tests/test_file_authoring_provider.py"
       - "tests/test_gmail_artifact_provider.py"
@@ -99,6 +101,7 @@ jobs:
           packages/coding_harness/contract_guidance.py
           packages/coding_harness/objective_audit.py
           packages/coding_harness/studio_controller.py
+          scripts/live_agent_runtime_acceptance.py
           alembic/versions/0041_agent_artifacts.py
       - name: Test shared Railway Sandbox computer contracts
         working-directory: apps/sandbox_runner
@@ -122,6 +125,7 @@ jobs:
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py
           tests/test_agent_objective_verification.py
+          tests/test_agent_runtime_business_os_recovery.py
           tests/test_capability_rescue.py
           tests/test_file_authoring_provider.py
           tests/test_gmail_artifact_provider.py
