@@ -42,7 +42,7 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
             await db.commit()
             return tenant.id, installation.id
 
-    async def test_unlinked_external_principal_gets_only_guest_ceiling(self):
+    async def test_unlinked_external_principal_gets_only_operly_guest_baseline(self):
         tenant_id, _ = await self._guest_workspace()
         async with self.sessions() as db:
             execution = await resolve_execution_context(
@@ -60,11 +60,14 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(execution.is_guest_workspace)
         self.assertEqual(execution.principal_id, "guest:raju")
-        self.assertIn("discord:read", execution.permissions)
         self.assertIn("model:invoke", execution.permissions)
+        self.assertIn("tasks:write", execution.permissions)
+        self.assertNotIn("discord:read", execution.permissions)
+        self.assertNotIn("discord:write", execution.permissions)
         self.assertNotIn("gmail:read", execution.permissions)
         self.assertNotIn("crm:read", execution.permissions)
         self.assertNotIn("files:process", execution.permissions)
+        self.assertNotIn("context:tenant:read", execution.permissions)
 
     async def test_linked_nonmember_stays_guest_in_provisional_workspace(self):
         tenant_id, _ = await self._guest_workspace()
@@ -140,6 +143,7 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(execution.role, "guest_admin")
         self.assertIn("workspace:settings:manage", execution.permissions)
+        self.assertIn("actions:read", execution.permissions)
         self.assertNotIn("crm:write", execution.permissions)
         self.assertNotIn("gmail:write", execution.permissions)
 
@@ -205,13 +209,13 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resolved.allow_tenant_context)
         self.assertFalse(resolved.can_process_files)
 
-    async def test_guest_attachment_ingress_requires_platform_and_policy_authority(self):
+    async def test_envelope_cannot_self_assert_guest_platform_file_permission(self):
         envelope = ChannelEnvelope(
             provider="discord",
             external_user_id="888",
             external_space_id="999",
             external_conversation_id="1000",
-            actor_name="Allowed User",
+            actor_name="Untrusted User",
             text="read this",
             space_name="Research Group",
             is_direct=False,
@@ -222,6 +226,7 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
                     "discord:write",
                     "files:process",
                 ],
+                "_operly_platform_admin": True,
             },
         )
         async with self.sessions() as db:
@@ -229,8 +234,9 @@ class GuestWorkspaceArchitectureTests(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
         self.assertTrue(resolved.is_guest_workspace)
-        self.assertTrue(resolved.allow_tenant_context)
-        self.assertTrue(resolved.can_process_files)
+        self.assertFalse(resolved.allow_tenant_context)
+        self.assertFalse(resolved.can_process_files)
+        self.assertFalse(resolved.platform_admin)
 
 
 if __name__ == "__main__":
