@@ -7,6 +7,7 @@ and cross-provider failover live entirely inside ``packages.model_runtime``.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Protocol
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
@@ -109,6 +110,12 @@ def _repair_packet(payload: dict[str, Any]) -> str:
     return text[:6000]
 
 
+def _diagnostic(label: str, detail: str) -> None:
+    if os.getenv("OPERLY_CODING_DIAGNOSTICS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    print(f"[coding-model] {label}: {detail[:7000]}", flush=True)
+
+
 class SemanticFailoverCodingClient:
     """Keep persistent coding sessions moving across model/provider failures.
 
@@ -145,7 +152,26 @@ class SemanticFailoverCodingClient:
             and not _has_mutation_after(messages, failed_finish[0])
         )
         effective_messages = list(messages)
+
+        # A greenfield build should not need one inference request per file. Modern
+        # tool-capable models can emit multiple independent writes in one assistant
+        # turn, which preserves rate-limit headroom for actual validation/repair.
+        if schemas and not _history_has_tool_calls(messages):
+            effective_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Execution efficiency: for a greenfield implementation, create the smallest coherent complete project first. "
+                        "When the provider supports parallel/multiple tool calls, batch independent write calls in the same response "
+                        "instead of spending one model turn per file. Include the real application behavior, required Operly runtime/interaction metadata, "
+                        "and executable tests in that first implementation pass. Then use deterministic finish evidence for targeted repair."
+                    ),
+                }
+            )
+
         if needs_finish_repair and failed_finish is not None:
+            packet = _repair_packet(failed_finish[1])
+            _diagnostic("finish-repair", packet)
             effective_messages.append(
                 {
                     "role": "user",
@@ -154,7 +180,7 @@ class SemanticFailoverCodingClient:
                         "Do NOT call finish again until you make a concrete source mutation that addresses the reported gap. "
                         "Use write/edit/remove now; do not reread unchanged files unless the repair packet names an unknown location. "
                         "Preserve behavior that already passes. Repair packet:\n"
-                        + _repair_packet(failed_finish[1])
+                        + packet
                     ),
                 }
             )
@@ -171,6 +197,7 @@ class SemanticFailoverCodingClient:
                 resource_id = str(getattr(result, "model_resource_id", "") or "")
                 if resource_id and resource_id not in rejected_resources:
                     rejected_resources.add(resource_id)
+                    _diagnostic("reject-nonconvergent", resource_id)
                     if reject_model_result(
                         getattr(self.adapter, "model", None),
                         result,
