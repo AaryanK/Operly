@@ -1,8 +1,8 @@
 """Append-only evidence bridge for factory control-plane runs.
 
 AgentRunEventRecord already provides the immutable event stream and AgentRunRecord is
-its resumable projection.  The factory reuses that storage instead of inventing a
-second audit ledger.  Events are serialized through one lock so parallel stages cannot
+its resumable projection. The factory reuses that storage instead of inventing a
+second audit ledger. Events are serialized through one lock so parallel stages cannot
 race event sequence allocation in the existing checkpoint writer.
 """
 from __future__ import annotations
@@ -67,9 +67,9 @@ class FactoryEvidenceLedger:
             )
 
     async def append(self, event_type: str, payload: dict[str, Any]) -> None:
-        # FactoryStageRunner emits a terminal in-memory event for generic consumers;
-        # ``finish`` below owns the single durable terminal checkpoint/event.
-        if event_type in {"factory.completed", "factory.stopped"}:
+        # The StageRunner emits a terminal/waiting event for generic consumers;
+        # finish() owns the single durable lifecycle transition for this run.
+        if event_type in {"factory.completed", "factory.stopped", "factory.waiting"}:
             return
         async with self._lock:
             factory = self._projection.setdefault("factory", {})
@@ -80,6 +80,16 @@ class FactoryEvidenceLedger:
                 factory.setdefault("statuses", {})[stage_id] = "passed"
             elif event_type == "stage.blocked" and stage_id:
                 factory.setdefault("statuses", {})[stage_id] = "blocked"
+            elif event_type == "stage.waiting" and stage_id:
+                waiting_status = str(payload.get("status") or "waiting_external")
+                factory.setdefault("statuses", {})[stage_id] = waiting_status
+                factory["waiting_stage_id"] = stage_id
+                factory["waiting_status"] = waiting_status
+                approval_id = str(payload.get("approval_id") or "").strip()
+                if approval_id:
+                    pending = set(self._projection.get("pending_approval_ids") or [])
+                    pending.add(approval_id)
+                    self._projection["pending_approval_ids"] = sorted(pending)
             elif event_type == "defect.created":
                 factory["defect_count"] = int(factory.get("defect_count") or 0) + 1
             if event_type == "stage.started":
@@ -97,11 +107,30 @@ class FactoryEvidenceLedger:
 
     async def finish(self, result: FactoryExecutionResult) -> None:
         async with self._lock:
+            if result.completed:
+                lifecycle = "completed"
+                factory_state = "completed"
+                event_type = "factory.completed"
+            elif result.waiting:
+                lifecycle = (
+                    "waiting_approval"
+                    if result.stop_reason == "waiting_approval"
+                    else "waiting_external"
+                )
+                factory_state = lifecycle
+                event_type = "factory.waiting"
+            else:
+                lifecycle = "failed"
+                factory_state = "blocked" if result.blocked else "failed"
+                event_type = "factory.stopped"
+
             factory = self._projection.setdefault("factory", {})
             factory.update(
                 {
-                    "state": "completed" if result.completed else "blocked" if result.blocked else "failed",
-                    "statuses": {key: value.value for key, value in result.statuses.items()},
+                    "state": factory_state,
+                    "statuses": {
+                        key: value.value for key, value in result.statuses.items()
+                    },
                     "artifact_refs": sorted(result.artifacts),
                     "evidence_refs": sorted(result.evidence_refs),
                     "defect_count": len(result.defects),
@@ -114,14 +143,17 @@ class FactoryEvidenceLedger:
             )
             self._projection["artifact_refs"] = sorted(result.artifacts)
             self._projection["evidence_refs"] = sorted(result.evidence_refs)
-            lifecycle = "completed" if result.completed else "failed"
             await checkpoint_agent_run(
                 runtime_run_id=self.runtime_run_id,
                 objective=self.objective,
                 metadata=self.metadata,
                 state=self._projection,
-                event_type="factory.completed" if result.completed else "factory.stopped",
+                event_type=event_type,
                 lifecycle_state=lifecycle,
                 payload=result.as_dict(),
-                error=None if result.completed else result.stop_reason,
+                error=(
+                    None
+                    if result.completed or result.waiting
+                    else result.stop_reason
+                ),
             )
