@@ -116,6 +116,48 @@ def _diagnostic(label: str, detail: str) -> None:
     print(f"[coding-model] {label}: {detail[:7000]}", flush=True)
 
 
+def _greenfield_hosted_runtime_policy() -> str:
+    """Return the canonical runner contract for a new hosted browser application.
+
+    This is application-owned runtime policy, not model-discovered architecture. It
+    keeps greenfield SoftwareProject generation on the same full-stack profile that
+    Operly's isolated runner already builds, starts, health-checks and previews.
+    """
+
+    manifest = {
+        "schemaVersion": "operly.solution/v1",
+        "runtime": "operly-fullstack-v1",
+        "runtimeVersion": 1,
+        "layout": {
+            "frontend": "frontend",
+            "backend": "backend",
+            "workers": "workers",
+            "tests": "tests",
+            "migrations": "migrations",
+        },
+        "execution": {
+            "frontend": "static",
+            "backend": "python-cli",
+            "worker": "none",
+            "healthPath": "/health",
+        },
+        "dependencies": [],
+        "bindings": [],
+    }
+    return (
+        "OPERLY HOSTED SOFTWARE RUNTIME POLICY (application-controlled): "
+        "For a new browser-hosted SoftwareProject, target the canonical operly-fullstack-v1 profile unless the approved specification explicitly requires another registered runtime. "
+        "Create `operly.solution.json` exactly for this profile, `frontend/index.html` plus browser application JavaScript under `frontend/`, `backend/app.py`, and executable tests under `tests/`. "
+        "The Python backend is the trusted runner entrypoint: accept `--host` and `--port`, serve the frontend at `/`, return HTTP 200 from `/health`, and serve any same-origin application API needed by the requested behavior. "
+        "Keep this dependency-free unless the requested behavior truly requires a registry dependency. Browser-native APIs such as getUserMedia and BarcodeDetector need no dependency. "
+        "Do not create the legacy root-level static-web shape or `operly.interactions.json` merely to satisfy metadata; the full-stack runtime has its own typed manifest and isolated build/test/start/health/acceptance gates. "
+        "For camera/QR work, the executable browser source must actually open the camera and decode frames; simulation, comments, manual-only buttons, or hard-coded fake scan results are not substitutes. "
+        "Write the smallest coherent complete project before attempting finish. Batch independent writes in one assistant response when the model/tool protocol supports multiple calls. "
+        "Canonical manifest: "
+        + json.dumps(manifest, separators=(",", ":"), ensure_ascii=False)
+    )
+
+
 class SemanticFailoverCodingClient:
     """Keep persistent coding sessions moving across model/provider failures.
 
@@ -153,19 +195,11 @@ class SemanticFailoverCodingClient:
         )
         effective_messages = list(messages)
 
-        # A greenfield build should not need one inference request per file. Modern
-        # tool-capable models can emit multiple independent writes in one assistant
-        # turn, which preserves rate-limit headroom for actual validation/repair.
         if schemas and not _history_has_tool_calls(messages):
             effective_messages.append(
                 {
                     "role": "user",
-                    "content": (
-                        "Execution efficiency: for a greenfield implementation, create the smallest coherent complete project first. "
-                        "When the provider supports parallel/multiple tool calls, batch independent write calls in the same response "
-                        "instead of spending one model turn per file. Include the real application behavior, required Operly runtime/interaction metadata, "
-                        "and executable tests in that first implementation pass. Then use deterministic finish evidence for targeted repair."
-                    ),
+                    "content": _greenfield_hosted_runtime_policy(),
                 }
             )
 
