@@ -75,7 +75,7 @@ class SoftwareProjectPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(project.name, "Operations Console")
         self.assertEqual(project.state.value, "draft")
 
-    async def test_legacy_studio_project_materializes_stable_canonical_identity(self):
+    async def test_legacy_studio_project_is_not_discovered_as_canonical_identity(self):
         legacy = StudioProject(
             tenant_id=self.tenant.id,
             name="Public Website",
@@ -87,32 +87,16 @@ class SoftwareProjectPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.db.add(legacy)
         await self.db.flush()
 
-        first = await self.projects.list(self.db, self.tenant.id)
+        projects = await self.projects.list(self.db, self.tenant.id)
         await self.db.commit()
-        second = await self.projects.list(self.db, self.tenant.id)
-
-        matched = [
-            row
-            for row in first
-            if row.metadata.get("runtime_reference") == legacy.id
-        ]
-        self.assertEqual(len(matched), 1)
-        canonical_id = matched[0].id
-        self.assertNotEqual(canonical_id, legacy.id)
-        self.assertTrue(
-            any(
-                row.id == canonical_id
-                and row.metadata.get("compatibility_runtime") == "studio"
-                for row in second
-            )
-        )
         stored = await self.db.scalar(
             select(SoftwareProjectRecord).where(
-                SoftwareProjectRecord.id == canonical_id
+                SoftwareProjectRecord.tenant_id == self.tenant.id
             )
         )
-        self.assertEqual(stored.legacy_runtime_type, "studio")
-        self.assertEqual(stored.legacy_runtime_reference, legacy.id)
+
+        self.assertEqual(projects, [])
+        self.assertIsNone(stored)
 
     async def test_service_binding_persists_capability_identity_without_credentials(self):
         project = await self.projects.create(
