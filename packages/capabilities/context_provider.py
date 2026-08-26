@@ -3,6 +3,7 @@ from sqlalchemy import select
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
 from packages.capabilities.providers import BaseProvider
 from packages.context.broker import ContextBroker
+from packages.context.federation import FederatedHistoryService
 from packages.context.service import ContextScopeError, ContextService
 from packages.database.channel_models import ContextRecord
 from packages.security.surfaces import SurfaceKind, capability_surface_allowed
@@ -29,19 +30,19 @@ class ContextProvider(BaseProvider):
     capabilities = (
         CapabilityDefinition(
             "context.search", "context_search",
-            "Semantically search context available to this authenticated surface and return compact references. Use context.get only for references whose contents you need in this model.",
+            "Search the complete history currently authorized to this surface and return compact references. On Personal AI this federates Operly context, private conversations, every authorized workspace/channel history, events, and searchable connected provider accounts such as Gmail. Use context.get only for references whose contents you need in this model.",
             {"type": "object", "properties": {"query": {"type": "string", "maxLength": 1000}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"], "additionalProperties": False},
             {"type": "object"}, risk_level="read_only", approval_policy=ApprovalPolicy.AUTO,
-            category="context", tags=frozenset({"kernel", "context", "retrieval"}),
-            semantic_operations=frozenset({"find context", "find memory", "retrieve knowledge"}),
+            category="context", tags=frozenset({"kernel", "context", "retrieval", "federated-history"}),
+            semantic_operations=frozenset({"find context", "find memory", "retrieve knowledge", "search history", "search across accounts", "search email history"}),
         ),
         CapabilityDefinition(
             "context.get", "context_get",
-            "Materialize exact contents of authorized context references into the current model. References are re-authorized on every read.",
+            "Materialize exact contents of authorized federated history references into the current model. References are re-authorized against their current workspace or provider account on every read.",
             {"type": "object", "properties": {"refs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12}}, "required": ["refs"], "additionalProperties": False},
             {"type": "object"}, risk_level="read_only", approval_policy=ApprovalPolicy.AUTO,
-            category="context", tags=frozenset({"kernel", "context", "retrieval"}),
-            semantic_operations=frozenset({"read context ref", "materialize context", "expand memory"}),
+            category="context", tags=frozenset({"kernel", "context", "retrieval", "federated-history"}),
+            semantic_operations=frozenset({"read context ref", "materialize context", "expand memory", "read history ref"}),
         ),
         _read_definition("context.human.search", "context_human_search", "Search global private context belonging only to the current linked human.", "context:human:read"),
         _remember_definition("context.human.remember", "context_human_remember", "Remember a global private fact or preference for the current linked human.", "context:human:write"),
@@ -80,10 +81,15 @@ class ContextProvider(BaseProvider):
 
         try:
             if capability_name == "context.search":
-                refs = await ContextBroker.search(
-                    context.db, tenant_id=context.tenant_id, user_id=user_id,
-                    conversation_id=conversation_id or None, authority=authority,
-                    surface=surface, query=query, limit=int(arguments.get("limit") or 8),
+                refs = await FederatedHistoryService.search(
+                    context,
+                    tenant_id=context.tenant_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id or None,
+                    authority=authority,
+                    surface=surface,
+                    query=query,
+                    limit=int(arguments.get("limit") or 8),
                 )
                 return CapabilityResult(
                     True,
@@ -93,19 +99,25 @@ class ContextProvider(BaseProvider):
                         "count": len(refs),
                         "surface": surface.value,
                         "contents_materialized": False,
+                        "federated": True,
                         "semantic_backend": ContextBroker.semantic_backend_name(),
                         "semantic_degraded_reason": ContextBroker.semantic_degraded_reason(),
                         "ranked_refs": [item.id for item in refs],
+                        "sources": sorted({item.source for item in refs}),
                         "estimated_tokens_if_all_materialized": sum(item.estimated_tokens for item in refs),
                     },
                 )
 
             if capability_name == "context.get":
                 requested_refs = [str(item) for item in arguments.get("refs") or ()]
-                rows = await ContextBroker.materialize(
-                    context.db, refs=requested_refs, tenant_id=context.tenant_id,
-                    user_id=user_id, conversation_id=conversation_id or None,
-                    authority=authority, surface=surface,
+                rows = await FederatedHistoryService.materialize(
+                    context,
+                    refs=requested_refs,
+                    tenant_id=context.tenant_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id or None,
+                    authority=authority,
+                    surface=surface,
                 )
                 return CapabilityResult(
                     True,
@@ -115,8 +127,10 @@ class ContextProvider(BaseProvider):
                         "count": len(rows),
                         "requested_count": len(requested_refs),
                         "surface": surface.value,
+                        "federated": True,
                         "references_reauthorized": True,
                         "materialized_refs": [str(row.get("ref") or "") for row in rows],
+                        "materialized_sources": sorted({str(row.get("source") or "context") for row in rows}),
                         "materialized_estimated_tokens": sum(int(row.get("estimated_tokens") or 0) for row in rows),
                     },
                 )
