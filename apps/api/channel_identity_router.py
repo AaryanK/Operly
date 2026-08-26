@@ -3,9 +3,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.dependencies import AuthContext, get_auth_context, get_db
+from apps.api.dependencies import (
+    AccountAuthContext,
+    AuthContext,
+    get_account_auth_context,
+    get_auth_context,
+    get_db,
+)
+from packages.channels.identity import IdentityService
 from packages.channels.linking import IdentityLinkService
 from packages.database.channel_models import ExternalIdentity
+from packages.security.human_identity import HumanIdentityService
 from packages.security.temporal_context import set_user_timezone, user_timezone, validate_timezone
 
 router = APIRouter(prefix="/api/identities", tags=["identities"])
@@ -28,7 +36,7 @@ def _provider(value: str) -> str:
 
 @router.get("")
 async def identities(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (
@@ -47,6 +55,19 @@ async def identities(
         }
         for row in rows
     ]
+
+
+@router.get("/graph")
+async def identity_graph(
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve all known authentication, channel and connector identities to one human."""
+    try:
+        snapshot = await HumanIdentityService.snapshot(db, user_id=auth.user.id)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    return snapshot.as_dict()
 
 
 @router.get("/preferences/timezone")
@@ -78,7 +99,7 @@ async def put_timezone_preference(
 @router.post("/{provider}/link-code")
 async def provider_link_code(
     provider: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     name = _provider(provider)
@@ -100,7 +121,7 @@ async def provider_link_code(
 async def provider_claim_info(
     provider: str,
     token: str = Query(..., min_length=20, max_length=500),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     name = _provider(provider)
@@ -120,7 +141,7 @@ async def provider_claim_info(
 async def provider_claim(
     provider: str,
     payload: ClaimIdentityInput,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     name = _provider(provider)
@@ -145,17 +166,15 @@ async def provider_claim(
 @router.delete("/{identity_id}")
 async def unlink_identity(
     identity_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(ExternalIdentity).where(
-            ExternalIdentity.id == identity_id,
-            ExternalIdentity.user_id == auth.user.id,
-        )
+    removed = await IdentityService.unlink_external_identity(
+        db,
+        user_id=auth.user.id,
+        identity_id=identity_id,
     )
-    if row is None:
+    if not removed:
         raise HTTPException(404, "External identity not found")
-    await db.delete(row)
     await db.commit()
     return {"ok": True}
