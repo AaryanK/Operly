@@ -60,6 +60,42 @@ def _worker_waiting_status(status: str) -> StageStatus | None:
     return None
 
 
+def _terminal_worker_failure(result: StageWorkerResult) -> bool:
+    """Return True when repair would risk replaying a terminal side effect.
+
+    Durable action outcomes such as approval rejection, deterministic policy denial,
+    cancellation/expiry, or a terminal provider failure are evidence, not a prompt for
+    another worker to try the side effect again. `terminal` is application-authored
+    evidence; explicit terminal status names are also fail-safe recognized.
+    """
+
+    status = str(result.status or "").strip().lower()
+    if status in {
+        "rejected",
+        "denied",
+        "cancelled",
+        "expired",
+        "verification_failed",
+        "unverified",
+    }:
+        return True
+    terminal_evidence = bool(
+        result.evidence.get("terminal")
+        if isinstance(result.evidence, dict)
+        else False
+    )
+    return terminal_evidence and status not in {
+        "completed",
+        "verified",
+        "success",
+        "passed",
+        "waiting_approval",
+        "awaiting_approval",
+        "waiting_external",
+        "pending_evidence",
+    }
+
+
 def _stage_status(value: StageStatus | str | None) -> StageStatus:
     if isinstance(value, StageStatus):
         return value
@@ -391,6 +427,40 @@ class FactoryStageRunner:
                 )
                 return (
                     waiting_status,
+                    attempts,
+                    defects_all,
+                    set(),
+                    set(),
+                    external_actions,
+                    token_usage,
+                    cost_usd,
+                )
+
+            if _terminal_worker_failure(result):
+                defect = Defect(
+                    stage_id=stage.id,
+                    validator_id="worker.terminal_outcome",
+                    expected="successful terminal action evidence",
+                    observed={
+                        "status": result.status,
+                        "action_status": result.evidence.get("action_status"),
+                        "action_id": result.evidence.get("action_id"),
+                        "approval_id": result.evidence.get("approval_id"),
+                    },
+                    evidence_refs=tuple(result.evidence_refs),
+                    failure_class="terminal_action_outcome",
+                    strategy=result.strategy,
+                    retryable=False,
+                    repair_depth=repair_depth,
+                )
+                attempts.append(
+                    StageAttempt(stage.id, attempt_index, result, [defect], source=source)
+                )
+                defects_all.append(defect)
+                await self._event("defect.created", defect.as_dict())
+                await self._event("stage.blocked", defect.as_dict())
+                return (
+                    StageStatus.BLOCKED,
                     attempts,
                     defects_all,
                     set(),
