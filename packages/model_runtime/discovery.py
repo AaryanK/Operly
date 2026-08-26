@@ -42,6 +42,7 @@ def _ensure_builtin_discoverers() -> None:
     _BUILTINS_LOADED = True
     # Provider-specific discovery remains outside the harness and catalog core.
     from packages.model_runtime import openrouter_discovery  # noqa: F401
+    from packages.model_runtime import provider_discovery  # noqa: F401
 
 
 async def refresh_model_discovery(
@@ -50,11 +51,11 @@ async def refresh_model_discovery(
     ttl_seconds: float = 600.0,
     force: bool = False,
 ) -> dict[str, int]:
-    """Refresh provider-published model catalogs without coupling the harness.
+    """Refresh every provider-published model catalog available to Operly.
 
     Discovery failures are isolated per provider. A temporary marketplace/API
-    failure must not break the configured orchestrator or manually registered
-    model resources.
+    failure must not break the configured orchestrator or erase the last known
+    model snapshot.
     """
     _ensure_builtin_discoverers()
     wanted = str(provider or "").strip().lower()
