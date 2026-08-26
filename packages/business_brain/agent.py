@@ -6,6 +6,10 @@ from packages.business_brain.context_loader import (
     load_business_context,
     load_conversation_messages,
 )
+from packages.business_brain.factory_runtime import (
+    run_workspace_factory,
+    workspace_factory_enabled,
+)
 from packages.business_brain.security import (
     MAX_ASSISTANT_TEXT,
     MAX_USER_TEXT,
@@ -23,9 +27,8 @@ from packages.security.execution_context import ExecutionContextError, resolve_e
 from packages.security.surfaces import SurfaceKind
 
 
-# Keep the universal model contract small. Identity, permissions, capability exposure,
-# approval, argument validation and execution verification are application state and
-# must not be repeated as a large policy prompt on every pass.
+# Legacy controller prompt. The Factory path does not inherit this transcript/prompt;
+# each factory station receives a fresh bounded stage capsule instead.
 SYSTEM_PROMPT = """
 You are OPERLY, the assistant operating inside an application-resolved scope.
 The application owns identity, workspace, permissions, context visibility and tools.
@@ -37,12 +40,13 @@ Keep answers concise and operational.
 
 
 class AgentService:
-    """Small-model-first workspace runtime over the governed capability harness.
+    """Workspace runtime over one governed capability harness.
 
-    Full and Guest Workspaces share this runtime. Their difference is entirely in the
-    ExecutionContext produced by the application: a full workspace resolves Operly
-    membership/RBAC; a Guest Workspace resolves source-platform + admin-policy
-    authority. The model never chooses which mode it is in.
+    ``OPERLY_WORKSPACE_AGENT_FACTORY=1`` cuts ordinary Workspace/Guest Workspace turns
+    to the Factory control plane. The legacy controller remains a deployment fallback
+    and handles image-bearing turns until image refs are represented in the same
+    scoped artifact/context contract. Both paths use the same ExecutionContext and
+    PluginAgentHarness authorization boundary.
     """
 
     def __init__(self) -> None:
@@ -68,6 +72,23 @@ class AgentService:
             return SurfaceKind.DISCORD_GUILD
         return SurfaceKind.WORKSPACE_SHARED
 
+    @staticmethod
+    async def _persist_assistant(
+        *,
+        tenant_id: str,
+        conversation_id: str,
+        answer: str,
+    ) -> None:
+        async with session_scope() as db:
+            db.add(
+                AgentMessage(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=answer,
+                )
+            )
+
     async def run(self, request: AgentInput) -> dict:
         if not request.tenant_id or not request.principal_id:
             raise AgentSecurityError("Tenant and principal are required")
@@ -91,9 +112,6 @@ class AgentService:
         if request.principal_id.startswith("guest:"):
             request.metadata["_guest_principal_id"] = request.principal_id
 
-        # Every workspace turn resolves one trusted execution context, including
-        # unresolved principals in provisional Guest Workspaces. Full workspaces still
-        # fail closed without membership.
         try:
             async with session_scope() as db:
                 execution = await resolve_execution_context(
@@ -126,6 +144,70 @@ class AgentService:
             attachment_label = " [Attachments: " + ", ".join(request.attachment_names[:10]) + "]"
         stored_user_text = (user_text or "Uploaded attachment(s)") + attachment_label
 
+        # Persist the user turn before either controller executes. The Factory does not
+        # inherit this row automatically; AuthorizedContextBindings can retrieve a
+        # bounded conversation slice only when a stage explicitly asks for it.
+        async with session_scope() as db:
+            db.add(
+                AgentMessage(
+                    tenant_id=request.tenant_id,
+                    conversation_id=conversation.id,
+                    role="user",
+                    content=stored_user_text,
+                )
+            )
+
+        plugin_metadata = dict(request.metadata)
+        plugin_metadata["_conversation_id"] = conversation.id
+        plugin_metadata["allow_tenant_context"] = allow_tenant_context
+        plugin_metadata["_surface_kind"] = surface_kind.value
+        plugin_metadata["principal_id"] = request.principal_id
+        plugin_context = PluginInvocationContext(
+            tenant_id=request.tenant_id,
+            user_id=user_id,
+            role=trusted_role,
+            objective=objective,
+            channel=request.channel,
+            metadata=plugin_metadata,
+            surface=surface_kind,
+            principal_id=request.principal_id,
+        )
+
+        # The deployment switch is environment-only, so connector/client metadata
+        # cannot select a more permissive controller. Image turns remain on the legacy
+        # multimodal path until images are first-class scoped artifact refs.
+        if workspace_factory_enabled() and not request.images:
+            run = await run_workspace_factory(
+                objective=objective,
+                request=request,
+                conversation_id=conversation.id,
+                execution=execution,
+                plugin_harness=self.plugin_harness,
+                plugin_context=plugin_context,
+            )
+            answer = bounded_text(
+                run.get("message") or "Done.",
+                MAX_ASSISTANT_TEXT,
+            ).strip()
+            await self._persist_assistant(
+                tenant_id=request.tenant_id,
+                conversation_id=conversation.id,
+                answer=answer,
+            )
+            return {
+                "conversation_id": conversation.id,
+                "message": answer,
+                "stop_reason": run.get("stop_reason"),
+                "runtime_run_id": run.get("runtime_run_id"),
+                "replans": run.get("replans", 0),
+                "run_plan": run.get("run_plan"),
+                "execution_truth": run.get("execution_truth"),
+                "factory": run.get("factory"),
+                "runtime_controller": "factory",
+            }
+
+        # Legacy fallback. Context is eagerly assembled here only when the Factory is
+        # disabled (or the request needs the legacy multimodal path).
         async with session_scope() as db:
             history = await load_conversation_messages(
                 db,
@@ -133,9 +215,6 @@ class AgentService:
                 conversation.id,
                 limit=12,
             )
-            # Full workspace business summaries are useful boot context. A Guest
-            # Workspace is intentionally platform-native and does not receive CRM/ERP
-            # style business context simply because those subsystems exist in Operly.
             business_context = (
                 await load_business_context(db, request.tenant_id)
                 if not execution.is_guest_workspace
@@ -143,7 +222,6 @@ class AgentService:
             )
             scoped_context = None
             if not execution.is_guest_workspace:
-                # Query is deliberately empty: durable memory is discovered lazily.
                 scoped_context = await ContextService.load_for_agent(
                     db,
                     tenant_id=request.tenant_id,
@@ -153,14 +231,6 @@ class AgentService:
                     surface=surface_kind,
                     query="",
                 )
-            db.add(
-                AgentMessage(
-                    tenant_id=request.tenant_id,
-                    conversation_id=conversation.id,
-                    role="user",
-                    content=stored_user_text,
-                )
-            )
 
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         if business_context:
@@ -229,22 +299,6 @@ class AgentService:
             user_message["images"] = request.images[:4]
         messages.append(user_message)
 
-        plugin_metadata = dict(request.metadata)
-        plugin_metadata["_conversation_id"] = conversation.id
-        plugin_metadata["allow_tenant_context"] = allow_tenant_context
-        plugin_metadata["_surface_kind"] = surface_kind.value
-        plugin_metadata["principal_id"] = request.principal_id
-        plugin_context = PluginInvocationContext(
-            tenant_id=request.tenant_id,
-            user_id=user_id,
-            role=trusted_role,
-            objective=objective,
-            channel=request.channel,
-            metadata=plugin_metadata,
-            surface=surface_kind,
-            principal_id=request.principal_id,
-        )
-
         async def schemas():
             return await self.plugin_harness.schemas(plugin_context)
 
@@ -294,15 +348,11 @@ class AgentService:
             run.get("message") or "Done.",
             MAX_ASSISTANT_TEXT,
         ).strip()
-        async with session_scope() as db:
-            db.add(
-                AgentMessage(
-                    tenant_id=request.tenant_id,
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=answer,
-                )
-            )
+        await self._persist_assistant(
+            tenant_id=request.tenant_id,
+            conversation_id=conversation.id,
+            answer=answer,
+        )
         return {
             "conversation_id": conversation.id,
             "message": answer,
@@ -310,6 +360,7 @@ class AgentService:
             "runtime_run_id": run.get("runtime_run_id"),
             "replans": run.get("replans", 0),
             "run_plan": run.get("run_plan"),
+            "runtime_controller": "legacy",
         }
 
     async def _get_or_create_conversation(self, request: AgentInput) -> AgentConversation:
