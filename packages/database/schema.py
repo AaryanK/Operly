@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0043_canonical_software_source_versions"
+ALEMBIC_HEAD = "0044_human_identity_workspace_invitations"
 
 
 def import_all_models() -> None:
@@ -22,6 +22,7 @@ def import_all_models() -> None:
     from packages.database import product_models  # noqa: F401
     from packages.database import workspace_security_models  # noqa: F401
     from packages.database import principal_models  # noqa: F401
+    from packages.database import identity_graph_models  # noqa: F401
     from packages.database import software_project_models  # noqa: F401
     from packages.database import scope_models  # noqa: F401
     from packages.database import model_trace_models  # noqa: F401
