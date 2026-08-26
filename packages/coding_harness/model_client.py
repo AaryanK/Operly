@@ -9,7 +9,11 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from packages.coding_harness.context_window import ContextBoundCodingClient
-from packages.model_runtime import InferenceBudget, model_chat_client_for_role
+from packages.model_runtime import (
+    InferenceBudget,
+    ModelRequirements,
+    model_chat_client_for_requirements,
+)
 from packages.model_runtime.semantic_failover import reject_model_result
 
 
@@ -100,17 +104,67 @@ class SemanticFailoverCodingClient:
                 return response
 
 
+def _default_coding_budget() -> InferenceBudget:
+    """Keep each coding turn useful without reserving an oversized completion.
+
+    File-writing tool calls need more output room than normal business-agent turns,
+    but a static 4k/16k reservation can cause an otherwise healthy provider to reject
+    the request before inference starts. The model pool can fail over across providers,
+    so keep one turn bounded and spend additional tokens only on subsequent repair
+    turns that actually make progress.
+    """
+
+    return InferenceBudget(
+        timeout_seconds=75.0,
+        attempts_per_model=1,
+        max_models=4,
+        max_output_tokens=3_000,
+    )
+
+
+def _coding_requirements() -> ModelRequirements:
+    """Describe coding-session needs without pinning the harness to one provider."""
+
+    return ModelRequirements(
+        requires=frozenset({"text", "tools", "coding"}),
+        prefer_tags=frozenset(
+            {
+                "qualified-coding",
+                "qualified-tools",
+                "coding",
+                "reliable",
+                "small",
+                "fast",
+                "free",
+            }
+        ),
+        avoid_tags=frozenset({"slow"}),
+        prefer_free=True,
+        max_models=4,
+        reason=(
+            "persistent project coding session; provider-diverse tool/coding model "
+            "pool with bounded per-turn output"
+        ),
+    )
+
+
 def coding_model_client(
     role: str = "coding",
     *,
     budget: InferenceBudget | None = None,
 ) -> CodingModelClient:
-    """Return the selected Model behind bounded coding-session context.
+    """Return a provider-diverse coding model behind bounded session context.
 
-    There is intentionally no provider/model allowlist or provider-specific policy
-    here. ``budget`` is provider-neutral and is enforced by the model runtime.
-    Semantic tool-protocol mismatch also participates in the model pool's failover
-    policy instead of making the user retry an otherwise valid generation job.
+    The coding harness states concrete requirements (text + tools + coding) instead
+    of resolving one provider role up front. The shared model runtime chooses a
+    provider-diverse pool, preserving the configured role chain only as a compatible
+    fallback. Quota, credits, rate limits, provider failures, and tool-protocol
+    mismatches can therefore fail over without restarting the user's coding job.
     """
-    adapter = model_chat_client_for_role(role, budget=budget)
+
+    adapter = model_chat_client_for_requirements(
+        _coding_requirements(),
+        budget=budget or _default_coding_budget(),
+        fallback_role=role,
+    )
     return SemanticFailoverCodingClient(adapter)
