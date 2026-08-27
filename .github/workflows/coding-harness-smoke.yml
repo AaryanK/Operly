@@ -5,6 +5,8 @@ on:
     branches: [main, "architecture/**", "fix/**"]
     paths:
       - "apps/api/**"
+      - "apps/web/src/**"
+      - "apps/web/scripts/frontend-contract.mjs"
       - "alembic/versions/**"
       - "packages/agents/**"
       - "packages/coding_harness/**"
@@ -24,6 +26,8 @@ on:
   pull_request:
     paths:
       - "apps/api/**"
+      - "apps/web/src/**"
+      - "apps/web/scripts/frontend-contract.mjs"
       - "alembic/versions/**"
       - "packages/agents/**"
       - "packages/coding_harness/**"
@@ -67,10 +71,8 @@ jobs:
           packages/software_projects
           packages/solutions
           packages/capability_sandbox
-      - name: Check current browser JavaScript syntax
-        run: |
-          set -euo pipefail
-          find apps/web/static -maxdepth 1 -type f -name '*.js' -print0 | sort -z | xargs -0 -r -n1 node --check
+      - name: Verify canonical frontend contracts
+        run: node apps/web/scripts/frontend-contract.mjs
       - name: Run current coding-runtime contracts
         run: >-
           python -m pytest -q
