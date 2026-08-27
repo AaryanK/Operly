@@ -1,0 +1,36 @@
+.personal-connector-card .connector-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(139, 130, 246, 0.24);
+  background: linear-gradient(145deg, #343b4d, #262c3a);
+  box-shadow: 0 5px 16px rgba(15, 18, 28, 0.18), inset 0 0 0 1px rgba(255,255,255,0.04);
+  color: #fff;
+  flex: 0 0 46px;
+}
+
+.personal-connector-card .connector-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  border-radius: inherit;
+}
+
+.personal-connector-card[data-provider="discord"] .connector-logo {
+  background: linear-gradient(145deg, #5865f2, #404eed);
+}
+
+.personal-connector-card .connector-logo + div {
+  min-width: 0;
+}
+
+@media (max-width: 680px) {
+  .personal-connector-card .connector-logo {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+}
