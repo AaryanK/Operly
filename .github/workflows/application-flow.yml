@@ -73,6 +73,7 @@ jobs:
           tests/test_capability_surface_parity.py
           tests/test_channel_context.py
           tests/test_channel_attachment_ingress.py
+          tests/test_discord_runtime_cutover.py
           tests/test_connector_presentation_tools.py
           tests/test_dm_workspace_switch.py
           tests/test_space_binding_transfer.py
