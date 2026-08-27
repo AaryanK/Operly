@@ -2,14 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from packages.capabilities.artifact_provider import ArtifactProvider
 from packages.capabilities.defaults import default_registry
-from packages.capabilities.root_routing import requires_software_build
+from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
+from packages.capabilities.namespaces import DEFAULT_CAPABILITY_NAMESPACE_TREE
 from packages.capabilities.session_view import (
     DEFAULT_KERNEL_IDS,
     DEFAULT_ROOT_OPERATION_IDS,
     SessionCapabilityView,
 )
+from packages.security.surfaces import SurfaceKind
 
 
 def _tool_ids(view: SessionCapabilityView, *, stage: str | None = None) -> set[str]:
@@ -20,211 +21,178 @@ def _tool_ids(view: SessionCapabilityView, *, stage: str | None = None) -> set[s
     }
 
 
-def _tool_description(view: SessionCapabilityView, capability_id: str) -> str:
-    for item in view.schemas():
-        if not isinstance(item, dict) or not isinstance(item.get("function"), dict):
-            continue
-        if item["function"].get("name") == capability_id:
-            return str(item["function"].get("description") or "")
-    return ""
-
-
-def test_authorized_capabilities_are_not_bulk_exposed():
-    registry = default_registry(set())
-    view = SessionCapabilityView(
-        registry,
-        "tenant-test",
-        {"workspace:read", "crm:read", "crm:write", "orders:write"},
+def _context(*, surface: SurfaceKind, authority: set[str]):
+    return SimpleNamespace(
+        tenant_id="tenant-test",
+        invocation={
+            "surface": surface.value,
+            "authority": sorted(authority),
+            "metadata": {"_surface_kind": surface.value},
+            "channel": "web",
+        },
     )
 
-    tools = _tool_ids(view)
-    # Kernel membership is still authority-gated. This fake principal omitted
-    # model:invoke, so escalation tools must not appear merely because they are kernel IDs.
-    assert tools == set(DEFAULT_KERNEL_IDS) - {"model.invoke", "model.deep_reason"}
-    assert "crm.list_contacts" not in tools
-    assert "crm.create_contact" not in tools
-    assert "orders.create" not in tools
 
-
-def test_event_discovery_is_permanent_workspace_read_kernel():
+def test_model_boot_surface_is_navigation_not_business_catalog():
     registry = default_registry(set())
     view = SessionCapabilityView(registry, "tenant-test", {"workspace:read"})
 
-    tools = _tool_ids(view)
-    assert "event.search" in tools
-    assert "event.describe" in tools
+    assert DEFAULT_KERNEL_IDS == {
+        "capability.search",
+        "capability.expand",
+        "capability.describe",
+    }
+    assert DEFAULT_ROOT_OPERATION_IDS == set()
+    assert _tool_ids(view) == set(DEFAULT_KERNEL_IDS)
+    assert "software.build" not in _tool_ids(view)
+    assert "crm.list_contacts" not in _tool_ids(view)
+    assert "event.search" not in _tool_ids(view)
+    assert "model.invoke" not in _tool_ids(view)
 
 
-def test_model_escalation_kernel_is_visible_when_model_authority_exists():
-    registry = default_registry(set())
-    view = SessionCapabilityView(
-        registry,
-        "tenant-test",
-        {"model:invoke"},
+def test_surface_selects_one_namespace_root():
+    tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
+    assert tree.root_for(SurfaceKind.PERSONAL_PRIVATE) == "user"
+    assert tree.root_for(SurfaceKind.DISCORD_DM) == "user"
+    assert tree.root_for(SurfaceKind.WORKSPACE_SHARED) == "workspace"
+    assert tree.root_for(SurfaceKind.WORKSPACE_PRIVATE) == "workspace"
+    assert tree.root_for(SurfaceKind.DISCORD_GUILD) == "workspace"
+
+    assert tree.allowed("user.workspaces", SurfaceKind.PERSONAL_PRIVATE)
+    assert not tree.allowed("workspace.crm", SurfaceKind.PERSONAL_PRIVATE)
+    assert tree.allowed("workspace.crm", SurfaceKind.WORKSPACE_SHARED)
+    assert not tree.allowed("user.connections", SurfaceKind.WORKSPACE_SHARED)
+
+
+def test_email_search_resolves_to_scope_specific_gmail_namespace():
+    tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
+    eligible = {"gmail.search", "gmail.read_message", "gmail.send_email"}
+
+    personal = tree.search(
+        "find an email in my inbox",
+        surface=SurfaceKind.PERSONAL_PRIVATE,
+        eligible_ids=eligible,
     )
-    tools = _tool_ids(view)
-    assert "model.invoke" in tools
-    assert "model.deep_reason" in tools
-
-
-def test_software_build_is_first_class_but_still_authority_and_stage_gated():
-    assert DEFAULT_ROOT_OPERATION_IDS == {"software.build"}
-    registry = default_registry(set())
-
-    authorized = SessionCapabilityView(
-        registry,
-        "tenant-test",
-        {"solution:generate"},
+    workspace = tree.search(
+        "find an email in the inbox",
+        surface=SurfaceKind.WORKSPACE_SHARED,
+        eligible_ids=eligible,
     )
-    assert "software.build" in _tool_ids(authorized)
-    # Root operations are not kernel capabilities. Planning/research stages still
-    # reduce the model-visible write surface in the normal way.
-    assert "software.build" not in _tool_ids(authorized, stage="planning")
 
-    unauthorized = SessionCapabilityView(
-        registry,
-        "tenant-test",
-        {"files:process"},
+    assert personal[0]["id"] == "user.connections.google.gmail"
+    assert workspace[0]["id"] == "workspace.connections.google.gmail"
+
+
+def test_studio_search_resolves_to_build_branch_without_worker_primitives():
+    tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
+    eligible = {
+        "software.build",
+        "software.edit",
+        "software.build.status",
+        "software.project.inspect",
+        "computer.run_python",
+        "artifact.create_text",
+        "data.relational",
+    }
+    rows = tree.search(
+        "build a complete software application",
+        surface=SurfaceKind.WORKSPACE_SHARED,
+        eligible_ids=eligible,
     )
-    assert "software.build" not in _tool_ids(unauthorized)
+    assert rows[0]["id"] == "workspace.solutions.studio.build"
 
-
-def test_root_software_routing_distinguishes_products_from_single_files():
-    assert requires_software_build(
-        "Build me an employee attendance system with QR clock in and clock out, manager dashboard and admin analytics."
+    expansion = tree.expand(
+        "workspace.solutions.studio.build",
+        surface=SurfaceKind.WORKSPACE_SHARED,
+        eligible_ids=eligible,
     )
-    assert requires_software_build(
-        "Write an entire runnable codebase for a working QR based clock in and clock out application."
-    )
-    assert requires_software_build("Create a complete customer support dashboard.")
-
-    assert not requires_software_build("Write schema.sql for an employees table.")
-    assert not requires_software_build(
-        "Create a TypeScript file that exports a function to add two numbers."
-    )
-    assert not requires_software_build("Write a system prompt for the assistant.")
-    assert not requires_software_build("Give me a React code snippet.")
+    assert expansion["capability_ids"] == [
+        "software.build",
+        "software.edit",
+        "software.build.status",
+    ]
+    assert "computer.run_python" not in expansion["capability_ids"]
+    assert "artifact.create_text" not in expansion["capability_ids"]
+    assert "data.relational" not in expansion["capability_ids"]
 
 
-class _ObjectiveOnlyDB:
-    def __init__(self, objective: str):
-        self.objective = objective
-
-    async def get(self, _model, _execution_id):
-        return SimpleNamespace(objective=self.objective)
+def test_workspace_cannot_expand_personal_namespace():
+    tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
+    with pytest.raises(PermissionError):
+        tree.expand(
+            "user.connections.google.gmail",
+            surface=SurfaceKind.WORKSPACE_SHARED,
+            eligible_ids={"gmail.search"},
+        )
 
 
 @pytest.mark.asyncio
-async def test_artifact_create_text_cannot_substitute_for_root_software_build():
-    objective = (
-        "Build me a working employee attendance system with QR clock in and clock out, "
-        "manager dashboard, admin analytics, authentication and a database."
-    )
-    context = SimpleNamespace(
-        db=_ObjectiveOnlyDB(objective),
-        tenant_id="tenant-test",
-        actor_id="user-1",
-        scope_kind="workspace",
-        scope_id="tenant-test",
-        owner_user_id=None,
-        execution_id="action-1",
-        invocation={"metadata": {"runtime_run_id": "run-1"}},
-    )
+async def test_discovery_describe_is_namespace_bound():
+    registry = default_registry(set())
+    discovery = CapabilityDiscoveryProvider(registry)
+    registry.register(discovery)
+    authority = {"solution:read", "solution:generate", "workspace:read"}
+    context = _context(surface=SurfaceKind.WORKSPACE_SHARED, authority=authority)
 
-    result = await ArtifactProvider().execute(
+    expanded = await discovery.execute(
         context,
-        "artifact.create_text",
-        {
-            "filename": "frontend_ui.tsx",
-            "content": "export default function App(){return null}",
-        },
+        "capability.expand",
+        {"namespace": "workspace.solutions.studio.build"},
     )
+    assert expanded.success
+    assert "software.build" in expanded.evidence["capability_ids"]
 
-    assert result.success is False
-    assert result.changed is False
-    assert result.evidence["reason"] == "software_product_requires_software_build"
-    assert result.evidence["required_capability"] == "software.build"
-    assert result.evidence["persisted"] is False
-
-
-def test_describe_observation_progressively_exposes_exact_schema():
-    registry = default_registry(set())
-    view = SessionCapabilityView(registry, "tenant-test", {"crm:read"})
-
-    view.observe(
+    described = await discovery.execute(
+        context,
         "capability.describe",
         {
-            "observation": {
-                "capabilities": [
-                    {"id": "crm.list_contacts", "authorized": True},
-                ]
-            }
+            "namespace": "workspace.solutions.studio.build",
+            "ids": ["software.build"],
         },
     )
+    assert described.success
+    assert described.evidence["capabilities"][0]["id"] == "software.build"
 
-    tools = _tool_ids(view)
-    assert "crm.list_contacts" in tools
-    assert "crm.search_contacts" not in tools
-
-
-def test_sufficient_search_guides_model_to_describe_before_searching_again():
-    registry = default_registry(set())
-    view = SessionCapabilityView(registry, "tenant-test", {"workspace:read"})
-
-    view.observe(
-        "capability.search",
-        {
-            "observation": {
-                "sufficient_match": True,
-                "search_again_recommended": False,
-                "ranked_ids": ["task.create", "event.search"],
-            }
-        },
-    )
-
-    search_description = _tool_description(view, "capability.search")
-    describe_description = _tool_description(view, "capability.describe")
-    assert "task.create" in search_description
-    assert "Describe/use those candidates before searching again" in search_description
-    assert "task.create" in describe_description
-
-    view.observe(
+    rejected = await discovery.execute(
+        context,
         "capability.describe",
-        {"observation": {"capabilities": [{"id": "event.search", "authorized": True}]}},
+        {
+            "namespace": "workspace.solutions.studio.build",
+            "ids": ["software.project.inspect"],
+        },
     )
-    assert "Recent search already found sufficient candidates" not in _tool_description(
-        view, "capability.search"
-    )
+    assert not rejected.success
+    assert rejected.evidence["reason"] == "capability_not_mounted_in_namespace"
 
 
-def test_describe_cannot_expose_surface_hidden_capability():
+def test_describe_observation_exposes_only_exact_described_leaf():
     registry = default_registry(set())
     view = SessionCapabilityView(
         registry,
         "tenant-test",
-        {"workspace:read"},
-        visible_predicate=lambda capability_id: not capability_id.startswith("account."),
+        {"solution:read", "solution:generate", "workspace:read"},
     )
+
+    view.observe(
+        "capability.expand",
+        {
+            "observation": {
+                "namespace": {"id": "workspace.solutions.studio.build"},
+                "capability_ids": ["software.build", "software.build.status"],
+            }
+        },
+    )
+    assert "software.build" not in _tool_ids(view)
 
     view.observe(
         "capability.describe",
         {
             "observation": {
                 "capabilities": [
-                    {"id": "account.list_workspaces", "authorized": True},
+                    {"id": "software.build", "authorized": True},
                 ]
             }
         },
     )
-
-    assert "account.list_workspaces" not in _tool_ids(view)
-
-
-def test_revoked_authority_removes_previously_exposed_schema():
-    registry = default_registry(set())
-    view = SessionCapabilityView(registry, "tenant-test", {"crm:read"})
-    view.expose(["crm.list_contacts"])
-    assert "crm.list_contacts" in _tool_ids(view)
-
-    view.authority = set()
-    assert "crm.list_contacts" not in _tool_ids(view)
+    assert "software.build" in _tool_ids(view)
+    assert "software.build.status" not in _tool_ids(view)
