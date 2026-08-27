@@ -8,18 +8,36 @@ export function csrfToken(): string | null {
   return cookie("__Host-operly_csrf") || cookie("operly_csrf") || cookie("operly_preauth_csrf");
 }
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+
+  constructor(message: string, status: number, code?: string, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 async function readResponse<T>(response: Response): Promise<T> {
   if (response.status === 401) window.dispatchEvent(new Event("operly:logout"));
   if (!response.ok) {
-    let detail = `Request failed (${response.status})`;
+    let message = `Request failed (${response.status})`;
+    let code: string | undefined;
+    let details: unknown;
     try {
       const body = await response.json();
+      details = body?.detail ?? body;
       const candidate = body?.detail?.message ?? body?.detail ?? body?.message;
-      detail = typeof candidate === "string" ? candidate : detail;
+      message = typeof candidate === "string" ? candidate : message;
+      code = typeof body?.detail?.code === "string" ? body.detail.code : typeof body?.code === "string" ? body.code : undefined;
     } catch {
       // Keep the status fallback when the server did not return JSON.
     }
-    throw new Error(detail);
+    throw new ApiError(message, response.status, code, details);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -1,0 +1,239 @@
+/* Mobile density and navigation rules. Imported last so the phone layout has one clear hierarchy. */
+@media (max-width: 900px) {
+  .surface-header { padding: 22px 24px; }
+  .content-grid, .activity-columns, .plugin-grid, .metric-grid, .settings-grid { padding-left: 24px; padding-right: 24px; }
+  .home-grid { padding-left: 24px; padding-right: 24px; }
+  .surface-header h1 { font-size: clamp(26px, 7vw, 34px); }
+  .page-header { gap: 14px; }
+  .data-card, .metric-card, .plugin-card, .destination-card { padding: 16px; }
+  .destination-card { min-height: 0; }
+  .destination-card > span { margin-bottom: 16px; }
+  .admin-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-panel-grid { grid-template-columns: 1fr; }
+  .react-hero { grid-template-columns: 1fr; gap: 28px; padding-top: 58px; }
+  .react-hero h1 { font-size: clamp(44px, 9vw, 68px); }
+  .public-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  html, body, #root { width: 100%; min-width: 0; overflow-x: hidden; }
+
+  /* The scope switcher becomes a compact top strip instead of permanently
+     consuming a column. Workspace navigation belongs to the bottom nav. */
+  .authenticated-shell { display: block; min-width: 0; }
+  .scope-rail {
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: 52px;
+    padding: 6px 10px;
+    flex-direction: row;
+    gap: 7px;
+    overflow: hidden;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    z-index: 30;
+  }
+  .scope-list {
+    min-width: 0;
+    width: auto;
+    flex: 1;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .scope-divider { width: 1px; height: 28px; flex: 0 0 auto; }
+  .scope-mark, .scope-account { width: 38px; height: 38px; min-width: 38px; border-radius: 11px; }
+  .scope-account { margin: 0 0 0 auto; flex: 0 0 auto; }
+
+  /* Mobile drawers must sit above the sticky scope switcher so their close
+     controls stay tappable. */
+  #personal-conversation-history { z-index: 80; }
+  .history-mobile-close { position: relative; z-index: 81; }
+
+  .workspace-shell { display: block; min-height: 0; }
+  .workspace-nav { display: none; }
+  .workspace-page { min-height: calc(100vh - 52px); padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+  /* Keep the page title useful, not dominant. */
+  .surface-header {
+    padding: 16px 14px;
+  }
+  .surface-header h1, .compact-header h1 { margin: 3px 0 5px; font-size: 25px; line-height: 1.08; }
+  .surface-header p { font-size: 13px; line-height: 1.42; }
+  .eyebrow { font-size: 9px; letter-spacing: .1em; }
+  .page-header { align-items: stretch; gap: 10px; }
+  .page-actions { width: 100%; gap: 7px; }
+  .page-actions > button, .page-actions > a { min-height: 40px; flex: 1 1 auto; }
+
+  /* Consistent phone gutters. */
+  .content-grid, .activity-columns, .plugin-grid, .metric-grid, .settings-grid, .home-grid {
+    gap: 10px;
+    padding: 12px 14px 18px;
+  }
+  .home-grid { padding-top: 12px; }
+  .loading-panel, .empty-panel, .inline-form, .presence-card, .solution-compose-card, .solutions-library, .info-banner, .page-error {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+  .loading-panel, .empty-panel { margin-top: 14px; padding: 16px; }
+  .presence-card, .solution-compose-card, .solutions-library, .info-banner { padding: 15px; }
+  .inline-form { margin-top: 14px; padding: 14px; }
+
+  /* Cards should read like rows on a phone, not desktop panels shrunk down. */
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-card, .data-card, .plugin-card, .destination-card, .solution-card, .settings-card { padding: 14px; border-radius: 12px; }
+  .metric-card > strong { margin: 5px 0 2px; font-size: 23px; }
+  .metric-card > span { font-size: 10px; }
+  .metric-card > small { font-size: 11px; }
+  .plugin-card { min-height: 0; gap: 9px; }
+  .destination-card { min-height: 0; }
+  .destination-card > span { margin-bottom: 10px; }
+  .destination-card p, .plugin-card p { font-size: 13px; line-height: 1.4; }
+  .card-heading, .section-heading { align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+  .card-heading h2, .section-heading h2 { font-size: 18px; }
+
+  .data-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 7px 10px;
+    padding: 11px 0;
+  }
+  .data-row > div { flex-basis: calc(100% - 72px); }
+  .data-row .row-actions { width: 100%; }
+  .data-row .row-actions > button { flex: 1; }
+  .status-chip { min-height: 23px; padding: 3px 7px; font-size: 10px; }
+
+  .connector-card, .personal-connector-card {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 9px 10px;
+    padding: 13px;
+  }
+  .connector-logo, .plugin-icon { width: 38px; height: 38px; border-radius: 11px; }
+  .connector-card > .status-chip, .personal-connector-card > .status-chip { grid-column: 2; justify-self: start; }
+  .connector-card > .row-actions, .personal-connector-card > .row-actions { grid-column: 1 / -1; width: 100%; }
+  .connector-card > .row-actions > button, .personal-connector-card > .row-actions > button { flex: 1; min-height: 40px; }
+  .connector-copy p, .connector-copy small, .personal-connector-card small { font-size: 11px; line-height: 1.38; }
+
+  .settings-callout { padding: 14px; gap: 12px; }
+  .settings-callout .row-actions { width: 100%; }
+  .settings-callout .row-actions > button { flex: 1 1 120px; min-height: 40px; }
+  .settings-boundary-grid { gap: 9px; }
+  .settings-boundary-grid > div { padding: 12px; }
+
+  /* Account settings becomes a phone sheet with a compact tab scroller. */
+  .editor-overlay.account-settings-overlay { align-items: stretch; padding: 0; }
+  .account-settings-card {
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+  .account-settings-nav { padding: 6px 8px; gap: 3px; }
+  .account-settings-nav > button { min-height: 38px; padding: 7px 10px; font-size: 12px; }
+  .account-settings-main { padding: 0 14px 24px; }
+  .account-settings-main > header { margin: 0 -14px 12px; padding: 12px 14px; }
+  .account-settings-main > header h2 { font-size: 21px; }
+  .account-settings-main > header > button { width: 38px; height: 38px; }
+  .account-identity { grid-template-columns: 42px minmax(0, 1fr); padding: 11px; }
+  .account-identity > span { width: 42px; height: 42px; border-radius: 11px; }
+  .form-stack { gap: 11px; }
+  .form-stack input, .form-stack select, .form-stack textarea { min-height: 42px; }
+
+  /* Conversation UI: preserve message space and keep controls compact. */
+  .personal-layout, .ai-layout-react { min-height: calc(100vh - 52px); }
+  .conversation-stage { padding-left: 14px; padding-right: 14px; }
+  .composer { width: calc(100% - 20px); margin-left: 10px; margin-right: 10px; }
+  .composer-actions { gap: 7px; }
+  .composer-actions > div { flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .suggestion-grid { gap: 8px; margin: 12px auto; }
+  .suggestion-grid button { min-height: 0; padding: 13px; }
+  .message-row { gap: 9px; padding: 10px 0; }
+
+  /* Admin: replace the 230px sidebar with one horizontal control strip. */
+  .admin-react-shell { display: block; }
+  .admin-react-shell > aside {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    width: 100%;
+    height: auto;
+    padding: 7px 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .admin-brand { border: 0; padding: 0; }
+  .admin-brand > div { display: none; }
+  .admin-brand svg { width: 32px; height: 32px; }
+  .admin-react-shell aside nav { display: flex; gap: 4px; margin: 0; overflow-x: auto; scrollbar-width: none; }
+  .admin-react-shell aside nav button { width: auto; min-height: 36px; padding: 7px 9px; white-space: nowrap; font-size: 12px; }
+  .admin-user { margin: 0; padding: 0; border: 0; }
+  .admin-user > div { display: none; }
+  .admin-user button { width: auto; min-height: 36px; margin: 0; padding: 7px 9px; }
+  .admin-react-shell > main > header { align-items: flex-start; padding: 16px 14px; }
+  .admin-react-shell > main > header h1 { font-size: 24px; }
+  .admin-tab-content { padding: 14px; }
+  .admin-metric-grid { gap: 8px; }
+  .admin-metric { padding: 12px; }
+  .admin-metric strong { font-size: 24px; }
+  .admin-panel-grid { gap: 10px; margin-top: 10px; }
+  .admin-panel, .admin-workspace-card { padding: 13px; }
+  .admin-list-row { align-items: flex-start; flex-wrap: wrap; gap: 5px 10px; }
+  .admin-table { margin: 0 -14px; border-left: 0; border-right: 0; border-radius: 0; }
+
+  /* Public/auth/legal pages: fewer simultaneous controls and shorter hero blocks. */
+  .react-public-header, .react-legal-topbar {
+    min-height: 56px;
+    padding: 0 14px;
+    gap: 10px;
+  }
+  .react-public-header nav { display: none; }
+  .react-public-header > div { gap: 7px; }
+  .react-public-header > div a { padding: 8px 10px; font-size: 12px; }
+  .public-brand-mark, .react-legal-brand svg, .react-legal-brand img { width: 31px; height: 31px; }
+  .react-hero { padding: 42px 16px 34px; gap: 20px; }
+  .react-hero h1 { margin: 8px 0 14px; font-size: clamp(39px, 12vw, 54px); line-height: 1; }
+  .react-hero p { font-size: 16px; line-height: 1.5; }
+  .hero-actions { margin-top: 20px; gap: 9px; }
+  .hero-actions .hero-button { flex: 1 1 150px; }
+  .runtime-card { min-height: 0; padding: 18px; border-radius: 18px; }
+  .runtime-card h3 { margin: 24px 0 8px; font-size: 22px; }
+  .runtime-chain { margin-top: 20px; }
+  .public-section { padding: 38px 16px; }
+  .public-section h2, .public-cta h2 { margin-bottom: 18px; font-size: clamp(30px, 9vw, 42px); }
+  .public-grid, .request-grid { grid-template-columns: 1fr; gap: 9px; }
+  .public-grid article { min-height: 0; padding: 16px; }
+  .public-grid h3 { margin: 15px 0 6px; }
+  .request-grid span { padding: 15px; font-size: 15px; }
+  .dark-band { padding-left: 16px; padding-right: 16px; }
+  .public-cta { margin: 18px 14px 42px; padding: 28px 18px; border-radius: 18px; }
+  .react-public-footer, .react-legal-footer { padding: 20px 16px; }
+
+  .react-auth-shell { padding: 22px 12px; align-items: start; }
+  .react-auth-card { padding: 20px 16px; gap: 11px; border-radius: 16px; }
+  .react-auth-card h1 { font-size: 28px; }
+  .react-auth-card input, .discord-auth-button, .google-react-button { min-height: 44px; }
+  .auth-links { gap: 8px; }
+
+  .react-legal-topbar nav { gap: 9px; font-size: 11px; }
+  .react-legal-shell { padding: 30px 16px 44px; }
+  .react-legal-hero { padding: 18px 0 20px; }
+  .react-legal-hero h1 { font-size: clamp(36px, 11vw, 48px); }
+  .react-legal-content { padding-top: 10px; }
+  .react-legal-content h2 { margin-top: 26px; font-size: 20px; }
+  .not-found-react { padding: 28px 18px; }
+}
+
+@media (max-width: 430px) {
+  .metric-grid, .admin-metric-grid { grid-template-columns: 1fr; }
+  .page-actions > button, .page-actions > a { flex-basis: 100%; }
+  .surface-header h1, .compact-header h1 { font-size: 23px; }
+  .card-heading, .section-heading { flex-direction: column; }
+  .settings-callout .row-actions > button { flex-basis: 100%; }
+  .react-public-header .secondary-button { display: none; }
+  .react-legal-topbar nav a:first-child { display: none; }
+}

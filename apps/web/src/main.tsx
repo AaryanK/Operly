@@ -20,6 +20,8 @@ import "./ui/convergence.css";
 import "./ui/approvals.css";
 import "./ui/admin-palette.css";
 import "./ui/solution-source-inspector.css";
+import "./ui/public.css";
+import "./ui/mobile.css";
 
 initializeTheme();
 installArtifactDownloadHandling();

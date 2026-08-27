@@ -10,19 +10,18 @@ from urllib.parse import urlparse
 from playwright.sync_api import Page, sync_playwright
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
-STATIC_ROOT = WEB_ROOT / "static"
 DIST_ROOT = WEB_ROOT / "dist"
 
 PUBLIC_ROUTES = {
-    "/": "AI shouldn't just answer",
+    "/": "Give AI somewhere to",
     "/login": "Welcome back",
-    "/signup": "Create your OPERLY account",
-    "/verify-email": "Verify your email",
-    "/forgot-password": "Forgot your password?",
-    "/reset-password": "Reset your password",
+    "/signup": "Create your Operly account",
+    "/verify-email": "Check your inbox",
+    "/forgot-password": "Reset your password",
+    "/reset-password": "Choose a new password",
     "/onboarding": "Welcome to OPERLY",
-    "/privacy": "Privacy",
-    "/terms": "Terms",
+    "/privacy": "Privacy Policy",
+    "/terms": "Terms of Service",
 }
 
 VIEWPORTS = [
@@ -65,6 +64,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _react_shell(self) -> None:
+        self._file(DIST_ROOT / "index.html", "text/html; charset=utf-8")
+
     def _api_get(self, path: str) -> None:
         if path == "/api/auth/bootstrap":
             self._json({"google_client_id": None, "google_nonce": "viewport-smoke"})
@@ -104,30 +106,19 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             self._api_get(path)
             return
-        if path.startswith("/static/"):
-            self._file(STATIC_ROOT / path.removeprefix("/static/"))
-            return
         if path.startswith("/assets/"):
             self._file(DIST_ROOT / path.removeprefix("/"))
             return
         if path == "/operly-logo.png":
             self._file(DIST_ROOT / "operly-logo.png", "image/png")
             return
-        if path == "/privacy":
-            self.server.scope = "public"
-            self._file(STATIC_ROOT / "privacy", "text/html; charset=utf-8")
-            return
-        if path == "/terms":
-            self.server.scope = "public"
-            self._file(STATIC_ROOT / "terms", "text/html; charset=utf-8")
-            return
         if path.startswith("/channels/"):
             self.server.scope = "personal" if path.startswith("/channels/@me") else "workspace"
-            self._file(DIST_ROOT / "index.html", "text/html; charset=utf-8")
+            self._react_shell()
             return
         if path in PUBLIC_ROUTES:
             self.server.scope = "public"
-            self._file(STATIC_ROOT / "index.html", "text/html; charset=utf-8")
+            self._react_shell()
             return
         self.send_error(404)
 

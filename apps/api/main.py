@@ -10,7 +10,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
@@ -68,21 +67,7 @@ PUBLIC_BASE_URL = (
     or RAILWAY_PUBLIC_URL
     or "http://localhost:8000"
 )
-PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {
-    "production",
-    "prod",
-}
-WEB_ASSET_REVISION = "20260826-workspace-invites-v1"
-PUBLIC_FRONTEND_ROUTES = {
-    "",
-    "login",
-    "signup",
-    "join",
-    "verify-email",
-    "forgot-password",
-    "reset-password",
-    "onboarding",
-}
+PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
 
 
 async def bootstrap_admin() -> None:
@@ -245,102 +230,44 @@ app.include_router(app_identity_runtime_router)
 app.include_router(app_identity_admin_router)
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
-WEB_STATIC = WEB_ROOT / "static"
 WEB_DIST = WEB_ROOT / "dist"
-app.mount("/static", StaticFiles(directory=WEB_STATIC), name="static")
+KNOWN_REACT_ROUTES = {
+    "",
+    "login",
+    "signup",
+    "join",
+    "verify-email",
+    "forgot-password",
+    "reset-password",
+    "onboarding",
+    "personal",
+    "app",
+    "admin",
+    "privacy",
+    "terms",
+}
 
 
-def frontend_shell() -> HTMLResponse:
-    html = (WEB_STATIC / "index.html").read_text(encoding="utf-8")
-    html = html.replace(
-        "/static/app.js?v=20260819-auth-v4",
-        f"/static/app.js?v={WEB_ASSET_REVISION}",
-    ).replace(
-        "/static/auth.js?v=20260819-auth-v4",
-        f"/static/auth.js?v={WEB_ASSET_REVISION}",
-    ).replace(
-        "/static/ai-assistant-bridge.js",
-        f"/static/ai-assistant-bridge.js?v={WEB_ASSET_REVISION}",
-    ).replace(
-        "/static/unified-solution-studio.js",
-        f"/static/unified-solution-studio.js?v={WEB_ASSET_REVISION}",
-    ).replace(
-        "/static/time-sync.js",
-        f"/static/time-sync.js?v={WEB_ASSET_REVISION}",
-    )
-    footer = '<p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a></p>'
-    footer_with_legal = '<p><a href="https://dragonzpyder.xyz/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">Developed and maintained by <strong>Dragonzpyder Industries</strong></a> · <a href="/privacy" style="color:inherit">Privacy</a> · <a href="/terms" style="color:inherit">Terms</a></p>'
-    html = html.replace(footer, footer_with_legal)
-    return HTMLResponse(
-        html,
-        headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
-
-
-def canonical_frontend_shell() -> HTMLResponse:
+def react_shell(*, status_code: int = 200) -> HTMLResponse:
     index = WEB_DIST / "index.html"
     if not index.is_file():
-        return frontend_shell()
-    return HTMLResponse(
-        index.read_text(encoding="utf-8"),
-        headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
-
-
-def legal_page(name: str) -> HTMLResponse:
-    page = WEB_STATIC / name
-    if not page.is_file():
-        return frontend_shell()
-    return HTMLResponse(
-        page.read_text(encoding="utf-8"),
-        headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
-
-
-def not_found_page() -> HTMLResponse:
-    page = WEB_STATIC / "404.html"
-    html = page.read_text(encoding="utf-8") if page.is_file() else "<h1>404 · Page not found</h1>"
-    return HTMLResponse(
-        html,
-        status_code=404,
-        headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-            "X-Robots-Tag": "noindex, nofollow",
-        },
-    )
+        return HTMLResponse(
+            "<h1>OPERLY frontend build is unavailable.</h1>",
+            status_code=503,
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+    headers = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
+    if status_code == 404:
+        headers["X-Robots-Tag"] = "noindex, nofollow"
+    return HTMLResponse(index.read_text(encoding="utf-8"), status_code=status_code, headers=headers)
 
 
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
     route = path.strip("/")
-    if route == "channels" or route.startswith("channels/"):
-        return canonical_frontend_shell()
-
-    if route == "admin":
-        return legal_page("admin.html")
-
-    if route in {"privacy", "terms"}:
-        return legal_page(route)
-
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-
-    requested = WEB_STATIC / route
-    if route and requested.is_file():
-        return FileResponse(requested)
-
-    if route in PUBLIC_FRONTEND_ROUTES:
-        return frontend_shell()
-
-    return not_found_page()
+    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/"):
+        return react_shell()
+    return react_shell(status_code=404)
