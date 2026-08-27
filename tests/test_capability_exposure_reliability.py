@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pytest
 
 from packages.capabilities.defaults import default_registry
-from packages.capabilities.discovery_provider import CapabilityDiscoveryProvider
 from packages.capabilities.namespaces import DEFAULT_CAPABILITY_NAMESPACE_TREE
 from packages.capabilities.session_view import (
     DEFAULT_KERNEL_IDS,
@@ -129,9 +128,12 @@ def test_workspace_cannot_expand_personal_namespace():
 @pytest.mark.asyncio
 async def test_discovery_describe_is_namespace_bound():
     registry = default_registry(set())
-    discovery = CapabilityDiscoveryProvider(registry)
-    registry.register(discovery)
     authority = {"solution:read", "solution:generate", "workspace:read"}
+    discovery = registry.resolve(
+        "tenant-test",
+        "capability.search",
+        authority=authority,
+    )
     context = _context(surface=SurfaceKind.WORKSPACE_SHARED, authority=authority)
 
     expanded = await discovery.execute(
