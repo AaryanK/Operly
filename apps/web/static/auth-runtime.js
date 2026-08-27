@@ -79,4 +79,63 @@ function installDiscordSignIn() {
   }
 }
 
+async function renderPersonalDiscordConnection() {
+  const pane = $("#account-settings-pane");
+  if (!pane || !pane.querySelector(".connector-setting") || pane.querySelector("[data-personal-discord-card]")) return;
+
+  let discordIdentity = null;
+  try {
+    const identities = await api("/identities");
+    discordIdentity = Array.isArray(identities) ? identities.find((item) => item.provider === "discord") : null;
+  } catch {
+    return;
+  }
+
+  const googleCard = pane.querySelector(".connector-setting");
+  if (!googleCard || pane.querySelector("[data-personal-discord-card]")) return;
+
+  const card = document.createElement("div");
+  card.className = "settings-card connector-setting";
+  card.dataset.personalDiscordCard = "true";
+  card.innerHTML = `
+    <div class="connector-icon discord">D</div>
+    <div class="connector-copy">
+      <h4>Discord</h4>
+      <p>${discordIdentity ? (discordIdentity.display_name || "Discord account connected") : "Connect your Discord identity to Personal Operly."}</p>
+      <small>${discordIdentity ? "Your Discord DMs can resolve to this same Operly user. Workspace access is still checked separately." : "Used for personal identity resolution in Discord; it does not grant access to servers or Operly workspaces by itself."}</small>
+    </div>
+    <div class="connector-actions">
+      ${discordIdentity
+        ? `<span class="connection-status">connected</span><button class="shell-button danger-subtle" data-personal-discord-disconnect="${discordIdentity.id}">Disconnect</button>`
+        : `<button class="shell-button primary" data-connect-discord>Connect Discord</button>`}
+    </div>`;
+  googleCard.insertAdjacentElement("afterend", card);
+
+  card.querySelector("[data-connect-discord]")?.addEventListener("click", (event) => {
+    event.currentTarget.disabled = true;
+    location.href = "/api/identities/discord/sign-in";
+  });
+
+  card.querySelector("[data-personal-discord-disconnect]")?.addEventListener("click", async (event) => {
+    if (!confirm("Disconnect this Discord account from your Operly user? Discord server/workspace bindings remain separate.")) return;
+    event.currentTarget.disabled = true;
+    try {
+      await api(`/identities/${event.currentTarget.dataset.personalDiscordDisconnect}`, { method: "DELETE", body: "{}" });
+      if (window.operlyPersonal?.openAccountSettings) await window.operlyPersonal.openAccountSettings("connections");
+    } catch (error) {
+      alert(error.message);
+      event.currentTarget.disabled = false;
+    }
+  });
+}
+
+function installPersonalConnectionObserver() {
+  const observer = new MutationObserver(() => {
+    renderPersonalDiscordConnection().catch(() => {});
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  renderPersonalDiscordConnection().catch(() => {});
+}
+
 installDiscordSignIn();
+installPersonalConnectionObserver();
