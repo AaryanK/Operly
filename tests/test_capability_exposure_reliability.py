@@ -63,9 +63,15 @@ def test_surface_selects_one_namespace_root():
     assert not tree.allowed("user.connections", SurfaceKind.WORKSPACE_SHARED)
 
 
-def test_email_search_resolves_to_scope_specific_gmail_namespace():
+def test_email_search_resolves_to_scope_specific_gmail_namespace_then_subcategories():
     tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
-    eligible = {"gmail.search", "gmail.read_message", "gmail.send_email"}
+    eligible = {
+        "gmail.search",
+        "gmail.read_message",
+        "gmail.send_email",
+        "gmail.create_draft",
+        "gmail.read_attachment",
+    }
 
     personal = tree.search(
         "find an email in my inbox",
@@ -80,6 +86,50 @@ def test_email_search_resolves_to_scope_specific_gmail_namespace():
 
     assert personal[0]["id"] == "user.connections.google.gmail"
     assert workspace[0]["id"] == "workspace.connections.google.gmail"
+
+    expansion = tree.expand(
+        "user.connections.google.gmail",
+        surface=SurfaceKind.PERSONAL_PRIVATE,
+        eligible_ids=eligible,
+    )
+    assert expansion["capability_ids"] == []
+    assert {child["id"] for child in expansion["children"]} == {
+        "user.connections.google.gmail.messages",
+        "user.connections.google.gmail.drafts",
+        "user.connections.google.gmail.attachments",
+    }
+
+    messages = tree.expand(
+        "user.connections.google.gmail.messages",
+        surface=SurfaceKind.PERSONAL_PRIVATE,
+        eligible_ids=eligible,
+    )
+    assert messages["capability_ids"] == [
+        "gmail.search",
+        "gmail.read_message",
+        "gmail.send_email",
+    ]
+
+
+def test_calendar_expands_into_events_availability_and_calendars():
+    tree = DEFAULT_CAPABILITY_NAMESPACE_TREE
+    eligible = {
+        "calendar.list_events",
+        "calendar.create_event",
+        "calendar.freebusy",
+        "calendar.list_calendars",
+    }
+    expansion = tree.expand(
+        "workspace.connections.google.calendar",
+        surface=SurfaceKind.WORKSPACE_SHARED,
+        eligible_ids=eligible,
+    )
+    assert expansion["capability_ids"] == []
+    assert {child["id"] for child in expansion["children"]} == {
+        "workspace.connections.google.calendar.events",
+        "workspace.connections.google.calendar.availability",
+        "workspace.connections.google.calendar.calendars",
+    }
 
 
 def test_studio_search_resolves_to_build_branch_without_worker_primitives():
