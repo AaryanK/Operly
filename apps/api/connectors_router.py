@@ -12,10 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from apps.api.personal_connectors_router import (
+    canva_serializer as personal_canva_serializer,
     serializer as personal_serializer,
+    upsert_canva_connector as upsert_personal_canva_connector,
     upsert_google_connector as upsert_personal_google_connector,
 )
 from packages.company.events import append_event
+from packages.connectors.account_secrets import read_account_secret
+from packages.connectors.canva_provider import (
+    CANVA_SCOPES,
+    CanvaProviderRejected,
+    access_token as canva_access_token,
+    authorization_url as canva_authorization_url,
+    canva_capabilities,
+    exchange_code as canva_exchange_code,
+    finalize_tokens as finalize_canva_tokens,
+    get_identity as canva_get_identity,
+    pkce_pair as canva_pkce_pair,
+)
 from packages.connectors.google_provider import (
     CALENDAR,
     CALENDAR_FREEBUSY,
@@ -28,6 +42,7 @@ from packages.connectors.google_provider import (
     request_json,
 )
 from packages.connectors.secrets import read_secret, store_secret
+from packages.database.account_connector_models import AccountConnectorSecret
 from packages.database.connector_models import ConnectorSecret, TenantConnector
 from packages.database.db import session_scope
 
@@ -51,6 +66,13 @@ def serializer():
     return URLSafeTimedSerializer(
         os.environ["SESSION_SECRET"],
         salt="operly-google-oauth-v1",
+    )
+
+
+def canva_serializer():
+    return URLSafeTimedSerializer(
+        os.environ["SESSION_SECRET"],
+        salt="operly-canva-oauth-v1",
     )
 
 
@@ -84,6 +106,33 @@ def load_google_oauth_state(state: str, *, max_age: int = 600) -> tuple[str, dic
     return "workspace", data
 
 
+def load_canva_oauth_state(state: str, *, max_age: int = 600) -> tuple[str, dict]:
+    """Validate Canva OAuth state and identify the credential owner."""
+    try:
+        data = canva_serializer().loads(state, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        try:
+            data = personal_canva_serializer().loads(state, max_age=max_age)
+        except (BadSignature, SignatureExpired) as error:
+            raise HTTPException(400, "OAuth state is invalid or expired") from error
+        if (
+            data.get("ownership") != "personal"
+            or not data.get("user_id")
+            or not data.get("pkce_ref")
+        ):
+            raise HTTPException(400, "OAuth state is invalid or expired")
+        return "personal", data
+
+    if (
+        data.get("ownership") != "workspace"
+        or not data.get("tenant_id")
+        or not data.get("user_id")
+        or not data.get("pkce_ref")
+    ):
+        raise HTTPException(400, "OAuth state is invalid or expired")
+    return "workspace", data
+
+
 def owner(auth):
     if auth.role != "owner":
         raise HTTPException(403, "Only owners can manage connectors")
@@ -111,6 +160,35 @@ def google_capabilities(scopes: set[str]) -> list[str]:
     if CALENDAR_LIST_READONLY in scopes:
         capabilities.append("calendar.list_calendars")
     return capabilities
+
+
+def connector_capabilities(provider: str, scopes: set[str]) -> list[str]:
+    if provider == "google":
+        return google_capabilities(scopes)
+    if provider == "canva":
+        return canva_capabilities(scopes)
+    return []
+
+
+def connector_configuration(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def canva_configuration(identity: dict, current: str | None = None) -> str:
+    config = connector_configuration(current)
+    display_name = str(identity.get("display_name") or "Canva account").strip()
+    if display_name:
+        config["display_name"] = display_name
+    team_id = str(identity.get("team_id") or "").strip()
+    if team_id:
+        config["team_id"] = team_id
+    else:
+        config.pop("team_id", None)
+    return json.dumps(config)
 
 
 async def upsert_google_connector(db, tenant_id, profile, tokens, scopes):
@@ -174,6 +252,81 @@ async def upsert_google_connector(db, tenant_id, profile, tokens, scopes):
     return row
 
 
+async def upsert_canva_connector(db, tenant_id: str, identity: dict, tokens: dict, scopes: list[str]) -> TenantConnector:
+    account = str(identity.get("user_id") or "")[:320]
+    if not account:
+        raise ValueError("Canva account identity was not returned")
+    row = await db.scalar(
+        select(TenantConnector).where(
+            TenantConnector.tenant_id == tenant_id,
+            TenantConnector.provider == "canva",
+            TenantConnector.provider_account_id == account,
+        )
+    )
+    old_ref = row.credential_reference if row else None
+    ref = await store_secret(db, tenant_id, tokens)
+    if row:
+        row.connector_type = "canva_workspace"
+        row.display_name = "Canva"
+        row.status = "connected"
+        row.enabled = True
+        row.credential_reference = ref
+        row.granted_scopes_json = json.dumps(scopes)
+        row.configuration_json = canva_configuration(identity, row.configuration_json)
+        row.health_status = "healthy"
+        row.last_health_check = datetime.utcnow()
+        row.last_error = None
+        await db.flush()
+        if old_ref and old_ref != ref:
+            old_secret = await db.get(ConnectorSecret, old_ref)
+            if old_secret:
+                await db.delete(old_secret)
+        return row
+
+    row = TenantConnector(
+        tenant_id=tenant_id,
+        connector_type="canva_workspace",
+        provider="canva",
+        display_name="Canva",
+        status="connected",
+        enabled=True,
+        credential_reference=ref,
+        provider_account_id=account,
+        granted_scopes_json=json.dumps(scopes),
+        configuration_json=canva_configuration(identity),
+        health_status="healthy",
+        last_health_check=datetime.utcnow(),
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def consume_canva_pkce(ownership: str, data: dict) -> str:
+    """Consume the encrypted PKCE verifier once before token exchange."""
+    reference = str(data.get("pkce_ref") or "")
+    try:
+        async with session_scope() as db:
+            if ownership == "personal":
+                secret = await read_account_secret(db, data["user_id"], reference)
+                row = await db.get(AccountConnectorSecret, reference)
+            else:
+                secret = await read_secret(db, data["tenant_id"], reference)
+                row = await db.get(ConnectorSecret, reference)
+            if (
+                secret.get("provider") != "canva"
+                or secret.get("purpose") != "oauth_pkce"
+                or not secret.get("code_verifier")
+                or not row
+            ):
+                raise LookupError("PKCE verifier is unavailable")
+            verifier = str(secret["code_verifier"])
+            await db.delete(row)
+            return verifier
+    except (LookupError, RuntimeError, KeyError) as error:
+        raise HTTPException(400, "OAuth state is invalid, expired, or already used") from error
+
+
 @router.get("")
 async def connectors(
     auth: AuthContext = Depends(get_auth_context),
@@ -189,6 +342,7 @@ async def connectors(
     result = []
     for row in rows:
         scopes = set(json.loads(row.granted_scopes_json or "[]"))
+        config = connector_configuration(row.configuration_json)
         result.append(
             {
                 "id": row.id,
@@ -197,13 +351,9 @@ async def connectors(
                 "display_name": row.display_name,
                 "status": row.status,
                 "enabled": row.enabled,
-                "account": row.provider_account_id,
+                "account": config.get("display_name") if row.provider == "canva" else row.provider_account_id,
                 "scopes": sorted(scopes),
-                "capabilities": (
-                    google_capabilities(scopes)
-                    if row.provider == "google"
-                    else []
-                ),
+                "capabilities": connector_capabilities(row.provider, scopes),
                 "permission_tier": (
                     "assistant"
                     if row.provider == "google"
@@ -257,6 +407,15 @@ async def google_permissions(auth: AuthContext = Depends(get_auth_context)):
     }
 
 
+@router.get("/canva/permissions")
+async def canva_permissions(auth: AuthContext = Depends(get_auth_context)):
+    owner(auth)
+    return {
+        "scopes": CANVA_SCOPES,
+        "capabilities": canva_capabilities(set(CANVA_SCOPES)),
+    }
+
+
 @router.post("/google/connect")
 async def google_connect(
     tier: str = Query("basic", pattern="^(basic|assistant)$"),
@@ -284,6 +443,44 @@ async def google_connect(
         }
     )
     return {"authorization_url": url, "permission_tier": tier}
+
+
+@router.post("/canva/connect")
+async def canva_connect(
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    owner(auth)
+    verifier, challenge = canva_pkce_pair()
+    pkce_ref = await store_secret(
+        db,
+        auth.tenant.id,
+        {
+            "provider": "canva",
+            "purpose": "oauth_pkce",
+            "code_verifier": verifier,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    state = canva_serializer().dumps(
+        {
+            "ownership": "workspace",
+            "tenant_id": auth.tenant.id,
+            "user_id": auth.user.id,
+            "pkce_ref": pkce_ref,
+        }
+    )
+    url = canva_authorization_url(
+        state=state,
+        code_challenge=challenge,
+        scopes=CANVA_SCOPES,
+    )
+    await db.commit()
+    return {
+        "authorization_url": url,
+        "ownership": "workspace",
+        "scopes": CANVA_SCOPES,
+    }
 
 
 @router.get("/google/callback")
@@ -354,6 +551,53 @@ async def google_callback(code: str = Query(...), state: str = Query(...)):
         f"/dashboard?connector=connected&tier={data.get('tier', 'basic')}",
         303,
     )
+
+
+@router.get("/canva/callback")
+async def canva_callback(code: str = Query(...), state: str = Query(...)):
+    ownership, data = load_canva_oauth_state(state)
+    verifier = await consume_canva_pkce(ownership, data)
+    try:
+        tokens = await canva_exchange_code(code=code, code_verifier=verifier)
+        tokens, scopes = finalize_canva_tokens(tokens, fallback_scopes=CANVA_SCOPES)
+        identity = await canva_get_identity(tokens["access_token"])
+    except (CanvaProviderRejected, KeyError, ValueError) as error:
+        raise HTTPException(400, "Canva authorization failed") from error
+
+    if ownership == "personal":
+        async with session_scope() as db:
+            await upsert_personal_canva_connector(
+                db,
+                data["user_id"],
+                identity,
+                tokens,
+                scopes,
+            )
+        return RedirectResponse("/personal?connector=connected&provider=canva", 303)
+
+    async with session_scope() as db:
+        row = await upsert_canva_connector(
+            db,
+            data["tenant_id"],
+            identity,
+            tokens,
+            scopes,
+        )
+        await append_event(
+            db,
+            tenant_id=data["tenant_id"],
+            event_type="connector.connected",
+            payload={
+                "connector_id": row.id,
+                "provider": "canva",
+                "account": row.provider_account_id,
+                "capabilities": canva_capabilities(set(scopes)),
+            },
+            actor_type="user",
+            actor_id=data["user_id"],
+            source="connectors",
+        )
+    return RedirectResponse("/dashboard?connector=connected&provider=canva", 303)
 
 
 @router.post("/{connector_id}/disable")
@@ -437,12 +681,19 @@ async def test_connector(
     if not row:
         raise HTTPException(404, "Connector not found")
     try:
-        token = await access_token(db, row)
-        await request_json(
-            "GET",
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            token,
-        )
+        if row.provider == "google":
+            token = await access_token(db, row)
+            await request_json(
+                "GET",
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                token,
+            )
+        elif row.provider == "canva":
+            token = await canva_access_token(db, row)
+            identity = await canva_get_identity(token)
+            row.configuration_json = canva_configuration(identity, row.configuration_json)
+        else:
+            raise RuntimeError(f"Connector health test is not implemented for {row.provider}")
         row.health_status = "healthy"
         row.last_error = None
     except Exception as error:
