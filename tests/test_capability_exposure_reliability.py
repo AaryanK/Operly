@@ -126,6 +126,28 @@ def test_workspace_cannot_expand_personal_namespace():
 
 
 @pytest.mark.asyncio
+async def test_expandable_personal_connections_node_keeps_its_direct_operation():
+    registry = default_registry(set())
+    authority = {"workspace:read"}
+    discovery = registry.resolve(
+        "personal:test-user",
+        "capability.search",
+        authority=authority,
+    )
+    context = _context(surface=SurfaceKind.PERSONAL_PRIVATE, authority=authority)
+    context.tenant_id = "personal:test-user"
+
+    expanded = await discovery.execute(
+        context,
+        "capability.expand",
+        {"namespace": "user.connections"},
+    )
+    assert expanded.success
+    assert any(child["id"] == "user.connections.google" for child in expanded.evidence["children"])
+    assert "account.list_personal_connectors" in expanded.evidence["capability_ids"]
+
+
+@pytest.mark.asyncio
 async def test_discovery_describe_is_namespace_bound():
     registry = default_registry(set())
     authority = {"solution:read", "solution:generate", "workspace:read"}
