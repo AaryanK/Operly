@@ -88,11 +88,15 @@ def _external_identity_avatar_url(row: ExternalIdentity) -> str | None:
     try:
         metadata = json.loads(row.metadata_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
-        return None
+        metadata = {}
     avatar = str(metadata.get("avatar") or "").strip()
-    if not avatar:
-        return None
-    return f"https://cdn.discordapp.com/avatars/{row.provider_subject}/{avatar}.png?size=128"
+    if avatar:
+        return f"https://cdn.discordapp.com/avatars/{row.provider_subject}/{avatar}.png?size=128"
+    try:
+        default_index = (int(row.provider_subject) >> 22) % 6
+    except (TypeError, ValueError):
+        default_index = 0
+    return f"https://cdn.discordapp.com/embed/avatars/{default_index}.png"
 
 
 @router.get("")
