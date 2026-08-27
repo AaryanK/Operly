@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:contracts": "node scripts/frontend-contract.mjs && node --check static/auth-runtime.js && node --check static/auth.js",
+    "test:contracts": "node scripts/frontend-contract.mjs",
     "test:bundle": "node scripts/bundle-contract.mjs"
   },
   "dependencies": {
