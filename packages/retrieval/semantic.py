@@ -1,8 +1,8 @@
-"""Shared local semantic retrieval primitives.
+"""Deterministic local retrieval primitives with no model downloads or ML runtime.
 
-Production defaults to a small ONNX-backed FastEmbed model. Tests and degraded
-runtime environments may explicitly use the deterministic hashing backend. Search
-callers still own authorization: this module only ranks documents supplied to it.
+This module intentionally performs only lightweight, in-process hashing similarity.
+It never imports FastEmbed, ONNX Runtime, Hugging Face Hub, or downloads model files.
+Search callers still own authorization: this module only ranks documents supplied to it.
 """
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from hashlib import blake2b
 from math import sqrt
-import os
 import re
 from threading import RLock
 from typing import Iterable, Protocol, Sequence
@@ -58,7 +57,7 @@ def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
 
 
 class HashingEmbeddingBackend:
-    """Deterministic no-network fallback used only when embeddings are unavailable."""
+    """Deterministic, dependency-free, no-network text similarity backend."""
 
     def __init__(self, *, dimensions: int = 384, reason: str | None = None) -> None:
         self.dimensions = max(64, int(dimensions))
@@ -70,7 +69,7 @@ class HashingEmbeddingBackend:
 
     @property
     def degraded_reason(self) -> str | None:
-        return self._reason or "deterministic_hashing_backend"
+        return self._reason
 
     def _embed_one(self, text: str) -> tuple[float, ...]:
         words = _TOKEN_RE.findall(str(text or "").lower())
@@ -96,120 +95,21 @@ class HashingEmbeddingBackend:
         return self._embed_one(text)
 
 
-class FastEmbedBackend:
-    """Lazy local ONNX embedding backend.
-
-    The model is downloaded/cached by fastembed once, then all searches are local.
-    No user context or capability metadata is sent to an external embedding API.
-    """
-
-    def __init__(self, *, model_name: str | None = None) -> None:
-        self.model_name = str(
-            model_name
-            or os.getenv("OPERLY_SEMANTIC_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-        ).strip()
-        self._model = None
-        self._lock = RLock()
-
-    @property
-    def name(self) -> str:
-        return f"fastembed:{self.model_name}"
-
-    @property
-    def degraded_reason(self) -> str | None:
-        return None
-
-    def _get_model(self):
-        with self._lock:
-            if self._model is not None:
-                return self._model
-            from fastembed import TextEmbedding
-
-            kwargs = {"model_name": self.model_name}
-            cache_dir = os.getenv("OPERLY_SEMANTIC_EMBEDDING_CACHE", "").strip()
-            if cache_dir:
-                kwargs["cache_dir"] = cache_dir
-            self._model = TextEmbedding(**kwargs)
-            return self._model
-
-    @staticmethod
-    def _vectors(rows) -> list[tuple[float, ...]]:
-        return [_normalized(row.tolist() if hasattr(row, "tolist") else row) for row in rows]
-
-    def embed_documents(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
-        if not texts:
-            return []
-        model = self._get_model()
-        method = getattr(model, "passage_embed", None)
-        rows = method(list(texts)) if callable(method) else model.embed(list(texts))
-        return self._vectors(rows)
-
-    def embed_query(self, text: str) -> tuple[float, ...]:
-        model = self._get_model()
-        method = getattr(model, "query_embed", None)
-        rows = method([str(text or "")]) if callable(method) else model.embed([str(text or "")])
-        vectors = self._vectors(rows)
-        return vectors[0] if vectors else ()
-
-
-class AutoEmbeddingBackend:
-    """Use real local embeddings by default and degrade safely if initialization fails."""
-
-    def __init__(self) -> None:
-        self._delegate: EmbeddingBackend = FastEmbedBackend()
-        self._degraded_reason: str | None = None
-        self._lock = RLock()
-
-    @property
-    def name(self) -> str:
-        return self._delegate.name
-
-    @property
-    def degraded_reason(self) -> str | None:
-        return self._degraded_reason or self._delegate.degraded_reason
-
-    def _fallback(self, error: BaseException) -> EmbeddingBackend:
-        with self._lock:
-            if isinstance(self._delegate, HashingEmbeddingBackend):
-                return self._delegate
-            self._degraded_reason = f"fastembed_unavailable:{type(error).__name__}"
-            self._delegate = HashingEmbeddingBackend(reason=self._degraded_reason)
-            return self._delegate
-
-    def embed_documents(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
-        try:
-            return self._delegate.embed_documents(texts)
-        except Exception as error:
-            return self._fallback(error).embed_documents(texts)
-
-    def embed_query(self, text: str) -> tuple[float, ...]:
-        try:
-            return self._delegate.embed_query(text)
-        except Exception as error:
-            return self._fallback(error).embed_query(text)
-
-
 _BACKEND: EmbeddingBackend | None = None
 _BACKEND_LOCK = RLock()
 
 
 def embedding_backend() -> EmbeddingBackend:
+    """Return the only supported retrieval backend: deterministic local hashing."""
     global _BACKEND
     with _BACKEND_LOCK:
-        if _BACKEND is not None:
-            return _BACKEND
-        mode = os.getenv("OPERLY_SEMANTIC_EMBEDDING_BACKEND", "auto").strip().lower()
-        if mode in {"hash", "hashing", "deterministic"}:
+        if _BACKEND is None:
             _BACKEND = HashingEmbeddingBackend()
-        elif mode in {"fastembed", "onnx"}:
-            _BACKEND = FastEmbedBackend()
-        else:
-            _BACKEND = AutoEmbeddingBackend()
         return _BACKEND
 
 
 class SemanticTextIndex:
-    """Exact cosine search with process-local document/query embedding caches."""
+    """Exact cosine search over lightweight deterministic hashed text features."""
 
     def __init__(
         self,
@@ -274,7 +174,7 @@ class SemanticTextIndex:
         if missing:
             vectors = self.backend.embed_documents([document.text for document, _ in missing])
             if len(vectors) != len(missing):
-                raise RuntimeError("Embedding backend returned an unexpected vector count")
+                raise RuntimeError("Retrieval backend returned an unexpected vector count")
             with self._lock:
                 for (document, fingerprint), vector in zip(missing, vectors):
                     output[document.key] = vector
@@ -299,7 +199,10 @@ class SemanticTextIndex:
         query_vector = self._query_vector(query)
         vectors = self._document_vectors(documents)
         matches = [
-            SemanticMatch(key=document.key, score=round(_cosine(query_vector, vectors.get(document.key, ())), 6))
+            SemanticMatch(
+                key=document.key,
+                score=round(_cosine(query_vector, vectors.get(document.key, ())), 6),
+            )
             for document in documents
         ]
         if min_score is not None:
