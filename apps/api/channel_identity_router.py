@@ -82,6 +82,19 @@ def _clear_discord_state_cookie(response: RedirectResponse) -> None:
     response.delete_cookie(DISCORD_OAUTH_STATE_COOKIE, path="/")
 
 
+def _external_identity_avatar_url(row: ExternalIdentity) -> str | None:
+    if row.provider != "discord":
+        return None
+    try:
+        metadata = json.loads(row.metadata_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    avatar = str(metadata.get("avatar") or "").strip()
+    if not avatar:
+        return None
+    return f"https://cdn.discordapp.com/avatars/{row.provider_subject}/{avatar}.png?size=128"
+
+
 @router.get("")
 async def identities(
     auth: AccountAuthContext = Depends(get_account_auth_context),
@@ -99,6 +112,7 @@ async def identities(
             "id": row.id,
             "provider": row.provider,
             "display_name": row.display_name,
+            "avatar_url": _external_identity_avatar_url(row),
             "verified_at": row.verified_at.isoformat() if row.verified_at else None,
         }
         for row in rows
