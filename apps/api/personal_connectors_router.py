@@ -72,6 +72,23 @@ def google_capabilities(scopes: set[str]) -> list[str]:
     return capabilities
 
 
+def connector_configuration(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def google_configuration(profile: dict, current: str | None = None) -> str:
+    config = connector_configuration(current)
+    config.setdefault("calendar_id", "primary")
+    picture = str(profile.get("picture") or "").strip()
+    if picture:
+        config["avatar_url"] = picture
+    return json.dumps(config)
+
+
 async def upsert_google_connector(db, user_id: str, profile: dict, tokens: dict, scopes: list[str]) -> AccountConnector:
     account = str(profile.get("email") or profile.get("sub") or "")[:320]
     if not account:
@@ -99,7 +116,7 @@ async def upsert_google_connector(db, user_id: str, profile: dict, tokens: dict,
         row.enabled = True
         row.credential_reference = ref
         row.granted_scopes_json = json.dumps(scopes)
-        row.configuration_json = row.configuration_json or json.dumps({"calendar_id": "primary"})
+        row.configuration_json = google_configuration(profile, row.configuration_json)
         row.health_status = "healthy"
         row.last_health_check = datetime.utcnow()
         row.last_error = None
@@ -119,7 +136,7 @@ async def upsert_google_connector(db, user_id: str, profile: dict, tokens: dict,
         credential_reference=ref,
         provider_account_id=account,
         granted_scopes_json=json.dumps(scopes),
-        configuration_json=json.dumps({"calendar_id": "primary"}),
+        configuration_json=google_configuration(profile),
         health_status="healthy",
         last_health_check=datetime.utcnow(),
     )
@@ -143,6 +160,7 @@ async def personal_connectors(
             "status": row.status,
             "enabled": row.enabled,
             "account": row.provider_account_id,
+            "avatarUrl": connector_configuration(row.configuration_json).get("avatar_url"),
             "scopes": sorted(set(json.loads(row.granted_scopes_json or "[]"))),
             "capabilities": google_capabilities(set(json.loads(row.granted_scopes_json or "[]"))) if row.provider == "google" else [],
             "healthStatus": row.health_status,
@@ -263,7 +281,9 @@ async def test_personal_connector(
         raise HTTPException(404, "Personal connector not found")
     try:
         token = await account_access_token(db, row)
-        await request_json("GET", "https://www.googleapis.com/oauth2/v3/userinfo", token)
+        profile = await request_json("GET", "https://www.googleapis.com/oauth2/v3/userinfo", token)
+        if row.provider == "google" and isinstance(profile, dict):
+            row.configuration_json = google_configuration(profile, row.configuration_json)
         row.health_status = "healthy"
         row.last_error = None
     except Exception as error:
