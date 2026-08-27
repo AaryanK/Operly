@@ -1,0 +1,126 @@
+body { margin: 0; }
+.react-public-page, .react-legal-page { min-height: 100vh; background: #f7f8fb; color: #171a22; }
+.react-public-header, .react-legal-topbar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 0 34px; border-bottom: 1px solid #e5e7ec; background: rgba(255,255,255,.94); position: sticky; top: 0; z-index: 20; backdrop-filter: blur(16px); }
+.react-public-header nav, .react-public-header > div, .react-legal-topbar nav { display: flex; align-items: center; gap: 16px; }
+.react-public-header a, .react-legal-topbar a, .react-public-footer a, .react-legal-footer a { color: inherit; text-decoration: none; }
+.public-brand, .react-legal-brand { display: inline-flex; align-items: center; gap: 10px; color: #171a22; text-decoration: none; letter-spacing: .04em; }
+.public-brand-mark, .react-legal-brand svg, .react-legal-brand img { width: 36px; height: 36px; }
+.react-hero { max-width: 1180px; margin: 0 auto; padding: 90px 34px 72px; display: grid; grid-template-columns: minmax(0,1.05fr) minmax(380px,.95fr); gap: 52px; align-items: center; }
+.react-hero h1 { margin: 12px 0 20px; max-width: 720px; font-size: clamp(48px,7vw,82px); letter-spacing: -.055em; line-height: .98; }
+.react-hero h1 em, .public-section h2 em { color: var(--ui-accent-strong); font-style: normal; }
+.react-hero p { max-width: 690px; margin: 0; color: #5f6675; font-size: 19px; line-height: 1.6; }
+.hero-actions { margin-top: 30px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; color: #707786; }
+.hero-button { padding: 13px 18px; }
+.runtime-card { min-height: 300px; padding: 28px; border: 1px solid #dddfe7; border-radius: 24px; background: #11131a; color: #f7f8fb; box-shadow: 0 25px 70px rgba(17,19,26,.16); }
+.runtime-card h3 { margin: 42px 0 12px; font-size: 28px; }
+.runtime-card p { color: #c2c7d1; font-size: 15px; }
+.runtime-pill { display: inline-flex; padding: 7px 10px; border-radius: 999px; background: #183924; color: #9ce0b2; font-size: 12px; font-weight: 800; }
+.runtime-chain { margin-top: 34px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.runtime-chain b { padding: 9px 10px; border-radius: 10px; background: #20242e; font-size: 12px; }
+.runtime-chain i { color: #71798a; font-style: normal; }
+.public-section { max-width: 1180px; margin: 0 auto; padding: 72px 34px; }
+.public-section h2, .public-cta h2 { margin: 8px 0 28px; font-size: clamp(34px,5vw,55px); letter-spacing: -.045em; }
+.public-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
+.public-grid article { min-height: 200px; padding: 22px; border: 1px solid #e1e3e9; border-radius: 18px; background: #fff; }
+.public-grid article > b { color: var(--ui-accent-strong); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
+.public-grid h3 { margin: 28px 0 8px; font-size: 20px; }
+.public-grid p { margin: 0; color: #656c79; line-height: 1.55; }
+.dark-band { max-width: none; padding-left: max(34px, calc((100vw - 1180px)/2 + 34px)); padding-right: max(34px, calc((100vw - 1180px)/2 + 34px)); background: #13161d; color: #f7f8fb; }
+.dark-band .public-grid article { background: #1b1f28; border-color: #292e39; }
+.dark-band .public-grid p { color: #bcc2ce; }
+.request-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.request-grid span { padding: 20px; border-radius: 15px; border: 1px solid #e0e2e8; background: #fff; font-size: 17px; line-height: 1.45; }
+.public-cta { max-width: 980px; margin: 40px auto 90px; padding: 58px; border-radius: 26px; background: linear-gradient(135deg,#ece9ff,#f7f6ff); text-align: center; }
+.public-cta p { margin: -12px auto 26px; max-width: 650px; color: #656c79; line-height: 1.55; }
+.react-public-footer, .react-legal-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; padding: 28px 34px; border-top: 1px solid #e2e4ea; color: #6c7380; font-size: 13px; background: #fff; }
+.react-public-footer nav { display: flex; gap: 16px; flex-wrap: wrap; }
+.auth-public-page { display: flex; min-height: 100vh; flex-direction: column; }
+.auth-header { position: static; }
+.react-auth-shell { flex: 1; display: grid; place-items: center; padding: 54px 20px; }
+.react-auth-card { width: min(460px,100%); padding: 30px; display: grid; gap: 14px; border: 1px solid #dfe2e9; border-radius: 20px; background: #fff; box-shadow: 0 18px 50px rgba(17,24,39,.08); }
+.react-auth-card h1 { margin: 0; font-size: 34px; letter-spacing: -.035em; }
+.react-auth-card > p { margin: -4px 0 8px; color: #68707e; line-height: 1.5; }
+.react-auth-card label { display: grid; gap: 6px; color: #454b58; font-size: 12px; font-weight: 750; }
+.react-auth-card input { width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid #d8dce5; border-radius: 10px; background: #fff; color: #171a22; outline: 0; }
+.react-auth-card input:focus { border-color: #aaa2ff; box-shadow: 0 0 0 3px #efedff; }
+.react-password-field { position: relative; display: flex; }
+.react-password-field input { padding-right: 62px; }
+.react-password-field button { position: absolute; right: 7px; top: 6px; bottom: 6px; border: 0; border-radius: 7px; background: #f0f1f5; color: #555c68; font-size: 11px; font-weight: 800; }
+.full-button { width: 100%; }
+.discord-auth-button { min-height: 42px; border: 0; border-radius: 10px; background: #5865f2; color: #fff; font-weight: 800; }
+.google-react-button { min-height: 42px; display: grid; place-items: center; }
+.auth-divider { display: flex; align-items: center; gap: 10px; color: #8a909b; font-size: 11px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: #e3e5ea; }
+.auth-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #656c79; }
+.auth-links a, .react-auth-card > a { color: var(--ui-accent-strong); text-decoration: none; }
+.auth-notice, .auth-success { padding: 10px 12px; border-radius: 10px; background: #eef8f1; color: #2a7048; font-size: 12px; }
+.onboarding-react { text-align: center; justify-items: center; }
+.onboarding-check { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 50%; background: #e8f8ee; color: #247448; font-size: 24px; font-weight: 900; }
+.not-found-react { min-height: calc(100vh - 150px); display: grid; place-content: center; justify-items: start; padding: 50px; }
+.not-found-react > span { font-size: 14px; font-weight: 900; color: var(--ui-accent-strong); }
+.not-found-react h1 { margin: 8px 0; font-size: clamp(38px,7vw,72px); letter-spacing: -.05em; }
+.not-found-react p { color: #68707e; }
+.react-legal-shell { max-width: 900px; margin: 0 auto; padding: 56px 28px 70px; }
+.react-legal-hero { padding: 32px 0 30px; border-bottom: 1px solid #e0e3e9; }
+.react-legal-hero h1 { margin: 8px 0 12px; font-size: clamp(42px,6vw,64px); letter-spacing: -.05em; }
+.react-legal-hero p { color: #626a78; line-height: 1.6; }
+.react-legal-content { padding: 22px 0 30px; }
+.react-legal-content h2 { margin: 34px 0 10px; font-size: 23px; }
+.react-legal-content h3 { margin: 20px 0 6px; font-size: 17px; }
+.react-legal-content p, .react-legal-content li { color: #4f5663; line-height: 1.72; }
+.react-legal-callout { padding: 15px 16px; border-left: 3px solid var(--ui-accent); border-radius: 0 10px 10px 0; background: #f3f1ff; }
+.react-legal-caps { font-weight: 700; }
+.react-legal-topbar nav { font-size: 13px; }
+.react-legal-topbar [aria-current="page"] { color: var(--ui-accent-strong); font-weight: 800; }
+.admin-react-loading { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 12px; background: #10131a; color: #fff; }
+.admin-react-loading svg { width: 54px; height: 54px; }
+.admin-react-login { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 20px; padding: 24px; background: #10131a; color: #fff; }
+.admin-react-mark { width: 62px; height: 62px; }
+.admin-react-login form { width: min(440px,calc(100vw - 40px)); display: grid; gap: 14px; padding: 30px; border: 1px solid #2b303b; border-radius: 20px; background: #171b23; }
+.admin-react-login h1 { margin: 0; }
+.admin-react-login p { margin: 0 0 8px; color: #aeb5c2; }
+.admin-react-login label { display: grid; gap: 6px; font-size: 12px; color: #c9ced8; }
+.admin-react-login input { padding: 11px; border: 1px solid #353b48; border-radius: 9px; background: #11141a; color: #fff; }
+.admin-react-login a { color: #bbb5ff; text-decoration: none; font-size: 12px; }
+.admin-react-shell { min-height: 100vh; display: grid; grid-template-columns: 230px minmax(0,1fr); background: #f5f6f9; color: #191c24; }
+.admin-react-shell > aside { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 18px 14px; background: #11141a; color: #fff; }
+.admin-brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 20px; border-bottom: 1px solid #2b3039; }
+.admin-brand svg { width: 36px; height: 36px; }
+.admin-brand small, .admin-user small { display: block; margin-top: 3px; color: #929aa8; }
+.admin-react-shell aside nav { display: grid; gap: 4px; margin-top: 18px; }
+.admin-react-shell aside nav button, .admin-user button { width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: transparent; color: #c7ccd6; text-align: left; }
+.admin-react-shell aside nav button:hover, .admin-react-shell aside nav button.active { background: #242933; color: #fff; }
+.admin-user { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid #2b3039; }
+.admin-user button { margin-top: 8px; color: #ffb8b0; padding-left: 0; }
+.admin-react-shell > main { min-width: 0; }
+.admin-react-shell > main > header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px 30px; border-bottom: 1px solid #e1e3e8; background: #fff; }
+.admin-react-shell h1 { margin: 4px 0 0; }
+.admin-tab-content { padding: 24px 30px 34px; }
+.admin-metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.admin-metric { padding: 18px; border: 1px solid #e0e2e8; border-radius: 14px; background: #fff; }
+.admin-metric span { display: block; color: #737a87; font-size: 12px; }
+.admin-metric strong { display: block; margin-top: 8px; font-size: 30px; }
+.admin-panel-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin-top: 18px; }
+.admin-panel, .admin-workspace-card { padding: 18px; border: 1px solid #e0e2e8; border-radius: 14px; background: #fff; }
+.admin-panel h3 { margin-top: 0; }
+.admin-list-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid #eceef2; }
+.admin-list-row:first-of-type { border-top: 0; }
+.admin-list-row strong, .admin-list-row small { display: block; }
+.admin-list-row small { margin-top: 3px; color: #7d8490; }
+.admin-list-row > span { color: #666d79; font-size: 12px; }
+.admin-toolbar { display: flex; margin-bottom: 12px; }
+.admin-toolbar input { width: min(400px,100%); padding: 10px 12px; border: 1px solid #d9dce3; border-radius: 10px; background: #fff; }
+.admin-table { overflow: auto; border: 1px solid #e0e2e8; border-radius: 14px; background: #fff; }
+.admin-table-head, .admin-table-row { min-width: 800px; display: grid; grid-template-columns: 1.4fr 1fr .8fr 1.2fr .8fr; gap: 12px; align-items: center; padding: 12px 14px; }
+.admin-table-head { color: #737a87; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; background: #f4f5f8; }
+.admin-table-row { border-top: 1px solid #eceef2; font-size: 13px; }
+.admin-table-row strong, .admin-table-row small { display: block; }
+.admin-table-row small { color: #767d89; }
+.admin-table-row em { display: inline-block; margin-top: 5px; padding: 3px 6px; border-radius: 999px; background: #eeeaff; color: #5c50a1; font-style: normal; font-size: 10px; font-weight: 800; }
+.admin-workspace-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.admin-workspace-card header { display: flex; justify-content: space-between; gap: 14px; align-items: start; }
+.admin-workspace-card h3 { margin: 0; }
+.admin-workspace-card header small, .admin-workspace-card > p { color: #767d89; }
+.muted { color: #767d89; }
+@media (max-width: 900px) { .react-hero { grid-template-columns: 1fr; padding-top: 58px; } .public-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .admin-react-shell { grid-template-columns: 1fr; } .admin-react-shell > aside { position: static; height: auto; } .admin-react-shell aside nav { display: flex; overflow-x: auto; } .admin-user { display: none; } .admin-metric-grid, .admin-panel-grid, .admin-workspace-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 640px) { .react-public-header, .react-legal-topbar { padding: 0 16px; min-height: 62px; } .react-public-header nav { display: none; } .react-public-header > div { gap: 8px; } .react-hero, .public-section { padding-left: 18px; padding-right: 18px; } .react-hero h1 { font-size: 50px; } .runtime-card { min-height: 0; } .public-grid, .request-grid, .admin-metric-grid, .admin-panel-grid, .admin-workspace-grid { grid-template-columns: 1fr; } .public-cta { margin: 20px 18px 60px; padding: 34px 22px; } .react-public-footer, .react-legal-footer { padding: 24px 18px; } .react-auth-card { padding: 22px; } .react-legal-shell { padding-left: 18px; padding-right: 18px; } .admin-react-shell > main > header, .admin-tab-content { padding-left: 18px; padding-right: 18px; } }
