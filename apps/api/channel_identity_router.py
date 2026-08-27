@@ -2,7 +2,8 @@ import hmac
 import json
 import os
 import secrets
-from urllib.parse import urlencode
+from datetime import datetime
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -21,7 +22,7 @@ from apps.api.dependencies import (
     get_db,
 )
 from apps.api.security import normalize_email
-from apps.api.session import _audit, _create_session, _first_membership, _rate_limit, auth_error
+from apps.api.session import _audit, _create_session, _rate_limit, auth_error
 from packages.channels.identity import IdentityLinkConflict, IdentityService
 from packages.channels.linking import IdentityLinkService
 from packages.database.channel_models import ExternalIdentity
@@ -61,7 +62,7 @@ def _discord_config() -> tuple[str, str, str]:
 
 
 def _discord_error(message: str) -> RedirectResponse:
-    return RedirectResponse(url=f"/login?discord_error={urlencode({'message': message})[8:]}", status_code=303)
+    return RedirectResponse(url=f"/login?discord_error={quote(message, safe='')}", status_code=303)
 
 
 def _set_discord_state_cookie(response: RedirectResponse, state: str) -> None:
@@ -158,7 +159,6 @@ async def discord_sign_in(request: Request, db: AsyncSession = Depends(get_db)):
             "redirect_uri": redirect_uri,
             "scope": "identify email",
             "state": state,
-            "prompt": "consent",
         }
     )
     response = RedirectResponse(url=f"{DISCORD_AUTHORIZE_URL}?{query}", status_code=302)
@@ -263,7 +263,7 @@ async def discord_sign_in_callback(
                 email=email,
                 display_name=display_name,
                 password_hash=None,
-                email_verified_at=__import__("datetime").datetime.utcnow(),
+                email_verified_at=datetime.utcnow(),
                 active=True,
             )
             db.add(user)
