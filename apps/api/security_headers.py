@@ -46,7 +46,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             frame_ancestors="'self'" if studio_preview else "'none'"
             script_sources="'self' 'unsafe-inline'" if studio_preview else "'self'"
             google_script=" https://accounts.google.com/gsi/client" if not studio_preview else ""
-            image_sources="'self' data: https:" if studio_preview else "'self' data:"
+            provider_images="https://cdn.discordapp.com https://lh3.googleusercontent.com"
+            image_sources="'self' data: https:" if studio_preview else f"'self' data: {provider_images}"
             runner_frames=" ".join(_runner_preview_origins()) if solution_studio else ""
             frame_sources=f"'self' https://accounts.google.com/gsi/ {runner_frames}".strip()
             response.headers["Content-Security-Policy"]=f"default-src 'self'; img-src {image_sources}; style-src 'self' 'unsafe-inline'; script-src {script_sources}{google_script}; connect-src 'self' https://accounts.google.com/gsi/; frame-src {frame_sources}; frame-ancestors {frame_ancestors}; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests"

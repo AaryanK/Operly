@@ -9,6 +9,7 @@ import "./ui/app.css";
 import "./ui/members.css";
 import "./ui/messages.css";
 import "./ui/settings.css";
+import "./ui/connection-avatars.css";
 import "./ui/security.css";
 import "./ui/premium.css";
 import "./ui/theme.css";
