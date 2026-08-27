@@ -9,8 +9,6 @@ import os
 
 import discord
 
-from sqlalchemy import select
-
 from packages.channels.identity import IdentityService
 from packages.channels.service import ChannelService
 from packages.connectors.discord import bot_shared as legacy
@@ -23,6 +21,7 @@ from packages.security.permissions import resolve_workspace_permissions
 
 bot = legacy.bot
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+DISCORD_SIGN_IN_URL = f"{PUBLIC_BASE_URL}/api/identities/discord/sign-in"
 
 
 async def server_tenant(message: discord.Message) -> str | None:
@@ -37,7 +36,8 @@ async def server_tenant(message: discord.Message) -> str | None:
         return installation.tenant_id if installation else None
 
 
-async def direct_discord_sign_in(message: discord.Message) -> None:
+async def create_channel_link(message: discord.Message) -> None:
+    """Compatibility entrypoint: old callers now start the canonical OAuth flow."""
     async with session_scope() as db:
         existing = await IdentityService.resolve_external_identity(
             db,
@@ -54,10 +54,14 @@ async def direct_discord_sign_in(message: discord.Message) -> None:
     await message.reply(
         "Discord pairing codes have been retired. Sign in to Operly with Discord here, "
         "then return to this conversation:\n"
-        f"{PUBLIC_BASE_URL}/login",
+        f"{DISCORD_SIGN_IN_URL}",
         mention_author=False,
         allowed_mentions=discord.AllowedMentions.none(),
     )
+
+
+async def direct_discord_sign_in(message: discord.Message) -> None:
+    await create_channel_link(message)
 
 
 async def bind_current_discord_workspace(
@@ -94,7 +98,7 @@ async def bind_current_discord_workspace(
         if not identity:
             await message.reply(
                 "Sign in to Operly with Discord first, then run this command again. "
-                f"{PUBLIC_BASE_URL}/login",
+                f"{DISCORD_SIGN_IN_URL}",
                 mention_author=False,
             )
             return
@@ -192,7 +196,7 @@ async def handle_operly_command(message: discord.Message) -> bool:
         return False
     command = parts[1].lower() if len(parts) > 1 else "help"
     if command == "link":
-        await direct_discord_sign_in(message)
+        await create_channel_link(message)
         return True
     if command == "bind":
         workspace_reference = raw.split(None, 2)[2] if len(parts) >= 3 else ""
@@ -245,7 +249,7 @@ async def on_message(message: discord.Message):
                 await legacy.send_chunks(
                     message,
                     "Sign in to Operly with Discord before sending private files. "
-                    f"{PUBLIC_BASE_URL}/login",
+                    f"{DISCORD_SIGN_IN_URL}",
                 )
                 return
             if not resolved.tenant_id or not resolved.allow_tenant_context:
