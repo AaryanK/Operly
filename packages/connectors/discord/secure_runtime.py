@@ -1,17 +1,17 @@
 """Workspace-safe Discord event surface for the embedded Operly runtime.
 
-The legacy module still owns reusable Discord helpers and the client object. This
-module replaces the message event with a non-mutating resolver and explicit
-workspace binding commands, so merely speaking in a server can never create or
-select a workspace.
+Discord authentication now uses the web OAuth sign-in flow. This module keeps
+server binding explicit and routes every Discord message through the canonical
+channel runtime without retaining a second identity-pairing mechanism.
 """
+
+import os
 
 import discord
 
 from sqlalchemy import select
 
 from packages.channels.identity import IdentityService
-from packages.channels.linking import IdentityLinkService
 from packages.channels.service import ChannelService
 from packages.connectors.discord import bot_shared as legacy
 from packages.connectors.discord.artifact_delivery import send_discord_response
@@ -22,6 +22,7 @@ from packages.security.permissions import resolve_workspace_permissions
 
 
 bot = legacy.bot
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 
 
 async def server_tenant(message: discord.Message) -> str | None:
@@ -36,27 +37,26 @@ async def server_tenant(message: discord.Message) -> str | None:
         return installation.tenant_id if installation else None
 
 
-async def consume_operly_link_code(message: discord.Message, code: str) -> None:
+async def direct_discord_sign_in(message: discord.Message) -> None:
     async with session_scope() as db:
-        try:
-            await IdentityLinkService.claim_from_channel(
-                db,
-                provider="discord",
-                external_user_id=str(message.author.id),
-                code=code,
-                display_name=message.author.display_name,
-            )
-        except ValueError as error:
-            await message.reply(str(error), mention_author=False)
-            return
-    suffix = (
-        " Use `!operly bind WORKSPACE` in this server after linking."
-        if message.guild is not None
-        else ""
-    )
+        existing = await IdentityService.resolve_external_identity(
+            db,
+            provider="discord",
+            external_user_id=str(message.author.id),
+        )
+    if existing:
+        await message.reply(
+            "This Discord account is already connected to your Operly identity. "
+            "You can keep talking to Operly here.",
+            mention_author=False,
+        )
+        return
     await message.reply(
-        "Discord is now linked to your Operly identity." + suffix,
+        "Discord pairing codes have been retired. Sign in to Operly with Discord here, "
+        "then return to this conversation:\n"
+        f"{PUBLIC_BASE_URL}/login",
         mention_author=False,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -93,7 +93,8 @@ async def bind_current_discord_workspace(
         )
         if not identity:
             await message.reply(
-                "Link your Discord identity first with `!operly link`.",
+                "Sign in to Operly with Discord first, then run this command again. "
+                f"{PUBLIC_BASE_URL}/login",
                 mention_author=False,
             )
             return
@@ -191,10 +192,7 @@ async def handle_operly_command(message: discord.Message) -> bool:
         return False
     command = parts[1].lower() if len(parts) > 1 else "help"
     if command == "link":
-        if len(parts) >= 3:
-            await consume_operly_link_code(message, parts[2])
-        else:
-            await legacy.create_channel_link(message)
+        await direct_discord_sign_in(message)
         return True
     if command == "bind":
         workspace_reference = raw.split(None, 2)[2] if len(parts) >= 3 else ""
@@ -208,7 +206,8 @@ async def handle_operly_command(message: discord.Message) -> bool:
         )
         return True
     await message.reply(
-        "Operly commands: `!operly link`, `!operly link CODE`, `!operly bind WORKSPACE`.",
+        "Operly commands: `!operly link` (opens Sign in with Discord) and "
+        "`!operly bind WORKSPACE`.",
         mention_author=False,
     )
     return True
@@ -237,58 +236,9 @@ async def on_message(message: discord.Message):
 
     prompt = legacy.clean_prompt(message)
     envelope = legacy.envelope_for(message, prompt)
+    response = await ChannelService.handle(envelope)
+    await send_discord_response(message, response)
 
-    try:
-        if message.attachments:
-            async with session_scope() as db:
-                resolved = await ChannelService.resolve(db, envelope)
-            if envelope.is_direct and not resolved.user_id:
-                await legacy.send_chunks(
-                    message,
-                    "Link your Discord identity first with `!operly link` before sending private files.",
-                )
-                return
-            if not resolved.tenant_id or not resolved.allow_tenant_context:
-                await legacy.send_chunks(
-                    message,
-                    "Bind this Discord server to an Operly workspace and link your identity "
-                    "to an authorized workspace member before processing business files.",
-                )
-                return
-            async with message.channel.typing():
-                ingested = await legacy.process_discord_attachments(
-                    message,
-                    resolved.tenant_id,
-                    prompt,
-                    shared_message_store=message.guild is not None,
-                )
-            if not ingested:
-                return
-            # Attachment ingestion is perception only. Continue this same user turn
-            # through ChannelService so files.process/computer/workflows can act on
-            # the retained context instead of stopping at the parser boundary.
 
-        async with message.channel.typing():
-            response = await ChannelService.handle(envelope)
-
-        sent = await send_discord_response(message, response)
-        if message.guild is not None and response.tenant_id:
-            await legacy.store_message(
-                sent,
-                response.tenant_id,
-                response.base_message or response.message,
-                is_bot=True,
-            )
-        if response.status == "ok":
-            await legacy.schedule_new_pending_jobs()
-
-    except Exception as error:
-        # ChannelService already runs through the configured ModelPool, including
-        # cross-model/provider failover and cooldowns. Reaching this boundary means
-        # that portfolio (or another terminal runtime dependency) actually failed.
-        legacy._log_channel_error(error)
-        await message.reply(
-            "The AI request failed after Operly exhausted the available runtime path. Please retry once; the failure details are in the server trace.",
-            mention_author=False,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+async def main() -> None:
+    await bot.start(legacy.TOKEN)
