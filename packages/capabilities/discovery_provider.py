@@ -1,15 +1,15 @@
-"""Permanent capability-discovery kernel exposed to capable agents.
+"""Permanent, scope-aware capability discovery kernel.
 
-Discovery returns metadata and schemas only. It never invokes the discovered
-capability and never upgrades the caller's authority.
+The model navigates a small namespace tree instead of ranking every registered leaf
+capability against every request. Namespace routing is model-facing only; execution
+still crosses the canonical registry, authority checks, firewall, approvals, audit,
+and verification boundary.
 """
 from __future__ import annotations
 
-import asyncio
-
 from packages.capabilities.contracts import ApprovalPolicy, CapabilityDefinition, CapabilityResult
+from packages.capabilities.namespaces import DEFAULT_CAPABILITY_NAMESPACE_TREE
 from packages.capabilities.providers import BaseProvider
-from packages.capabilities.search_index import CapabilitySearchHit, CapabilitySearchIndex
 from packages.channels.presentation import connector_tool_context
 from packages.security.surfaces import SurfaceKind, capability_surface_allowed
 
@@ -20,15 +20,14 @@ class CapabilityDiscoveryProvider(BaseProvider):
         CapabilityDefinition(
             "capability.search",
             "capability_search",
-            "Semantically search capabilities eligible for this authenticated surface. Returns metadata only and never grants permission. When a result reports sufficient_match=true, describe/use those ranked candidates before searching again unless they prove unavailable or unsuitable.",
+            "Search the small capability namespace available on this authenticated surface. Returns namespace paths only, never executable schemas. Choose the best domain, then call capability.expand.",
             {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "maxLength": 1000},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
-                    "categories": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
-                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 12},
                 },
+                "required": ["query"],
                 "additionalProperties": False,
             },
             {"type": "object"},
@@ -36,19 +35,40 @@ class CapabilityDiscoveryProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             plugin_id="operly.core.discovery",
             category="discovery",
-            tags=frozenset({"kernel", "discovery"}),
-            semantic_operations=frozenset({"find tool", "find capability", "discover operation"}),
+            tags=frozenset({"kernel", "discovery", "namespace"}),
+            semantic_operations=frozenset({"find capability domain", "search capability namespace"}),
+        ),
+        CapabilityDefinition(
+            "capability.expand",
+            "capability_expand",
+            "Expand one capability namespace under the current trusted scope. Returns immediate child namespaces and governed operation IDs mounted directly at this node. It never returns schemas or grants authority.",
+            {
+                "type": "object",
+                "properties": {
+                    "namespace": {"type": "string", "minLength": 1, "maxLength": 200}
+                },
+                "required": ["namespace"],
+                "additionalProperties": False,
+            },
+            {"type": "object"},
+            risk_level="read_only",
+            approval_policy=ApprovalPolicy.AUTO,
+            plugin_id="operly.core.discovery",
+            category="discovery",
+            tags=frozenset({"kernel", "discovery", "namespace"}),
+            semantic_operations=frozenset({"expand capability domain", "browse capability namespace"}),
         ),
         CapabilityDefinition(
             "capability.describe",
             "capability_describe",
-            "Return exact schemas and availability metadata for discovered capability IDs. This does not execute them.",
+            "Return exact schemas for operation IDs mounted directly under one namespace that is allowed on this surface. IDs outside that namespace are rejected. This does not execute them.",
             {
                 "type": "object",
                 "properties": {
-                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12}
+                    "namespace": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12},
                 },
-                "required": ["ids"],
+                "required": ["namespace", "ids"],
                 "additionalProperties": False,
             },
             {"type": "object"},
@@ -56,21 +76,19 @@ class CapabilityDiscoveryProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             plugin_id="operly.core.discovery",
             category="discovery",
-            tags=frozenset({"kernel", "discovery"}),
-            semantic_operations=frozenset({"describe tool", "describe capability", "get tool schema"}),
+            tags=frozenset({"kernel", "discovery", "schema"}),
+            semantic_operations=frozenset({"describe capability operation", "get exact operation schema"}),
         ),
+        # Retained for compatibility with explicit transport/presentation callers. It
+        # is intentionally not part of the permanent model kernel or namespace tree.
         CapabilityDefinition(
             "connector.presentation",
             "connector_presentation",
-            "Return the small last-mile presentation/transport contract for a connector such as Discord, Slack, WhatsApp, Web, Email or Gmail. Use when output must be shaped for another platform (text dialect, size limit, HTML support, rich blocks, native-file or MIME attachment strategy). This describes formatting/transport only and grants no connector authority.",
+            "Return the last-mile formatting/transport contract for a connector. This describes presentation only and grants no connector authority.",
             {
                 "type": "object",
                 "properties": {
-                    "provider": {
-                        "type": "string",
-                        "maxLength": 80,
-                        "description": "Connector/provider to target. Omit to inspect the current interaction channel.",
-                    }
+                    "provider": {"type": "string", "maxLength": 80}
                 },
                 "additionalProperties": False,
             },
@@ -79,21 +97,12 @@ class CapabilityDiscoveryProvider(BaseProvider):
             approval_policy=ApprovalPolicy.AUTO,
             plugin_id="operly.core.discovery",
             category="connector",
-            tags=frozenset({"connector", "presentation", "format", "transport"}),
-            semantic_operations=frozenset({
-                "format for platform",
-                "format for discord",
-                "format for slack",
-                "format email html",
-                "attach file to email",
-                "connector output format",
-            }),
         ),
     )
 
     def __init__(self, registry) -> None:
         self.registry = registry
-        self.search_index = CapabilitySearchIndex()
+        self.namespaces = DEFAULT_CAPABILITY_NAMESPACE_TREE
 
     @staticmethod
     def _surface(context) -> SurfaceKind:
@@ -111,27 +120,14 @@ class CapabilityDiscoveryProvider(BaseProvider):
             if capability_surface_allowed(definition.id, surface)
         ]
 
-    @staticmethod
-    def _sufficient_match(hits: list[CapabilitySearchHit]) -> bool:
-        if not hits:
-            return False
-        top = hits[0]
-        if top.strategy == "lexical_fast_path":
-            return True
-        second_score = hits[1].score if len(hits) > 1 else 0.0
-        score_margin = top.score - second_score
-        if top.lexical_score >= 4.0 and score_margin >= 1.5:
-            return True
-        if top.semantic_score >= 0.62:
-            second_semantic = hits[1].semantic_score if len(hits) > 1 else 0.0
-            if len(hits) == 1 or (top.semantic_score - second_semantic) >= 0.08:
-                return True
-        return False
+    def _eligible_ids(self, context, authority: set[str]) -> set[str]:
+        return {definition.id for definition in self._eligible_definitions(context, authority)}
 
     async def execute(self, context, capability_name, arguments):
         invocation = context.invocation or {}
         authority = set(invocation.get("authority") or [])
         surface = self._surface(context)
+        root = self.namespaces.root_for(surface)
 
         if capability_name == "connector.presentation":
             metadata = invocation.get("metadata") if isinstance(invocation.get("metadata"), dict) else {}
@@ -148,86 +144,115 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     "presentation": connector_tool_context(provider),
                     "surface": surface.value,
                     "authorization_granted": False,
-                    "note": "Presentation metadata describes last-mile formatting/transport only; connector authorization is resolved separately at execution.",
                 },
             )
 
-        eligible = self._eligible_definitions(context, authority)
-        eligible_by_id = {definition.id: definition for definition in eligible}
+        eligible_ids = self._eligible_ids(context, authority)
 
         if capability_name == "capability.search":
-            # The eligible set is established synchronously from canonical authority
-            # before ranking. Only CPU-bound semantic work leaves the event loop, and
-            # strong lexical matches can now return without invoking embeddings at all.
-            hits = await asyncio.to_thread(
-                self.search_index.search,
-                eligible,
+            rows = self.namespaces.search(
                 str(arguments.get("query") or ""),
+                surface=surface,
+                eligible_ids=eligible_ids,
                 limit=int(arguments.get("limit") or 8),
-                categories=arguments.get("categories") or (),
-                tags=arguments.get("tags") or (),
             )
-            rows = []
-            for hit in hits:
-                definition = eligible_by_id.get(hit.capability_id)
-                if definition is None:
-                    continue
-                descriptor = self.registry.descriptor(context.tenant_id, definition.id, authority=authority)
-                availability = self.registry.availability(context.tenant_id, definition.id, authority=authority)
-                rows.append(
-                    {
-                        "id": descriptor.id,
-                        "version": descriptor.version,
-                        "plugin_id": descriptor.plugin_id,
-                        "display_name": descriptor.display_name,
-                        "description": descriptor.description,
-                        "risk": descriptor.risk,
-                        "category": descriptor.category,
-                        "tags": list(descriptor.tags),
-                        "semantic_operations": list(descriptor.semantic_operations),
-                        "installed": descriptor.installed,
-                        "configured": descriptor.configured,
-                        "healthy": descriptor.healthy,
-                        "authorized": True,
-                        "availability": availability.as_dict(),
-                        "score": hit.score,
-                        "semantic_score": hit.semantic_score,
-                        "lexical_score": hit.lexical_score,
-                        "ranking_strategy": hit.strategy,
-                    }
-                )
-            sufficient = self._sufficient_match(hits)
-            ranked_ids = [row["id"] for row in rows]
+            ranked = [row["id"] for row in rows]
             return CapabilityResult(
                 True,
                 False,
                 {
-                    "capabilities": rows,
-                    "count": len(rows),
-                    "eligible_count": len(eligible),
+                    "root": root,
                     "surface": surface.value,
+                    "namespaces": rows,
+                    "count": len(rows),
+                    "ranked_namespace_ids": ranked,
                     "schemas_included": False,
-                    "semantic_backend": self.search_index.backend_name,
-                    "semantic_degraded_reason": self.search_index.degraded_reason,
-                    "ranking_strategy": hits[0].strategy if hits else "none",
-                    "ranked_ids": ranked_ids,
-                    "sufficient_match": sufficient,
-                    "search_again_recommended": not sufficient,
                     "next_action": (
-                        "Call capability.describe on the most relevant ranked_ids, then use the resulting schema. Do not call capability.search again for this operation unless these candidates are unavailable or unsuitable."
-                        if sufficient
-                        else "Refine the operation query or filters if none of these candidates fit."
+                        "Call capability.expand on the most relevant namespace. Continue expanding until the needed operation IDs are mounted at that node; then call capability.describe with that same namespace."
+                        if rows
+                        else "No matching namespace is currently mounted under this interaction scope."
                     ),
-                    "note": "Search ranks only an already-authorized surface-visible candidate set; discovery is not execution authority.",
+                    "note": "Namespace discovery does not grant execution authority and cannot cross the trusted surface root.",
                 },
             )
 
+        if capability_name == "capability.expand":
+            namespace_id = str(arguments.get("namespace") or "").strip().lower()
+            try:
+                expansion = self.namespaces.expand(
+                    namespace_id,
+                    surface=surface,
+                    eligible_ids=eligible_ids,
+                )
+                # A routing node may itself own a small operation while also having
+                # child namespaces (for example user.connections can list connections
+                # and also expand into Google). Direct operations remain available;
+                # children never cause them to disappear.
+                expansion["capability_ids"] = self.namespaces.leaf_ids(
+                    namespace_id,
+                    eligible_ids,
+                )
+            except (LookupError, PermissionError) as error:
+                return CapabilityResult(
+                    False,
+                    False,
+                    {
+                        "reason": "namespace_unavailable",
+                        "detail": str(error),
+                        "root": root,
+                        "surface": surface.value,
+                    },
+                )
+            expansion.update(
+                {
+                    "root": root,
+                    "surface": surface.value,
+                    "schemas_included": False,
+                    "next_action": (
+                        "Call capability.describe with this namespace and only the needed capability_ids, or expand a child namespace when the request belongs there."
+                        if expansion.get("capability_ids")
+                        else "Expand the relevant child namespace."
+                    ),
+                }
+            )
+            return CapabilityResult(True, False, expansion)
+
         if capability_name == "capability.describe":
-            requested = [str(item) for item in arguments.get("ids") or []]
-            visible_ids = [item for item in requested if item in eligible_by_id]
+            namespace_id = str(arguments.get("namespace") or "").strip().lower()
+            requested = [str(item).strip() for item in arguments.get("ids") or [] if str(item).strip()]
+            try:
+                if not self.namespaces.allowed(namespace_id, surface):
+                    raise PermissionError("Namespace is outside the current interaction scope")
+                mounted = set(self.namespaces.leaf_ids(namespace_id, eligible_ids))
+            except (LookupError, PermissionError) as error:
+                return CapabilityResult(
+                    False,
+                    False,
+                    {
+                        "reason": "namespace_unavailable",
+                        "detail": str(error),
+                        "root": root,
+                        "surface": surface.value,
+                    },
+                )
+
+            rejected = [item for item in requested if item not in mounted]
+            if rejected:
+                return CapabilityResult(
+                    False,
+                    False,
+                    {
+                        "reason": "capability_not_mounted_in_namespace",
+                        "namespace": namespace_id,
+                        "rejected_ids": rejected,
+                        "mounted_ids": sorted(mounted),
+                        "surface": surface.value,
+                    },
+                )
+
             rows = self.registry.describe(
                 context.tenant_id,
-                visible_ids,
+                requested,
                 authority=authority,
                 include_schema=True,
             )
@@ -235,15 +260,15 @@ class CapabilityDiscoveryProvider(BaseProvider):
                 True,
                 False,
                 {
+                    "namespace": namespace_id,
                     "capabilities": rows,
                     "count": len(rows),
                     "requested_count": len(requested),
                     "surface": surface.value,
-                    "semantic_backend": self.search_index.backend_name,
-                    "semantic_degraded_reason": self.search_index.degraded_reason,
-                    "note": "Invoke selected capabilities through the normal Operly capability boundary.",
+                    "note": "Invoke the selected operation through the normal governed Operly capability boundary.",
                 },
             )
+
         return CapabilityResult(False, False, {"reason": "unsupported_discovery_capability"})
 
     async def verify(self, context, capability_name, arguments, result):
