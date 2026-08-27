@@ -15,6 +15,14 @@ type Connector = {
   healthStatus?: string | null;
   lastError?: string | null;
 };
+
+type ExternalIdentity = {
+  id: string;
+  provider: string;
+  display_name?: string | null;
+  verified_at?: string | null;
+};
+
 type SettingsTab = "account" | "appearance" | "connections" | "security" | "workspaces";
 type Props = {
   profile: PersonalProfile | null;
@@ -37,15 +45,24 @@ const APPEARANCE_OPTIONS: Array<{ value: ThemePreference; title: string; descrip
 export function AccountSettings({ profile, workspaces, initialTab = "account", themePreference, resolvedTheme, onThemePreference, onClose, onRefresh, onWorkspace }: Props) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [connectors, setConnectors] = useState<Connector[]>([]);
+  const [discordIdentity, setDiscordIdentity] = useState<ExternalIdentity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function loadConnectors() {
-    try { setConnectors(await api<Connector[]>("/personal-connectors")); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Personal connectors are unavailable"); }
+  async function loadConnections() {
+    try {
+      const [nextConnectors, identities] = await Promise.all([
+        api<Connector[]>("/personal-connectors"),
+        api<ExternalIdentity[]>("/identities"),
+      ]);
+      setConnectors(nextConnectors);
+      setDiscordIdentity(identities.find((identity) => identity.provider === "discord") || null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Personal connections are unavailable");
+    }
   }
-  useEffect(() => { if (tab === "connections") loadConnectors(); }, [tab]);
+  useEffect(() => { if (tab === "connections") loadConnections(); }, [tab]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); setError(null); setMessage(null);
@@ -83,10 +100,28 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
     catch (caught) { setError(caught instanceof Error ? caught.message : "Google authorization could not start"); setBusy(false); }
   }
 
+  function connectDiscord() {
+    window.location.assign("/api/identities/discord/sign-in");
+  }
+
   async function connectorAction(action: () => Promise<unknown>) {
     setError(null); setMessage(null);
-    try { await action(); await loadConnectors(); }
+    try { await action(); await loadConnections(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Connector action failed"); }
+  }
+
+  async function disconnectDiscord() {
+    if (!discordIdentity) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await api(`/identities/${discordIdentity.id}`, { method: "DELETE" });
+      await loadConnections();
+      setMessage("Discord disconnected.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Discord could not be disconnected");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const heading = tab === "account" ? "My account" : tab === "appearance" ? "Appearance" : tab === "connections" ? "Personal connections" : tab === "security" ? "Password & security" : "Your workspaces";
@@ -95,7 +130,7 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
     <main className="account-settings-main"><header><div><span className="eyebrow">Private account</span><h2>{heading}</h2></div><button onClick={onClose} aria-label="Close">×</button></header>{error && <div className="inline-error">{error}</div>}{message && <div className="success-banner">{message}</div>}
       {tab === "account" && <form className="form-stack account-form" onSubmit={saveProfile}><div className="account-identity"><span>{(profile?.display_name || profile?.email || "Me").slice(0,1).toUpperCase()}</span><div><strong>{profile?.display_name || "Operly user"}</strong><small>{profile?.email}</small></div></div><label>Display name<input name="display_name" defaultValue={profile?.display_name || ""} required maxLength={200} /></label><label>Email<input value={profile?.email || ""} disabled readOnly /><small>Email changes require a verified identity flow.</small></label><button className="primary-button" disabled={busy}>{busy ? "Saving…" : "Save profile"}</button></form>}
       {tab === "appearance" && <section className="settings-section-stack"><div className="settings-callout"><div><strong>Choose how Operly feels</strong><p>Appearance is a private device preference. It changes presentation only; workspace behavior and permissions stay unchanged.</p></div></div><div className="appearance-grid" role="radiogroup" aria-label="Appearance">{APPEARANCE_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={themePreference === option.value} data-choice={option.value} className={`appearance-choice ${themePreference === option.value ? "active" : ""}`} onClick={() => onThemePreference(option.value)}><span className="appearance-preview" aria-hidden="true"><span></span><div></div></span><strong>{option.title}</strong><small>{option.description}</small></button>)}</div><p className="appearance-current">Currently rendered in <strong>{resolvedTheme}</strong> mode{themePreference === "system" ? " from your system preference" : ""}.</p></section>}
-      {tab === "connections" && <div className="settings-section-stack"><div className="settings-callout"><div><strong>Your tools, wherever you go</strong><p>Personal connectors belong to you, not a workspace. Workspace members cannot see these credentials or this private transcript.</p></div><button className="primary-button" disabled={busy} onClick={connectGoogle}>Connect Google</button></div>{connectors.length ? connectors.map((connector) => <article className="personal-connector-card" key={connector.id}><span className="connector-logo">{connector.provider.slice(0,1).toUpperCase()}</span><div><strong>{connector.displayName}</strong><p>{connector.account || connector.provider}</p><small>{(connector.capabilities || []).slice(0,5).join(" · ") || "No exposed capabilities"}</small>{connector.lastError && <span className="form-error">{connector.lastError}</span>}</div><span className={`status-chip status-${connector.healthStatus || connector.status}`}>{connector.healthStatus || connector.status}</span><div className="row-actions"><button className="secondary-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}/test`, { method: "POST", body: "{}" }))}>Test</button><button className="danger-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}`, { method: "DELETE" }))}>Disconnect</button></div></article>) : <div className="empty-panel">No personal connectors yet.</div>}</div>}
+      {tab === "connections" && <div className="settings-section-stack"><div className="settings-callout"><div><strong>Your tools, wherever you go</strong><p>Personal connections belong to you, not a workspace. Workspace members cannot see these credentials or this private transcript.</p></div><div className="row-actions"><button className="primary-button" disabled={busy} onClick={connectGoogle}>Connect Google</button>{!discordIdentity && <button className="secondary-button" disabled={busy} onClick={connectDiscord}>Connect Discord</button>}</div></div>{connectors.length ? connectors.map((connector) => <article className="personal-connector-card" key={connector.id}><span className="connector-logo">{connector.provider.slice(0,1).toUpperCase()}</span><div><strong>{connector.displayName}</strong><p>{connector.account || connector.provider}</p><small>{(connector.capabilities || []).slice(0,5).join(" · ") || "No exposed capabilities"}</small>{connector.lastError && <span className="form-error">{connector.lastError}</span>}</div><span className={`status-chip status-${connector.healthStatus || connector.status}`}>{connector.healthStatus || connector.status}</span><div className="row-actions"><button className="secondary-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}/test`, { method: "POST", body: "{}" }))}>Test</button><button className="danger-button" onClick={() => connectorAction(() => api(`/personal-connectors/${connector.id}`, { method: "DELETE" }))}>Disconnect</button></div></article>) : <div className="empty-panel">No OAuth tool connectors yet.</div>}<article className="personal-connector-card" data-provider="discord"><span className="connector-logo">D</span><div><strong>Personal Discord</strong><p>{discordIdentity?.display_name || (discordIdentity ? "Discord account connected" : "Not connected")}</p><small>{discordIdentity ? "Discord DMs resolve to this Personal Operly user. Server and workspace access stays separately authorized." : "Connect your Discord identity so DMs resolve to this Personal Operly user. This does not grant server or workspace access."}</small></div><span className={`status-chip ${discordIdentity ? "status-healthy" : ""}`}>{discordIdentity ? "Connected" : "Not connected"}</span><div className="row-actions">{discordIdentity ? <button className="danger-button" disabled={busy} onClick={disconnectDiscord}>Disconnect</button> : <button className="primary-button" disabled={busy} onClick={connectDiscord}>Connect Discord</button>}</div></article></div>}
       {tab === "security" && <div className="settings-section-stack"><form className="form-stack account-form" onSubmit={changePassword}><div><strong>Change password</strong><p className="settings-copy">Password fields go directly to authentication; they are never sent through a model conversation.</p></div><label>Current password<input name="current_password" type="password" autoComplete="current-password" /></label><label>New password<input name="new_password" type="password" minLength={12} required autoComplete="new-password" /></label><label>Confirm new password<input name="confirm_password" type="password" minLength={12} required autoComplete="new-password" /></label><button className="primary-button" disabled={busy}>{busy ? "Updating…" : "Change password"}</button></form><div className="danger-settings"><div><strong>Sign out</strong><p>End this Operly session on this browser.</p></div><button className="danger-button" disabled={busy} onClick={signOut}>Sign out</button></div></div>}
       {tab === "workspaces" && <div className="settings-section-stack"><form className="form-stack create-workspace-card" onSubmit={createWorkspace}><div><strong>Create a workspace</strong><p>A workspace is a shared boundary for a business, team, project, or community. Personal Operly remains above it.</p></div><label>Name<input name="name" required maxLength={200} placeholder="ORB Eats" /></label><label>Timezone<input name="timezone" required maxLength={100} defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"} /></label><button className="primary-button" disabled={busy}>Create workspace</button></form><div className="workspace-settings-list">{workspaces.map((workspace) => <button key={workspace.id} onClick={async () => { onClose(); await onWorkspace(workspace.id); }}><span>{workspace.logo_url ? <img src={workspace.logo_url} alt="" /> : workspace.name.slice(0,2).toUpperCase()}</span><div><strong>{workspace.name}</strong><small>{workspace.role} · {workspace.timezone || "UTC"}</small></div><b>›</b></button>)}</div></div>}
     </main>
