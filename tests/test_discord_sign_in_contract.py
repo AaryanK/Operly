@@ -26,6 +26,15 @@ class DiscordSignInContractTests(unittest.TestCase):
         self.assertIn("Sign in with Discord", source)
         self.assertIn("/api/identities/discord/sign-in", source)
 
+    def test_personal_settings_exposes_discord_connection(self):
+        source = (ROOT / "apps/web/static/auth-runtime.js").read_text(encoding="utf-8")
+        personal = (ROOT / "apps/web/static/personal.js").read_text(encoding="utf-8")
+        self.assertIn('data-account-switch="connections"', personal)
+        self.assertIn("data-personal-discord-card", source)
+        self.assertIn("Connect Discord", source)
+        self.assertIn('api("/identities")', source)
+        self.assertIn("data-personal-discord-disconnect", source)
+
     def test_discord_runtime_keeps_compatibility_entrypoint_but_no_pairing(self):
         source = (ROOT / "packages/connectors/discord/secure_runtime.py").read_text(encoding="utf-8")
         self.assertIn("async def create_channel_link", source)
