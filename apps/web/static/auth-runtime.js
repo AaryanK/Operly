@@ -47,3 +47,36 @@ async function api(path, options = {}) {
   }
   return body;
 }
+
+function installDiscordSignIn() {
+  [
+    ["#login-form", "#google-login-button", "Sign in with Discord"],
+    ["#signup-form", "#google-signup-button", "Continue with Discord"]
+  ].forEach(([formSelector, anchorSelector, label]) => {
+    const form = $(formSelector);
+    const anchor = $(anchorSelector);
+    if (!form || !anchor || form.querySelector("[data-discord-sign-in]")) return;
+    const link = document.createElement("a");
+    link.href = "/api/identities/discord/sign-in";
+    link.dataset.discordSignIn = "true";
+    link.className = "button secondary large";
+    link.textContent = label;
+    link.setAttribute("role", "button");
+    link.style.width = "100%";
+    link.style.justifyContent = "center";
+    link.style.marginBottom = "12px";
+    anchor.insertAdjacentElement("beforebegin", link);
+  });
+
+  const discordError = new URLSearchParams(location.search).get("discord_error");
+  if (discordError) {
+    const target = $("#login-error");
+    if (target) {
+      target.textContent = discordError;
+      target.className = "error";
+    }
+    history.replaceState(history.state || {}, "", "/login");
+  }
+}
+
+installDiscordSignIn();
