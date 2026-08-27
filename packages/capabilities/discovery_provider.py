@@ -1,7 +1,7 @@
 """Permanent, scope-aware capability discovery kernel.
 
 The model navigates a small namespace tree instead of ranking every registered leaf
-capability against every request.  Namespace routing is model-facing only; execution
+capability against every request. Namespace routing is model-facing only; execution
 still crosses the canonical registry, authority checks, firewall, approvals, audit,
 and verification boundary.
 """
@@ -41,7 +41,7 @@ class CapabilityDiscoveryProvider(BaseProvider):
         CapabilityDefinition(
             "capability.expand",
             "capability_expand",
-            "Expand one capability namespace under the current trusted scope. Returns immediate child namespaces and only the governed operation IDs mounted directly at this node. It never returns schemas or grants authority.",
+            "Expand one capability namespace under the current trusted scope. Returns immediate child namespaces and governed operation IDs mounted directly at this node. It never returns schemas or grants authority.",
             {
                 "type": "object",
                 "properties": {
@@ -184,6 +184,14 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     surface=surface,
                     eligible_ids=eligible_ids,
                 )
+                # A routing node may itself own a small operation while also having
+                # child namespaces (for example user.connections can list connections
+                # and also expand into Google). Direct operations remain available;
+                # children never cause them to disappear.
+                expansion["capability_ids"] = self.namespaces.leaf_ids(
+                    namespace_id,
+                    eligible_ids,
+                )
             except (LookupError, PermissionError) as error:
                 return CapabilityResult(
                     False,
@@ -201,7 +209,7 @@ class CapabilityDiscoveryProvider(BaseProvider):
                     "surface": surface.value,
                     "schemas_included": False,
                     "next_action": (
-                        "Call capability.describe with this namespace and only the needed capability_ids."
+                        "Call capability.describe with this namespace and only the needed capability_ids, or expand a child namespace when the request belongs there."
                         if expansion.get("capability_ids")
                         else "Expand the relevant child namespace."
                     ),
