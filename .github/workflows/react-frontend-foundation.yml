@@ -13,12 +13,7 @@ on:
       - "apps/web/package-lock.json"
       - "apps/web/vite.config.ts"
       - "apps/web/src/**"
-      - "apps/web/static/index.html"
-      - "apps/web/static/auth.js"
-      - "apps/web/static/auth-runtime.js"
-      - "apps/web/static/legal.css"
-      - "apps/web/static/privacy"
-      - "apps/web/static/terms"
+      - "apps/web/public/**"
       - "apps/web/scripts/**"
       - "apps/web/FRONTEND_MIGRATION.md"
       - "docs/legal/**"
@@ -67,15 +62,18 @@ jobs:
           grep -q 'route.startswith("channels/")' apps/api/main.py
       - name: Verify canonical route ownership has no migration placeholders
         run: |
+          ! test -d apps/web/static
           ! grep -R 'PendingMigration' apps/web/src
           ! grep -R 'hiddenClick' apps/web/src
           ! grep -R 'MutationObserver' apps/web/src
           grep -q 'WorkspaceOperly' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'CRMPage' apps/web/src/workspace/WorkspaceShell.tsx
           grep -q 'AccessPage' apps/web/src/workspace/WorkspaceShell.tsx
-          grep -q '/channels/@me' apps/web/static/auth.js
-          grep -q 'href="/privacy"' apps/web/static/index.html
-          grep -q 'href="/terms"' apps/web/static/index.html
-          ! grep -q 'id="dashboard"' apps/web/static/index.html
+          grep -q '/channels/@me' apps/web/src/public/PublicApp.tsx
+          grep -q 'href="/privacy"' apps/web/src/public/PublicApp.tsx
+          grep -q 'href="/terms"' apps/web/src/public/PublicApp.tsx
+          grep -q 'pathname === "/admin"' apps/web/src/app/App.tsx
+          ! grep -q 'WEB_STATIC' apps/api/main.py
+          ! grep -q 'app.mount("/static"' apps/api/main.py
       - name: Build Railway-style production image
         run: docker build --tag operly-frontend-pr .
