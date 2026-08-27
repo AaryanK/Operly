@@ -6,31 +6,26 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, "..");
 const repoRoot = resolve(webRoot, "../..");
 
-async function text(path) {
-  return readFile(resolve(webRoot, path), "utf8");
-}
+async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
+async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
+function assert(condition, message) { if (!condition) throw new Error(message); }
 
-async function repoText(path) {
-  return readFile(resolve(repoRoot, path), "utf8");
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-const [publicShell, publicStyles, auth, runtime, main, convergence, theme, brand, legalLinks, legalPage, personal, workspace, emailBase, ...emailBodies] = await Promise.all([
-  text("static/index.html"),
-  text("static/styles.css"),
-  text("static/auth.js"),
-  text("static/auth-runtime.js"),
+const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+  text("src/app/App.tsx"),
+  text("src/app/ProductApp.tsx"),
+  text("src/public/PublicApp.tsx"),
+  text("src/admin/AdminPage.tsx"),
+  text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
+  text("src/ui/public.css"),
   text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
   text("src/ui/legal-links.css"),
-  text("static/legal.css"),
   text("src/account/PersonalHome.tsx"),
   text("src/workspace/WorkspaceShell.tsx"),
+  repoText("apps/api/main.py"),
+  repoText("Dockerfile"),
   repoText("packages/email/templates/base.html"),
   repoText("packages/email/templates/verify_email.html"),
   repoText("packages/email/templates/password_reset.html"),
@@ -39,35 +34,43 @@ const [publicShell, publicStyles, auth, runtime, main, convergence, theme, brand
   repoText("packages/email/templates/security_alert.html"),
 ]);
 
-const forbiddenLegacyPayload = [
-  "/static/app.js",
-  "/static/personal.js",
-  "/static/operations-phase.js",
-  "/static/ai-assistant.js",
-  "/static/general-business.js",
-  "/static/studio.js",
-  "/static/dashboard-customize.js",
-  "/static/coding-harness-ui.js",
-  "/static/graph-planning-ui.js",
-  'id="dashboard"',
-  'id="personal"',
-];
+assert(rootApp.includes('pathname === "/admin"'), "React root must own /admin");
+assert(rootApp.includes('pathname === "/privacy"'), "React root must own /privacy");
+assert(rootApp.includes('pathname === "/terms"'), "React root must own /terms");
+assert(rootApp.includes('pathname.startsWith("/channels/")'), "React root must own authenticated /channels routes");
+assert(rootApp.includes("<PublicApp pathname={pathname}"), "React root must own public/auth and unknown routes");
 
-for (const token of forbiddenLegacyPayload) {
-  assert(!publicShell.includes(token), `Public/auth shell regressed to legacy signed-in payload: ${token}`);
+for (const route of ["/login", "/signup", "/verify-email", "/forgot-password", "/reset-password", "/onboarding"]) {
+  assert(publicApp.includes(`pathname === "${route}"`), `React public app is missing ${route}`);
 }
+for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/workspace-invitations/accept", "/api/identities/discord/sign-in"]) {
+  assert(publicApp.includes(contract), `React auth migration is missing ${contract}`);
+}
+assert(publicApp.includes('go("/channels/@me")'), "Personal auth handoff must target the canonical route");
+assert(publicApp.includes("/channels/${encodeURIComponent"), "Workspace auth handoff must target the canonical route");
+assert(publicApp.includes("workspace-invitations/inspect"), "Workspace invitation inspection must survive the migration");
 
-assert(publicShell.includes("/static/auth-runtime.js"), "Public shell must load the lightweight auth runtime");
-assert(publicShell.includes("/static/auth.js"), "Public shell must load the auth flow");
-assert(publicShell.includes('href="/privacy"'), "Public/auth shell must expose the Privacy Policy");
-assert(publicShell.includes('href="/terms"'), "Public/auth shell must expose the Terms");
-assert(auth.includes('return "/channels/@me"'), "Personal auth handoff must target the canonical React route");
-assert(auth.includes("/channels/${encodeURIComponent(workspaceId)}"), "Workspace auth handoff must target the canonical React route");
-assert(!auth.includes("commitAuthenticatedScreen"), "Legacy authenticated screen rendering must not return to auth.js");
-assert(runtime.includes("async function api"), "Auth runtime must own the public API helper");
+for (const contract of ["/admin/session", "/admin/overview", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
+  assert(adminPage.includes(contract), `React admin migration is missing ${contract}`);
+}
+assert(legalPage.includes("Privacy Policy"), "React Privacy Policy is missing");
+assert(legalPage.includes("Terms of Service"), "React Terms of Service is missing");
+assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
 
+assert(apiMain.includes("KNOWN_REACT_ROUTES"), "FastAPI must declare canonical React frontend routes");
+assert(apiMain.includes("return react_shell(status_code=404)"), "Unknown frontend routes must render the React 404 shell");
+assert(!apiMain.includes("WEB_STATIC"), "FastAPI must not depend on the removed static frontend");
+assert(!apiMain.includes('app.mount("/static"'), "Legacy /static application mount must be retired");
+assert(!dockerfile.includes("apps/web/static"), "Production image must not depend on apps/web/static");
+assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo source must come from Vite public assets");
+
+assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
 assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
 assert(main.includes('import "./ui/convergence.css"'), "React must load the final convergence layer");
+assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
+assert(publicStyles.includes(".admin-react-shell"), "React admin styling is missing");
+assert(publicStyles.includes(".react-legal-shell"), "React legal styling is missing");
+
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
 assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");
 assert(convergence.includes("100dvh"), "Mobile shell must use dynamic viewport units");
@@ -75,19 +78,8 @@ assert(convergence.includes("env(safe-area-inset-bottom)"), "Mobile shell must r
 assert(convergence.includes(".workspace-mobile-nav"), "Mobile workspace navigation contract is missing");
 assert(convergence.includes(".workspace-more-sheet"), "Mobile More sheet contract is missing");
 assert(convergence.includes(".mobile-history-open .personal-history"), "Personal history drawer contract is missing");
-assert(convergence.includes("--ui-accent: #185d43"), "React brand accent must match the public Operly green");
-assert(convergence.includes("--ui-accent-cyan: #b9ee72"), "React secondary accent must match the public Operly lime");
 assert(legalLinks.includes("position: static"), "Mobile legal links must leave the floating interaction layer");
-assert(legalLinks.includes(".workspace-shell ~ .operly-legal-links"), "Mobile workspace legal links must clear the bottom navigation");
 assert(legalLinks.includes("env(safe-area-inset-bottom)"), "Signed-in legal links must respect phone safe areas");
-
-for (const token of ["--ink:#13231c", "--green:#185d43", "--dark:#102f24", "--lime:#b9ee72", "--line:#dfe6df", "--bg:#f3f5f1"]) {
-  assert(publicStyles.toLowerCase().includes(token), `Public design system is missing canonical Operly token: ${token}`);
-}
-assert(legalPage.includes('@import url("/static/styles.css'), "Legal pages must inherit the public Operly design system");
-for (const sharedToken of ["var(--bg)", "var(--ink)", "var(--green)", "var(--lime)", "var(--line)"]) {
-  assert(legalPage.includes(sharedToken), `Legal pages must consume shared public token: ${sharedToken}`);
-}
 
 for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
   assert(!theme.toLowerCase().includes(legacyPurple.toLowerCase()), `Dark theme contains legacy purple brand accent: ${legacyPurple}`);
@@ -100,6 +92,7 @@ assert(workspace.includes('const mobilePrimarySections: WorkspaceSection[] = ["h
 assert(workspace.includes("workspace-more-sheet"), "Workspace secondary destinations must remain reachable on phones");
 assert(personal.includes("mobile-history-button"), "Personal conversation history must stay reachable on phones");
 assert(personal.includes("history-mobile-close"), "Personal history drawer must have an explicit close control");
+assert(productApp.includes("<ScopeRail"), "Authenticated product shell must keep the canonical scope rail");
 
 for (const token of ["#f3f5f1", "#13231c", "#dfe6df", "#102f24"]) {
   assert(emailBase.toLowerCase().includes(token), `Transactional email shell is missing canonical Operly token: ${token}`);
@@ -109,4 +102,4 @@ for (const emailBody of emailBodies) {
   assert(!emailBody.toLowerCase().includes("#176c4a"), "Legacy email green #176c4a must not return");
 }
 
-console.log("Frontend convergence contracts passed.");
+console.log("React-only frontend contracts passed.");
