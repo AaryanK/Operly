@@ -193,7 +193,7 @@ class AttachmentPluginTests(unittest.TestCase):
 class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
     async def test_personal_attachment_turn_uses_connector_ingress_then_channel_agent(self):
         from packages.channels.envelope import ChannelAttachment
-        from packages.connectors.discord import bot_shared
+        from packages.connectors.discord import secure_runtime
 
         class _Typing:
             async def __aenter__(self):
@@ -241,22 +241,20 @@ class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
             )
         ]
 
-        with patch.object(bot_shared, "handle_operly_command", AsyncMock(return_value=False)), patch.object(
-            bot_shared, "server_tenant", AsyncMock(return_value=None)
-        ), patch.object(bot_shared, "addressed_to_operly", return_value=True), patch.object(
-            bot_shared, "session_scope", _fake_session_scope
+        with patch.object(secure_runtime, "handle_operly_command", AsyncMock(return_value=False)), patch.object(
+            secure_runtime, "server_tenant", AsyncMock(return_value=None)
+        ), patch.object(secure_runtime, "addressed_to_operly", return_value=True), patch.object(
+            secure_runtime, "session_scope", _fake_session_scope
         ), patch.object(
-            bot_shared.ChannelService, "resolve", AsyncMock(return_value=resolution)
+            secure_runtime.ChannelService, "resolve", AsyncMock(return_value=resolution)
         ), patch.object(
-            bot_shared, "collect_discord_attachments", AsyncMock(return_value=collected)
+            secure_runtime, "collect_discord_attachments", AsyncMock(return_value=collected)
         ) as collect, patch.object(
-            bot_shared.ChannelService, "handle", AsyncMock(return_value=response)
+            secure_runtime.ChannelService, "handle", AsyncMock(return_value=response)
         ) as handle, patch.object(
-            bot_shared, "send_discord_response", AsyncMock(return_value=SimpleNamespace())
-        ), patch.object(
-            bot_shared, "schedule_new_pending_jobs", AsyncMock()
+            secure_runtime, "send_discord_response", AsyncMock(return_value=SimpleNamespace())
         ):
-            await bot_shared.on_message(message)
+            await secure_runtime.on_message(message)
 
         collect.assert_awaited_once_with(message)
         handle.assert_awaited_once()
