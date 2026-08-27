@@ -236,9 +236,59 @@ async def on_message(message: discord.Message):
 
     prompt = legacy.clean_prompt(message)
     envelope = legacy.envelope_for(message, prompt)
-    response = await ChannelService.handle(envelope)
-    await send_discord_response(message, response)
 
+    try:
+        if message.attachments:
+            async with session_scope() as db:
+                resolved = await ChannelService.resolve(db, envelope)
+            if envelope.is_direct and not resolved.user_id:
+                await legacy.send_chunks(
+                    message,
+                    "Sign in to Operly with Discord before sending private files. "
+                    f"{PUBLIC_BASE_URL}/login",
+                )
+                return
+            if not resolved.tenant_id or not resolved.allow_tenant_context:
+                await legacy.send_chunks(
+                    message,
+                    "Bind this Discord server to an Operly workspace and sign in with Discord "
+                    "as an authorized workspace member before processing business files.",
+                )
+                return
+            async with message.channel.typing():
+                ingested = await legacy.process_discord_attachments(
+                    message,
+                    resolved.tenant_id,
+                    prompt,
+                    shared_message_store=message.guild is not None,
+                )
+            if not ingested:
+                return
+            # Attachment ingestion is perception only. Continue this same user turn
+            # through ChannelService so files.process/computer/workflows can act on
+            # the retained context instead of stopping at the parser boundary.
 
-async def main() -> None:
-    await bot.start(legacy.TOKEN)
+        async with message.channel.typing():
+            response = await ChannelService.handle(envelope)
+
+        sent = await send_discord_response(message, response)
+        if message.guild is not None and response.tenant_id:
+            await legacy.store_message(
+                sent,
+                response.tenant_id,
+                response.base_message or response.message,
+                is_bot=True,
+            )
+        if response.status == "ok":
+            await legacy.schedule_new_pending_jobs()
+
+    except Exception as error:
+        # ChannelService already runs through the configured ModelPool, including
+        # cross-model/provider failover and cooldowns. Reaching this boundary means
+        # that portfolio (or another terminal runtime dependency) actually failed.
+        legacy._log_channel_error(error)
+        await message.reply(
+            "The AI request failed after Operly exhausted the available runtime path. Please retry once; the failure details are in the server trace.",
+            mention_author=False,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
