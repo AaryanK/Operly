@@ -79,9 +79,21 @@ function installDiscordSignIn() {
   }
 }
 
+function findPersonalGoogleCard(pane) {
+  const legacy = pane.querySelector(".connector-setting");
+  if (legacy) return legacy;
+  return [...pane.querySelectorAll(".settings-card")].find((card) => {
+    const text = (card.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+    return text.includes("personal google") || (text.includes("google") && (text.includes("disconnect") || text.includes("gmail")));
+  }) || null;
+}
+
 async function renderPersonalDiscordConnection() {
   const pane = $("#account-settings-pane");
-  if (!pane || !pane.querySelector(".connector-setting") || pane.querySelector("[data-personal-discord-card]")) return;
+  if (!pane || pane.querySelector("[data-personal-discord-card]")) return;
+
+  const googleCard = findPersonalGoogleCard(pane);
+  if (!googleCard) return;
 
   let discordIdentity = null;
   try {
@@ -91,22 +103,21 @@ async function renderPersonalDiscordConnection() {
     return;
   }
 
-  const googleCard = pane.querySelector(".connector-setting");
-  if (!googleCard || pane.querySelector("[data-personal-discord-card]")) return;
+  if (pane.querySelector("[data-personal-discord-card]")) return;
 
   const card = document.createElement("div");
-  card.className = "settings-card connector-setting";
+  card.className = googleCard.className || "settings-card";
   card.dataset.personalDiscordCard = "true";
   card.innerHTML = `
     <div class="connector-icon discord">D</div>
     <div class="connector-copy">
-      <h4>Discord</h4>
+      <h4>Personal Discord</h4>
       <p>${discordIdentity ? (discordIdentity.display_name || "Discord account connected") : "Connect your Discord identity to Personal Operly."}</p>
-      <small>${discordIdentity ? "Your Discord DMs can resolve to this same Operly user. Workspace access is still checked separately." : "Used for personal identity resolution in Discord; it does not grant access to servers or Operly workspaces by itself."}</small>
+      <small>${discordIdentity ? "Your Discord DMs resolve to this same Operly user. Workspace and server authority remain separate." : "Used for personal identity resolution in Discord. Connecting does not grant access to Discord servers or Operly workspaces."}</small>
     </div>
     <div class="connector-actions">
       ${discordIdentity
-        ? `<span class="connection-status">connected</span><button class="shell-button danger-subtle" data-personal-discord-disconnect="${discordIdentity.id}">Disconnect</button>`
+        ? `<span class="connection-status">Connected</span><button class="shell-button danger-subtle" data-personal-discord-disconnect="${discordIdentity.id}">Disconnect</button>`
         : `<button class="shell-button primary" data-connect-discord>Connect Discord</button>`}
     </div>`;
   googleCard.insertAdjacentElement("afterend", card);
