@@ -22,18 +22,17 @@ class DiscordSignInContractTests(unittest.TestCase):
         self.assertIn("Discord web-claim links are retired. Use Sign in with Discord instead.", source)
 
     def test_auth_ui_exposes_discord_sign_in(self):
-        source = (ROOT / "apps/web/static/auth-runtime.js").read_text(encoding="utf-8")
-        self.assertIn("Sign in with Discord", source)
+        source = (ROOT / "apps/web/src/public/PublicApp.tsx").read_text(encoding="utf-8")
+        self.assertIn("Continue with Discord", source)
         self.assertIn("/api/identities/discord/sign-in", source)
 
     def test_personal_settings_exposes_discord_connection(self):
-        source = (ROOT / "apps/web/static/auth-runtime.js").read_text(encoding="utf-8")
-        personal = (ROOT / "apps/web/static/personal.js").read_text(encoding="utf-8")
-        self.assertIn('data-account-switch="connections"', personal)
-        self.assertIn("data-personal-discord-card", source)
+        source = (ROOT / "apps/web/src/account/AccountSettings.tsx").read_text(encoding="utf-8")
+        self.assertIn('setTab("connections")', source)
+        self.assertIn('data-provider="discord"', source)
         self.assertIn("Connect Discord", source)
-        self.assertIn('api("/identities")', source)
-        self.assertIn("data-personal-discord-disconnect", source)
+        self.assertIn('api<ExternalIdentity[]>("/identities")', source)
+        self.assertIn("disconnectDiscord", source)
 
     def test_discord_runtime_keeps_compatibility_entrypoint_but_no_pairing(self):
         source = (ROOT / "packages/connectors/discord/secure_runtime.py").read_text(encoding="utf-8")
