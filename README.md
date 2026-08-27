@@ -1,319 +1,372 @@
 # OPERLY
 
-**OPERLY is a model-agnostic AI operating system and capability harness for people and businesses.**
+**OPERLY is a model-agnostic AI operating system, agent runtime, and capability harness for people and businesses.**
 
-It gives an AI model persistent context, identity, permissions, tools, external services, software-construction abilities, and controlled ways to act in the real world. The model is replaceable. The harness is the product kernel.
+The model is replaceable. The durable product is the layer around the model: identity, context, permissions, capabilities, actions, connectors, software runtimes, artifacts, memory, and execution policy.
 
-OPERLY can currently combine business state, conversations, memory, CRM data, Google Workspace, Discord, reminders, approvals, websites, generated software, coding agents, and other capabilities behind one authorization and execution layer.
+OPERLY is built around one principle:
 
-The long-term direction is simple:
+> **Any authorized model should be able to understand the current person or workspace, discover the capabilities available to it, and safely use those capabilities to get work done.**
 
-> **Any authorized model should be able to understand the user or company, discover the capabilities available to it, and safely use those capabilities to get work done.**
+Today the repository contains a working control plane for Personal and Workspace AI, capability/plugin discovery, approval-backed actions, federated authorized context, multi-provider model routing, Discord and Google integrations, MCP exposure, business state, software construction, isolated generated-code execution, artifacts, and the web product.
 
 ---
 
-## What OPERLY is
-
-Most AI products hard-code a model into a fixed application.
-
-OPERLY separates those concerns:
+## Mental model
 
 ```text
-                     Human / Client / Channel
-                  Web · Discord · MCP · API · AI
+                    Human / Client / Channel
+          Web · Personal AI · Workspace AI · Discord · MCP
                               │
                               ▼
-                    ┌───────────────────┐
-                    │   OPERLY HARNESS  │
-                    │ identity · context│
-                    │ policy · runtime  │
-                    └─────────┬─────────┘
-                              │
-                     authorized capability set
-                              │
-                    ┌─────────▼─────────┐
-                    │ Capability Layer  │
-                    │ registry/firewall │
-                    │ discovery/schemas │
-                    └─────────┬─────────┘
-                              │
-       ┌──────────────────────┼──────────────────────┐
-       ▼                      ▼                      ▼
-   Connectors             OPERLY services       Construction
- Google / Discord         business / CRM        Studio
- email / channels         memory / actions      apps / websites
- MCP / external APIs      company state         coding agents
-                                                  runners
-       └──────────────────────┬──────────────────────┘
-                              ▼
-                     persistent workspace
-                   database · context · history
+                 ┌─────────────────────────┐
+                 │ Identity + Scope        │
+                 │ human · account ·       │
+                 │ workspace · channel     │
+                 └────────────┬────────────┘
                               │
                               ▼
-                        Model Runtime
-              Ollama · OpenRouter · compatible APIs
+                 ┌─────────────────────────┐
+                 │ Agent Control Plane     │
+                 │ objective · stages ·    │
+                 │ context · validation    │
+                 └────────────┬────────────┘
+                              │
+                              ▼
+                 ┌─────────────────────────┐
+                 │ PluginAgentHarness      │
+                 │ capability discovery   │
+                 │ + authorization         │
+                 └────────────┬────────────┘
+                              │
+                              ▼
+                 ┌─────────────────────────┐
+                 │ Capability Firewall     │
+                 │ actions · approvals ·   │
+                 │ policy · provenance     │
+                 └────────────┬────────────┘
+                              │
+             ┌────────────────┼─────────────────┐
+             ▼                ▼                 ▼
+        Connectors       OPERLY services   Software/runtime
+      Google/Discord     business/context  Studio/projects
+      MCP/channels       memory/artifacts  coding/runner
+             └────────────────┼─────────────────┘
+                              ▼
+                   Persistent OPERLY state
+              database · history · source · events
+                              │
+                              ▼
+                     Model Runtime
+        Ollama · OpenRouter · Groq · Gemini · NVIDIA
 ```
 
-The same capability can be exposed to OPERLY's own AI, an external AI client, a channel such as Discord, or another authorized principal without rebuilding the underlying business logic for every interface.
+A model never becomes the authority boundary. Identity, current scope, permissions, capability policy, action state, and live authorization remain owned by OPERLY.
 
 ---
 
-## Core architecture
+## Current architecture
 
-### 1. Harness
+### 1. Identity and scope
 
-The harness resolves the current principal, workspace, conversation, temporal context, permissions, and available services before a model acts.
+OPERLY distinguishes the human from the interface being used.
 
-The important boundary is not *which model is running*. It is **what that model is authorized to see and do in the current context**.
+The repository has first-class concepts for:
 
-Relevant code lives primarily in:
+- authenticated users and sessions;
+- account-level identity;
+- workspaces and membership roles;
+- external/channel identities;
+- connector accounts;
+- principals and execution context;
+- workspace invitations;
+- service/runtime bindings;
+- user-local temporal context.
 
-- `packages/harness`
-- `packages/agents`
-- `packages/security`
-- `packages/context`
-- `packages/workspace`
-- `packages/service_bindings`
+`packages/security/human_identity.py` projects the known authentication, external-provider, connector, principal, and membership records into one human identity graph without merging their permissions.
 
-### 2. Capability system
+Workspace invitations are durable, expiring, one-time records. Identity linking is account-scoped, while workspace authority is resolved separately.
+
+### 2. Federated authorized context
+
+Personal AI can retrieve across authorized OPERLY history without treating every source as one unrestricted transcript.
+
+`packages/context` contains the context broker, federation layer, provider-history adapters, and materialization rules. Current federation can include authorized Personal conversations, context records, workspace/channel history, business events, Gmail history, and Calendar history where the user has the required account/workspace authority.
+
+Important rule:
+
+> **A context reference is a locator, not a bearer token.**
+
+Search can return a reference, but materialization rechecks current authorization before the underlying data is exposed.
+
+### 3. Capabilities and plugins
 
 Capabilities are OPERLY's common tool abstraction.
 
-`packages/capabilities` contains contracts, registration, discovery, authorization, runtime context, capability providers, and the capability firewall. Providers currently cover areas such as:
+`packages/capabilities` contains capability contracts, providers, schemas, semantic discovery, session views, authorization, execution context, and the capability firewall.
 
-- actions and approvals;
-- business operations;
-- context and history;
-- CRM reads;
-- Gmail drafts and Google Workspace operations;
-- reminders and personal utilities;
-- model access;
-- software projects;
-- Solutions;
-- Studio;
-- websites;
-- workspace operations.
+A model session starts with a deliberately small discovery kernel. It can search for capabilities and describe exact schemas, but discovery and authorization remain separate. Progressive exposure lets the runtime reveal only the capabilities relevant to the current task instead of sending the entire tool surface to every model call.
 
-Low-risk authorized capabilities can be exposed directly to the agent. Capabilities that require additional discovery, stronger authorization, or approval remain bounded by policy rather than being handed to the model indiscriminately.
+First-party capabilities are registered through the plugin runtime. New connectors, model providers, lifecycle hooks, and capability providers should converge on this path rather than creating parallel agent-only registries.
 
-`packages/capability_sandbox` provides target-resolution and benchmark tooling for exercising this boundary.
+### 4. Actions, approvals, and execution policy
 
-### 3. Model runtime
+OPERLY separates **reasoning** from **authority**.
+
+Consequential capability calls flow through the capability firewall and Action lifecycle. Policy considers declared capability effects, data egress, external writes, destructive behavior, live authorization, and approval requirements.
+
+A model may propose an operation without receiving permission to execute it. Durable action results and approval outcomes become system evidence and are not silently replayed.
+
+### 5. Agent runtime
+
+`packages/agents` contains the generic agent runtime, persistence, verification, capability rescue, run state, and the newer Factory control plane.
+
+The runtime is provider-neutral: model calls, capability observations, durable run state, and verification are separate concerns.
+
+---
+
+## Agent Factory control plane
+
+`packages/agents/control_plane` implements the newer orchestration layer for complex agent work.
+
+The Factory owns root-task truth rather than delegating lifecycle semantics to a single model loop. Its core concepts include:
+
+- immutable objective specifications;
+- frozen acceptance contracts;
+- stage DAGs;
+- stage-specific context capsules;
+- capability intents;
+- dependency-scoped artifact distribution;
+- evidence collection;
+- deterministic/provider validation;
+- semantic validation fallback;
+- structured defects;
+- bounded repair budgets;
+- durable waiting and exact-stage resume;
+- root completion truth.
+
+The important separation is:
+
+```text
+Factory decides what must be accomplished
+        │
+        ▼
+Worker receives only stage-relevant context + capabilities
+        │
+        ▼
+PluginAgentHarness authorizes and executes real capabilities
+        │
+        ▼
+Validation decides whether evidence satisfies the stage
+        │
+        ├── pass -> promote verified outputs
+        ├── repairable -> bounded repair
+        └── terminal/waiting -> persist exact state
+```
+
+Workers do **not** inherit a workspace-wide transcript, sibling-worker history, or failed artifacts. Failed attempt outputs remain audit evidence but are not promoted as trusted dependency inputs.
+
+Approval continuation re-resolves the original run principal's current authority. An approving administrator does not donate broader permissions to the resumed worker.
+
+Workspace AI can be bound to this control plane with `OPERLY_WORKSPACE_AGENT_FACTORY`; deployment enablement remains an explicit operational decision.
+
+---
+
+## Model runtime
 
 Models are providers, not the operating system.
 
 `packages/model_runtime` provides:
 
-- a provider-neutral model registry;
-- model catalogs and discovery;
-- Ollama support;
-- OpenRouter support and discovery;
-- generic OpenAI-compatible endpoints;
-- semantic routing;
-- role-based model portfolios;
-- fallback and routing policy.
+- provider-neutral inference contracts;
+- model catalogs and resource metadata;
+- live model discovery;
+- provider/model route identity;
+- capability/requirement filtering;
+- adaptive scoring;
+- reliability and latency feedback;
+- cooldown and failure handling;
+- role-based selection and fallbacks;
+- provider activation policy;
+- zero-cost eligibility policy;
+- normalized attempt telemetry.
 
-Different roles such as planning, coding, repair, validation, placement, or bounded agent work can use different models without changing the higher-level OPERLY contracts.
+Current live catalog support includes:
 
-### 4. Identity, workspaces, and authorization
+- Ollama;
+- OpenRouter;
+- Groq;
+- Gemini;
+- NVIDIA.
 
-OPERLY maintains explicit security context around every action.
+The adaptive route flow is roughly:
 
-The repository contains first-class concepts for:
+```text
+provider catalogs
+    -> model-resource index
+    -> provider activation policy
+    -> cost/eligibility policy
+    -> task capability filter
+    -> live scorer
+    -> ranked route batch
+    -> model call
+    -> telemetry/result
+    -> scorer update
+```
 
-- users and authenticated sessions;
-- principals and external clients;
-- workspace membership and RBAC;
-- channel identities;
-- conversation ownership;
-- execution context;
-- temporal/user-local context;
-- action provenance;
-- approvals;
-- encrypted connector credentials.
+Each provider/model pair is a distinct route. The same canonical model hosted by two providers may rank differently because reliability, latency, rate limits, and runtime history differ.
 
-The goal is for capability access to follow the human and workspace rather than whichever interface happens to invoke it.
+### Current operating policy
 
-### 5. Persistent context and memory
+The repository currently defaults to conservative model routing:
 
-OPERLY is designed around durable context rather than isolated prompts.
+- `OPERLY_FREE_MODELS_ONLY=1` by default, so paid or unknown-cost routes are excluded from adaptive scoring;
+- `OPERLY_ACTIVE_MODEL_PROVIDERS` defaults to `ollama`, providing a hard provider-level activation/hold switch;
+- provider discovery may know about more routes than are currently eligible to invoke.
 
-It stores and reconstructs context from areas including:
-
-- conversations;
-- business/company state;
-- actions and activity;
-- channel messages;
-- workspace history;
-- human memory;
-- software projects;
-- Studio runs and model traces.
-
-Context providers decide what should be surfaced into the current model interaction instead of blindly stuffing the entire database into a prompt.
-
----
-
-## Product layers
-
-The current repository effectively contains three closely related product layers.
-
-### OPERLY AI
-
-The conversational agent layer.
-
-It receives the current context and authorized capabilities, reasons with the configured model runtime, invokes tools, requests approval where necessary, and persists relevant results.
-
-### OPERLY OS
-
-The persistent operating layer underneath the agent.
-
-It contains workspaces, identities, permissions, context, business records, company intelligence, actions, connectors, channels, approvals, memory, and the capability registry.
-
-### OPERLY Studio
-
-The software-construction environment.
-
-It allows an agent to plan, create, inspect, edit, validate, run, repair, preview, and version software rather than merely returning code in chat.
+These are operating policies, not architectural limits. The higher-level runtime remains provider-neutral.
 
 ---
 
-## Business and company intelligence
+## Personal AI and Workspace AI
 
-`packages/business`, `packages/business_brain`, and `packages/company` provide the company-aware layer of OPERLY.
+OPERLY has two important user-facing AI scopes.
 
-Current systems include:
+### Personal Operly
 
-- business profiles and operational records;
-- contacts, leads, products, inventory, orders, quotations, appointments, team members, and documents;
-- business induction and context loading;
-- operational scans, alerts, briefs, audits, and operating plans;
-- company state and event history;
-- company attention/intelligence;
-- research and web-research hooks;
-- attachment processing for documents, images, archives, and multimodal inputs.
+Personal AI is account-scoped. It can use the user's authorized personal connectors and federated history, and may retrieve from multiple workspaces only where current membership and permissions allow it.
 
-This allows the model to reason over a persistent company rather than treating each conversation as a blank session.
+Personal attachments remain account-private. Their extracted content is treated as untrusted input before entering model context.
+
+### Workspace Operly
+
+Workspace AI operates inside the selected workspace's authority boundary. Workspace data, capabilities, roles, approvals, activity, and connectors are resolved for that scope.
+
+Changing a frontend route is not enough to change scope: the backend session is explicitly switched before the UI enters another workspace.
 
 ---
 
-## Connectors and channels
+## Channels, connectors, and external clients
 
-External systems enter the same harness instead of becoming separate agent implementations.
-
-Current connector/channel work includes:
+External systems enter the same authorization/runtime architecture rather than receiving separate unrestricted agent implementations.
 
 ### Google Workspace
 
-The Google provider exposes authorized Workspace operations through the capability layer, including Gmail and calendar-related functionality.
+Google capabilities expose authorized account operations, including Gmail and Calendar functionality, through the normal capability system.
 
 ### Discord
 
-`packages/connectors/discord` contains the bot lifecycle, secure runtime, provider, slash commands, channel integration, and harness-facing behavior.
+`packages/connectors/discord` contains Discord lifecycle, secure runtime, commands, artifact/task delivery, identity linking, and workspace-aware channel behavior.
 
-Discord messages can participate in OPERLY context while remaining subject to workspace identity and authorization boundaries.
-
-### Email
-
-OPERLY has a transactional email subsystem with SMTP, Zoho Mail API, development-memory providers, and HTML templates for verification, password reset, welcome, password-change, and security notifications.
+Discord identities are linked to OPERLY principals, but provider identity linking does not merge workspace permissions.
 
 ### MCP
 
-`packages/mcp` provides an MCP gateway, OAuth support, and policy enforcement so external AI clients can access approved OPERLY capabilities through the same security model rather than receiving unrestricted backend access.
+`packages/mcp` exposes approved OPERLY capabilities to external AI clients through an MCP gateway with OAuth and policy enforcement. MCP is an interface to the capability system, not a bypass around it.
 
-### Channels and identity
+### Channels
 
-`packages/channels` handles channel envelopes, identity resolution/linking, guest chat, service routing, and space/workspace bindings.
+`packages/channels` handles provider/channel envelopes, identity resolution, service routing, guest/channel bindings, and cross-interface delivery semantics.
+
+---
+
+## Business and company state
+
+`packages/business`, `packages/business_brain`, and `packages/company` provide persistent business-aware state.
+
+Current functionality includes business profiles, contacts, leads, products, inventory, orders, quotations, appointments, team members, documents, operational events, business context, scans, alerts, briefs, research hooks, attachments, and agent-facing business operations.
+
+This lets OPERLY reason over a durable organization instead of treating every chat as a blank session.
+
+---
+
+## Artifacts and agent computer
+
+Complex agent work is not limited to text messages.
+
+`packages/artifacts` provides durable artifact storage/delivery semantics, while `packages/agent_computer` and related capability providers expose controlled file/computer/runtime operations.
+
+Artifacts are first-class evidence for agent and Factory workflows. Verified outputs can be promoted and delivered across supported surfaces; failed or unverified attempt outputs remain isolated from downstream dependency trust.
 
 ---
 
 ## Software construction
 
-OPERLY contains both higher-level application generation and a lower-level coding harness.
+OPERLY contains a source-aware software construction stack rather than a chat-only code generator.
 
-The intended construction lifecycle is roughly:
+The intended lifecycle is:
 
 ```text
 request
-  -> context and requirements analysis
-  -> capability/dependency graph
-  -> clarification only when materially necessary
-  -> plan and acceptance criteria
-  -> persistent coding-agent tool loop
-  -> immutable source snapshot
+  -> requirements/context analysis
+  -> objective + acceptance contract
+  -> plan/stage graph
+  -> source-aware coding loop
+  -> immutable source version
   -> isolated build/test/start/health checks
-  -> validation and bounded repair
+  -> validation + bounded repair
   -> preview
-  -> iterative source-aware editing
+  -> iterative edits
+  -> production lifecycle
 ```
 
-Major components include:
+Major components:
 
-- `packages/application_builder` — schema-driven managed applications;
-- `packages/custom_software` — planning, graph coverage, dependency resolution, scope convergence, source generation, runner orchestration, validation and repair;
-- `packages/coding_harness` — persistent coding-agent execution, context-window management, source tools, model resolution, build service and execution loop;
-- `packages/software_projects` — durable project abstraction and persistence;
-- `packages/solutions` — solution registry, production lifecycle and deployment-oriented state;
-- `packages/studio` — source agent, agent runs, model traces, rendering, design/runtime policy and terminal recovery.
+- `packages/software_projects` — canonical durable software-project identity and source/runtime state;
+- `packages/solutions` — user-facing Solution registry and production lifecycle;
+- `packages/studio` — source agent, Studio runs, rendering/design/runtime policy, traces and recovery;
+- `packages/coding_harness` — persistent coding-agent execution, source tools, context management and build loop;
+- `packages/custom_software` — requirements, planning, dependency/scope convergence and compatibility orchestration;
+- `packages/application_builder` — older managed/schema-driven application generation retained for compatibility;
+- `packages/service_bindings` — scoped project/service bindings without storing raw provider credentials;
+- `packages/runtime_plugins` — trusted runtime contracts and registry.
 
-Generated code is not executed directly inside the FastAPI control plane. Production-grade generation is designed to use an isolated runner with bounded resources and explicit validation.
-
-See [`packages/coding_harness/ARCHITECTURE.md`](packages/coding_harness/ARCHITECTURE.md) for the coding/runtime design.
-
----
-
-## Solutions
-
-A **Solution** is the user-facing unit for software or operational functionality launched through OPERLY.
-
-A Solution may contain any combination of:
-
-- a website or public digital presence;
-- an internal application;
-- a customer portal;
-- backend services;
-- workflows;
-- agents;
-- integrations;
-- generated software;
-- operational capabilities.
-
-The Solution layer is intentionally above the lower-level runtime implementations so a business outcome does not have to be defined by whether it happened to be built as a website, managed application, generated project, workflow, or agent.
+Generated code does not execute inside the FastAPI control plane.
 
 ---
 
-## Actions, approvals, and safety
+## Isolated runner
 
-OPERLY distinguishes reasoning from authority.
+`apps/runner` is the production isolated execution service for generated full-stack software.
 
-The model can propose or plan an operation without automatically receiving permission to perform every consequential action.
+It is intentionally separate from the OPERLY API. Each build receives fresh container/network isolation. Generated software receives no Docker socket, host mounts, OPERLY database credentials, session secrets, model keys, connector credentials, or raw service-binding secrets.
 
-Important safety boundaries include:
+The production runner uses a dedicated Docker host and constrained egress during dependency installation. Generated runtime traffic is exposed through an opaque preview boundary rather than directly publishing the generated container.
 
-- workspace- and principal-scoped data access;
-- capability authorization before tool exposure;
-- capability firewall and runtime validation;
-- explicit approvals for consequential actions where required;
-- action provenance and history;
-- CSRF protection, secure sessions, security headers, and request safety;
-- encrypted connector credentials;
-- immutable/versioned generated source;
-- isolated execution of generated software;
-- fail-closed behavior when required production infrastructure is unavailable.
+`apps/sandbox_runner` and local runner paths support development/test workflows, but the production isolation contract belongs to the dedicated runner service.
 
-The objective is **maximum useful capability with explicit authority boundaries**, not an artificially weak agent and not an unrestricted one.
+See [`apps/runner/README.md`](apps/runner/README.md) for the security and deployment contract.
 
 ---
 
-## Current web application
+## Web application
 
-The backend is a FastAPI application under `apps/api`.
+The web product is split by **route ownership**, not by two competing authenticated frontends.
 
-The repository currently contains two frontend generations:
+### Canonical authenticated UI
 
-- `apps/web/static` — the current browser interface served by FastAPI;
-- `apps/web/src` — a newer React/Vite application that is being developed alongside the existing static shell.
+`apps/web/src` is the React/Vite application and owns authenticated `/channels/**` routes, including:
 
-The static application contains accumulated product surfaces and compatibility layers from several stages of OPERLY's development. Consolidating these frontend generations is an active architectural cleanup opportunity.
+- Personal Operly;
+- workspace Home;
+- Workspace Operly chat;
+- CRM;
+- Operations;
+- Activity/approvals/tasks;
+- Presence;
+- Solutions;
+- Connections;
+- Plugins;
+- Members;
+- Access/MCP exposure.
+
+The production image builds `apps/web/dist`, and FastAPI serves the React application for authenticated product routes.
+
+### Compatibility shell
+
+`apps/web/static` remains temporarily for public/authentication flows and protected legacy Studio paths that have not yet completed migration. It is **not** the canonical owner of normal authenticated `/channels/**` product development.
+
+See [`apps/web/FRONTEND_MIGRATION.md`](apps/web/FRONTEND_MIGRATION.md).
 
 ---
 
@@ -321,46 +374,56 @@ The static application contains accumulated product surfaces and compatibility l
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/api` | FastAPI control plane, auth, API routers, sessions, security and browser delivery |
-| `apps/web/static` | Current browser application and legacy/transition UI surfaces |
-| `apps/web/src` | React/Vite frontend source |
-| `packages/capabilities` | Capability contracts, providers, discovery, registry and firewall |
-| `packages/capability_sandbox` | Capability resolution benchmarks and tests |
-| `packages/harness` | Core agent/tool harness abstractions |
-| `packages/agents` | Agent runtime |
-| `packages/model_runtime` | Provider-neutral model discovery, routing and execution |
-| `packages/security` | Principals, permissions and execution context |
-| `packages/context` | Durable context service |
+| `apps/api` | FastAPI control plane, auth/session APIs, routers, security middleware and browser delivery |
+| `apps/web/src` | Canonical React/Vite authenticated product UI |
+| `apps/web/static` | Public/auth and temporary legacy compatibility surfaces |
+| `apps/runner` | Production isolated generated-software runner |
+| `apps/sandbox_runner` | Sandbox/development execution support |
+| `packages/agents` | Generic agent runtime, persistence, verification and Factory control plane |
+| `packages/agents/control_plane` | Objective/stage DAG orchestration, context distribution, evidence, validation and repair |
+| `packages/capabilities` | Capability contracts, discovery, providers, session exposure and firewall |
+| `packages/capability_sandbox` | Capability-resolution benchmarks and safety tests |
+| `packages/actions` | Durable action policy/lifecycle support |
+| `packages/model_runtime` | Provider-neutral inference, discovery, scoring, provider/cost policy and routing |
+| `packages/security` | Principals, roles, authorization, human identity, invitations and execution context |
+| `packages/context` | Durable context, federation, provider-history adapters and retrieval |
 | `packages/workspace` | Workspace-level services |
-| `packages/service_bindings` | Service-to-workspace/principal bindings |
-| `packages/channels` | Cross-channel identity, envelopes and workspace bindings |
+| `packages/channels` | Cross-channel identity, envelopes, routing and bindings |
 | `packages/connectors` | Google Workspace, Discord and connector runtime |
-| `packages/mcp` | MCP gateway, OAuth and policy |
-| `packages/email` | Transactional email service and templates |
-| `packages/business` | Core business services |
-| `packages/business_brain` | Business-aware agent, tools, attachments and operations |
-| `packages/company` | Company state, events, context, research and intelligence |
-| `packages/application_builder` | Managed application generation |
-| `packages/custom_software` | General software planning/build/runner/repair orchestration |
-| `packages/coding_harness` | Persistent coding-agent and source execution loop |
-| `packages/software_projects` | Universal software project persistence |
+| `packages/mcp` | MCP gateway, OAuth and capability policy |
+| `packages/artifacts` | Durable agent artifacts and delivery |
+| `packages/agent_computer` | Controlled computer/file/runtime execution bridge |
+| `packages/business` | Core business data/services |
+| `packages/business_brain` | Business-aware agent/runtime, Factory binding, tools and attachments |
+| `packages/company` | Company state, events, research and intelligence |
+| `packages/software_projects` | Canonical software-project persistence |
 | `packages/solutions` | Solution registry and production lifecycle |
-| `packages/studio` | Source-aware AI software editing and agent runs |
-| `packages/plugins` | Plugin manifests and plugin runtime |
+| `packages/studio` | Source-aware Studio agent and software editing runtime |
+| `packages/coding_harness` | Persistent coding-agent/source execution loop |
+| `packages/custom_software` | General software planning/build/repair compatibility orchestration |
+| `packages/application_builder` | Managed application generation compatibility layer |
+| `packages/service_bindings` | Project/workspace semantic service bindings |
+| `packages/plugins` | Plugin manifests and plugin support |
 | `packages/runtime_plugins` | Runtime plugin contracts and registry |
-| `packages/database` | SQLAlchemy models, database services and migration helpers |
+| `packages/database` | SQLAlchemy models, services and migration helpers |
 | `alembic/versions` | Authoritative schema history |
-| `tests` | Unit, integration, security, model, connector, planning, harness and runner tests |
+| `tests` | Unit, integration, security, model, connector, Factory, harness and runner tests |
 
 ---
 
 ## Local setup
 
-Requirements: **Python 3.11+**. PostgreSQL is recommended for production; SQLite is supported for local development.
+Requirements:
+
+- Python 3.11+;
+- Node.js for the React frontend build/development workflow;
+- SQLite for simple local development or PostgreSQL for production-like use.
+
+### Backend
 
 ```powershell
 Copy-Item .env.example .env
-# Configure SESSION_SECRET, ADMIN_PASSWORD, and model settings.
+# Configure at minimum the session/admin/model settings you need.
 
 uv venv
 uv pip install -r requirements.txt
@@ -370,11 +433,25 @@ uv run uvicorn apps.api.main:app --reload --env-file .env
 
 Open `http://localhost:8000`.
 
-To run the Discord connector separately:
+### React frontend development
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+Production builds the frontend into the main image; the Vite dev server is only for frontend development.
+
+### Discord connector
 
 ```powershell
 uv run python -m packages.connectors.discord.bot_harness
 ```
+
+### Local generated-software runner
+
+Use the separate development runner sidecar when testing the production control-plane protocol locally. See [`apps/runner/README.md`](apps/runner/README.md) for the required environment and safety restrictions.
 
 ---
 
@@ -382,33 +459,38 @@ uv run python -m packages.connectors.discord.bot_harness
 
 Start with [`.env.example`](.env.example).
 
-Important settings include:
+Important configuration families include:
 
 | Setting | Purpose |
 | --- | --- |
-| `DATABASE_URL` | SQLite development database or PostgreSQL connection |
+| `DATABASE_URL` | SQLite/PostgreSQL connection |
 | `SESSION_SECRET` | Authenticated session signing secret |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Bootstrap owner account |
-| `PUBLIC_BASE_URL` | Canonical production origin |
-| `MAIL_PROVIDER` | Transactional email provider |
-| `ZOHO_MAIL_*` | Zoho Mail API/OAuth configuration |
-| `OLLAMA_URL`, `OLLAMA_API_KEY`, `OLLAMA_MODEL` | Ollama provider configuration |
-| `OPENROUTER_API_KEY` | OpenRouter provider access when enabled |
-| `OPERLY_MODEL_<ROLE>` | Provider/model assignment for an OPERLY role |
-| `OPERLY_MODEL_<ROLE>_FALLBACKS` | Role-specific fallback portfolio |
-| `OPERLY_PLANNING_MODE` | Planning implementation selection |
-| `OPERLY_SANDBOX_RUNNER_URL`, `OPERLY_SANDBOX_RUNNER_TOKEN` | External isolated runner |
-| `OPERLY_ENABLE_TEST_SUBPROCESS_RUNNER` | Local/test runner only |
+| `PUBLIC_BASE_URL` | Canonical public origin |
+| `MAIL_PROVIDER`, `ZOHO_MAIL_*` | Transactional email |
+| `OLLAMA_*` | Ollama endpoint/auth/model compatibility settings |
+| `OPENROUTER_*` | OpenRouter access/discovery |
+| `GROQ_API_KEY` | Groq model catalog/runtime access |
+| `GEMINI_API_KEY` | Gemini model catalog/runtime access |
+| `NVIDIA_API_KEY` | NVIDIA model catalog/runtime access |
+| `OPERLY_ACTIVE_MODEL_PROVIDERS` | Hard allowlist of providers currently permitted to invoke |
+| `OPERLY_FREE_MODELS_ONLY` | Fail-closed zero-cost route policy; defaults on |
+| `OPERLY_MODEL_DISCOVERY_TTL_SECONDS` | Live provider catalog refresh TTL |
+| `OPERLY_MODEL_ROUTE_BATCH_SIZE` | Bounded adaptive candidate batch |
+| `OPERLY_MODEL_<ROLE>` | Optional role-specific provider/model assignment |
+| `OPERLY_MODEL_<ROLE>_FALLBACKS` | Role-specific fallback routes |
+| `OPERLY_WORKSPACE_AGENT_FACTORY` | Workspace Agent Factory deployment switch |
+| `OPERLY_SANDBOX_RUNNER_URL` | External isolated runner origin |
+| `OPERLY_SANDBOX_RUNNER_TOKEN` | Runner HMAC secret |
 | `DISCORD_BOT_TOKEN` | Discord connector |
 | `OPERLY_CONNECTOR_SECRET_KEY` | Connector credential encryption |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth application |
-| `GOOGLE_OAUTH_REDIRECT_URI` | Registered Google OAuth callback |
 
-Production additionally requires HTTPS, strong unique secrets, PostgreSQL, completed migrations, verified backups, and an isolated runner when generated-software execution is enabled.
+Do not copy OPERLY database credentials, model-provider keys, Gmail credentials, session secrets, or connector secrets onto the generated-code runner host.
 
 ---
 
-## Database and tests
+## Database, tests, and CI
 
 Alembic revisions are the authoritative database history.
 
@@ -418,40 +500,52 @@ uv run python -m packages.database.migrate check
 uv run pytest -q
 ```
 
-CI currently includes application-flow, capability-sandbox, and coding-harness smoke workflows.
+The repository has focused CI for application flow, runtime hardening, relational data, task/workflow contracts, the unified agent runtime, capability sandbox behavior, and coding-harness/runner paths.
 
 Before releasing, follow [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
 
-Architecture and implementation notes are under [`docs/`](docs/), including:
+Useful architecture notes:
 
 - [`docs/TARGET_ARCHITECTURE.md`](docs/TARGET_ARCHITECTURE.md)
 - [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 - [`docs/MULTI_PROVIDER_MODELS.md`](docs/MULTI_PROVIDER_MODELS.md)
 - [`docs/PLUGIN_HARNESS.md`](docs/PLUGIN_HARNESS.md)
 - [`docs/model-runtime.md`](docs/model-runtime.md)
+- [`packages/coding_harness/ARCHITECTURE.md`](packages/coding_harness/ARCHITECTURE.md)
+- [`apps/web/FRONTEND_MIGRATION.md`](apps/web/FRONTEND_MIGRATION.md)
+- [`apps/runner/README.md`](apps/runner/README.md)
 
 ---
 
-## Current limitations
+## Current migration boundaries
 
-OPERLY is evolving quickly and the repository still contains architectural layers from earlier product iterations.
+OPERLY is moving quickly, and `main` still contains compatibility layers from earlier product generations.
 
-Notable current boundaries:
+The important boundaries today are:
 
-- the frontend is split between the current static application and a newer React/Vite implementation;
-- some older routers, patch scripts, compatibility surfaces, and generation paths remain in the repository;
-- capability coverage is broad but not every service has been normalized behind the capability layer yet;
-- production generated-software execution depends on separately operated isolated-runner infrastructure;
-- successful source generation and preview do not automatically imply production deployment;
-- connectors currently have different levels of maturity and capability coverage;
-- the plugin architecture exists, but further consolidation is still needed before every subsystem is truly interchangeable as a plugin.
+- React/Vite is canonical for authenticated `/channels/**`, while the static shell remains for public/auth and protected legacy Studio migration;
+- Agent Factory is implemented, but Workspace deployment is controlled explicitly by `OPERLY_WORKSPACE_AGENT_FACTORY`;
+- the universal capability system is canonical, while some older coding and software-generation registries remain as compatibility bridges;
+- `SoftwareProject` is the canonical software identity, while Studio/managed/generated legacy records still exist for compatibility;
+- production generated-code execution depends on the separately operated isolated runner;
+- model discovery spans multiple providers, but invocation is additionally constrained by active-provider and cost policy;
+- provider and connector maturity is not uniform;
+- not every historical subsystem has completed plugin/runtime convergence yet.
 
-These are implementation gaps, not changes to the architectural direction.
+New architecture should strengthen the common identity → context → capability → action → runtime path rather than creating another special-case agent stack.
 
 ---
 
-## Design principle
+## Design principles
 
-OPERLY should not need a special-case architecture for every new model, integration, application, channel, or business tool.
+1. **Models are replaceable.** Provider choice must not define product architecture.
+2. **Context is authorized, reference-first, and revalidated.** Retrieval is not authority.
+3. **Capabilities are composable.** Interfaces should reuse the same underlying operations.
+4. **Discovery is not permission.** A model may know a capability exists without being allowed to invoke it.
+5. **Consequential effects are durable actions.** Approvals and terminal outcomes are system truth.
+6. **Workers do not own completion truth.** The control plane validates evidence against the objective.
+7. **Generated code is untrusted.** It executes outside the OPERLY control plane.
+8. **Identity follows the human; authority follows the current scope.** Linking identities never silently merges permissions.
+9. **Everything should converge on plugins/capabilities instead of parallel special-case runtimes.**
 
-**Models are replaceable. Capabilities are composable. Context is persistent. Authority is explicit. Everything else should plug into the harness.**
+**Models are replaceable. Capabilities are composable. Context is persistent and authorized. Authority is explicit. Execution is verifiable.**
