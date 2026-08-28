@@ -10,7 +10,7 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, reactPalette, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
   text("src/app/App.tsx"),
   text("src/app/ProductApp.tsx"),
   text("src/public/PublicApp.tsx"),
@@ -18,6 +18,7 @@ const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles,
   text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
   text("src/ui/public.css"),
+  text("src/ui/react-public-admin-palette.css"),
   text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
@@ -49,10 +50,17 @@ for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/ve
 assert(publicApp.includes('go("/channels/@me")'), "Personal auth handoff must target the canonical route");
 assert(publicApp.includes("/channels/${encodeURIComponent"), "Workspace auth handoff must target the canonical route");
 assert(publicApp.includes("workspace-invitations/inspect"), "Workspace invitation inspection must survive the migration");
+assert(publicApp.includes("<RuntimePreview />"), "Public landing must keep the React runtime preview");
+assert(publicApp.includes('id="studio"'), "Public landing must keep the React Studio product section");
+assert(publicApp.includes("auth-visual-panel"), "Auth routes must keep the React visual context panel");
+assert(publicApp.includes("public-model-band"), "Public landing must keep the model-agnostic operating-layer section");
 
 for (const contract of ["/admin/session", "/admin/overview", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
   assert(adminPage.includes(contract), `React admin migration is missing ${contract}`);
 }
+assert(adminPage.includes("admin-overview-grid"), "React admin must keep the rich overview composition");
+assert(adminPage.includes("admin-health-ring"), "React admin must keep account-health visualization");
+assert(adminPage.includes("admin-shell-orb"), "React admin must keep its canonical visual shell treatment");
 assert(legalPage.includes("Privacy Policy"), "React Privacy Policy is missing");
 assert(legalPage.includes("Terms of Service"), "React Terms of Service is missing");
 assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
@@ -65,11 +73,19 @@ assert(!dockerfile.includes("apps/web/static"), "Production image must not depen
 assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo source must come from Vite public assets");
 
 assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
+assert(main.includes('import "./ui/react-public-admin-palette.css"'), "React must load the public/admin palette convergence layer");
+assert(main.indexOf('import "./ui/react-public-admin-palette.css"') > main.indexOf('import "./ui/public.css"'), "Public/admin palette convergence must load after public.css");
 assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
 assert(main.includes('import "./ui/convergence.css"'), "React must load the final convergence layer");
 assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
 assert(publicStyles.includes(".admin-react-shell"), "React admin styling is missing");
 assert(publicStyles.includes(".react-legal-shell"), "React legal styling is missing");
+assert(reactPalette.includes(".react-public-page"), "React public palette convergence is missing");
+assert(reactPalette.includes(".admin-react-shell"), "React admin palette convergence is missing");
+assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must explicitly bound the OperlyMark image size");
+assert(reactPalette.includes(".operly-runtime-preview"), "React landing preview styling is missing");
+assert(reactPalette.includes(".auth-visual-panel"), "React auth visual styling is missing");
+assert(reactPalette.includes("var(--ui-canvas)"), "React public/admin convergence must use the canonical Operly canvas token");
 
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
 assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");
