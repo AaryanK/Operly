@@ -1,4 +1,3 @@
-import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -90,15 +89,14 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         register_model_provider("test-fail", lambda route: _FailClient(), replace=True)
         register_model_provider("test-ok", lambda route: _OkClient(route), replace=True)
-        # The synthetic providers below validate provider-neutral failover. Billing
-        # eligibility is covered independently by the zero-cost routing policy tests.
-        self.free_policy_patch = patch.dict(
-            os.environ,
-            {"OPERLY_FREE_MODELS_ONLY": "0"},
-            clear=False,
+        # Synthetic providers validate provider-neutral failover. The production
+        # provider/billing eligibility gates have their own policy tests.
+        self.route_policy_patch = patch(
+            "packages.model_runtime.scoring.route_is_zero_cost",
+            return_value=True,
         )
-        self.free_policy_patch.start()
-        self.addCleanup(self.free_policy_patch.stop)
+        self.route_policy_patch.start()
+        self.addCleanup(self.route_policy_patch.stop)
 
     async def test_model_pool_fails_over_across_providers(self):
         pool = ModelPool(
