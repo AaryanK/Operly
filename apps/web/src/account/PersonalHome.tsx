@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, apiForm } from "../api";
 import { PersonalProfile } from "../app/types";
@@ -72,6 +72,7 @@ export function PersonalHome({ profile }: Props) {
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationSearch, setConversationSearch] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [files, setFiles] = useState<File[]>([]);
@@ -79,7 +80,7 @@ export function PersonalHome({ profile }: Props) {
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [mobileListOpen, setMobileListOpen] = useState(true);
   const [historyCollapsed, setHistoryCollapsed] = useState(() => {
     try { return window.localStorage.getItem("operly.personal-history-collapsed") === "true"; }
     catch { return false; }
@@ -91,7 +92,8 @@ export function PersonalHome({ profile }: Props) {
     const rows = await api<Conversation[]>("/personal-agent/conversations");
     setConversations(rows);
     const next = prefer || conversationId || rows[0]?.id || null;
-    if (next && next !== conversationId) await openConversation(next);
+    if (next && next !== conversationId) await openConversation(next, Boolean(prefer));
+    else if (prefer && next) setMobileListOpen(false);
     if (!next) setMessages([]);
   }
 
@@ -118,13 +120,13 @@ export function PersonalHome({ profile }: Props) {
     }
   }
 
-  async function openConversation(id: string) {
+  async function openConversation(id: string, revealOnMobile = true) {
     setConversationId(id);
     setError(null);
+    if (revealOnMobile) setMobileListOpen(false);
     try {
       const rows = await api<Message[]>(`/personal-agent/conversations/${encodeURIComponent(id)}/messages`);
       setMessages(rows);
-      setMobileHistoryOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Conversation could not be loaded");
     }
@@ -134,7 +136,7 @@ export function PersonalHome({ profile }: Props) {
     setConversationId(null);
     setMessages([]);
     setError(null);
-    setMobileHistoryOpen(false);
+    setMobileListOpen(false);
   }
 
   useEffect(() => {
@@ -146,15 +148,6 @@ export function PersonalHome({ profile }: Props) {
   useEffect(() => {
     stage.current?.scrollTo({ top: stage.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
-
-  useEffect(() => {
-    if (!mobileHistoryOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileHistoryOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mobileHistoryOpen]);
 
   function toggleHistory() {
     setHistoryCollapsed((current) => {
@@ -220,21 +213,41 @@ export function PersonalHome({ profile }: Props) {
 
   const pendingApprovals = approvals.filter((item) => item.status === "pending");
   const recentApprovals = approvals.slice(0, 12);
+  const normalizedSearch = conversationSearch.trim().toLowerCase();
+  const filteredConversations = useMemo(
+    () => conversations.filter((item) => !normalizedSearch || (item.title || "Conversation").toLowerCase().includes(normalizedSearch)),
+    [conversations, normalizedSearch],
+  );
+  const activeConversation = conversations.find((item) => item.id === conversationId);
 
   return (
-    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileHistoryOpen ? "mobile-history-open" : ""}`}>
-      <button className="personal-history-backdrop" type="button" aria-label="Close conversation history" onClick={() => setMobileHistoryOpen(false)} />
+    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileListOpen ? "mobile-personal-list" : "mobile-personal-thread"}`}>
       <aside id="personal-conversation-history" className="personal-history" aria-label="Conversation history">
-        <div className="history-head"><div><small>YOUR SPACE</small><strong>Personal Operly</strong></div><div className="history-head-actions"><button onClick={newConversation} aria-label="New conversation" title="New conversation">+</button><button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button><button className="history-mobile-close" onClick={() => setMobileHistoryOpen(false)} aria-label="Close conversation history">×</button></div></div>
+        <div className="history-head personal-message-list-head">
+          <div><small>YOUR SPACE</small><strong>Messages</strong></div>
+          <div className="history-head-actions">
+            <button onClick={newConversation} aria-label="New conversation" title="New conversation">＋</button>
+            <button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button>
+          </div>
+        </div>
+        <label className="personal-conversation-search">
+          <span aria-hidden="true">⌕</span>
+          <input value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} type="search" placeholder="Search conversations" aria-label="Search Personal Operly conversations" />
+        </label>
         <div className="history-list">
-          {conversations.length === 0 && <p className="empty-copy">Your private conversations will appear here.</p>}
-          {conversations.map((item) => <button key={item.id} className={conversationId === item.id ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
+          {filteredConversations.length === 0 && <p className="empty-copy">{conversations.length ? "No conversations match your search." : "Your private conversations will appear here."}</p>}
+          {filteredConversations.map((item) => <button key={item.id} className={conversationId === item.id ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
         </div>
         <div className="history-account"><span>{(profile?.display_name || profile?.email || "Me").slice(0, 1).toUpperCase()}</span><div><strong>{profile?.display_name || "Operly user"}</strong><small>{profile?.email || "Private account"}</small></div></div>
       </aside>
 
       <main className="personal-surface">
-        <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><button className="mobile-history-button" type="button" onClick={() => setMobileHistoryOpen(true)} aria-expanded={mobileHistoryOpen} aria-controls="personal-conversation-history">History</button><span className="privacy-pill">Private</span></div></header>
+        <header className="mobile-content-header personal-mobile-content-header">
+          <button type="button" onClick={() => setMobileListOpen(true)} aria-label="Back to conversations">←</button>
+          <div><small>Personal Operly</small><strong>{activeConversation?.title || "New conversation"}</strong></div>
+          <span className="privacy-pill">Private</span>
+        </header>
+        <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><span className="privacy-pill">Private</span></div></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
           <section className="personal-approval-stack" aria-label="Personal approvals">
             <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>Approvals</h2><small>{pendingApprovals.length} pending</small></div><button className="text-button" type="button" onClick={loadApprovals}>Refresh</button></div>
