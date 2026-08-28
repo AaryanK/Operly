@@ -10,16 +10,18 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, reactPalette, liveStyles, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+const [rootApp, productApp, publicApp, apiClient, adminPage, legalPage, main, publicStyles, reactPalette, liveStyles, productShell, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
   text("src/app/App.tsx"),
   text("src/app/ProductApp.tsx"),
   text("src/public/PublicApp.tsx"),
+  text("src/api.ts"),
   text("src/admin/AdminPage.tsx"),
   text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
   text("src/ui/public.css"),
   text("src/ui/react-public-admin-palette.css"),
   text("src/ui/react-public-live.css"),
+  text("src/ui/product-shell.css"),
   text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
@@ -48,6 +50,11 @@ for (const route of ["/login", "/signup", "/verify-email", "/forgot-password", "
 for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/workspace-invitations/accept", "/api/identities/discord/sign-in"]) {
   assert(publicApp.includes(contract), `React auth migration is missing ${contract}`);
 }
+for (const preauthPath of ["/auth/signup", "/auth/login", "/session/login", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/auth/google"]) {
+  assert(apiClient.includes(`"${preauthPath}"`), `React API client must recognize ${preauthPath} as a pre-auth CSRF path`);
+}
+assert(apiClient.includes("if (PREAUTH_CSRF_PATHS.has(path)) return preauth || session;"), "Pre-auth writes must prefer the independent pre-auth CSRF token over stale session CSRF");
+assert(apiClient.includes("authorizedHeaders(path, options)"), "React API requests must choose CSRF using the request path");
 assert(publicApp.includes('go("/channels/@me")'), "Personal auth handoff must target the canonical route");
 assert(publicApp.includes("/channels/${encodeURIComponent"), "Workspace auth handoff must target the canonical route");
 assert(publicApp.includes("workspace-invitations/inspect"), "Workspace invitation inspection must survive the migration");
@@ -82,10 +89,12 @@ assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo 
 assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
 assert(main.includes('import "./ui/react-public-admin-palette.css"'), "React must load the public/admin palette convergence layer");
 assert(main.includes('import "./ui/react-public-live.css"'), "React must load the live public/admin layer");
+assert(main.includes('import "./ui/product-shell.css"'), "React must load the authenticated product shell");
 assert(main.indexOf('import "./ui/react-public-admin-palette.css"') > main.indexOf('import "./ui/public.css"'), "Public/admin palette convergence must load after public.css");
 assert(main.indexOf('import "./ui/react-public-live.css"') > main.indexOf('import "./ui/react-public-admin-palette.css"'), "Live public/admin layer must load after the palette convergence layer");
+assert(main.indexOf('import "./ui/product-shell.css"') > main.indexOf('import "./ui/react-public-live.css"'), "Authenticated product shell must load last so structure is deterministic");
 assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
-assert(main.includes('import "./ui/convergence.css"'), "React must load the final convergence layer");
+assert(main.includes('import "./ui/convergence.css"'), "React must keep the palette convergence layer until its remaining shared rules are retired");
 assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
 assert(publicStyles.includes(".admin-react-shell"), "React admin styling is missing");
 assert(publicStyles.includes(".react-legal-shell"), "React legal styling is missing");
@@ -100,14 +109,40 @@ assert(liveStyles.includes(".auth-visual-orb"), "React auth surface must keep am
 assert(liveStyles.includes(".admin-token-chart"), "React admin AI usage chart styling is missing");
 assert(liveStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin live motion must respect reduced-motion preference");
 
-assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
-assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");
-assert(convergence.includes("100dvh"), "Mobile shell must use dynamic viewport units");
-assert(convergence.includes("env(safe-area-inset-bottom)"), "Mobile shell must respect safe-area insets");
-assert(convergence.includes(".workspace-mobile-nav"), "Mobile workspace navigation contract is missing");
-assert(convergence.includes(".workspace-more-sheet"), "Mobile More sheet contract is missing");
-assert(convergence.includes(".mobile-history-open .personal-history"), "Personal history drawer contract is missing");
-assert(legalLinks.includes("position: static"), "Mobile legal links must leave the floating interaction layer");
+assert(productApp.includes("<ScopeRail"), "Authenticated product shell must keep the canonical scope rail");
+assert(productApp.includes("authenticated-content"), "Authenticated shell must separate the scope rail from active product content");
+assert(workspace.includes("workspace-nav-search"), "Workspace navigation must provide section search");
+assert(workspace.includes("nav-group-heading"), "Workspace navigation groups must be collapsible");
+assert(workspace.includes("mobile-nav-open"), "Workspace mobile shell must have a navigation state");
+assert(workspace.includes("mobile-content-open"), "Workspace mobile shell must have a full-content state");
+assert(workspace.includes("workspace-mobile-content-header"), "Workspace mobile content must provide an explicit back control");
+assert(!workspace.includes("workspace-mobile-nav"), "The old workspace bottom navigation must stay retired");
+assert(!workspace.includes("workspace-more-sheet"), "The old workspace More sheet must stay retired");
+assert(personal.includes("personal-conversation-search"), "Personal Operly must provide conversation search");
+assert(personal.includes("mobile-personal-list"), "Personal Operly must have a mobile conversation-list state");
+assert(personal.includes("mobile-personal-thread"), "Personal Operly must have a full-screen mobile thread state");
+assert(personal.includes("personal-mobile-content-header"), "Personal mobile thread must provide an explicit back control");
+assert(!personal.includes("mobile-history-button"), "The old Personal history drawer trigger must stay retired");
+assert(!personal.includes("personal-history-backdrop"), "The old Personal history drawer backdrop must stay retired");
+
+for (const shellContract of [
+  ".authenticated-content",
+  ".workspace-content-frame",
+  ".workspace-nav-search",
+  ".personal-conversation-search",
+  ".mobile-content-open .workspace-content-frame",
+  ".mobile-personal-thread .personal-surface",
+  "grid-template-columns: 72px minmax(0, 1fr)",
+  "100dvh",
+  "env(safe-area-inset-bottom)",
+  ":focus-visible",
+  "prefers-reduced-motion",
+]) {
+  assert(productShell.includes(shellContract), `Authenticated product shell is missing structural contract: ${shellContract}`);
+}
+assert(productShell.includes("flex-direction: column !important"), "Phone scope rail must remain vertical rather than becoming a top strip");
+assert(productShell.includes("position: fixed"), "Selected mobile content must be able to take over the full viewport");
+assert(convergence.includes("@media (max-width: 680px)"), "Legacy convergence layer must still keep shared phone fallbacks while the shell migration settles");
 assert(legalLinks.includes("env(safe-area-inset-bottom)"), "Signed-in legal links must respect phone safe areas");
 
 for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
@@ -116,12 +151,6 @@ for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255
 for (const legacyPurple of ["#7d6cff", "rgba(125,108,255", "rgba(111,92,255"]) {
   assert(!brand.toLowerCase().includes(legacyPurple.toLowerCase()), `Brand boot contains legacy purple accent: ${legacyPurple}`);
 }
-
-assert(workspace.includes('const mobilePrimarySections: WorkspaceSection[] = ["home", "operly", "activity", "solutions"]'), "Workspace phone navigation must stay intentionally small");
-assert(workspace.includes("workspace-more-sheet"), "Workspace secondary destinations must remain reachable on phones");
-assert(personal.includes("mobile-history-button"), "Personal conversation history must stay reachable on phones");
-assert(personal.includes("history-mobile-close"), "Personal history drawer must have an explicit close control");
-assert(productApp.includes("<ScopeRail"), "Authenticated product shell must keep the canonical scope rail");
 
 for (const token of ["#f3f5f1", "#13231c", "#dfe6df", "#102f24"]) {
   assert(emailBase.toLowerCase().includes(token), `Transactional email shell is missing canonical Operly token: ${token}`);

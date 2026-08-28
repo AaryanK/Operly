@@ -24,6 +24,7 @@ import "./ui/public.css";
 import "./ui/mobile.css";
 import "./ui/react-public-admin-palette.css";
 import "./ui/react-public-live.css";
+import "./ui/product-shell.css";
 
 initializeTheme();
 installArtifactDownloadHandling();
