@@ -735,6 +735,13 @@
     min-height: 56px;
   }
 
+  .personal-message-list-head .history-head-actions > button {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   .personal-message-list-head strong {
     font-size: 22px;
   }
