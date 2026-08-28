@@ -10,7 +10,7 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, reactPalette, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, reactPalette, liveStyles, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
   text("src/app/App.tsx"),
   text("src/app/ProductApp.tsx"),
   text("src/public/PublicApp.tsx"),
@@ -19,6 +19,7 @@ const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles,
   text("src/main.tsx"),
   text("src/ui/public.css"),
   text("src/ui/react-public-admin-palette.css"),
+  text("src/ui/react-public-live.css"),
   text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
@@ -55,11 +56,17 @@ assert(publicApp.includes('id="studio"'), "Public landing must keep the React St
 assert(publicApp.includes("auth-visual-panel"), "Auth routes must keep the React visual context panel");
 assert(publicApp.includes("public-model-band"), "Public landing must keep the model-agnostic operating-layer section");
 
-for (const contract of ["/admin/session", "/admin/overview", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
+for (const contract of ["/admin/session", "/admin/overview", "/admin/ai-usage?range=", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
   assert(adminPage.includes(contract), `React admin migration is missing ${contract}`);
 }
+assert(adminPage.includes('type Tab = "overview" | "ai-usage" | "users" | "workspaces"'), "React admin must keep AI Usage as a first-class tab");
 assert(adminPage.includes("admin-overview-grid"), "React admin must keep the rich overview composition");
 assert(adminPage.includes("admin-health-ring"), "React admin must keep account-health visualization");
+assert(adminPage.includes("admin-growth-panel"), "React admin must keep the 30-day growth chart");
+assert(adminPage.includes("metrics.mau"), "React admin must keep MAU visibility");
+assert(adminPage.includes("metrics.signups_today"), "React admin must keep today signup visibility");
+assert(adminPage.includes("admin-token-chart"), "React admin must render token usage over time");
+assert(adminPage.includes("admin-model-row"), "React admin must render per-model usage");
 assert(adminPage.includes("admin-shell-orb"), "React admin must keep its canonical visual shell treatment");
 assert(legalPage.includes("Privacy Policy"), "React Privacy Policy is missing");
 assert(legalPage.includes("Terms of Service"), "React Terms of Service is missing");
@@ -74,7 +81,9 @@ assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo 
 
 assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
 assert(main.includes('import "./ui/react-public-admin-palette.css"'), "React must load the public/admin palette convergence layer");
+assert(main.includes('import "./ui/react-public-live.css"'), "React must load the live public/admin layer");
 assert(main.indexOf('import "./ui/react-public-admin-palette.css"') > main.indexOf('import "./ui/public.css"'), "Public/admin palette convergence must load after public.css");
+assert(main.indexOf('import "./ui/react-public-live.css"') > main.indexOf('import "./ui/react-public-admin-palette.css"'), "Live public/admin layer must load after the palette convergence layer");
 assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
 assert(main.includes('import "./ui/convergence.css"'), "React must load the final convergence layer");
 assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
@@ -86,6 +95,10 @@ assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must exp
 assert(reactPalette.includes(".operly-runtime-preview"), "React landing preview styling is missing");
 assert(reactPalette.includes(".auth-visual-panel"), "React auth visual styling is missing");
 assert(reactPalette.includes("var(--ui-canvas)"), "React public/admin convergence must use the canonical Operly canvas token");
+assert(liveStyles.includes(".runtime-chain b"), "React landing runtime must keep visible live state motion");
+assert(liveStyles.includes(".auth-visual-orb"), "React auth surface must keep ambient capability motion");
+assert(liveStyles.includes(".admin-token-chart"), "React admin AI usage chart styling is missing");
+assert(liveStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin live motion must respect reduced-motion preference");
 
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
 assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");

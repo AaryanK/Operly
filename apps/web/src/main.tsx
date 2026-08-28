@@ -23,6 +23,7 @@ import "./ui/solution-source-inspector.css";
 import "./ui/public.css";
 import "./ui/mobile.css";
 import "./ui/react-public-admin-palette.css";
+import "./ui/react-public-live.css";
 
 initializeTheme();
 installArtifactDownloadHandling();
