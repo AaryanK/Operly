@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from packages.agents.control_plane.inference_budget import (
@@ -11,7 +9,11 @@ from packages.model_runtime import InferenceBudget, InferenceRequest, InferenceR
 
 
 class FakeInferenceModel:
+    def __init__(self):
+        self.last_request = None
+
     async def infer(self, request):
+        self.last_request = request
         return InferenceResult(
             message={"role": "assistant", "content": "done"},
             model_resource_id="fake:model",
@@ -43,8 +45,9 @@ async def test_budget_reservations_prevent_parallel_double_spend():
 @pytest.mark.asyncio
 async def test_budgeted_model_uses_provider_usage_and_caps_output_tokens():
     budget = FactoryInferenceBudget(max_tokens=10_000, max_model_calls=10)
+    raw_model = FakeInferenceModel()
     model = budgeted_model(
-        FakeInferenceModel(),
+        raw_model,
         root_budget=budget,
         max_output_tokens=800,
     )
@@ -56,6 +59,7 @@ async def test_budgeted_model_uses_provider_usage_and_caps_output_tokens():
     result = await model.infer(request)
 
     assert result.message["content"] == "done"
+    assert raw_model.last_request.budget.max_output_tokens == 800
     assert model.usage == {
         "input_tokens": 120,
         "output_tokens": 30,
@@ -66,7 +70,7 @@ async def test_budgeted_model_uses_provider_usage_and_caps_output_tokens():
 
 
 @pytest.mark.asyncio
-async def test_root_model_call_limit_blocks_additional_calls():
+async def test_root_model_call_limit_returns_clean_terminal_response():
     budget = FactoryInferenceBudget(max_tokens=10_000, max_model_calls=1)
     model = budgeted_model(
         FakeInferenceModel(),
@@ -76,7 +80,8 @@ async def test_root_model_call_limit_blocks_additional_calls():
     request = InferenceRequest(messages=({"role": "user", "content": "hello"},))
 
     await model.infer(request)
-    with pytest.raises(FactoryInferenceBudgetExceeded) as raised:
-        await model.infer(request)
+    stopped = await model.infer(request)
 
-    assert raised.value.reason == "root_model_call_budget_exhausted"
+    assert stopped.finish_reason == "budget_exhausted"
+    assert model.budget_exhausted.reason == "root_model_call_budget_exhausted"
+    assert model.usage["model_calls"] == 1
