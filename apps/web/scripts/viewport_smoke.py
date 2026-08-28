@@ -96,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/personal-agent/conversations":
             self._json([])
             return
-        if path in {"/api/tasks", "/api/approvals", "/api/solutions"}:
+        if path in {"/api/tasks", "/api/approvals", "/api/approvals/personal", "/api/solutions"}:
             self._json([])
             return
         self._json([])
@@ -165,6 +165,15 @@ def assert_min_target(page: Page, selector: str, minimum: float, label: str) -> 
             raise AssertionError(f"{label}: {selector} target below {minimum}px: {box}")
 
 
+def assert_full_viewport(page: Page, selector: str, viewport: tuple[int, int], label: str) -> None:
+    box = page.locator(selector).bounding_box()
+    if not box:
+        raise AssertionError(f"{label}: {selector} is not visible")
+    width, height = viewport
+    if box["x"] > 1 or box["y"] > 1 or box["width"] < width - 2 or box["height"] < height - 2:
+        raise AssertionError(f"{label}: {selector} did not take over the viewport: {box}")
+
+
 def wait_for_visible_text(page: Page, expected: str) -> None:
     page.wait_for_function(
         """expected => Array.from(document.querySelectorAll('body *')).some(el => {
@@ -216,44 +225,46 @@ def run() -> None:
                         for route, expected in PUBLIC_ROUTES.items():
                             open_page(page, base_url, route, expected, viewport)
 
-                        open_page(page, base_url, "/channels/@me", "Operly", viewport)
+                        open_page(page, base_url, "/channels/@me", "Messages", viewport)
                         if width <= 680:
-                            history = page.locator(".mobile-history-button")
-                            history.wait_for(state="visible")
-                            assert_min_target(page, ".mobile-history-button", 44, f"Personal at {viewport}")
-                            history.click()
-                            page.wait_for_timeout(250)
-                            drawer = page.locator("#personal-conversation-history")
-                            drawer_box = drawer.bounding_box()
-                            if not drawer_box or drawer_box["x"] < -1:
-                                raise AssertionError(f"Personal at {viewport}: history drawer did not enter the viewport")
-                            page.locator(".history-mobile-close").click()
-                            legal = page.locator(".operly-legal-links")
-                            if legal.evaluate("el => getComputedStyle(el).position") != "static":
-                                raise AssertionError(f"Personal at {viewport}: legal links must not float over the composer")
+                            rail = page.locator(".scope-rail")
+                            rail.wait_for(state="visible")
+                            rail_box = rail.bounding_box()
+                            if not rail_box or rail_box["height"] < height - 2 or rail_box["width"] > 74:
+                                raise AssertionError(f"Personal at {viewport}: scope rail must remain a vertical mobile rail: {rail_box}")
+                            page.locator(".personal-conversation-search").wait_for(state="visible")
+                            assert_min_target(page, ".personal-message-list-head button[aria-label='New conversation']", 44, f"Personal at {viewport}")
+                            page.locator(".personal-message-list-head button[aria-label='New conversation']").click()
+                            page.wait_for_timeout(120)
+                            assert_full_viewport(page, ".mobile-personal-thread .personal-surface", viewport, f"Personal at {viewport}")
+                            assert_min_target(page, ".personal-mobile-content-header > button", 44, f"Personal thread at {viewport}")
+                            page.locator(".personal-mobile-content-header > button").click()
+                            page.locator(".personal-conversation-search").wait_for(state="visible")
+                        else:
+                            page.locator(".personal-history").wait_for(state="visible")
+                            page.locator(".personal-surface").wait_for(state="visible")
 
                         open_page(page, base_url, "/channels/workspace-1", "Demo Workspace", viewport)
                         if width <= 680:
-                            nav = page.locator(".workspace-mobile-nav")
-                            nav.wait_for(state="visible")
-                            buttons = nav.locator("button")
-                            if buttons.count() != 5:
-                                raise AssertionError(f"Workspace at {viewport}: expected 5 mobile nav actions, got {buttons.count()}")
-                            assert_min_target(page, ".workspace-mobile-nav button", 44, f"Workspace at {viewport}")
-                            buttons.last.click()
-                            shell_class = page.locator(".workspace-shell").get_attribute("class") or ""
-                            if "workspace-more-open" not in shell_class:
-                                raise AssertionError(f"Workspace at {viewport}: More sheet did not open")
-                            legal = page.locator(".operly-legal-links")
-                            if legal.evaluate("el => getComputedStyle(el).position") != "static":
-                                raise AssertionError(f"Workspace at {viewport}: legal links must not float over bottom navigation")
-                            legal.scroll_into_view_if_needed()
-                            legal_box = legal.bounding_box()
-                            nav_box = nav.bounding_box()
-                            if legal_box and nav_box and legal_box["y"] + legal_box["height"] > nav_box["y"] + 1:
-                                raise AssertionError(f"Workspace at {viewport}: legal links overlap bottom navigation")
+                            page.locator(".workspace-nav").wait_for(state="visible")
+                            page.locator(".workspace-nav-search").wait_for(state="visible")
+                            if page.locator(".workspace-mobile-nav").count():
+                                raise AssertionError(f"Workspace at {viewport}: retired bottom navigation returned")
+                            assert_min_target(page, ".nav-group-items > button", 44, f"Workspace navigation at {viewport}")
+                            home = page.locator(".nav-group-items > button").filter(has_text="Home").first
+                            home.click()
+                            page.wait_for_timeout(120)
+                            assert_full_viewport(page, ".mobile-content-open .workspace-content-frame", viewport, f"Workspace at {viewport}")
+                            assert_min_target(page, ".workspace-mobile-content-header > button", 44, f"Workspace content at {viewport}")
+                            page.locator(".workspace-mobile-content-header > button").click()
+                            page.locator(".workspace-nav-search").wait_for(state="visible")
+                            first_group = page.locator(".nav-group").first
+                            first_group.locator(".nav-group-heading").click()
+                            if first_group.locator(".nav-group-items").evaluate("el => getComputedStyle(el).display") != "none":
+                                raise AssertionError(f"Workspace at {viewport}: collapsible navigation group did not collapse")
                         else:
                             page.locator(".workspace-nav").wait_for(state="visible")
+                            page.locator(".workspace-content-frame").wait_for(state="visible")
                     finally:
                         page.close()
             finally:
