@@ -95,6 +95,17 @@ class _BudgetAwareClient:
 
 
 class ModelPoolFailoverTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Fake providers in this suite exercise failover mechanics, not billing
+        # eligibility. Zero-cost routing itself has dedicated policy coverage.
+        self.free_policy_patch = patch.dict(
+            os.environ,
+            {"OPERLY_FREE_MODELS_ONLY": "0"},
+            clear=False,
+        )
+        self.free_policy_patch.start()
+        self.addCleanup(self.free_policy_patch.stop)
+
     async def test_timeout_falls_through_to_next_model(self):
         first = _FailingModel("primary")
         second = _SuccessModel("fallback")
