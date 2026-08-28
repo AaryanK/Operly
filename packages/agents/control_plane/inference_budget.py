@@ -1,9 +1,9 @@
-"""Root-scoped inference accounting and admission control for Agent Factory workers.
+"""Root-scoped inference accounting and admission control for Agent Factory work.
 
-The Factory may execute stages concurrently, but all model calls for one root objective
-share one budget. Reservations are made before provider calls so parallel workers cannot
-independently spend the same remaining tokens. Provider-reported usage is preferred;
-when a provider does not report usage, a deterministic approximation is used.
+Every model call for one root objective can share one budget: blueprint compilation,
+stage workers, semantic validation and defect repair. Reservations are made before
+provider calls so parallel workers cannot independently spend the same remaining
+budget. Provider-reported usage is preferred; deterministic estimates are a fallback.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class _Reservation:
 
 
 class FactoryInferenceBudget:
-    """Concurrency-safe token/model-call budget shared by one Factory execution."""
+    """Concurrency-safe token/model-call budget shared by one Factory objective."""
 
     def __init__(
         self,
@@ -47,9 +47,11 @@ class FactoryInferenceBudget:
     ) -> None:
         self.max_tokens = max(1_000, int(max_tokens))
         self.max_model_calls = max(1, int(max_model_calls))
-        self._used_tokens = max(0, int(initial_tokens))
+        self._initial_tokens = max(0, int(initial_tokens))
+        self._initial_model_calls = max(0, int(initial_model_calls))
+        self._used_tokens = self._initial_tokens
         self._reserved_tokens = 0
-        self._model_calls = max(0, int(initial_model_calls))
+        self._model_calls = self._initial_model_calls
         self._lock = asyncio.Lock()
 
     def snapshot(self) -> dict[str, int | bool]:
@@ -62,6 +64,10 @@ class FactoryInferenceBudget:
             "remaining_tokens": max(0, self.max_tokens - committed - reserved),
             "model_calls": self._model_calls,
             "max_model_calls": self.max_model_calls,
+            "run_used_tokens": max(0, committed - self._initial_tokens),
+            "run_model_calls": max(0, self._model_calls - self._initial_model_calls),
+            "initial_tokens": self._initial_tokens,
+            "initial_model_calls": self._initial_model_calls,
             "exhausted": (
                 committed + reserved >= self.max_tokens
                 or self._model_calls >= self.max_model_calls
@@ -195,7 +201,7 @@ class _UsageMixin:
                 "role": "assistant",
                 "content": (
                     "The Factory inference budget is exhausted for this objective. "
-                    "Stop this worker without issuing another capability call."
+                    "Stop without issuing another capability call."
                 ),
             },
             model_resource_id=str(getattr(self._model, "id", "operly:budget")),
@@ -257,7 +263,7 @@ class BudgetedChatModel(_UsageMixin):
                 "role": "assistant",
                 "content": (
                     "The Factory inference budget is exhausted for this objective. "
-                    "Stop this worker without issuing another capability call."
+                    "Stop without issuing another capability call."
                 ),
             }
         try:
