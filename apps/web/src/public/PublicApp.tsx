@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { OperlyMark } from "../ui/OperlyMark";
@@ -104,31 +104,135 @@ function useGoogleButton(containerId: string, onCredential: (credential: string)
 }
 
 function Brand() {
-  return <a className="public-brand" href="/"><OperlyMark className="public-brand-mark" /><strong>OPERLY</strong></a>;
+  return <a className="public-brand" href="/"><OperlyMark className="public-brand-mark" /><span><strong>OPERLY</strong><small>AI operating layer</small></span></a>;
 }
 
 function PublicFooter() {
-  return <footer className="react-public-footer"><span>© 2026 OPERLY</span><nav><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://dragonzpyder.xyz/" target="_blank" rel="noreferrer">Dragonzpyder Industries</a></nav></footer>;
+  return (
+    <footer className="react-public-footer">
+      <div><Brand /><p>Persistent context, governed capabilities, real operations.</p></div>
+      <nav><a href="#capabilities">Capabilities</a><a href="#control">Control</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://dragonzpyder.xyz/" target="_blank" rel="noreferrer">Dragonzpyder Industries</a></nav>
+      <span>© 2026 OPERLY</span>
+    </footer>
+  );
 }
+
+function RuntimePreview() {
+  return (
+    <div className="runtime-card operly-runtime-preview">
+      <div className="runtime-preview-head"><div><span className="runtime-pill"><i /> Operating</span><small>OPERLY runtime</small></div><span className="runtime-window-dots"><i /><i /><i /></span></div>
+      <div className="runtime-request"><small>Request</small><p>“Find the leads that need follow-up, draft the messages, and show me anything that needs approval.”</p></div>
+      <div className="runtime-workflow">
+        <article><header><span>Business operation</span><small>authorized chain</small></header><div className="runtime-chain"><b>Context</b><i>→</i><b>CRM</b><i>→</i><b>Gmail</b><i>→</i><b>Approval</b></div></article>
+        <article><header><span>Software construction</span><small>persistent lifecycle</small></header><div className="runtime-chain"><b>Prompt</b><i>→</i><b>Plan</b><i>→</i><b>Source</b><i>→</i><b>Preview</b></div></article>
+      </div>
+      <div className="runtime-status"><span><i>✓</i> Context loaded</span><span><i>✓</i> Authority resolved</span><span><i>◉</i> Approval boundary active</span></div>
+    </div>
+  );
+}
+
+const capabilityCards = [
+  { icon: "↗", eyebrow: "01 / Connect", title: "Work across connected services", body: "Bring Gmail, Calendar, Discord, CRM, business records and other authorized services into one operating environment.", tags: ["Google Workspace", "Discord", "CRM", "Channels"] },
+  { icon: "⌁", eyebrow: "02 / Context", title: "Persistent understanding", body: "Conversations, company state, projects and history become retrievable context instead of disappearing between prompts.", tags: ["Conversations", "History", "Projects", "Business state"] },
+  { icon: "◆", eyebrow: "03 / Act", title: "Turn intent into operations", body: "Agents discover and invoke only the capabilities authorized for the current person, workspace and surface.", tags: ["Actions", "Approvals", "Capabilities", "Agent runtime"] },
+  { icon: "◎", eyebrow: "04 / Access", title: "Use the same operating layer anywhere", body: "Reach the same governed capability layer from Operly, connected channels, APIs and compatible external AI clients.", tags: ["Operly AI", "MCP", "API", "External AI"] },
+];
 
 function Landing() {
   useEffect(() => {
     api("/auth/workspaces").then(() => enterAuthenticatedScope()).catch(() => undefined);
   }, []);
-  return <div className="react-public-page landing-page">
-    <header className="react-public-header"><Brand /><nav><a href="#capabilities">Capabilities</a><a href="#control">Control</a><a href="#use-cases">Use cases</a></nav><div><a className="secondary-button" href="/login">Sign in</a><a className="primary-button" href="/signup">Get started</a></div></header>
-    <main>
-      <section className="react-hero"><div><span className="eyebrow">AI that can actually operate</span><h1>Give AI somewhere to <em>operate.</em></h1><p>OPERLY connects persistent context, authorized capabilities, business data and human approvals so AI can move from answering questions to getting work done.</p><div className="hero-actions"><a className="primary-button hero-button" href="/signup">Start using OPERLY →</a><span>Start privately. Add workspaces when you need shared context.</span></div></div><div className="runtime-card"><span className="runtime-pill">● Operating</span><h3>One request. Real work.</h3><p>“Find the leads that need follow-up, draft the messages, and show me anything that needs approval.”</p><div className="runtime-chain"><b>Context</b><i>→</i><b>Capabilities</b><i>→</i><b>Actions</b><i>→</i><b>Approval</b></div></div></section>
-      <section id="capabilities" className="public-section"><span className="eyebrow">Capability layer</span><h2>More than a chat box.</h2><div className="public-grid"><article><b>Connect</b><h3>Work across services</h3><p>Gmail, Calendar, Discord, CRM, business records and other authorized services can participate in one operating environment.</p></article><article><b>Context</b><h3>Persistent understanding</h3><p>Conversations, projects, company state and history become retrievable context instead of being lost between prompts.</p></article><article><b>Act</b><h3>Turn intent into operations</h3><p>Agents can discover and invoke only the capabilities authorized for the current person or workspace.</p></article><article><b>Access</b><h3>Use it from anywhere</h3><p>The same operating layer can be reached from Operly, connected channels, APIs and compatible external AI clients.</p></article></div></section>
-      <section id="control" className="public-section dark-band"><span className="eyebrow">Explicit authority</span><h2>Powerful does not mean unrestricted.</h2><div className="public-grid"><article><b>Identity</b><p>Personal and workspace scopes keep authority attached to the correct person and context.</p></article><article><b>Capability firewall</b><p>Knowing a capability exists is separate from being allowed to execute it.</p></article><article><b>Approval</b><p>Consequential actions can require explicit human approval before execution.</p></article><article><b>Provenance</b><p>Operational activity remains visible and attributable instead of disappearing into opaque agent output.</p></article></div></section>
-      <section id="use-cases" className="public-section"><span className="eyebrow">Think in jobs</span><h2>Ask OPERLY to do the work.</h2><div className="request-grid"><span>Check my calendar and email and tell me what needs attention.</span><span>Look through our leads and prepare the follow-ups.</span><span>Use the tools available in this workspace to finish this task.</span><span>Read this attachment, understand the customer and update their record.</span></div></section>
-      <section className="public-cta"><h2>Stop giving AI isolated prompts.</h2><p>Bring together context, models, tools and business operations inside one authorized AI operating layer.</p><a className="primary-button hero-button" href="/signup">Get started with OPERLY →</a></section>
-    </main><PublicFooter />
-  </div>;
+
+  return (
+    <div className="react-public-page landing-page">
+      <header className="react-public-header">
+        <Brand />
+        <nav><a href="#capabilities">Capabilities</a><a href="#studio">Studio</a><a href="#control">Control</a><a href="#use-cases">Use cases</a></nav>
+        <div className="public-header-actions"><a className="secondary-button" href="/login">Sign in</a><a className="primary-button" href="/signup">Get started</a></div>
+      </header>
+
+      <main>
+        <section className="react-hero">
+          <div className="public-hero-copy">
+            <span className="public-status-chip"><i /> AI that can actually operate</span>
+            <h1>AI shouldn’t just answer. <em>It should operate.</em></h1>
+            <p>OPERLY gives AI persistent context, authorized capabilities, connected services and a real software workspace—so it can move from understanding work to getting it done.</p>
+            <div className="hero-actions"><a className="primary-button hero-button" href="/signup">Start using OPERLY <span>→</span></a><a className="hero-text-link" href="#capabilities">Explore the operating layer</a></div>
+            <div className="hero-proof"><span>Persistent context</span><span>Connected tools</span><span>Business operations</span><span>Software construction</span><span>Human approvals</span></div>
+          </div>
+          <RuntimePreview />
+        </section>
+
+        <section id="capabilities" className="public-section public-capability-section">
+          <div className="public-section-intro"><span className="eyebrow">The capability layer</span><h2>Give AI more than a chat box. <em>Give it capabilities.</em></h2><p>Context, tools, business services and software projects sit behind one governed operating layer. The model can discover what is available while Operly keeps authority explicit.</p></div>
+          <div className="public-grid capability-grid">
+            {capabilityCards.map((card) => <article key={card.eyebrow}><span className="capability-icon">{card.icon}</span><b>{card.eyebrow}</b><h3>{card.title}</h3><p>{card.body}</p><div className="capability-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></article>)}
+          </div>
+        </section>
+
+        <section id="studio" className="public-operating-band">
+          <div className="public-band-copy"><span className="eyebrow">OPERLY Studio</span><h2>Don’t just ask AI to write code. <em>Ask it to build the thing.</em></h2><p>Studio gives agents a persistent software workspace with real source, build evidence, repair loops and previewable outcomes instead of disposable code blocks.</p><div className="studio-proof"><span>Persistent source</span><span>Isolated builds</span><span>Validation</span><span>Repair</span></div></div>
+          <div className="studio-flow">
+            <article><span>01</span><div><strong>Plan & understand</strong><p>Turn requirements into bounded work and acceptance criteria.</p></div></article>
+            <article><span>02</span><div><strong>Create real source</strong><p>Generate and edit durable project files, not throwaway snippets.</p></div></article>
+            <article><span>03</span><div><strong>Run & validate</strong><p>Build and test through isolated runtime boundaries.</p></div></article>
+            <article><span>04</span><div><strong>Repair & preview</strong><p>Use failure evidence to converge on a verified preview.</p></div></article>
+          </div>
+        </section>
+
+        <section className="public-section context-section">
+          <div className="public-section-intro"><span className="eyebrow">Persistent business context</span><h2>Your business becomes context. <em>Not another prompt.</em></h2><p>Operly can retrieve only the relevant authorized slices of the information that already matters to the work.</p></div>
+          <div className="context-cloud"><span>Contacts</span><span>Leads</span><span>Products</span><span>Inventory</span><span>Orders</span><span>Quotations</span><span>Appointments</span><span>Documents</span><span>Conversations</span><span>Projects</span></div>
+        </section>
+
+        <section className="public-model-band">
+          <div><span className="eyebrow">Model agnostic by design</span><h2>The model isn’t the operating system. <em>OPERLY is.</em></h2><p>Models can change while your context, permissions, capabilities and business state remain anchored to one operating layer.</p></div>
+          <div className="model-role-grid"><span>Reasoning</span><span>Planning</span><span>Coding</span><span>Validation</span><span>Repair</span><span>Specialist work</span></div>
+        </section>
+
+        <section id="control" className="public-section control-section">
+          <div className="public-section-intro"><span className="eyebrow">Explicit authority</span><h2>Powerful doesn’t mean <em>unrestricted.</em></h2><p>Operly separates what AI can understand from what it is permitted to execute, with authorization and approvals between reasoning and real-world effects.</p></div>
+          <div className="public-grid control-grid">
+            <article><span className="capability-icon">◎</span><b>Identity</b><h3>Scoped context</h3><p>Personal, workspace and channel identities keep authority attached to the correct operating context.</p></article>
+            <article><span className="capability-icon">◇</span><b>Firewall</b><h3>Authorized capabilities</h3><p>Knowing a capability exists is separate from receiving permission to execute it.</p></article>
+            <article><span className="capability-icon">✓</span><b>Approval</b><h3>Human control when needed</h3><p>Consequential actions can stop at an explicit approval boundary before execution.</p></article>
+            <article><span className="capability-icon">⌁</span><b>Provenance</b><h3>Actions remain visible</h3><p>Operational activity stays attributable instead of disappearing into opaque model output.</p></article>
+          </div>
+        </section>
+
+        <section id="use-cases" className="public-section use-case-section">
+          <div className="public-section-intro"><span className="eyebrow">Think in jobs, not AI products</span><h2>Ask OPERLY to <em>do the work.</em></h2><p>Different jobs can reuse the same governed context and capability foundation instead of becoming separate AI products.</p></div>
+          <div className="request-grid"><span>Check my calendar and email and tell me what needs attention.</span><span>Look through our leads and prepare the follow-ups.</span><span>Build a website for this business and let me keep editing it with you.</span><span>Read this attachment, understand the customer and update their record.</span><span>Use the tools available in this workspace to finish this task.</span><span>Take this software project, find the bug, fix it and validate the build.</span></div>
+        </section>
+
+        <section className="public-cta"><span className="eyebrow">One operating layer</span><h2>Stop giving AI isolated prompts.</h2><p>Bring together context, models, tools, approvals and business operations inside one authorized system.</p><div><a className="primary-button hero-button" href="/signup">Get started with OPERLY →</a><a className="secondary-button" href="/login">Sign in</a></div></section>
+      </main>
+      <PublicFooter />
+    </div>
+  );
 }
 
-function AuthShell({ children }: { children: React.ReactNode }) {
-  return <div className="react-public-page auth-public-page"><header className="react-public-header auth-header"><Brand /><a href="/">← Home</a></header><main className="react-auth-shell">{children}</main><PublicFooter /></div>;
+function AuthVisual() {
+  return (
+    <aside className="auth-visual-panel" aria-label="Operly capability overview">
+      <div className="auth-visual-orb"><OperlyMark /><i /><i /></div>
+      <span className="eyebrow">One identity. Governed action.</span>
+      <h2>Your AI operating layer is waiting.</h2>
+      <p>Sign in once to reach private Personal Operly and every workspace you are authorized to use.</p>
+      <div className="auth-runtime-stack"><span><i>✓</i> Persistent context</span><span><i>✓</i> Permission-scoped capabilities</span><span><i>✓</i> Human approval boundaries</span></div>
+      <div className="auth-mini-chain"><b>You</b><i>→</i><b>OPERLY</b><i>→</i><b>Authorized work</b></div>
+    </aside>
+  );
+}
+
+function AuthShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="react-public-page auth-public-page">
+      <header className="react-public-header auth-header"><Brand /><a className="auth-home-link" href="/">← Home</a></header>
+      <main className="react-auth-shell"><AuthVisual /><div className="auth-form-stage">{children}</div></main>
+      <PublicFooter />
+    </div>
+  );
 }
 
 function PasswordInput({ name, label, autoComplete }: { name: string; label: string; autoComplete: string }) {
@@ -179,7 +283,9 @@ function Onboarding() {
   return <AuthShell><section className="react-auth-card onboarding-react"><span className="onboarding-check">✓</span><span className="eyebrow">You’re ready</span><h1>Welcome to OPERLY</h1><p>Your account is ready. Start in private Personal Operly; create or join workspaces whenever you choose.</p><button className="primary-button full-button" onClick={() => enterAfterAuthentication(flow.scope)}>Open Operly</button></section></AuthShell>;
 }
 
-function NotFound() { return <div className="react-public-page"><header className="react-public-header"><Brand /><a href="/">Home</a></header><main className="not-found-react"><span>404</span><h1>That page does not exist.</h1><p>The route may have moved as Operly evolved.</p><a className="primary-button" href="/">Return home</a></main><PublicFooter /></div>; }
+function NotFound() {
+  return <div className="react-public-page"><header className="react-public-header"><Brand /><a href="/">Home</a></header><main className="not-found-react"><div className="not-found-orbit"><OperlyMark /><i /><i /></div><span>404 / ROUTE NOT FOUND</span><h1>This part of the operating layer isn’t here.</h1><p>The route may have moved as Operly evolved. Return to the main surface and continue from there.</p><a className="primary-button" href="/">Return home →</a></main><PublicFooter /></div>;
+}
 
 export function PublicApp({ pathname }: { pathname: string }) {
   useEffect(() => { document.title = pathname === "/" ? "OPERLY — AI that can operate" : `${pathname.slice(1).replaceAll("-", " ") || "Operly"} · OPERLY`; }, [pathname]);
