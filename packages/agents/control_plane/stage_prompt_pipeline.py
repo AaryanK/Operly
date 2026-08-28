@@ -48,6 +48,55 @@ def _fingerprint(item: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _large_item_preview(item: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    """Preserve the useful text of one oversized context record inside a hard budget."""
+
+    locator = _ref_id(item) or None
+    preview: dict[str, Any] = {
+        "ref": locator,
+        "_operly_compacted": True,
+    }
+    for key in ("type", "kind", "source", "title", "name", "timestamp"):
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            preview[key] = str(value)[:240]
+
+    text_value = ""
+    for key in ("content", "text", "body", "message", "summary"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            text_value = value
+            break
+    if text_value:
+        overhead = serialized_chars(preview) + 120
+        available = max(200, max_chars - overhead)
+        preview["content_preview"] = text_value[:available]
+        if len(text_value) > available:
+            preview["content_truncated"] = True
+
+    preview["raw_chars"] = serialized_chars(item)
+    # Extremely metadata-heavy records can still exceed the remaining allowance. In
+    # that case retain the ref plus the bounded text preview and remove optional labels.
+    while serialized_chars(preview) > max_chars:
+        removable = next(
+            (
+                key
+                for key in ("timestamp", "source", "kind", "type", "name", "title")
+                if key in preview
+            ),
+            None,
+        )
+        if removable is not None:
+            preview.pop(removable, None)
+            continue
+        content = str(preview.get("content_preview") or "")
+        if len(content) <= 200:
+            break
+        preview["content_preview"] = content[: max(200, len(content) - 300)]
+        preview["content_truncated"] = True
+    return preview
+
+
 class FactoryStagePromptPipeline:
     """Build and deterministically reset one worker's model-visible working set."""
 
@@ -97,18 +146,7 @@ class FactoryStagePromptPipeline:
                 used += size
                 continue
 
-            # Keep a retrievable locator plus a bounded semantic summary rather than
-            # dropping the only relevant large item or cutting structured JSON in half.
-            raw = json.dumps(item, ensure_ascii=False, default=str)
-            compacted = compact_tool_content(raw, max_chars=max(400, remaining))
-            output.append(
-                {
-                    "ref": _ref_id(item) or None,
-                    "_operly_compacted": True,
-                    "summary": compacted,
-                    "raw_chars": len(raw),
-                }
-            )
+            output.append(_large_item_preview(item, max_chars=remaining))
             break
         return output
 
@@ -199,7 +237,30 @@ class FactoryStagePromptPipeline:
         if latest_assistant_index is None:
             return reduced
 
+        tool_messages: list[dict[str, Any]] = []
+        returned_call_ids: set[str] = set()
+        for message in messages[latest_assistant_index + 1 :]:
+            if str(message.get("role") or "") != "tool":
+                continue
+            tool_message = dict(message)
+            tool_call_id = str(tool_message.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                returned_call_ids.add(tool_call_id)
+            tool_message["content"] = compact_tool_content(
+                str(tool_message.get("content") or ""),
+                max_chars=self.policy.continuation_tool_chars,
+            )
+            tool_messages.append(tool_message)
+
         assistant = dict(messages[latest_assistant_index])
+        calls = list(assistant.get("tool_calls") or [])
+        if returned_call_ids:
+            assistant["tool_calls"] = [
+                call
+                for call in calls
+                if isinstance(call, dict)
+                and str(call.get("id") or "").strip() in returned_call_ids
+            ]
         content = str(assistant.get("content") or "")
         if len(content) > self.policy.assistant_content_chars:
             assistant["content"] = (
@@ -207,21 +268,14 @@ class FactoryStagePromptPipeline:
             )
         reduced.append(assistant)
 
-        call_ids = {
+        allowed_call_ids = {
             str(call.get("id") or "").strip()
             for call in (assistant.get("tool_calls") or [])
             if isinstance(call, dict) and str(call.get("id") or "").strip()
         }
-        for message in messages[latest_assistant_index + 1 :]:
-            if str(message.get("role") or "") != "tool":
+        for tool_message in tool_messages:
+            tool_call_id = str(tool_message.get("tool_call_id") or "").strip()
+            if allowed_call_ids and tool_call_id and tool_call_id not in allowed_call_ids:
                 continue
-            tool_call_id = str(message.get("tool_call_id") or "").strip()
-            if call_ids and tool_call_id and tool_call_id not in call_ids:
-                continue
-            tool_message = dict(message)
-            tool_message["content"] = compact_tool_content(
-                str(tool_message.get("content") or ""),
-                max_chars=self.policy.continuation_tool_chars,
-            )
             reduced.append(tool_message)
         return reduced
