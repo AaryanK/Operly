@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from packages.model_runtime import InferenceBudget, InferenceRequest
+from packages.model_runtime.conversation_policy import is_trivial_conversation
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import (
@@ -84,7 +85,18 @@ class FactoryBlueprintCompiler:
         self.max_validators = max(1, min(int(max_validators), 24))
 
     @staticmethod
-    def _fallback(objective: str) -> FactoryBlueprint:
+    def _fallback(
+        objective: str,
+        *,
+        resolve_capabilities: bool = True,
+    ) -> FactoryBlueprint:
+        """Return one capable station when planning is unnecessary or unavailable.
+
+        A planner failure must not silently turn an actionable request into a
+        reasoning-only worker. For non-trivial objectives, use the literal objective as
+        a plain-language capability intent; the application-side resolver still applies
+        installation, authority and surface policy before any schema is exposed.
+        """
         validator = ValidatorSpec(
             id="root-result",
             criterion="The bounded worker returns a non-failed result for the requested objective.",
@@ -95,6 +107,7 @@ class FactoryBlueprintCompiler:
         stage = StageSpec(
             id="stage-1",
             objective=objective,
+            capability_intents=(objective[:500],) if resolve_capabilities else (),
             validation_ids=(validator.id,),
         )
         return FactoryBlueprint(
@@ -316,6 +329,11 @@ class FactoryBlueprintCompiler:
         clean = " ".join(str(objective or "").split()).strip()
         if not clean:
             raise ValueError("Factory objective is required")
+        # Greetings/thanks are the one case where a planning call is pure overhead.
+        # They still get one bounded worker response, but no requirements-model pass or
+        # capability surface expansion.
+        if is_trivial_conversation(clean):
+            return self._fallback(clean, resolve_capabilities=False)
         try:
             payload = await self._infer(clean, dict(ingress_metadata or {}))
             if not payload:
