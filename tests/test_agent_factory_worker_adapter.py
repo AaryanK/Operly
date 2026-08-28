@@ -195,7 +195,7 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
 
 
 @pytest.mark.asyncio
-async def test_capability_discovery_is_only_exposed_when_resolution_failed(monkeypatch):
+async def test_unresolved_capability_intent_does_not_expose_discovery_tools(monkeypatch):
     monkeypatch.setattr(worker_module, "AgentRuntime", FakeRuntime)
     _reset_runtime_observations()
 
@@ -219,10 +219,7 @@ async def test_capability_discovery_is_only_exposed_when_resolution_failed(monke
         None,
     )
 
-    tool_ids = {
-        item["function"]["name"] for item in FakeRuntime.seen_tools[-1]
-    }
-    assert tool_ids == {"capability.search", "capability.describe"}
+    assert FakeRuntime.seen_tools[-1] == []
 
 
 @pytest.mark.asyncio
