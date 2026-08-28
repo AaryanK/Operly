@@ -22,6 +22,7 @@ import "./ui/admin-palette.css";
 import "./ui/solution-source-inspector.css";
 import "./ui/public.css";
 import "./ui/mobile.css";
+import "./ui/react-public-admin-palette.css";
 
 initializeTheme();
 installArtifactDownloadHandling();
