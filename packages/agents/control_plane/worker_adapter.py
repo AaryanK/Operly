@@ -12,10 +12,16 @@ import json
 from collections.abc import Callable
 from typing import Any, Awaitable
 
-from packages.agents.runtime import AgentRuntime
+from packages.agents.runtime import AgentExecutionBudget, AgentRuntime
+from packages.model_runtime import InferenceBudget
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import ContextCapsule, Defect, StageSpec, StageWorkerResult
+from .inference_budget import (
+    FactoryInferenceBudget,
+    FactoryInferenceBudgetExceeded,
+    budgeted_model,
+)
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -153,8 +159,19 @@ def _extract_handles(trace: list[Any]) -> tuple[set[str], set[str], dict[str, An
     return artifacts, evidence_refs, compact
 
 
+def _external_action_count(trace: list[Any]) -> int:
+    return sum(
+        1
+        for entry in trace
+        if str(getattr(entry, "capability_id", "") or "")
+        and not str(getattr(entry, "capability_id", "") or "").startswith(
+            ("context.", "capability.", "model.", "runtime.")
+        )
+    )
+
+
 class AgentRuntimeWorker:
-    """Run one focused stage with the existing bounded AgentRuntime micro-loop."""
+    """Run one focused stage with a short, metered AgentRuntime micro-loop."""
 
     def __init__(
         self,
@@ -164,12 +181,18 @@ class AgentRuntimeWorker:
         model_resolver: Callable[[str], Any] | None = None,
         max_steps: int = 8,
         inference_metadata: dict[str, Any] | None = None,
+        root_inference_budget: FactoryInferenceBudget | None = None,
+        max_output_tokens: int = 2_000,
     ) -> None:
         self.schemas = schemas
         self.invoke = invoke
         self.model_resolver = model_resolver or model_for_role
-        self.max_steps = max(1, min(int(max_steps), 24))
+        self.max_steps = max(1, min(int(max_steps), 12))
         self.inference_metadata = dict(inference_metadata or {})
+        # One AgentRuntimeWorker instance is shared by the deterministic stage runner,
+        # so this default ledger is root-scoped across all stages/parallel attempts.
+        self.root_inference_budget = root_inference_budget or FactoryInferenceBudget()
+        self.max_output_tokens = max(256, min(int(max_output_tokens), 8_000))
 
     async def _stage_schemas(self, capsule: ContextCapsule) -> list[dict[str, Any]]:
         available = list(await _resolve(self.schemas()) or [])
@@ -217,7 +240,12 @@ class AgentRuntimeWorker:
         attempt: int,
         defect: Defect | None,
     ) -> StageWorkerResult:
-        model = self.model_resolver(stage.assigned_role)
+        raw_model = self.model_resolver(stage.assigned_role)
+        model = budgeted_model(
+            raw_model,
+            root_budget=self.root_inference_budget,
+            max_output_tokens=self.max_output_tokens,
+        )
         runtime_run_id = str(self.inference_metadata.get("runtime_run_id") or "").strip()
 
         async def schemas():
@@ -232,21 +260,89 @@ class AgentRuntimeWorker:
             )
             return await _resolve(self.invoke(name, arguments, correlated_call_id or call_id))
 
-        result = await AgentRuntime(max_steps=self.max_steps).run(
-            model=model,
-            messages=self._messages(stage, capsule, defect),
-            schemas=schemas,
-            invoke=invoke,
-            inference_metadata={
-                **self.inference_metadata,
-                "runtime_component": "factory_worker",
-                "factory_stage_id": stage.id,
-                "factory_attempt": attempt,
-                "worker_role": stage.assigned_role,
-            },
+        # Long-horizon work belongs to the Factory DAG. A worker gets only a short
+        # reason-act-observe loop; progress may extend it by at most two calls rather
+        # than silently turning an 8-step worker into the old 24-call loop.
+        execution_budget = AgentExecutionBudget(
+            base_steps=self.max_steps,
+            max_steps=min(12, self.max_steps + 2),
+            extension_steps=2,
+            max_tool_calls=24,
         )
+        inference_budget = InferenceBudget(
+            timeout_seconds=45.0,
+            attempts_per_model=1,
+            max_models=2,
+            max_output_tokens=self.max_output_tokens,
+        )
+        try:
+            result = await AgentRuntime(
+                max_steps=self.max_steps,
+                execution_budget=execution_budget,
+                inference_budget=inference_budget,
+            ).run(
+                model=model,
+                messages=self._messages(stage, capsule, defect),
+                schemas=schemas,
+                invoke=invoke,
+                inference_metadata={
+                    **self.inference_metadata,
+                    "runtime_component": "factory_worker",
+                    "factory_stage_id": stage.id,
+                    "factory_attempt": attempt,
+                    "worker_role": stage.assigned_role,
+                },
+            )
+        except FactoryInferenceBudgetExceeded as error:
+            usage = dict(getattr(model, "usage", {}) or {})
+            return StageWorkerResult(
+                status="failed",
+                strategy="root_inference_budget",
+                summary=(
+                    "The Factory stopped this stage because the root inference budget "
+                    "was exhausted before another model call could run."
+                ),
+                evidence={
+                    "terminal": True,
+                    "failure_class": "root_inference_budget_exhausted",
+                    "budget_reason": error.reason,
+                    "budget": error.snapshot,
+                    "runtime_usage": usage,
+                },
+                external_actions=0,
+                token_usage=max(0, int(usage.get("total_tokens") or 0)),
+                cost_usd=0.0,
+            )
+
         trace = list(result.get("trace") or [])
         artifacts, evidence_refs, compact_evidence = _extract_handles(trace)
+        usage = dict(getattr(model, "usage", {}) or {})
+        compact_evidence["runtime_usage"] = usage
+        budget_error = getattr(model, "budget_exhausted", None)
+        if isinstance(budget_error, FactoryInferenceBudgetExceeded):
+            compact_evidence.update(
+                {
+                    "terminal": True,
+                    "failure_class": "root_inference_budget_exhausted",
+                    "budget_reason": budget_error.reason,
+                    "budget": budget_error.snapshot,
+                }
+            )
+            return StageWorkerResult(
+                status="failed",
+                strategy="root_inference_budget",
+                summary=(
+                    "The Factory stopped this stage at the root inference budget. "
+                    "Earlier capability evidence from this worker was preserved."
+                ),
+                artifacts=tuple(sorted(artifacts)),
+                evidence=compact_evidence,
+                evidence_refs=tuple(sorted(evidence_refs)),
+                external_actions=_external_action_count(trace),
+                token_usage=max(0, int(usage.get("total_tokens") or 0)),
+                cost_usd=0.0,
+            )
+
         truth = (
             result.get("execution_truth")
             if isinstance(result.get("execution_truth"), dict)
@@ -290,16 +386,7 @@ class AgentRuntimeWorker:
             artifacts=tuple(sorted(artifacts)),
             evidence=compact_evidence,
             evidence_refs=tuple(sorted(evidence_refs)),
-            external_actions=sum(
-                1
-                for entry in trace
-                if str(getattr(entry, "capability_id", "") or "")
-                and not str(getattr(entry, "capability_id", "") or "").startswith(
-                    ("context.", "capability.", "model.", "runtime.")
-                )
-            ),
-            token_usage=int(
-                (result.get("budget") or {}).get("approxTokensUsed") or 0
-            ),
+            external_actions=_external_action_count(trace),
+            token_usage=max(0, int(usage.get("total_tokens") or 0)),
             cost_usd=0.0,
         )

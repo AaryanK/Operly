@@ -9,6 +9,7 @@ from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import StageSpec, StageWorkerResult, ValidatorSpec
+from .inference_budget import FactoryInferenceBudget, budgeted_model
 
 
 def _parse(value: str) -> dict[str, Any]:
@@ -26,13 +27,31 @@ def _parse(value: str) -> dict[str, Any]:
 class EvidenceBoundedSemanticValidator:
     """Judge only genuinely semantic criteria from bounded evidence/artifact handles."""
 
+    def __init__(
+        self,
+        *,
+        root_inference_budget: FactoryInferenceBudget | None = None,
+    ) -> None:
+        self.root_inference_budget = root_inference_budget
+
+    def with_root_inference_budget(
+        self,
+        budget: FactoryInferenceBudget,
+    ) -> "EvidenceBoundedSemanticValidator":
+        """Return a per-run clone so concurrent Factory runs never share mutable state."""
+        return EvidenceBoundedSemanticValidator(root_inference_budget=budget)
+
     async def __call__(
         self,
         spec: ValidatorSpec,
         stage: StageSpec,
         result: StageWorkerResult,
     ) -> dict[str, Any]:
-        model = model_for_role("global_validator")
+        model = budgeted_model(
+            model_for_role("global_validator"),
+            root_budget=self.root_inference_budget,
+            max_output_tokens=1000,
+        )
         system = (
             "You are OPERLY's semantic acceptance validator. Return JSON only; never provide chain-of-thought. "
             "Judge only the supplied semantic criterion. Deterministic/provider checks happen elsewhere and cannot be overridden here. "
@@ -72,6 +91,14 @@ class EvidenceBoundedSemanticValidator:
                     },
                 )
             )
+            if getattr(model, "budget_exhausted", None) is not None:
+                return {
+                    "passed": False,
+                    "expected": spec.expected,
+                    "observed": "root_inference_budget_exhausted",
+                    "failure_class": "root_inference_budget_exhausted",
+                    "retryable": False,
+                }
             parsed = _parse(str(response.message.get("content") or ""))
         except (LookupError, RuntimeError, TypeError, ValueError) as error:
             return {

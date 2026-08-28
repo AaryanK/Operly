@@ -42,8 +42,10 @@ on:
       - "alembic/versions/0041_agent_artifacts.py"
       - "tests/test_action_effect_policy.py"
       - "tests/test_agent_factory_bindings.py"
+      - "tests/test_agent_factory_compiler_efficiency.py"
       - "tests/test_agent_factory_control_plane.py"
       - "tests/test_agent_factory_distribution_resume.py"
+      - "tests/test_agent_factory_root_budget.py"
       - "tests/test_agent_factory_worker_adapter.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
@@ -131,8 +133,10 @@ jobs:
           python -m pytest -q
           tests/test_action_effect_policy.py
           tests/test_agent_factory_bindings.py
+          tests/test_agent_factory_compiler_efficiency.py
           tests/test_agent_factory_control_plane.py
           tests/test_agent_factory_distribution_resume.py
+          tests/test_agent_factory_root_budget.py
           tests/test_agent_factory_worker_adapter.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py

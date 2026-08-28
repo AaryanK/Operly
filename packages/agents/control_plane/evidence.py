@@ -74,6 +74,10 @@ class FactoryEvidenceLedger:
             factory.setdefault("audit_evidence_refs", [])
             factory.setdefault("defect_count", 0)
             factory.setdefault("attempt_count", 0)
+            factory.setdefault("external_actions", 0)
+            factory.setdefault("token_usage", 0)
+            factory.setdefault("model_calls", 0)
+            factory.setdefault("cost_usd", 0.0)
             _refresh_waiting_summary(self._projection, factory)
         else:
             self._projection: dict[str, Any] = {
@@ -92,6 +96,7 @@ class FactoryEvidenceLedger:
                     "attempt_count": 0,
                     "external_actions": 0,
                     "token_usage": 0,
+                    "model_calls": 0,
                     "cost_usd": 0.0,
                 },
                 "artifact_refs": [],
@@ -169,6 +174,8 @@ class FactoryEvidenceLedger:
             factory.setdefault("objective_spec", blueprint.objective.as_dict())
             factory.setdefault("acceptance", blueprint.acceptance.as_dict())
             factory.setdefault("graph", blueprint.graph.as_dict())
+            factory.setdefault("token_usage", 0)
+            factory.setdefault("model_calls", 0)
             await checkpoint_agent_run(
                 runtime_run_id=self.runtime_run_id,
                 objective=self.objective,
@@ -179,6 +186,8 @@ class FactoryEvidenceLedger:
                 payload={
                     "stage_id": str(stage_id),
                     "statuses": dict(factory.get("statuses") or {}),
+                    "token_usage": int(factory.get("token_usage") or 0),
+                    "model_calls": int(factory.get("model_calls") or 0),
                 },
             )
 
@@ -243,7 +252,12 @@ class FactoryEvidenceLedger:
                 payload=dict(payload),
             )
 
-    async def finish(self, result: FactoryExecutionResult) -> None:
+    async def finish(
+        self,
+        result: FactoryExecutionResult,
+        *,
+        inference_snapshot: dict[str, Any] | None = None,
+    ) -> None:
         async with self._lock:
             if result.completed:
                 lifecycle = "completed"
@@ -265,7 +279,11 @@ class FactoryEvidenceLedger:
             factory = self._projection.setdefault("factory", {})
             prior_external_actions = int(factory.get("external_actions") or 0)
             prior_token_usage = int(factory.get("token_usage") or 0)
+            prior_model_calls = int(factory.get("model_calls") or 0)
             prior_cost_usd = float(factory.get("cost_usd") or 0.0)
+            run_model_calls = int(
+                (inference_snapshot or {}).get("run_model_calls") or 0
+            )
             factory.update(
                 {
                     "state": factory_state,
@@ -285,9 +303,26 @@ class FactoryEvidenceLedger:
                     "stop_reason": result.stop_reason,
                     "external_actions": prior_external_actions + result.external_actions,
                     "token_usage": prior_token_usage + result.token_usage,
+                    "model_calls": prior_model_calls + run_model_calls,
                     "cost_usd": prior_cost_usd + result.cost_usd,
                 }
             )
+            if inference_snapshot:
+                factory["inference_budget"] = {
+                    key: value
+                    for key, value in inference_snapshot.items()
+                    if key
+                    in {
+                        "used_tokens",
+                        "max_tokens",
+                        "remaining_tokens",
+                        "model_calls",
+                        "max_model_calls",
+                        "run_used_tokens",
+                        "run_model_calls",
+                        "exhausted",
+                    }
+                }
             factory["attempt_count"] = int(factory.get("attempt_count") or 0)
             factory["defect_count"] = int(factory.get("defect_count") or 0)
 
@@ -308,7 +343,10 @@ class FactoryEvidenceLedger:
                 state=self._projection,
                 event_type=event_type,
                 lifecycle_state=lifecycle,
-                payload=result.as_dict(),
+                payload={
+                    **result.as_dict(),
+                    "inference_budget": dict(factory.get("inference_budget") or {}),
+                },
                 error=(
                     None
                     if result.completed or result.waiting

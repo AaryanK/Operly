@@ -9,15 +9,27 @@ from packages.agents.control_plane import (
     Defect,
     StageSpec,
 )
+from packages.agents.control_plane.inference_budget import (
+    FactoryInferenceBudget,
+    FactoryInferenceBudgetExceeded,
+    budgeted_model,
+)
+from packages.model_runtime import InferenceBudget, InferenceRequest, InferenceResult, ModelUsage
 
 
 class FakeRuntime:
     seen_messages = []
     seen_tools = []
     seen_metadata = []
+    seen_execution_budgets = []
+    seen_inference_budgets = []
 
-    def __init__(self, *, max_steps):
+    def __init__(self, *, max_steps, execution_budget=None, inference_budget=None):
         self.max_steps = max_steps
+        self.execution_budget = execution_budget
+        self.inference_budget = inference_budget
+        FakeRuntime.seen_execution_budgets.append(execution_budget)
+        FakeRuntime.seen_inference_budgets.append(inference_budget)
 
     async def run(self, **kwargs):
         FakeRuntime.seen_messages.append(list(kwargs["messages"]))
@@ -100,6 +112,22 @@ class RejectedRuntime(FakeRuntime):
         }
 
 
+class FakeInferenceModel:
+    def __init__(self):
+        self.last_request = None
+
+    async def infer(self, request):
+        self.last_request = request
+        return InferenceResult(
+            message={"role": "assistant", "content": "done"},
+            model_resource_id="fake:model",
+            provider="fake",
+            provider_model_id="fake-model",
+            latency_ms=1,
+            usage=ModelUsage(input_tokens=120, output_tokens=30, total_tokens=150),
+        )
+
+
 def _tool(name):
     return {
         "type": "function",
@@ -111,6 +139,8 @@ def _reset_runtime_observations():
     FakeRuntime.seen_messages = []
     FakeRuntime.seen_tools = []
     FakeRuntime.seen_metadata = []
+    FakeRuntime.seen_execution_budgets = []
+    FakeRuntime.seen_inference_budgets = []
 
 
 @pytest.mark.asyncio
@@ -154,6 +184,14 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     assert FakeRuntime.seen_metadata[-1]["runtime_run_id"] == "factory-run-1"
     assert FakeRuntime.seen_metadata[-1]["factory_stage_id"] == "pdf"
     assert FakeRuntime.seen_metadata[-1]["factory_attempt"] == 1
+    execution_budget = FakeRuntime.seen_execution_budgets[-1]
+    assert execution_budget.base_steps == 8
+    assert execution_budget.max_steps == 10
+    assert execution_budget.max_tool_calls == 24
+    inference_budget = FakeRuntime.seen_inference_budgets[-1]
+    assert inference_budget.attempts_per_model == 1
+    assert inference_budget.max_models == 2
+    assert inference_budget.max_output_tokens == 2_000
 
 
 @pytest.mark.asyncio
@@ -242,3 +280,66 @@ async def test_terminal_capability_observation_cannot_become_completed_worker_re
     assert result.evidence["terminal"] is True
     assert result.evidence["status"] == "REJECTED"
     assert result.evidence["action_id"] == "action-1"
+
+
+@pytest.mark.asyncio
+async def test_budget_reservations_prevent_parallel_double_spend():
+    budget = FactoryInferenceBudget(max_tokens=1_000, max_model_calls=10)
+    first = await budget.reserve(700)
+
+    with pytest.raises(FactoryInferenceBudgetExceeded) as raised:
+        await budget.reserve(400)
+
+    assert raised.value.reason == "root_token_budget_exhausted"
+    await budget.reconcile(first, 300)
+    second = await budget.reserve(400)
+    await budget.reconcile(second, 200)
+
+    snapshot = budget.snapshot()
+    assert snapshot["used_tokens"] == 500
+    assert snapshot["model_calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_budgeted_model_uses_provider_usage_and_caps_output_tokens():
+    budget = FactoryInferenceBudget(max_tokens=10_000, max_model_calls=10)
+    raw_model = FakeInferenceModel()
+    model = budgeted_model(
+        raw_model,
+        root_budget=budget,
+        max_output_tokens=800,
+    )
+    request = InferenceRequest(
+        messages=({"role": "user", "content": "do the task"},),
+        budget=InferenceBudget(max_output_tokens=2_000),
+    )
+
+    result = await model.infer(request)
+
+    assert result.message["content"] == "done"
+    assert raw_model.last_request.budget.max_output_tokens == 800
+    assert model.usage == {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "total_tokens": 150,
+        "model_calls": 1,
+    }
+    assert budget.snapshot()["used_tokens"] == 150
+
+
+@pytest.mark.asyncio
+async def test_root_model_call_limit_returns_clean_terminal_response():
+    budget = FactoryInferenceBudget(max_tokens=10_000, max_model_calls=1)
+    model = budgeted_model(
+        FakeInferenceModel(),
+        root_budget=budget,
+        max_output_tokens=500,
+    )
+    request = InferenceRequest(messages=({"role": "user", "content": "hello"},))
+
+    await model.infer(request)
+    stopped = await model.infer(request)
+
+    assert stopped.finish_reason == "budget_exhausted"
+    assert model.budget_exhausted.reason == "root_model_call_budget_exhausted"
+    assert model.usage["model_calls"] == 1

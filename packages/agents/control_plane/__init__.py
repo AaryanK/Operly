@@ -18,6 +18,7 @@ from .contracts import (
 )
 from .evidence import FactoryEvidenceLedger
 from .factory import AgentFactoryControlPlane, FactoryRunResponse
+from .inference_budget import FactoryInferenceBudget, FactoryInferenceBudgetExceeded
 from .repair import DefectRepairPlanner
 from .sandbox_validation import SandboxPythonValidator
 from .semantic_validation import EvidenceBoundedSemanticValidator
@@ -41,6 +42,8 @@ __all__ = [
     "FactoryCapabilityIntentResolver",
     "FactoryEvidenceLedger",
     "FactoryExecutionResult",
+    "FactoryInferenceBudget",
+    "FactoryInferenceBudgetExceeded",
     "FactoryRunResponse",
     "FactoryStageRunner",
     "ObjectiveSpec",

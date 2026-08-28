@@ -9,6 +9,7 @@ from packages.model_runtime import InferenceBudget, InferenceRequest
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import Defect, StageSpec, bounded_strings
+from .inference_budget import FactoryInferenceBudget, budgeted_model
 
 
 def _parse(value: str) -> dict[str, Any]:
@@ -33,13 +34,31 @@ def _parse(value: str) -> dict[str, Any]:
 class DefectRepairPlanner:
     """Ask a fresh reasoning worker for a different bounded method after a defect."""
 
+    def __init__(
+        self,
+        *,
+        root_inference_budget: FactoryInferenceBudget | None = None,
+    ) -> None:
+        self.root_inference_budget = root_inference_budget
+
+    def with_root_inference_budget(
+        self,
+        budget: FactoryInferenceBudget,
+    ) -> "DefectRepairPlanner":
+        """Return a per-run clone so shared control-plane instances stay concurrency-safe."""
+        return DefectRepairPlanner(root_inference_budget=budget)
+
     async def __call__(
         self,
         stage: StageSpec,
         defect: Defect,
         repair_depth: int,
     ) -> StageSpec | None:
-        model = model_for_role("requirements_analyst")
+        model = budgeted_model(
+            model_for_role("requirements_analyst"),
+            root_budget=self.root_inference_budget,
+            max_output_tokens=1400,
+        )
         system = (
             "You are OPERLY's defect repair planner. Return JSON only; never provide chain-of-thought. "
             "You receive one bounded stage and deterministic failure evidence. Propose a materially different repair strategy only if the defect is retryable. "
@@ -80,6 +99,8 @@ class DefectRepairPlanner:
                     },
                 )
             )
+            if getattr(model, "budget_exhausted", None) is not None:
+                return None
             parsed = _parse(str(result.message.get("content") or ""))
         except (LookupError, RuntimeError, TypeError, ValueError):
             return None

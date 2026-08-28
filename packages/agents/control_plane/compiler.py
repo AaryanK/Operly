@@ -1,7 +1,7 @@
 """Compile a user request into a small immutable factory blueprint before execution.
 
 This compiler receives the literal request and small ingress metadata only. It is not a
-workspace-context loader and cannot grant capabilities.  It emits context/capability
+workspace-context loader and cannot grant capabilities. It emits context/capability
 *intents* that the application-controlled injector/harness resolves later under the
 trusted execution context.
 """
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from packages.model_runtime import InferenceBudget, InferenceRequest
+from packages.model_runtime.conversation_policy import is_trivial_conversation
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import (
@@ -24,6 +25,7 @@ from .contracts import (
     ValidatorSpec,
     bounded_strings,
 )
+from .inference_budget import FactoryInferenceBudget, budgeted_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +86,18 @@ class FactoryBlueprintCompiler:
         self.max_validators = max(1, min(int(max_validators), 24))
 
     @staticmethod
-    def _fallback(objective: str) -> FactoryBlueprint:
+    def _fallback(
+        objective: str,
+        *,
+        resolve_capabilities: bool = True,
+    ) -> FactoryBlueprint:
+        """Return one capable station when planning is unnecessary or unavailable.
+
+        A planner failure must not silently turn an actionable request into a
+        reasoning-only worker. For non-trivial objectives, use the literal objective as
+        a plain-language capability intent; the application-side resolver still applies
+        installation, authority and surface policy before any schema is exposed.
+        """
         validator = ValidatorSpec(
             id="root-result",
             criterion="The bounded worker returns a non-failed result for the requested objective.",
@@ -95,6 +108,7 @@ class FactoryBlueprintCompiler:
         stage = StageSpec(
             id="stage-1",
             objective=objective,
+            capability_intents=(objective[:500],) if resolve_capabilities else (),
             validation_ids=(validator.id,),
         )
         return FactoryBlueprint(
@@ -103,8 +117,18 @@ class FactoryBlueprintCompiler:
             StageGraph((stage,)),
         )
 
-    async def _infer(self, objective: str, ingress: dict[str, Any]) -> dict[str, Any]:
-        model = model_for_role("requirements_analyst")
+    async def _infer(
+        self,
+        objective: str,
+        ingress: dict[str, Any],
+        *,
+        root_inference_budget: FactoryInferenceBudget | None = None,
+    ) -> dict[str, Any]:
+        model = budgeted_model(
+            model_for_role("requirements_analyst"),
+            root_budget=root_inference_budget,
+            max_output_tokens=3200,
+        )
         system = (
             "You are OPERLY's factory blueprint compiler. Return JSON only; never provide chain-of-thought. "
             "Before any execution, convert the literal user request into: (1) an immutable objective spec, "
@@ -212,7 +236,6 @@ class FactoryBlueprintCompiler:
             if validator not in self._KNOWN_VALIDATORS:
                 validator = "semantic_evidence"
                 kind = ValidatorKind.SEMANTIC
-            # Semantic validators cannot masquerade as deterministic truth.
             if validator == "semantic_evidence":
                 kind = ValidatorKind.SEMANTIC
             validators.append(
@@ -286,7 +309,6 @@ class FactoryBlueprintCompiler:
                 )
             )
 
-        # Any required validator not attached to a stage belongs to the terminal stage.
         attached = {item for stage in normalized_stages for item in stage.validation_ids}
         missing = tuple(item.id for item in validators if item.required and item.id not in attached)
         if missing:
@@ -312,12 +334,19 @@ class FactoryBlueprintCompiler:
         objective: str,
         *,
         ingress_metadata: dict[str, Any] | None = None,
+        root_inference_budget: FactoryInferenceBudget | None = None,
     ) -> FactoryBlueprint:
         clean = " ".join(str(objective or "").split()).strip()
         if not clean:
             raise ValueError("Factory objective is required")
+        if is_trivial_conversation(clean):
+            return self._fallback(clean, resolve_capabilities=False)
         try:
-            payload = await self._infer(clean, dict(ingress_metadata or {}))
+            payload = await self._infer(
+                clean,
+                dict(ingress_metadata or {}),
+                root_inference_budget=root_inference_budget,
+            )
             if not payload:
                 return self._fallback(clean)
             return self._normalize(clean, payload)
