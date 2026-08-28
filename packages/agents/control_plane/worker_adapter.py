@@ -177,7 +177,9 @@ class AgentRuntimeWorker:
         self.model_resolver = model_resolver or model_for_role
         self.max_steps = max(1, min(int(max_steps), 12))
         self.inference_metadata = dict(inference_metadata or {})
-        self.root_inference_budget = root_inference_budget
+        # One AgentRuntimeWorker instance is shared by the deterministic stage runner,
+        # so this default ledger is root-scoped across all stages/parallel attempts.
+        self.root_inference_budget = root_inference_budget or FactoryInferenceBudget()
         self.max_output_tokens = max(256, min(int(max_output_tokens), 8_000))
 
     async def _stage_schemas(self, capsule: ContextCapsule) -> list[dict[str, Any]]:
