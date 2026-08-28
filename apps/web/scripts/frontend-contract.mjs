@@ -85,7 +85,7 @@ assert(reactPalette.includes(".admin-react-shell"), "React admin palette converg
 assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must explicitly bound the OperlyMark image size");
 assert(reactPalette.includes(".operly-runtime-preview"), "React landing preview styling is missing");
 assert(reactPalette.includes(".auth-visual-panel"), "React auth visual styling is missing");
-assert(reactPalette.includes("#0d0a15"), "React public/admin convergence must preserve the canonical deep-plum canvas");
+assert(reactPalette.includes("var(--ui-canvas)"), "React public/admin convergence must use the canonical Operly canvas token");
 
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
 assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");
