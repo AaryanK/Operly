@@ -158,15 +158,15 @@ class _SuccessModel:
 
 class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # Synthetic models in the failover tests below are intentionally provider-
-        # neutral. Billing eligibility is covered by dedicated zero-cost policy tests.
-        self.free_policy_patch = patch.dict(
-            os.environ,
-            {"OPERLY_FREE_MODELS_ONLY": "0"},
-            clear=False,
+        # Synthetic models in the failover tests are intentionally provider-neutral.
+        # Mock only the scorer eligibility boundary; real provider/zero-cost policy
+        # remains covered by its dedicated tests and untouched in production.
+        self.route_policy_patch = patch(
+            "packages.model_runtime.scoring.route_is_zero_cost",
+            return_value=True,
         )
-        self.free_policy_patch.start()
-        self.addCleanup(self.free_policy_patch.stop)
+        self.route_policy_patch.start()
+        self.addCleanup(self.route_policy_patch.stop)
         self.provider_env = {
             "OPEN_ROUTER_API": "test-openrouter",
             "OLLAMA_API_KEY": "test-ollama",
@@ -174,7 +174,6 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
             "gemini_api_key": "test-gemini",
             "nvidia_api_key": "test-nvidia",
             "OPERLY_MODEL_AUTO_PORTFOLIO": "1",
-            "OPERLY_FREE_MODELS_ONLY": "0",
         }
 
     def test_all_five_provider_adapters_are_installed(self):
