@@ -158,6 +158,17 @@ def _extract_handles(trace: list[Any]) -> tuple[set[str], set[str], dict[str, An
     return artifacts, evidence_refs, compact
 
 
+def _external_action_count(trace: list[Any]) -> int:
+    return sum(
+        1
+        for entry in trace
+        if str(getattr(entry, "capability_id", "") or "")
+        and not str(getattr(entry, "capability_id", "") or "").startswith(
+            ("context.", "capability.", "model.", "runtime.")
+        )
+    )
+
+
 class AgentRuntimeWorker:
     """Run one focused stage with a short, metered AgentRuntime micro-loop."""
 
@@ -299,6 +310,31 @@ class AgentRuntimeWorker:
         artifacts, evidence_refs, compact_evidence = _extract_handles(trace)
         usage = dict(getattr(model, "usage", {}) or {})
         compact_evidence["runtime_usage"] = usage
+        budget_error = getattr(model, "budget_exhausted", None)
+        if isinstance(budget_error, FactoryInferenceBudgetExceeded):
+            compact_evidence.update(
+                {
+                    "terminal": True,
+                    "failure_class": "root_inference_budget_exhausted",
+                    "budget_reason": budget_error.reason,
+                    "budget": budget_error.snapshot,
+                }
+            )
+            return StageWorkerResult(
+                status="failed",
+                strategy="root_inference_budget",
+                summary=(
+                    "The Factory stopped this stage at the root inference budget. "
+                    "Earlier capability evidence from this worker was preserved."
+                ),
+                artifacts=tuple(sorted(artifacts)),
+                evidence=compact_evidence,
+                evidence_refs=tuple(sorted(evidence_refs)),
+                external_actions=_external_action_count(trace),
+                token_usage=max(0, int(usage.get("total_tokens") or 0)),
+                cost_usd=0.0,
+            )
+
         truth = (
             result.get("execution_truth")
             if isinstance(result.get("execution_truth"), dict)
@@ -342,14 +378,7 @@ class AgentRuntimeWorker:
             artifacts=tuple(sorted(artifacts)),
             evidence=compact_evidence,
             evidence_refs=tuple(sorted(evidence_refs)),
-            external_actions=sum(
-                1
-                for entry in trace
-                if str(getattr(entry, "capability_id", "") or "")
-                and not str(getattr(entry, "capability_id", "") or "").startswith(
-                    ("context.", "capability.", "model.", "runtime.")
-                )
-            ),
+            external_actions=_external_action_count(trace),
             token_usage=max(0, int(usage.get("total_tokens") or 0)),
             cost_usd=0.0,
         )
