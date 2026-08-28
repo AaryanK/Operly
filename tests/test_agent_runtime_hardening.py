@@ -149,13 +149,16 @@ class WorkingToolModel:
 
 @pytest.mark.asyncio
 async def test_model_pool_fails_over_after_generated_tool_validation_failure():
-    pool = ModelPool((RejectingToolModel(), WorkingToolModel()))
-    result = await pool.infer(
-        InferenceRequest(
-            messages=({"role": "user", "content": "find something"},),
-            tools=(_search_tool(),),
+    # This test is about generated-tool validation failover. Synthetic route
+    # eligibility is intentionally outside its unit boundary.
+    with patch("packages.model_runtime.scoring.route_is_zero_cost", return_value=True):
+        pool = ModelPool((RejectingToolModel(), WorkingToolModel()))
+        result = await pool.infer(
+            InferenceRequest(
+                messages=({"role": "user", "content": "find something"},),
+                tools=(_search_tool(),),
+            )
         )
-    )
     assert result.provider_model_id == "working"
     assert result.message["content"] == "recovered"
 
