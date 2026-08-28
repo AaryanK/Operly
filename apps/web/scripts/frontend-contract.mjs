@@ -10,7 +10,7 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles, reactPalette, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
   text("src/app/App.tsx"),
   text("src/app/ProductApp.tsx"),
   text("src/public/PublicApp.tsx"),
@@ -18,6 +18,7 @@ const [rootApp, productApp, publicApp, adminPage, legalPage, main, publicStyles,
   text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
   text("src/ui/public.css"),
+  text("src/ui/react-public-admin-palette.css"),
   text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
@@ -65,11 +66,17 @@ assert(!dockerfile.includes("apps/web/static"), "Production image must not depen
 assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo source must come from Vite public assets");
 
 assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
+assert(main.includes('import "./ui/react-public-admin-palette.css"'), "React must load the public/admin palette convergence layer");
+assert(main.indexOf('import "./ui/react-public-admin-palette.css"') > main.indexOf('import "./ui/public.css"'), "Public/admin palette convergence must load after public.css");
 assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
 assert(main.includes('import "./ui/convergence.css"'), "React must load the final convergence layer");
 assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
 assert(publicStyles.includes(".admin-react-shell"), "React admin styling is missing");
 assert(publicStyles.includes(".react-legal-shell"), "React legal styling is missing");
+assert(reactPalette.includes(".react-public-page"), "React public palette convergence is missing");
+assert(reactPalette.includes(".admin-react-shell"), "React admin palette convergence is missing");
+assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must explicitly bound the OperlyMark image size");
+assert(reactPalette.includes("#0d0a15"), "React public/admin convergence must preserve the canonical deep-plum canvas");
 
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
 assert(convergence.includes("@media (max-width: 430px)"), "Small-phone breakpoint contract is missing");
