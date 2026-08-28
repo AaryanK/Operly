@@ -4,14 +4,20 @@ from packages.coding_harness.model_client import SemanticFailoverCodingClient
 from packages.coding_harness.opencode_agent import OpenCodeStyleCodingAgent
 from packages.model_runtime.contracts import InferenceResult, ModelTraits
 from packages.model_runtime.registry import ModelChatAdapter, ModelPool
+from packages.model_runtime.scoring import ModelScorer
 
 
 @pytest.fixture(autouse=True)
-def _allow_synthetic_model_routes(monkeypatch):
-    """These tests exercise semantic failover, not provider/billing eligibility."""
+def _isolate_synthetic_model_routes(monkeypatch):
+    """Exercise semantic failover without production eligibility or learned state."""
+    scorer = ModelScorer()
     monkeypatch.setattr(
         "packages.model_runtime.scoring.route_is_zero_cost",
         lambda model: True,
+    )
+    monkeypatch.setattr(
+        "packages.model_runtime.registry.default_model_scorer",
+        lambda: scorer,
     )
 
 
