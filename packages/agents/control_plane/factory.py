@@ -1,6 +1,7 @@
 """High-level composition root for the Operly agent factory control plane."""
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, Iterable
 from uuid import uuid4
@@ -25,6 +26,7 @@ from .contracts import (
     ValidatorSpec,
 )
 from .evidence import FactoryEvidenceLedger
+from .inference_budget import FactoryInferenceBudget
 from .repair import DefectRepairPlanner
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner
 from .validation import ControlPlaneValidator, PythonTestExecutor, SemanticValidator
@@ -168,6 +170,8 @@ class AgentFactoryControlPlane:
 
     All authority remains in the supplied schema/invocation/context callbacks. This
     class orchestrates them; it does not resolve a principal or widen capability scope.
+    Every standard model inference for one objective debits one root budget that is
+    persisted and restored when approval/external work resumes.
     """
 
     def __init__(
@@ -186,6 +190,7 @@ class AgentFactoryControlPlane:
         repair_budget: RepairBudget | None = None,
         max_worker_steps: int = 8,
         max_parallelism: int = 4,
+        max_model_calls: int = 48,
     ) -> None:
         self.schemas = schemas
         self.invoke = invoke
@@ -200,6 +205,7 @@ class AgentFactoryControlPlane:
         self.repair_budget = (repair_budget or RepairBudget()).normalized()
         self.max_worker_steps = max_worker_steps
         self.max_parallelism = max_parallelism
+        self.max_model_calls = max(1, min(int(max_model_calls), 500))
 
     @staticmethod
     def _message(execution: FactoryExecutionResult) -> str:
@@ -229,11 +235,61 @@ class AgentFactoryControlPlane:
             f"({execution.stop_reason})."
         )
 
+    def _new_inference_budget(
+        self,
+        *,
+        initial_tokens: int = 0,
+        initial_model_calls: int = 0,
+    ) -> FactoryInferenceBudget:
+        return FactoryInferenceBudget(
+            max_tokens=self.repair_budget.max_tokens,
+            max_model_calls=self.max_model_calls,
+            initial_tokens=initial_tokens,
+            initial_model_calls=initial_model_calls,
+        )
+
+    async def _compile(
+        self,
+        objective: str,
+        *,
+        ingress_metadata: dict[str, Any],
+        root_inference_budget: FactoryInferenceBudget,
+    ) -> FactoryBlueprint:
+        """Pass the root ledger to budget-aware compilers without breaking custom ones."""
+        compile_fn = self.compiler.compile
+        try:
+            parameters = inspect.signature(compile_fn).parameters.values()
+            accepts_budget = any(
+                parameter.name == "root_inference_budget"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_budget = False
+        if accepts_budget:
+            return await compile_fn(
+                objective,
+                ingress_metadata=ingress_metadata,
+                root_inference_budget=root_inference_budget,
+            )
+        return await compile_fn(
+            objective,
+            ingress_metadata=ingress_metadata,
+        )
+
+    @staticmethod
+    def _bind_budget(component, budget: FactoryInferenceBudget):
+        binder = getattr(component, "with_root_inference_budget", None)
+        if callable(binder):
+            return binder(budget)
+        return component
+
     def _runner(
         self,
         *,
         run_metadata: dict[str, Any],
         ledger: FactoryEvidenceLedger,
+        root_inference_budget: FactoryInferenceBudget,
     ) -> FactoryStageRunner:
         injector = StageContextInjector(
             search=self.context_search,
@@ -246,16 +302,25 @@ class AgentFactoryControlPlane:
             model_resolver=self.model_resolver,
             max_steps=self.max_worker_steps,
             inference_metadata=run_metadata,
+            root_inference_budget=root_inference_budget,
+        )
+        semantic_validator = self._bind_budget(
+            self.semantic_validator,
+            root_inference_budget,
+        )
+        repair_planner = self._bind_budget(
+            self.repair_planner,
+            root_inference_budget,
         )
         validator = ControlPlaneValidator(
             python_test=self.python_validator,
-            semantic=self.semantic_validator,
+            semantic=semantic_validator,
         )
         return FactoryStageRunner(
             context_injector=injector,
             worker=worker,
             validator=validator,
-            repair=self.repair_planner,
+            repair=repair_planner,
             event_sink=ledger.append,
             repair_budget=self.repair_budget,
             max_parallelism=self.max_parallelism,
@@ -291,13 +356,15 @@ class AgentFactoryControlPlane:
             "runtime_run_id": runtime_run_id,
             "runtime_controller": "factory",
         }
-        blueprint = await self.compiler.compile(
+        root_inference_budget = self._new_inference_budget()
+        blueprint = await self._compile(
             objective,
             ingress_metadata={
                 **dict(ingress_metadata or {}),
                 "channel": metadata.get("channel"),
                 "surface": metadata.get("surface"),
             },
+            root_inference_budget=root_inference_budget,
         )
         ledger = FactoryEvidenceLedger(
             runtime_run_id=runtime_run_id,
@@ -313,6 +380,7 @@ class AgentFactoryControlPlane:
         execution = await self._runner(
             run_metadata=run_metadata,
             ledger=ledger,
+            root_inference_budget=root_inference_budget,
         ).run(
             graph=blueprint.graph,
             acceptance=blueprint.acceptance,
@@ -321,7 +389,11 @@ class AgentFactoryControlPlane:
             stage_input_artifact_refs=stage_input_artifact_refs,
             facts=facts,
         )
-        await ledger.finish(execution)
+        inference_snapshot = root_inference_budget.snapshot()
+        # StageRunner retains per-attempt usage for repair decisions. The root result is
+        # the objective-wide delta, including compiler/semantic/repair model calls.
+        execution.token_usage = int(inference_snapshot.get("run_used_tokens") or 0)
+        await ledger.finish(execution, inference_snapshot=inference_snapshot)
         return self._response(runtime_run_id, blueprint, execution)
 
     async def resume(
@@ -338,7 +410,8 @@ class AgentFactoryControlPlane:
         The frozen objective/acceptance/DAG are loaded from the durable checkpoint.
         The waiting side effect is never re-issued by a worker; ``stage_result`` is
         validated as the terminal result for that station, then downstream work may
-        continue under freshly resolved authority/context.
+        continue under freshly resolved authority/context. Inference allowance resumes
+        from the persisted root usage instead of resetting after an approval boundary.
         """
 
         clean_run_id = str(runtime_run_id or "").strip()
@@ -402,6 +475,12 @@ class AgentFactoryControlPlane:
             ).items()
             if isinstance(value, (list, tuple, set))
         }
+        prior_tokens = max(0, int(factory_state.get("token_usage") or 0))
+        prior_model_calls = max(0, int(factory_state.get("model_calls") or 0))
+        root_inference_budget = self._new_inference_budget(
+            initial_tokens=prior_tokens,
+            initial_model_calls=prior_model_calls,
+        )
 
         ledger = FactoryEvidenceLedger(
             runtime_run_id=clean_run_id,
@@ -413,6 +492,7 @@ class AgentFactoryControlPlane:
         execution = await self._runner(
             run_metadata=run_metadata,
             ledger=ledger,
+            root_inference_budget=root_inference_budget,
         ).run(
             graph=blueprint.graph,
             acceptance=blueprint.acceptance,
@@ -425,5 +505,7 @@ class AgentFactoryControlPlane:
             prior_stage_evidence_refs=prior_stage_evidence_refs,
             resume_results={selected_stage: stage_result},
         )
-        await ledger.finish(execution)
+        inference_snapshot = root_inference_budget.snapshot()
+        execution.token_usage = int(inference_snapshot.get("run_used_tokens") or 0)
+        await ledger.finish(execution, inference_snapshot=inference_snapshot)
         return self._response(clean_run_id, blueprint, execution)
