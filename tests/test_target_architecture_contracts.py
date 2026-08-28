@@ -89,14 +89,20 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         register_model_provider("test-fail", lambda route: _FailClient(), replace=True)
         register_model_provider("test-ok", lambda route: _OkClient(route), replace=True)
-        # Synthetic providers validate provider-neutral failover. The production
-        # provider/billing eligibility gates have their own policy tests.
+        # Synthetic providers validate provider-neutral failover. Production
+        # provider/billing eligibility is covered by dedicated policy tests.
         self.route_policy_patch = patch(
             "packages.model_runtime.scoring.route_is_zero_cost",
             return_value=True,
         )
         self.route_policy_patch.start()
         self.addCleanup(self.route_policy_patch.stop)
+        self.provider_policy_patch = patch(
+            "packages.model_runtime.providers.provider_is_active",
+            return_value=True,
+        )
+        self.provider_policy_patch.start()
+        self.addCleanup(self.provider_policy_patch.stop)
 
     async def test_model_pool_fails_over_across_providers(self):
         pool = ModelPool(
