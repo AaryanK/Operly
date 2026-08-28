@@ -6,6 +6,12 @@ from packages.model_runtime.contracts import InferenceResult, ModelTraits
 from packages.model_runtime.registry import ModelChatAdapter, ModelPool
 
 
+@pytest.fixture(autouse=True)
+def _disable_zero_cost_filter_for_fake_models(monkeypatch):
+    """These tests exercise semantic failover, not provider billing eligibility."""
+    monkeypatch.setenv("OPERLY_FREE_MODELS_ONLY", "0")
+
+
 class _NoToolModel:
     def __init__(self, model_id: str, *, provider: str = "provider-a") -> None:
         self.id = model_id
