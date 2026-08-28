@@ -1,0 +1,318 @@
+/*
+ * React public/admin palette convergence.
+ *
+ * PR #216 made React the only frontend, but the new public.css also brought a
+ * light palette that cascades after admin-palette.css. Keep React as the single
+ * renderer while restoring the established Operly deep-plum/lavender visual
+ * language. Layout and responsive geometry remain owned by public.css/mobile.css.
+ */
+
+.react-public-page,
+.react-legal-page {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 14% 8%, rgba(155, 114, 255, .11), transparent 28%),
+    radial-gradient(circle at 88% 90%, rgba(232, 139, 220, .06), transparent 30%),
+    var(--ui-canvas) !important;
+}
+
+.react-public-header,
+.react-legal-topbar {
+  color: var(--ui-ink) !important;
+  background: rgba(13, 10, 21, .88) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .16) !important;
+}
+
+.public-brand,
+.react-legal-brand,
+.react-public-header a,
+.react-legal-topbar a {
+  color: var(--ui-ink) !important;
+}
+
+.public-brand-mark,
+.react-legal-brand .operly-mark {
+  border-radius: 11px;
+  box-shadow: 0 8px 28px rgba(120, 77, 214, .28);
+}
+
+.react-hero {
+  position: relative;
+  color: var(--ui-ink) !important;
+}
+
+.react-hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 520px;
+  height: 520px;
+  right: -120px;
+  top: -150px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(155, 114, 255, .15), rgba(155, 114, 255, .03) 44%, transparent 70%);
+}
+
+.react-hero p,
+.hero-actions,
+.public-grid p,
+.public-cta p,
+.react-public-footer,
+.react-legal-footer,
+.react-auth-card > p,
+.auth-links,
+.react-legal-hero p,
+.react-legal-content p,
+.react-legal-content li,
+.not-found-react p {
+  color: var(--ui-muted) !important;
+}
+
+.runtime-card {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(155, 114, 255, .12), transparent 34%),
+    linear-gradient(155deg, rgba(27, 22, 39, .99), rgba(18, 14, 27, .99)) !important;
+  border-color: var(--ui-line-strong) !important;
+  box-shadow: 0 36px 90px rgba(0, 0, 0, .34), 0 0 0 1px rgba(155, 114, 255, .06) !important;
+}
+
+.runtime-card p { color: #cfc4dd !important; }
+.runtime-chain b {
+  color: #e9ddff !important;
+  background: #221b31 !important;
+  border: 1px solid var(--ui-line) !important;
+}
+.runtime-chain i { color: var(--ui-accent-strong) !important; }
+.runtime-pill {
+  color: #d9caff !important;
+  background: rgba(155, 114, 255, .12) !important;
+  border: 1px solid rgba(196, 167, 255, .18) !important;
+}
+
+.public-section h2,
+.public-grid h3,
+.public-cta h2,
+.react-auth-card h1,
+.react-legal-hero h1,
+.react-legal-content h2,
+.react-legal-content h3,
+.not-found-react h1 {
+  color: var(--ui-ink) !important;
+}
+
+.public-grid article,
+.request-grid span,
+.react-auth-card {
+  color: var(--ui-ink) !important;
+  background: linear-gradient(155deg, rgba(27, 22, 39, .98), rgba(18, 14, 27, .98)) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: var(--ui-shadow-soft) !important;
+}
+
+.public-grid article:hover,
+.request-grid span:hover {
+  border-color: rgba(155, 114, 255, .34) !important;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, .22) !important;
+}
+
+.dark-band {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(155, 114, 255, .13), transparent 28%),
+    linear-gradient(135deg, #15111e, #100c18) !important;
+  border-top: 1px solid var(--ui-line) !important;
+  border-bottom: 1px solid var(--ui-line) !important;
+}
+.dark-band .public-grid article {
+  background: linear-gradient(155deg, rgba(34, 27, 49, .94), rgba(21, 17, 30, .96)) !important;
+  border-color: var(--ui-line) !important;
+}
+.dark-band .public-grid p { color: #cfc4dd !important; }
+
+.public-cta {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 50% -20%, rgba(155, 114, 255, .22), transparent 48%),
+    linear-gradient(135deg, #1b1627, #15111e) !important;
+  border: 1px solid var(--ui-line-strong) !important;
+  box-shadow: 0 28px 76px rgba(0, 0, 0, .24) !important;
+}
+
+.react-public-footer,
+.react-legal-footer {
+  background: #0f0c17 !important;
+  border-color: var(--ui-line) !important;
+}
+.react-public-footer a:hover,
+.react-legal-footer a:hover { color: var(--ui-accent-strong) !important; }
+
+/* Auth */
+.react-auth-shell {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(155, 114, 255, .08), transparent 26%),
+    radial-gradient(circle at 82% 78%, rgba(232, 139, 220, .05), transparent 25%);
+}
+.react-auth-card {
+  border-color: var(--ui-line-strong) !important;
+  box-shadow: var(--ui-shadow-float) !important;
+}
+.react-auth-card label { color: #d7cce7 !important; }
+.react-auth-card input {
+  color: var(--ui-ink) !important;
+  background: #0e0b16 !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.react-auth-card input:focus {
+  border-color: var(--ui-accent) !important;
+  box-shadow: 0 0 0 4px rgba(155, 114, 255, .13) !important;
+}
+.react-password-field button {
+  color: #d7cce7 !important;
+  background: #221b31 !important;
+}
+.auth-divider { color: var(--ui-muted-2) !important; }
+.auth-divider::before,
+.auth-divider::after { background: var(--ui-line) !important; }
+.auth-notice,
+.auth-success {
+  color: #ded5eb !important;
+  background: rgba(155, 114, 255, .10) !important;
+  border: 1px solid rgba(196, 167, 255, .18) !important;
+}
+.onboarding-check {
+  color: var(--ui-accent-strong) !important;
+  background: var(--ui-accent-soft) !important;
+}
+
+/* Legal */
+.react-legal-hero { border-color: var(--ui-line) !important; }
+.react-legal-content strong { color: var(--ui-ink) !important; }
+.react-legal-callout {
+  color: #ded5eb !important;
+  background: rgba(155, 114, 255, .10) !important;
+  border-left-color: var(--ui-accent) !important;
+}
+.react-legal-topbar [aria-current="page"] { color: var(--ui-accent-strong) !important; }
+
+/* Admin: restore the pre-cutover plum/lavender console without reviving static rendering. */
+.admin-react-loading,
+.admin-react-login {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 15% 12%, rgba(155, 114, 255, .18), transparent 26%),
+    radial-gradient(circle at 86% 84%, rgba(232, 139, 220, .12), transparent 28%),
+    var(--ui-canvas) !important;
+}
+.admin-react-login form {
+  color: var(--ui-ink) !important;
+  background: linear-gradient(160deg, rgba(29, 23, 42, .96), rgba(19, 15, 29, .96)) !important;
+  border-color: var(--ui-line-strong) !important;
+  box-shadow: var(--ui-shadow-float) !important;
+}
+.admin-react-login p,
+.admin-react-login label { color: var(--ui-muted) !important; }
+.admin-react-login input {
+  color: var(--ui-ink) !important;
+  background: #0e0b16 !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.admin-react-login input:focus {
+  outline: 0;
+  border-color: var(--ui-accent) !important;
+  box-shadow: 0 0 0 4px rgba(155, 114, 255, .13) !important;
+}
+
+.admin-react-shell {
+  color: var(--ui-ink) !important;
+  background: var(--ui-canvas) !important;
+}
+.admin-react-shell > aside {
+  color: var(--ui-ink) !important;
+  background: linear-gradient(180deg, #12101a 0%, #0c0912 100%) !important;
+  border-right: 1px solid var(--ui-line) !important;
+  box-shadow: 12px 0 34px rgba(0, 0, 0, .20) !important;
+}
+
+/* OperlyMark renders span > img, not an svg. The old selector made the image
+ * use its intrinsic size and caused the enormous logo seen after #216. */
+.admin-brand .operly-mark {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 11px !important;
+  flex: 0 0 36px !important;
+  box-shadow: 0 8px 28px rgba(120, 77, 214, .30) !important;
+}
+.admin-brand .operly-mark img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+.admin-brand,
+.admin-user { border-color: var(--ui-line) !important; }
+.admin-brand small,
+.admin-user small { color: var(--ui-muted-2) !important; }
+.admin-react-shell aside nav button,
+.admin-user button { color: var(--ui-muted) !important; }
+.admin-react-shell aside nav button:hover {
+  color: var(--ui-ink) !important;
+  background: rgba(255, 255, 255, .035) !important;
+}
+.admin-react-shell aside nav button.active {
+  color: var(--ui-ink) !important;
+  background: var(--ui-accent-soft) !important;
+  box-shadow: inset 0 0 0 1px rgba(155, 114, 255, .10) !important;
+}
+
+.admin-react-shell > main > header {
+  color: var(--ui-ink) !important;
+  background:
+    radial-gradient(circle at 90% -30%, rgba(155, 114, 255, .09), transparent 34%),
+    rgba(21, 17, 30, .92) !important;
+  border-color: var(--ui-line) !important;
+  backdrop-filter: blur(18px);
+}
+.admin-react-shell h1,
+.admin-panel h3,
+.admin-workspace-card h3 { color: var(--ui-ink) !important; }
+
+.admin-metric,
+.admin-panel,
+.admin-workspace-card,
+.admin-table {
+  color: var(--ui-ink) !important;
+  background: linear-gradient(155deg, rgba(27, 22, 39, .98), rgba(18, 14, 27, .98)) !important;
+  border-color: var(--ui-line) !important;
+  box-shadow: var(--ui-shadow-soft) !important;
+}
+.admin-metric span,
+.admin-list-row small,
+.admin-list-row > span,
+.admin-table-row small,
+.admin-workspace-card header small,
+.admin-workspace-card > p,
+.muted { color: var(--ui-muted) !important; }
+
+.admin-list-row,
+.admin-table-row { border-color: var(--ui-line) !important; }
+.admin-table-head {
+  color: var(--ui-muted-2) !important;
+  background: #17121f !important;
+}
+.admin-toolbar input {
+  color: var(--ui-ink) !important;
+  background: #0e0b16 !important;
+  border-color: var(--ui-line-strong) !important;
+}
+.admin-toolbar input:focus {
+  outline: 0;
+  border-color: var(--ui-accent) !important;
+  box-shadow: 0 0 0 4px rgba(155, 114, 255, .13) !important;
+}
+.admin-table-row em {
+  color: #d7c7ff !important;
+  background: rgba(155, 114, 255, .12) !important;
+}
