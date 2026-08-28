@@ -1,18 +1,17 @@
-"""Adapter that demotes the existing AgentRuntime to one disposable factory worker.
+"""Adapter that runs one disposable worker per Factory stage.
 
-The adapter deliberately starts a fresh model transcript for every stage. Persistent
-factory state flows through ContextCapsule/artifact/evidence references, never by
-replaying a previous worker's conversation or chain of thought.
+Factory workers use a resettable stage runtime rather than a growing conversational
+transcript. Persistent state flows through ContextCapsule/artifact/evidence references;
+materialized workspace context is single-use and is never replayed after a tool round.
 """
 from __future__ import annotations
 
 import hashlib
 import inspect
-import json
 from collections.abc import Callable
 from typing import Any, Awaitable
 
-from packages.agents.runtime import AgentExecutionBudget, AgentRuntime
+from packages.agents.runtime import AgentExecutionBudget
 from packages.model_runtime import InferenceBudget
 from packages.model_runtime.registry import model_for_role
 
@@ -22,6 +21,8 @@ from .inference_budget import (
     FactoryInferenceBudgetExceeded,
     budgeted_model,
 )
+from .stage_prompt_pipeline import FactoryStagePromptPipeline
+from .stage_runtime import FactoryStageRuntime as AgentRuntime
 
 
 SchemaLoader = Callable[[], Awaitable[list[dict[str, Any]]] | list[dict[str, Any]]]
@@ -31,15 +32,10 @@ CapabilityInvoker = Callable[
 ]
 
 
-_KERNEL_CAPABILITIES = frozenset(
+_DISCOVERY_CAPABILITIES = frozenset(
     {
         "capability.search",
         "capability.describe",
-        "context.search",
-        "context.get",
-        "model.invoke",
-        "model.deep_reason",
-        "runtime.context",
     }
 )
 _FACTORY_CAUSATION_PREFIX = "factory"
@@ -171,7 +167,7 @@ def _external_action_count(trace: list[Any]) -> int:
 
 
 class AgentRuntimeWorker:
-    """Run one focused stage with a short, metered AgentRuntime micro-loop."""
+    """Run one focused stage with a bounded, resettable Factory stage loop."""
 
     def __init__(
         self,
@@ -194,9 +190,29 @@ class AgentRuntimeWorker:
         self.root_inference_budget = root_inference_budget or FactoryInferenceBudget()
         self.max_output_tokens = max(256, min(int(max_output_tokens), 8_000))
 
-    async def _stage_schemas(self, capsule: ContextCapsule) -> list[dict[str, Any]]:
+    async def _stage_schemas(
+        self,
+        stage: StageSpec,
+        capsule: ContextCapsule,
+    ) -> list[dict[str, Any]]:
         available = list(await _resolve(self.schemas()) or [])
-        allowed = set(capsule.capability_ids) | set(_KERNEL_CAPABILITIES)
+        allowed = set(capsule.capability_ids)
+
+        # The control plane already resolved capability intents before creating the
+        # capsule. Discovery is therefore fallback-only; exposing it beside resolved
+        # direct tools lets models waste turns rediscovering tools they already have.
+        if not allowed and stage.capability_intents:
+            allowed.update(_DISCOVERY_CAPABILITIES)
+
+        # Context search also belongs in the injector. Workers get exact refs when the
+        # injector found authorized context and may dereference only those refs. A broad
+        # search is available solely as a recovery path when the stage declared context
+        # intent but the injector found no refs.
+        if capsule.context_refs:
+            allowed.add("context.get")
+        elif stage.context_intents:
+            allowed.add("context.search")
+
         return [schema for schema in available if _schema_id(schema) in allowed]
 
     @staticmethod
@@ -205,33 +221,13 @@ class AgentRuntimeWorker:
         capsule: ContextCapsule,
         defect: Defect | None,
     ) -> list[dict[str, Any]]:
-        system = (
-            "You are one disposable OPERLY factory worker. Complete only this bounded stage. "
-            "The Factory owns the root objective, authorization, retries and completion truth. "
-            "Use only supplied tools/context. Do not claim the whole user request is complete. "
-            "Return concise stage output; durable results must be represented by tool evidence or artifact references."
-        )
-        user_payload: dict[str, Any] = {
-            "stage": stage.as_dict(),
-            "context_capsule": capsule.as_dict(),
-            "worker_contract": {
-                "do_only_stage": True,
-                "do_not_replay_prior_worker_history": True,
-                "return_artifact_or_evidence_handles": True,
-            },
-        }
-        if defect is not None:
-            user_payload["repair_defect"] = defect.as_dict()
-            user_payload["repair_instruction"] = (
-                "Use the defect evidence to choose a materially different repair when the previous strategy failed."
-            )
-        return [
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False, default=str),
-            },
-        ]
+        """Compatibility seam for tests/callers; no raw capsule replay occurs here."""
+
+        return FactoryStagePromptPipeline(
+            stage=stage,
+            capsule=capsule,
+            defect=defect,
+        ).initial_messages()
 
     async def __call__(
         self,
@@ -247,9 +243,14 @@ class AgentRuntimeWorker:
             max_output_tokens=self.max_output_tokens,
         )
         runtime_run_id = str(self.inference_metadata.get("runtime_run_id") or "").strip()
+        prompt_pipeline = FactoryStagePromptPipeline(
+            stage=stage,
+            capsule=capsule,
+            defect=defect,
+        )
 
         async def schemas():
-            return await self._stage_schemas(capsule)
+            return await self._stage_schemas(stage, capsule)
 
         async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
             correlated_call_id = factory_action_call_id(
@@ -260,9 +261,8 @@ class AgentRuntimeWorker:
             )
             return await _resolve(self.invoke(name, arguments, correlated_call_id or call_id))
 
-        # Long-horizon work belongs to the Factory DAG. A worker gets only a short
-        # reason-act-observe loop; progress may extend it by at most two calls rather
-        # than silently turning an 8-step worker into the old 24-call loop.
+        # Long-horizon work belongs to the Factory DAG. A worker gets a short bounded
+        # loop, and every capability round resets its model-visible working set.
         execution_budget = AgentExecutionBudget(
             base_steps=self.max_steps,
             max_steps=min(12, self.max_steps + 2),
@@ -282,15 +282,17 @@ class AgentRuntimeWorker:
                 inference_budget=inference_budget,
             ).run(
                 model=model,
-                messages=self._messages(stage, capsule, defect),
+                messages=prompt_pipeline.initial_messages(),
                 schemas=schemas,
                 invoke=invoke,
+                reduce_working_messages=prompt_pipeline.continuation_messages,
                 inference_metadata={
                     **self.inference_metadata,
                     "runtime_component": "factory_worker",
                     "factory_stage_id": stage.id,
                     "factory_attempt": attempt,
                     "worker_role": stage.assigned_role,
+                    "factory_context_pipeline": "bounded-reset-v2",
                 },
             )
         except FactoryInferenceBudgetExceeded as error:
@@ -318,6 +320,9 @@ class AgentRuntimeWorker:
         artifacts, evidence_refs, compact_evidence = _extract_handles(trace)
         usage = dict(getattr(model, "usage", {}) or {})
         compact_evidence["runtime_usage"] = usage
+        runtime_budget = result.get("budget")
+        if isinstance(runtime_budget, dict):
+            compact_evidence["factory_stage_runtime"] = dict(runtime_budget)
         budget_error = getattr(model, "budget_exhausted", None)
         if isinstance(budget_error, FactoryInferenceBudgetExceeded):
             compact_evidence.update(
@@ -364,15 +369,13 @@ class AgentRuntimeWorker:
             or compact_evidence.get("lifecycle_status")
             or ""
         ).strip().lower()
-        # AgentRuntime intentionally has a small lifecycle vocabulary. Preserve terminal
-        # action truth found in capability observations so the Factory cannot mistake a
-        # rejected/denied/failed durable action for an ordinary reasoning completion.
+        # Preserve terminal action truth found in capability observations so the Factory
+        # cannot mistake a rejected/denied/failed durable action for normal completion.
         if observed_capability_status in _TERMINAL_CAPABILITY_STATUSES:
             status = observed_capability_status
             compact_evidence["terminal"] = True
         # A capability may truthfully accept durable work while terminal evidence is
-        # still pending. That is neither success nor a defect and must pause the
-        # Factory rather than triggering validation/repair.
+        # still pending. That pauses the Factory instead of triggering validation/repair.
         elif bool(compact_evidence.get("deferred")):
             status = "waiting_external"
         elif status in {"pending_evidence", "waiting_external_completion"}:
