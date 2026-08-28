@@ -13,6 +13,7 @@ from packages.model_runtime import (
     model_resources,
 )
 from packages.model_runtime.openai_compatible_client import OpenAICompatibleClient
+from packages.model_runtime.registry import AdaptiveRoleModel
 
 
 class _FakeResponse:
@@ -157,6 +158,15 @@ class _SuccessModel:
 
 class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        # Synthetic models in the failover tests below are intentionally provider-
+        # neutral. Billing eligibility is covered by dedicated zero-cost policy tests.
+        self.free_policy_patch = patch.dict(
+            os.environ,
+            {"OPERLY_FREE_MODELS_ONLY": "0"},
+            clear=False,
+        )
+        self.free_policy_patch.start()
+        self.addCleanup(self.free_policy_patch.stop)
         self.provider_env = {
             "OPEN_ROUTER_API": "test-openrouter",
             "OLLAMA_API_KEY": "test-ollama",
@@ -164,6 +174,7 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
             "gemini_api_key": "test-gemini",
             "nvidia_api_key": "test-nvidia",
             "OPERLY_MODEL_AUTO_PORTFOLIO": "1",
+            "OPERLY_FREE_MODELS_ONLY": "0",
         }
 
     def test_all_five_provider_adapters_are_installed(self):
@@ -224,8 +235,8 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(caught.exception.classification, "rate_limited")
-        # Do not retry the same route immediately; ModelPool treats rate_limited as
-        # provider-wide and moves to another provider.
+        # Do not retry the same route immediately. ModelPool may continue to another
+        # eligible route, including a separate route on the same provider.
         self.assertFalse(caught.exception.retryable)
         self.assertEqual(caught.exception.provider, "groq")
 
@@ -293,16 +304,13 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed.input_cost_per_million, 0.0)
         self.assertEqual(routed.output_cost_per_million, 0.0)
 
-    def test_automatic_bounded_task_pool_only_uses_verified_tool_capable_providers(self):
+    def test_automatic_bounded_task_role_uses_adaptive_portfolio(self):
         with patch.dict(os.environ, self.provider_env, clear=True):
             model = model_for_role("bounded_task")
 
-        self.assertIsInstance(model, ModelPool)
-        self.assertEqual(len(model.models), 3)
-        providers = {candidate.provider for candidate in model.models}
-        self.assertTrue(providers.issubset({"openrouter", "ollama", "groq", "gemini"}))
-        self.assertNotIn("nvidia", providers)
-        self.assertTrue(all("tools" in candidate.capabilities for candidate in model.models))
+        self.assertIsInstance(model, AdaptiveRoleModel)
+        self.assertEqual(model.role, "bounded_task")
+        self.assertIn("tools", model.capabilities)
 
     async def test_successful_fallback_becomes_sticky_across_agent_turns(self):
         primary = _FailingModel("slow-primary")
@@ -337,7 +345,7 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(too_small.calls, 1)
         self.assertEqual(larger_route.calls, 1)
 
-    async def test_provider_rate_limit_skips_other_routes_on_same_provider(self):
+    async def test_route_rate_limit_can_try_other_route_on_same_provider(self):
         first = _FailingModel(
             "provider-a-primary",
             provider="provider-a",
@@ -360,10 +368,10 @@ class MultiProviderModelPortfolioTests(unittest.IsolatedAsyncioTestCase):
             InferenceRequest(messages=({"role": "user", "content": "work"},))
         )
 
-        self.assertEqual(result.provider, "provider-b")
+        self.assertEqual(result.provider, "provider-a")
         self.assertEqual(first.calls, 1)
-        self.assertEqual(same_provider.calls, 0)
-        self.assertEqual(other_provider.calls, 1)
+        self.assertEqual(same_provider.calls, 1)
+        self.assertEqual(other_provider.calls, 0)
 
 
 if __name__ == "__main__":
