@@ -7,9 +7,12 @@ from packages.model_runtime.registry import ModelChatAdapter, ModelPool
 
 
 @pytest.fixture(autouse=True)
-def _disable_zero_cost_filter_for_fake_models(monkeypatch):
-    """These tests exercise semantic failover, not provider billing eligibility."""
-    monkeypatch.setenv("OPERLY_FREE_MODELS_ONLY", "0")
+def _allow_synthetic_model_routes(monkeypatch):
+    """These tests exercise semantic failover, not provider/billing eligibility."""
+    monkeypatch.setattr(
+        "packages.model_runtime.scoring.route_is_zero_cost",
+        lambda model: True,
+    )
 
 
 class _NoToolModel:
