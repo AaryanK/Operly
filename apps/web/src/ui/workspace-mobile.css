@@ -1,5 +1,5 @@
 /*
- * Mobile workspace navigation owns the final phone cascade for the
+ * Workspace navigation owns the final structural cascade for the
  * scope -> workspace navigation -> content flow.
  *
  * Older base/mobile layers still contain the pre-cutover horizontal workspace
@@ -7,9 +7,24 @@
  * removed from their shared files.
  */
 
+/* The workspace identity already opens Settings. The adjacent control owns
+ * sidebar collapse/expand, so a second directional chevron is ambiguous. */
+.workspace-identity-chevron {
+  display: none !important;
+}
+
+.workspace-shell:not(.workspace-nav-collapsed) .workspace-identity-button {
+  grid-template-columns: 42px minmax(0, 1fr) !important;
+}
+
 @media (max-width: 680px) {
   .workspace-nav {
     max-width: 100%;
+  }
+
+  .workspace-identity-button,
+  .workspace-nav-collapsed .workspace-identity-button {
+    grid-template-columns: 42px minmax(0, 1fr) !important;
   }
 
   .workspace-nav > nav {
