@@ -22,11 +22,14 @@ class FakeRuntime:
     seen_tools = []
     seen_metadata = []
     seen_execution_budgets = []
+    seen_inference_budgets = []
 
-    def __init__(self, *, max_steps, execution_budget=None):
+    def __init__(self, *, max_steps, execution_budget=None, inference_budget=None):
         self.max_steps = max_steps
         self.execution_budget = execution_budget
+        self.inference_budget = inference_budget
         FakeRuntime.seen_execution_budgets.append(execution_budget)
+        FakeRuntime.seen_inference_budgets.append(inference_budget)
 
     async def run(self, **kwargs):
         FakeRuntime.seen_messages.append(list(kwargs["messages"]))
@@ -137,6 +140,7 @@ def _reset_runtime_observations():
     FakeRuntime.seen_tools = []
     FakeRuntime.seen_metadata = []
     FakeRuntime.seen_execution_budgets = []
+    FakeRuntime.seen_inference_budgets = []
 
 
 @pytest.mark.asyncio
@@ -184,6 +188,10 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     assert execution_budget.base_steps == 8
     assert execution_budget.max_steps == 10
     assert execution_budget.max_tool_calls == 24
+    inference_budget = FakeRuntime.seen_inference_budgets[-1]
+    assert inference_budget.attempts_per_model == 1
+    assert inference_budget.max_models == 2
+    assert inference_budget.max_output_tokens == 2_000
 
 
 @pytest.mark.asyncio
