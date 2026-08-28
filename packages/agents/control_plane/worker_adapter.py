@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any, Awaitable
 
 from packages.agents.runtime import AgentExecutionBudget, AgentRuntime
+from packages.model_runtime import InferenceBudget
 from packages.model_runtime.registry import model_for_role
 
 from .contracts import ContextCapsule, Defect, StageSpec, StageWorkerResult
@@ -268,10 +269,17 @@ class AgentRuntimeWorker:
             extension_steps=2,
             max_tool_calls=24,
         )
+        inference_budget = InferenceBudget(
+            timeout_seconds=45.0,
+            attempts_per_model=1,
+            max_models=2,
+            max_output_tokens=self.max_output_tokens,
+        )
         try:
             result = await AgentRuntime(
                 max_steps=self.max_steps,
                 execution_budget=execution_budget,
+                inference_budget=inference_budget,
             ).run(
                 model=model,
                 messages=self._messages(stage, capsule, defect),
