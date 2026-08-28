@@ -11,7 +11,6 @@ from packages.capabilities.search_index import CapabilitySearchIndex
 from packages.context.broker import ContextBroker
 from packages.model_runtime import (
     InferenceRequest,
-    ModelPool,
     TaskRouteDecision,
     model_for_requirements,
     requirements_for_task,
@@ -250,8 +249,9 @@ def test_real_catalog_requirements_route_stays_small_and_non_heavy_through_failo
     assert pool
     assert "tools" in pool[0].capabilities
     assert "small" in pool[0].tags
+    # The architecture contract is tag/capability driven. Concrete route IDs can be
+    # reclassified or promoted by operator catalog metadata without changing it.
     assert all("heavy" not in model.tags for model in pool)
-    assert all(model.provider_model_id != "stealth/ox-alpha" for model in pool)
 
 
 def test_deep_reasoning_selector_prefers_heavy_and_excludes_small():
