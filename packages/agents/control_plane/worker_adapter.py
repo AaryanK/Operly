@@ -32,12 +32,6 @@ CapabilityInvoker = Callable[
 ]
 
 
-_DISCOVERY_CAPABILITIES = frozenset(
-    {
-        "capability.search",
-        "capability.describe",
-    }
-)
 _FACTORY_CAUSATION_PREFIX = "factory"
 _TERMINAL_CAPABILITY_STATUSES = frozenset(
     {
@@ -195,24 +189,18 @@ class AgentRuntimeWorker:
         stage: StageSpec,
         capsule: ContextCapsule,
     ) -> list[dict[str, Any]]:
+        del stage  # Resolution/search belongs to the control plane, never the worker.
         available = list(await _resolve(self.schemas()) or [])
         allowed = set(capsule.capability_ids)
 
-        # The control plane already resolved capability intents before creating the
-        # capsule. Discovery is therefore fallback-only; exposing it beside resolved
-        # direct tools lets models waste turns rediscovering tools they already have.
-        if not allowed and stage.capability_intents:
-            allowed.update(_DISCOVERY_CAPABILITIES)
-
-        # Context search also belongs in the injector. Workers get exact refs when the
-        # injector found authorized context and may dereference only those refs. A broad
-        # search is available solely as a recovery path when the stage declared context
-        # intent but the injector found no refs.
+        # StageContextInjector owns authorized retrieval. Workers may dereference exact
+        # refs selected for their capsule but may not widen scope with context.search.
         if capsule.context_refs:
             allowed.add("context.get")
-        elif stage.context_intents:
-            allowed.add("context.search")
 
+        # capability.search/describe and context.search are intentionally absent. If the
+        # control plane failed to resolve a required capability/context ref, validation or
+        # repair handles that failure instead of allowing an unbounded discovery loop.
         return [schema for schema in available if _schema_id(schema) in allowed]
 
     @staticmethod
