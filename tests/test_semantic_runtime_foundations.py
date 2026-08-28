@@ -18,6 +18,7 @@ from packages.model_runtime import (
 )
 from packages.model_runtime.contracts import ModelSelector
 from packages.model_runtime.registry import ModelRegistry
+from packages.model_runtime.requirements import AdaptiveRequirementsModel, _eligible_models
 from packages.model_runtime.routing_policy import role_routing_profile
 from packages.retrieval.semantic import SemanticDocument, SemanticTextIndex
 from packages.security.surfaces import SurfaceKind
@@ -209,7 +210,7 @@ def test_normal_business_worker_prefers_small_fast_tool_model_over_heavy_model()
 
 
 def test_real_catalog_requirements_route_stays_small_and_non_heavy_through_failover():
-    """Inspect the worker pool behind TaskRoutedBusinessModel, not its proxy tags."""
+    """Inspect the eligible pool behind the live requirements facade."""
     provider_env = {
         "OPEN_ROUTER_API": "test-openrouter",
         "OLLAMA_API_KEY": "test-ollama",
@@ -242,8 +243,10 @@ def test_real_catalog_requirements_route_stays_small_and_non_heavy_through_failo
 
     with patch.dict(os.environ, provider_env, clear=False):
         selected = model_for_requirements(requirements, fallback_role="business_agent")
+        pool = _eligible_models(requirements)
 
-    pool = list(selected.models) if isinstance(selected, ModelPool) else [selected]
+    assert isinstance(selected, AdaptiveRequirementsModel)
+    assert selected.requirements == requirements
     assert pool
     assert "tools" in pool[0].capabilities
     assert "small" in pool[0].tags
