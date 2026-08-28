@@ -50,10 +50,17 @@ for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/ve
 assert(publicApp.includes('go("/channels/@me")'), "Personal auth handoff must target the canonical route");
 assert(publicApp.includes("/channels/${encodeURIComponent"), "Workspace auth handoff must target the canonical route");
 assert(publicApp.includes("workspace-invitations/inspect"), "Workspace invitation inspection must survive the migration");
+assert(publicApp.includes("<RuntimePreview />"), "Public landing must keep the React runtime preview");
+assert(publicApp.includes('id="studio"'), "Public landing must keep the React Studio product section");
+assert(publicApp.includes("auth-visual-panel"), "Auth routes must keep the React visual context panel");
+assert(publicApp.includes("public-model-band"), "Public landing must keep the model-agnostic operating-layer section");
 
 for (const contract of ["/admin/session", "/admin/overview", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
   assert(adminPage.includes(contract), `React admin migration is missing ${contract}`);
 }
+assert(adminPage.includes("admin-overview-grid"), "React admin must keep the rich overview composition");
+assert(adminPage.includes("admin-health-ring"), "React admin must keep account-health visualization");
+assert(adminPage.includes("admin-shell-orb"), "React admin must keep its canonical visual shell treatment");
 assert(legalPage.includes("Privacy Policy"), "React Privacy Policy is missing");
 assert(legalPage.includes("Terms of Service"), "React Terms of Service is missing");
 assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
@@ -76,6 +83,8 @@ assert(publicStyles.includes(".react-legal-shell"), "React legal styling is miss
 assert(reactPalette.includes(".react-public-page"), "React public palette convergence is missing");
 assert(reactPalette.includes(".admin-react-shell"), "React admin palette convergence is missing");
 assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must explicitly bound the OperlyMark image size");
+assert(reactPalette.includes(".operly-runtime-preview"), "React landing preview styling is missing");
+assert(reactPalette.includes(".auth-visual-panel"), "React auth visual styling is missing");
 assert(reactPalette.includes("#0d0a15"), "React public/admin convergence must preserve the canonical deep-plum canvas");
 
 assert(convergence.includes("@media (max-width: 680px)"), "Phone breakpoint contract is missing");
