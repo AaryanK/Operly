@@ -12,11 +12,16 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from packages.agents.compaction import approx_tokens
-from packages.model_runtime import InferenceBudget, InferenceRequest
+from packages.model_runtime import (
+    InferenceBudget,
+    InferenceRequest,
+    InferenceResult,
+    ModelUsage,
+)
 
 
 class FactoryInferenceBudgetExceeded(RuntimeError):
-    """Raised before another model call would exceed the root inference budget."""
+    """Describes why another model call cannot be admitted for this root objective."""
 
     def __init__(self, reason: str, snapshot: dict[str, int | bool]) -> None:
         super().__init__(reason)
@@ -80,7 +85,11 @@ class FactoryInferenceBudget:
             self._model_calls += 1
             return _Reservation(tokens=requested)
 
-    async def reconcile(self, reservation: _Reservation, actual_tokens: int) -> dict[str, int | bool]:
+    async def reconcile(
+        self,
+        reservation: _Reservation,
+        actual_tokens: int,
+    ) -> dict[str, int | bool]:
         actual = max(0, int(actual_tokens))
         async with self._lock:
             self._reserved_tokens = max(0, self._reserved_tokens - reservation.tokens)
@@ -107,6 +116,7 @@ class _UsageMixin:
         self.output_tokens = 0
         self.total_tokens = 0
         self.model_calls = 0
+        self.budget_exhausted: FactoryInferenceBudgetExceeded | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._model, name)
@@ -142,7 +152,11 @@ class _UsageMixin:
     async def _reserve(self, estimated_input: int, output_limit: int) -> _Reservation | None:
         if self._root_budget is None:
             return None
-        return await self._root_budget.reserve(estimated_input + output_limit)
+        # Character/4 is intentionally cheap and may underestimate some tokenizers.
+        # Reserve 25% headroom plus the provider output ceiling so concurrent workers
+        # cannot spend the same root budget while calls are in flight.
+        guarded_input = max(estimated_input, (estimated_input * 5 + 3) // 4)
+        return await self._root_budget.reserve(guarded_input + output_limit)
 
     async def _record(
         self,
@@ -151,25 +165,46 @@ class _UsageMixin:
         input_tokens: int,
         output_tokens: int,
         total_tokens: int,
-    ) -> None:
+    ) -> dict[str, int | bool] | None:
         self.input_tokens += max(0, int(input_tokens))
         self.output_tokens += max(0, int(output_tokens))
         self.total_tokens += max(0, int(total_tokens))
         self.model_calls += 1
         if self._root_budget is not None and reservation is not None:
-            snapshot = await self._root_budget.reconcile(reservation, total_tokens)
-            if bool(snapshot.get("exhausted")) and int(snapshot.get("used_tokens") or 0) > int(
-                snapshot.get("max_tokens") or 0
-            ):
-                raise FactoryInferenceBudgetExceeded(
-                    "root_token_budget_exhausted",
-                    snapshot,
-                )
+            return await self._root_budget.reconcile(reservation, total_tokens)
+        return None
 
     async def _record_failure(self, reservation: _Reservation | None) -> None:
         self.model_calls += 1
         if self._root_budget is not None and reservation is not None:
             await self._root_budget.charge_unknown(reservation)
+
+    def _mark_post_call_overflow(self, snapshot: dict[str, int | bool] | None) -> None:
+        if not snapshot:
+            return
+        if int(snapshot.get("used_tokens") or 0) > int(snapshot.get("max_tokens") or 0):
+            self.budget_exhausted = FactoryInferenceBudgetExceeded(
+                "root_token_budget_exhausted",
+                snapshot,
+            )
+
+    def _budget_stop_result(self, error: FactoryInferenceBudgetExceeded) -> InferenceResult:
+        self.budget_exhausted = error
+        return InferenceResult(
+            message={
+                "role": "assistant",
+                "content": (
+                    "The Factory inference budget is exhausted for this objective. "
+                    "Stop this worker without issuing another capability call."
+                ),
+            },
+            model_resource_id=str(getattr(self._model, "id", "operly:budget")),
+            provider="operly",
+            provider_model_id="budget-guard",
+            latency_ms=0,
+            usage=ModelUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            finish_reason="budget_exhausted",
+        )
 
 
 class BudgetedInferenceModel(_UsageMixin):
@@ -186,7 +221,10 @@ class BudgetedInferenceModel(_UsageMixin):
         )
         bounded_budget = replace(existing, max_output_tokens=output_limit)
         bounded_request = replace(request, budget=bounded_budget)
-        reservation = await self._reserve(input_estimate, output_limit)
+        try:
+            reservation = await self._reserve(input_estimate, output_limit)
+        except FactoryInferenceBudgetExceeded as error:
+            return self._budget_stop_result(error)
         try:
             result = await self._model.infer(bounded_request)
         except Exception:
@@ -196,12 +234,13 @@ class BudgetedInferenceModel(_UsageMixin):
             result,
             input_estimate=input_estimate,
         )
-        await self._record(
+        snapshot = await self._record(
             reservation,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
         )
+        self._mark_post_call_overflow(snapshot)
         return result
 
 
@@ -210,7 +249,17 @@ class BudgetedChatModel(_UsageMixin):
 
     async def chat(self, messages, tools):
         input_estimate = approx_tokens(messages) + approx_tokens(tools)
-        reservation = await self._reserve(input_estimate, self._max_output_tokens)
+        try:
+            reservation = await self._reserve(input_estimate, self._max_output_tokens)
+        except FactoryInferenceBudgetExceeded as error:
+            self.budget_exhausted = error
+            return {
+                "role": "assistant",
+                "content": (
+                    "The Factory inference budget is exhausted for this objective. "
+                    "Stop this worker without issuing another capability call."
+                ),
+            }
         try:
             message = await self._model.chat(messages, tools)
         except Exception:
@@ -218,12 +267,13 @@ class BudgetedChatModel(_UsageMixin):
             raise
         output_tokens = approx_tokens(message)
         total_tokens = input_estimate + output_tokens
-        await self._record(
+        snapshot = await self._record(
             reservation,
             input_tokens=input_estimate,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
         )
+        self._mark_post_call_overflow(snapshot)
         return message
 
 
