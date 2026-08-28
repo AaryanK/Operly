@@ -17,6 +17,12 @@
   grid-template-columns: 42px minmax(0, 1fr) !important;
 }
 
+.ai-history-mobile-trigger,
+.ai-history-mobile-close,
+.ai-history-backdrop {
+  display: none;
+}
+
 @media (max-width: 680px) {
   .workspace-nav {
     max-width: 100%;
@@ -70,5 +76,245 @@
     max-width: 100% !important;
     min-width: 0 !important;
     white-space: normal !important;
+  }
+
+  /* Workspace AI is a chat surface, not a vertically stacked content page. */
+  .mobile-content-open .workspace-content-frame > .workspace-page.ai-page,
+  .workspace-page.ai-page {
+    min-height: 0 !important;
+    height: 100% !important;
+    padding-bottom: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .ai-layout-react,
+  .ai-layout-react.history-collapsed {
+    position: relative;
+    display: block !important;
+    min-height: 0 !important;
+    height: 100% !important;
+    overflow: hidden !important;
+  }
+
+  .ai-chat-panel {
+    min-width: 0;
+    min-height: 0 !important;
+    height: 100% !important;
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+    overflow: hidden !important;
+  }
+
+  .ai-chat-panel .surface-header {
+    min-width: 0;
+    padding: 11px 12px 10px !important;
+    gap: 8px !important;
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  .ai-chat-panel .surface-header > div {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .ai-chat-panel .surface-header h1 {
+    margin: 2px 0 0 !important;
+    font-size: 21px !important;
+    line-height: 1.08 !important;
+  }
+
+  .ai-chat-panel .surface-header p {
+    display: none;
+  }
+
+  .ai-chat-panel .workspace-context-pill {
+    display: none;
+  }
+
+  .ai-history-mobile-trigger {
+    width: fit-content;
+    min-height: 36px;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 7px;
+    padding: 0 10px;
+    border: 1px solid var(--ui-line);
+    border-radius: 10px;
+    color: var(--ui-ink);
+    background: var(--ui-panel-muted);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .ai-history-mobile-trigger > span:first-child {
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .ai-chat-panel .conversation-stage {
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 16px 12px 12px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ai-chat-panel .suggestion-grid {
+    grid-template-columns: 1fr !important;
+    gap: 8px;
+    margin: 0 auto;
+  }
+
+  .ai-chat-panel .suggestion-grid button {
+    min-height: 0;
+    padding: 12px 13px;
+  }
+
+  .ai-chat-panel .chat-message {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    margin-bottom: 18px;
+  }
+
+  .ai-chat-panel .assistant-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .ai-chat-panel .composer {
+    position: relative;
+    z-index: 2;
+    width: calc(100% - 18px) !important;
+    max-width: none;
+    margin: 0 9px calc(9px + env(safe-area-inset-bottom)) !important;
+    border-radius: 16px;
+    flex: 0 0 auto;
+  }
+
+  .ai-chat-panel .composer textarea {
+    min-height: 52px;
+    max-height: 128px;
+    padding: 13px 14px 7px;
+    font-size: 16px;
+  }
+
+  .ai-chat-panel .composer-actions {
+    align-items: center !important;
+    padding: 7px 8px 8px 10px;
+  }
+
+  .ai-chat-panel .composer-actions > div {
+    min-width: 0;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  .ai-chat-panel .composer-actions > div > span {
+    display: none;
+  }
+
+  /* Conversation history is a drawer on phones instead of consuming the chat. */
+  .ai-layout-react .conversation-list-panel,
+  .ai-layout-react.history-collapsed .conversation-list-panel {
+    display: flex !important;
+    position: fixed !important;
+    z-index: 260;
+    inset: 0 auto 0 0;
+    width: min(86vw, 340px) !important;
+    max-width: 340px;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    padding: max(14px, env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) !important;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--ui-line);
+    background: var(--ui-panel);
+    box-shadow: 24px 0 70px rgba(0, 0, 0, .34);
+    transform: translateX(-105%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform .18s ease, visibility .18s ease;
+  }
+
+  .ai-layout-react .conversation-list-panel.mobile-open,
+  .ai-layout-react.history-collapsed .conversation-list-panel.mobile-open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .ai-layout-react .conversation-list-panel .history-head {
+    flex: 0 0 auto;
+    padding: 3px 5px 12px;
+  }
+
+  .ai-layout-react .conversation-list-panel .history-list {
+    min-height: 0;
+    flex: 1;
+    display: grid;
+    align-content: start;
+    gap: 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 12px;
+  }
+
+  .ai-layout-react .conversation-list-panel .history-list > button,
+  .ai-layout-react.history-collapsed .conversation-list-panel .history-list > button {
+    min-height: 50px;
+    grid-template-columns: 28px minmax(0, 1fr) !important;
+    place-items: initial !important;
+    align-items: center !important;
+    padding: 8px 9px !important;
+  }
+
+  .ai-layout-react.history-collapsed .conversation-list-panel .history-list > button > span:last-child {
+    display: block !important;
+  }
+
+  .ai-layout-react .history-collapse {
+    display: none !important;
+  }
+
+  .ai-history-mobile-close {
+    width: 34px !important;
+    height: 34px !important;
+    display: grid !important;
+    place-items: center;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .ai-history-backdrop.open {
+    display: block !important;
+    position: fixed;
+    z-index: 250;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, .52);
+    backdrop-filter: blur(2px);
+  }
+}
+
+@media (max-width: 430px) {
+  .ai-chat-panel .surface-header h1 {
+    font-size: 20px !important;
+  }
+
+  .ai-history-mobile-trigger {
+    min-height: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-layout-react .conversation-list-panel {
+    transition: none !important;
   }
 }
