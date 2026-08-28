@@ -1,0 +1,74 @@
+/*
+ * Workspace navigation owns the final structural cascade for the
+ * scope -> workspace navigation -> content flow.
+ *
+ * Older base/mobile layers still contain the pre-cutover horizontal workspace
+ * nav rules. Keep this layer last until those legacy selectors are fully
+ * removed from their shared files.
+ */
+
+/* The workspace identity already opens Settings. The adjacent control owns
+ * sidebar collapse/expand, so a second directional chevron is ambiguous. */
+.workspace-identity-chevron {
+  display: none !important;
+}
+
+.workspace-shell:not(.workspace-nav-collapsed) .workspace-identity-button {
+  grid-template-columns: 42px minmax(0, 1fr) !important;
+}
+
+@media (max-width: 680px) {
+  .workspace-nav {
+    max-width: 100%;
+  }
+
+  .workspace-identity-button,
+  .workspace-nav-collapsed .workspace-identity-button {
+    grid-template-columns: 42px minmax(0, 1fr) !important;
+  }
+
+  .workspace-nav > nav {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    gap: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  .workspace-nav > nav > .nav-group {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin: 8px 0 0 !important;
+  }
+
+  .workspace-nav .nav-group-heading {
+    display: flex !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    white-space: normal !important;
+  }
+
+  .workspace-nav .nav-group-items {
+    display: grid;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .workspace-nav .nav-group-collapsed .nav-group-items {
+    display: none !important;
+  }
+
+  .workspace-nav .nav-group-items > button {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    white-space: normal !important;
+  }
+}
