@@ -68,23 +68,30 @@ class RailwayAuthOriginTests(unittest.TestCase):
             )
             self.assertFalse(_cross_site(request))
 
-    def test_signed_in_entry_routes_probe_session_before_rendering_public_auth(self):
+    def test_landing_probes_authenticated_scope_before_rendering_public_entry(self):
         source = (
             Path(__file__).resolve().parents[1]
             / "apps"
             / "web"
-            / "static"
-            / "auth.js"
+            / "src"
+            / "public"
+            / "PublicApp.tsx"
         ).read_text(encoding="utf-8")
-        self.assertIn('const SIGNED_IN_ENTRY_ROUTES = new Set(["/", "/login", "/signup"]);', source)
-        initialize = source.index("async function initializeAuth()")
-        signed_in_check = source.index("if (SIGNED_IN_ENTRY_ROUTES.has(location.pathname))", initialize)
-        public_route = source.index("if (AUTH_ROUTES[location.pathname])", signed_in_check)
-        self.assertLess(signed_in_check, public_route)
-        # Account-first auth probes the selected workspace and falls back to the
-        # private Personal AI scope when the account has no workspace.
-        self.assertIn("await enterAuthenticatedScope();", source[signed_in_check:public_route])
-        self.assertIn("return await enterAuthenticatedPersonal();", source)
+
+        self.assertIn("async function enterAuthenticatedScope", source)
+        landing = source.index("function Landing()")
+        session_probe = source.index(
+            'api("/auth/workspaces").then(() => enterAuthenticatedScope())',
+            landing,
+        )
+        public_render = source.index("return (", session_probe)
+        self.assertLess(session_probe, public_render)
+
+        # Account-first routing probes the selected workspace and falls back to the
+        # private Personal Operly scope when no workspace can be entered.
+        self.assertIn('const me = await api<{ tenant: { id: string } }>("/me");', source)
+        self.assertIn('await api("/auth/workspaces");', source)
+        self.assertIn('go("/channels/@me");', source)
 
 
 if __name__ == "__main__":
