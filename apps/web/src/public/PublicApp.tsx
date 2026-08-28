@@ -154,7 +154,7 @@ function Landing() {
       <main>
         <section className="react-hero">
           <div className="public-hero-copy">
-            <span className="public-status-chip"><i /> AI that can actually operate</span>
+            <span className="public-status-chip"><i /> Give AI somewhere to operate</span>
             <h1>AI shouldn’t just answer. <em>It should operate.</em></h1>
             <p>OPERLY gives AI persistent context, authorized capabilities, connected services and a real software workspace—so it can move from understanding work to getting it done.</p>
             <div className="hero-actions"><a className="primary-button hero-button" href="/signup">Start using OPERLY <span>→</span></a><a className="hero-text-link" href="#capabilities">Explore the operating layer</a></div>
