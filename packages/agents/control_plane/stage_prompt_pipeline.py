@@ -145,6 +145,8 @@ class FactoryStagePromptPipeline:
                 output.append(item)
                 used += size
                 continue
+            if remaining < 400:
+                break
 
             output.append(_large_item_preview(item, max_chars=remaining))
             break
