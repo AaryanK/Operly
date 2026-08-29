@@ -52,7 +52,6 @@ jobs:
           packages/runtime_plugins
           packages/security
           packages/solutions
-          packages/studio
           packages/workspace
 
       - name: Verify canonical React frontend contracts
