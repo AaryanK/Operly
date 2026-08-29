@@ -48,9 +48,22 @@ def _decoded_payload(payload_json: str | None) -> dict[str, Any]:
 
 
 def _event_payload(row: ModelRuntimeTrace) -> dict[str, Any]:
+    """Return the application payload for one persisted runtime event.
+
+    `emit_runtime_trace_event` persists a trace envelope whose payload is an event
+    packet (`eventType`, `metadata`, `payload`). Model trace rows use the first payload
+    level directly. AI Debug status classification needs the inner application payload
+    for runtime events while remaining compatible with older/direct test rows.
+    """
+
     envelope = _decoded_payload(row.payload_json)
     payload = envelope.get("payload")
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    nested = payload.get("payload")
+    if "eventType" in payload and isinstance(nested, dict):
+        return nested
+    return payload
 
 
 def _usage_values(value: Any) -> tuple[int, int, int]:
@@ -81,15 +94,24 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
     components: list[str] = []
     seen_components: set[str] = set()
     input_tokens = output_tokens = total_tokens = 0
+    reported_runtime_tokens = 0
 
     for row in ordered:
         model_key = (row.provider, row.provider_model_id)
-        if model_key not in seen_models:
+        # `operly/runtime` is orchestration telemetry, not a model candidate. Keeping it
+        # out prevents zero-model Factory runs from misleadingly claiming a model.
+        if model_key != ("operly", "runtime") and model_key not in seen_models:
             seen_models.add(model_key)
             models.append({"provider": row.provider, "model": row.provider_model_id})
         if row.component and row.component not in seen_components:
             seen_components.add(row.component)
             components.append(row.component)
+
+        event_payload = _event_payload(row)
+        event_token_usage = event_payload.get("token_usage")
+        if isinstance(event_token_usage, (int, float)):
+            reported_runtime_tokens = max(reported_runtime_tokens, int(event_token_usage))
+
         if row.phase == "success":
             envelope = _decoded_payload(row.payload_json)
             payload = envelope.get("payload") if isinstance(envelope.get("payload"), dict) else {}
@@ -100,7 +122,13 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
             output_tokens += out_count
             total_tokens += total_count
 
-    # Factory fail-closed runs may intentionally make zero model calls. Their
+    # Older Factory rows may have recorded aggregate root-budget usage only on the
+    # terminal orchestration event. Preserve that total when model rows were not yet
+    # correlated to the Factory run; new runs should get exact input/output counts.
+    if total_tokens == 0 and reported_runtime_tokens:
+        total_tokens = reported_runtime_tokens
+
+    # Factory fail-closed runs may intentionally make zero worker/model calls. Their
     # application-authored terminal event is therefore the source of run truth.
     # Only a rejection explicitly marked state=blocked is terminal; ordinary
     # capability rejections can still be recovered by the runtime.
@@ -249,7 +277,7 @@ async def get_ai_run(
         (
             await db.scalars(
                 select(ModelRuntimeTrace)
-                .where(*filters)
+                .where(*filters, ModelRuntimeTrace.run_id.in_([run_id]))
                 .order_by(ModelRuntimeTrace.created_at.asc())
                 .limit(10000)
             )
