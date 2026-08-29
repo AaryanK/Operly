@@ -3,14 +3,20 @@
 Factory workers use a resettable stage runtime rather than a growing conversational
 transcript. Persistent state flows through ContextCapsule/artifact/evidence references;
 materialized workspace context is single-use and is never replayed after a tool round.
+Verified working observations are retained separately from promoted stage evidence so
+repair attempts can continue from completed work without weakening completion truth.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
+import json
+import re
 from collections.abc import Callable
 from typing import Any, Awaitable
 
+from packages.agents.compaction import compact_tool_content
 from packages.agents.runtime import AgentExecutionBudget
 from packages.model_runtime import InferenceBudget
 from packages.model_runtime.registry import model_for_role
@@ -44,6 +50,31 @@ _TERMINAL_CAPABILITY_STATUSES = frozenset(
         "unverified",
     }
 )
+_CACHEABLE_READ_OPERATIONS = frozenset(
+    {
+        "search",
+        "list",
+        "read",
+        "get",
+        "fetch",
+        "retrieve",
+        "check",
+        "inspect",
+        "view",
+        "lookup",
+        "query",
+    }
+)
+_CACHEABLE_AI_OPERATIONS = frozenset(
+    {
+        "extract",
+        "classify",
+        "analyze",
+        "analyse",
+        "summarize",
+        "assess",
+    }
+)
 
 
 async def _resolve(value):
@@ -65,6 +96,88 @@ def _strings(value: Any) -> list[str]:
 
 def _short_hash(value: str, *, size: int = 12) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()[: max(6, min(int(size), 24))]
+
+
+def _capability_tokens(capability_id: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", str(capability_id or "").lower())
+        if token
+    }
+
+
+def _cacheable_capability(capability_id: str) -> bool:
+    """Return True only for same-run operations safe to replay from observation cache.
+
+    Connector reads are cacheable until a successful mutation advances the run epoch.
+    A narrow set of AI analysis/extraction capabilities is also pure for identical
+    arguments and can be memoized. Unknown operations fail closed as non-cacheable.
+    """
+
+    clean = str(capability_id or "").strip().lower()
+    tokens = _capability_tokens(clean)
+    if tokens & _CACHEABLE_READ_OPERATIONS:
+        return True
+    return clean.startswith("ai.") and bool(tokens & _CACHEABLE_AI_OPERATIONS)
+
+
+def _verified_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("ok") is False or result.get("success") is False:
+        return False
+    status = str(
+        result.get("status") or result.get("lifecycle_status") or ""
+    ).strip().lower()
+    if status in _TERMINAL_CAPABILITY_STATUSES:
+        return False
+    verification = result.get("verification")
+    if isinstance(verification, dict) and verification.get("success") is True:
+        return True
+    if result.get("verified") is True or result.get("success") is True:
+        return True
+    if result.get("ok") is True and status in {
+        "",
+        "verified",
+        "completed",
+        "success",
+        "succeeded",
+    }:
+        return True
+    return status in {"verified", "completed", "success", "succeeded"}
+
+
+def _canonical_arguments(arguments: dict[str, Any]) -> str:
+    return json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _bounded_arguments(arguments: dict[str, Any]) -> Any:
+    raw = _canonical_arguments(arguments)
+    if len(raw) <= 1_200:
+        return copy.deepcopy(arguments)
+    return {
+        "preview": raw[:1_000] + "… [bounded]",
+        "digest": hashlib.sha256(raw.encode()).hexdigest()[:16],
+    }
+
+
+def _compact_result(result: dict[str, Any]) -> Any:
+    raw = json.dumps(result, sort_keys=True, ensure_ascii=False, default=str)
+    compacted = compact_tool_content(raw, max_chars=1_600)
+    try:
+        return json.loads(compacted)
+    except (TypeError, json.JSONDecodeError):
+        return compacted
+
+
+def _memoized_trace_entry(entry: Any) -> bool:
+    observation = getattr(entry, "observation", {})
+    if not isinstance(observation, dict):
+        return False
+    if observation.get("_operly_memoized") is True:
+        return True
+    nested = observation.get("observation")
+    return isinstance(nested, dict) and nested.get("_operly_memoized") is True
 
 
 def factory_action_call_id(
@@ -154,6 +267,7 @@ def _external_action_count(trace: list[Any]) -> int:
         1
         for entry in trace
         if str(getattr(entry, "capability_id", "") or "")
+        and not _memoized_trace_entry(entry)
         and not str(getattr(entry, "capability_id", "") or "").startswith(
             ("context.", "capability.", "model.", "runtime.")
         )
@@ -180,9 +294,52 @@ class AgentRuntimeWorker:
         self.max_steps = max(1, min(int(max_steps), 12))
         self.inference_metadata = dict(inference_metadata or {})
         # One AgentRuntimeWorker instance is shared by the deterministic stage runner,
-        # so this default ledger is root-scoped across all stages/parallel attempts.
+        # so these ledgers are root-scoped across all stages/repair attempts.
         self.root_inference_budget = root_inference_budget or FactoryInferenceBudget()
         self.max_output_tokens = max(256, min(int(max_output_tokens), 8_000))
+        self._read_observation_cache: dict[str, dict[str, Any]] = {}
+        self._mutation_epoch = 0
+        self._stage_working_state: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _observation_signature(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+    ) -> tuple[str, str]:
+        canonical = _canonical_arguments(arguments)
+        raw_key = f"{self._mutation_epoch}:{capability_id}:{canonical}"
+        return raw_key, hashlib.sha256(raw_key.encode()).hexdigest()[:16]
+
+    def _remember_observation(
+        self,
+        *,
+        stage_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+        signature: str,
+        memoized: bool,
+    ) -> None:
+        stage_state = self._stage_working_state.setdefault(stage_id, {})
+        existing = stage_state.get(signature)
+        if existing is not None:
+            existing["cache_hits"] = max(0, int(existing.get("cache_hits") or 0)) + (
+                1 if memoized else 0
+            )
+            return
+        stage_state[signature] = {
+            "signature": signature,
+            "capability_id": capability_id,
+            "arguments": _bounded_arguments(arguments),
+            "status": "verified",
+            "cache_epoch": self._mutation_epoch,
+            "cache_hits": 1 if memoized else 0,
+            "observation": _compact_result(result),
+        }
+
+    def _working_state_snapshot(self, stage_id: str) -> list[dict[str, Any]]:
+        state = self._stage_working_state.get(stage_id, {})
+        return [copy.deepcopy(item) for item in list(state.values())[-16:]]
 
     async def _stage_schemas(
         self,
@@ -231,26 +388,79 @@ class AgentRuntimeWorker:
             max_output_tokens=self.max_output_tokens,
         )
         runtime_run_id = str(self.inference_metadata.get("runtime_run_id") or "").strip()
+        stage_state = self._stage_working_state.setdefault(stage.id, {})
         prompt_pipeline = FactoryStagePromptPipeline(
             stage=stage,
             capsule=capsule,
             defect=defect,
+            working_state=list(stage_state.values()),
         )
+        # Preserve a live reference: new observations are appended to this list as tool
+        # calls complete, so continuation turns see them immediately. On a later repair
+        # attempt a fresh pipeline receives the same run-scoped ledger snapshot.
+        prompt_pipeline.working_state = []
+
+        def sync_prompt_working_state() -> None:
+            prompt_pipeline.working_state[:] = list(
+                self._stage_working_state.get(stage.id, {}).values()
+            )
+
+        sync_prompt_working_state()
 
         async def schemas():
             return await self._stage_schemas(stage, capsule)
 
         async def invoke(name: str, arguments: dict[str, Any], call_id: str | None):
+            cacheable = _cacheable_capability(name)
+            cache_key, signature = self._observation_signature(name, arguments)
+            if cacheable and cache_key in self._read_observation_cache:
+                cached = copy.deepcopy(self._read_observation_cache[cache_key])
+                self._remember_observation(
+                    stage_id=stage.id,
+                    capability_id=name,
+                    arguments=arguments,
+                    result=cached,
+                    signature=signature,
+                    memoized=True,
+                )
+                sync_prompt_working_state()
+                cached["_operly_memoized"] = True
+                cached["_operly_cache_signature"] = signature
+                return cached
+
             correlated_call_id = factory_action_call_id(
                 runtime_run_id,
                 stage.id,
                 attempt,
                 call_id,
             )
-            return await _resolve(self.invoke(name, arguments, correlated_call_id or call_id))
+            result = await _resolve(
+                self.invoke(name, arguments, correlated_call_id or call_id)
+            )
+            if not isinstance(result, dict) or not _verified_result(result):
+                return result
+
+            self._remember_observation(
+                stage_id=stage.id,
+                capability_id=name,
+                arguments=arguments,
+                result=result,
+                signature=signature,
+                memoized=False,
+            )
+            if cacheable:
+                self._read_observation_cache[cache_key] = copy.deepcopy(result)
+            else:
+                # A verified mutation may make any prior read stale. Advancing the epoch
+                # invalidates memoization without deleting historical working-state facts.
+                self._mutation_epoch += 1
+                self._read_observation_cache.clear()
+            sync_prompt_working_state()
+            return result
 
         # Long-horizon work belongs to the Factory DAG. A worker gets a short bounded
-        # loop, and every capability round resets its model-visible working set.
+        # loop, and every capability round resets its model-visible working set while the
+        # verified observation ledger survives those resets and repair attempts.
         execution_budget = AgentExecutionBudget(
             base_steps=self.max_steps,
             max_steps=min(12, self.max_steps + 2),
@@ -280,7 +490,7 @@ class AgentRuntimeWorker:
                     "factory_stage_id": stage.id,
                     "factory_attempt": attempt,
                     "worker_role": stage.assigned_role,
-                    "factory_context_pipeline": "bounded-reset-v2",
+                    "factory_context_pipeline": "bounded-reset-v3-working-state",
                 },
             )
         except FactoryInferenceBudgetExceeded as error:
@@ -298,6 +508,7 @@ class AgentRuntimeWorker:
                     "budget_reason": error.reason,
                     "budget": error.snapshot,
                     "runtime_usage": usage,
+                    "working_state": self._working_state_snapshot(stage.id),
                 },
                 external_actions=0,
                 token_usage=max(0, int(usage.get("total_tokens") or 0)),
@@ -308,6 +519,9 @@ class AgentRuntimeWorker:
         artifacts, evidence_refs, compact_evidence = _extract_handles(trace)
         usage = dict(getattr(model, "usage", {}) or {})
         compact_evidence["runtime_usage"] = usage
+        working_state = self._working_state_snapshot(stage.id)
+        if working_state:
+            compact_evidence["working_state"] = working_state
         runtime_budget = result.get("budget")
         if isinstance(runtime_budget, dict):
             compact_evidence["factory_stage_runtime"] = dict(runtime_budget)
