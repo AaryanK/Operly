@@ -33,6 +33,49 @@ def _mentions(lowered: str, *values: str) -> bool:
     return any(value in lowered for value in values)
 
 
+def _calendar_language(lowered: str) -> bool:
+    """Recognize ordinary calendar phrasing before exact capability cataloging.
+
+    This stays deterministic and intentionally narrow. It is not a pseudo-intent
+    resolver: it only decides whether the authorized calendar namespace should be
+    offered to the planner. Natural user wording such as appointments, agenda,
+    availability, double-booking, and scheduling conflicts must not fall through to
+    an unrelated global semantic catalog.
+    """
+
+    if _mentions(
+        lowered,
+        "calendar",
+        "meeting",
+        "meetings",
+        "event",
+        "events",
+        "schedule",
+        "scheduling",
+        "appointment",
+        "appointments",
+        "agenda",
+        "availability",
+        "free/busy",
+        "freebusy",
+        "double-book",
+        "double book",
+        "double-booked",
+        "overbook",
+    ):
+        return True
+    return _mentions(lowered, "conflict", "conflicts", "overlap", "overlaps") and _mentions(
+        lowered,
+        "time",
+        "today",
+        "tomorrow",
+        "day",
+        "week",
+        "slot",
+        "slots",
+    )
+
+
 def _domain_catalog_requests(objective: str) -> list[dict[str, Any]]:
     """Return deterministic domain slices for the planner's capability catalog.
 
@@ -55,7 +98,7 @@ def _domain_catalog_requests(objective: str) -> list[dict[str, Any]]:
                 ),
             }
         )
-    if _mentions(lowered, "calendar", "meeting", "event", "schedule"):
+    if _calendar_language(lowered):
         requests.append(
             {
                 "query": "calendar list events read",
