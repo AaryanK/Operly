@@ -64,6 +64,9 @@ class DefectRepairPlanner:
             "You receive one bounded stage and deterministic failure evidence. Propose a materially different repair strategy only if the defect is retryable. "
             "Do not change the stage identity, dependencies, validation IDs, authorization, or root objective. "
             "Do not invent capability IDs or resource IDs; use context/capability intents in plain language. "
+            "A worker-exit failure does not mean its earlier capability calls failed: verified observations are retained in stage working state and will be supplied to the next worker. "
+            "Do not replace a relevant read operation with a semantically unrelated operation merely to be different (for example, do not replace recent-email search/read with draft listing). "
+            "For worker-exit failures, revise the objective toward the remaining work and preserve the provider family/operation intents that are still required; let the next worker reuse completed observations instead of restarting them. "
             "Do not ask to repeat the same method that produced the same failure. Return {\"abort\":true,...} if evidence shows the objective cannot currently be satisfied."
         )
         payload = {

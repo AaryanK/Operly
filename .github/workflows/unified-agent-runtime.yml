@@ -51,6 +51,7 @@ on:
       - "tests/test_factory_ai_debug_observability.py"
       - "tests/test_factory_pseudo_intent_discovery.py"
       - "tests/test_factory_worker_context_projection.py"
+      - "tests/test_factory_stage_working_state.py"
       - "tests/test_factory_grounded_recovery.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
@@ -147,6 +148,7 @@ jobs:
           tests/test_factory_ai_debug_observability.py
           tests/test_factory_pseudo_intent_discovery.py
           tests/test_factory_worker_context_projection.py
+          tests/test_factory_stage_working_state.py
           tests/test_factory_grounded_recovery.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
