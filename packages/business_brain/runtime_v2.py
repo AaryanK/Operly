@@ -196,6 +196,7 @@ async def run_workspace_runtime_v2(
         schemas=schemas,
         invoke=invoke,
         metadata=metadata,
+        runtime_context=runtime_context,
         run_id=runtime_run_id,
         planner_input_tokens=planned.input_tokens,
         planner_output_tokens=planned.output_tokens,
