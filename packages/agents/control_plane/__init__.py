@@ -1,6 +1,6 @@
 """Operly agent factory control plane."""
 
-from .bindings import AuthorizedContextBindings, FactoryCapabilityIntentResolver
+from .bindings import AuthorizedContextBindings
 from .compiler import FactoryBlueprint, FactoryBlueprintCompiler
 from .context_injector import ContextInjectionPolicy, StageContextInjector
 from .contracts import (
@@ -17,9 +17,13 @@ from .contracts import (
     ValidatorSpec,
 )
 from .evidence import FactoryEvidenceLedger
-from .factory import AgentFactoryControlPlane, FactoryRunResponse
+from .factory import FactoryRunResponse
 from .inference_budget import FactoryInferenceBudget, FactoryInferenceBudgetExceeded
 from .repair import DefectRepairPlanner
+from .safe_factory import (
+    SafeAgentFactoryControlPlane as AgentFactoryControlPlane,
+    SafeFactoryCapabilityIntentResolver as FactoryCapabilityIntentResolver,
+)
 from .sandbox_validation import SandboxPythonValidator
 from .semantic_validation import EvidenceBoundedSemanticValidator
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner, StageAttempt
