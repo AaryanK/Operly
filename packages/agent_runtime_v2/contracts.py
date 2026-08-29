@@ -94,6 +94,7 @@ class RunState:
     objective: str
     plan: Plan
     steps: dict[str, StepState]
+    runtime_context: dict[str, Any] = field(default_factory=dict)
     status: str = "running"
     stop_reason: str | None = None
     mutation_epoch: int = 0
@@ -109,6 +110,7 @@ class RunState:
         return {
             "run_id": self.run_id,
             "objective": self.objective,
+            "runtime_context": dict(self.runtime_context),
             "status": self.status,
             "stop_reason": self.stop_reason,
             "mutation_epoch": self.mutation_epoch,
