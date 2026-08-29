@@ -77,6 +77,9 @@ async def chat(
                 "user_id": auth.user.id,
                 "role": auth.role,
                 "allow_tenant_context": True,
+                # Workspace time is application-owned context. Relative dates such
+                # as today/tomorrow must not silently fall back to UTC.
+                "timezone": str(auth.tenant.timezone or "UTC"),
             },
         ),
     )
@@ -159,6 +162,7 @@ async def chat_with_attachments(
                 "user_id": auth.user.id,
                 "role": auth.role,
                 "allow_tenant_context": True,
+                "timezone": str(auth.tenant.timezone or "UTC"),
                 "attachment_artifact_ids": [item["artifact_id"] for item in uploaded_artifacts],
                 "dashboard_context": trusted_upload_context,
             },
