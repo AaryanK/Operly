@@ -1,6 +1,7 @@
 """Operation-aware capability intent resolution for the Factory control plane."""
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 from .safe_factory import (
@@ -32,6 +33,40 @@ _READ_FALLBACK_INTENT = frozenset(
 _READ_CAPABILITY_OPERATIONS = frozenset(
     {"read", "get", "retrieve", "fetch", "check", "inspect", "view", "search", "find", "query", "lookup", "list"}
 )
+_DISCOVERY_TOKEN_ALIASES = {
+    "email": "gmail",
+    "emails": "gmail",
+    "mail": "gmail",
+    "tasks": "task",
+    "todos": "task",
+    "reminders": "task",
+    "calendars": "calendar",
+}
+
+
+def _registry_search_query(intent: str) -> str:
+    """Normalize model-emitted pseudo-intents for metadata discovery only.
+
+    The capability registry intentionally treats punctuation inside IDs as part of a
+    token. A compiler may still emit values such as ``calendar_read`` or
+    ``task_create`` even though the compiler contract asks for plain language. Search
+    those as ordinary words, with narrow provider aliases such as email -> gmail.
+
+    This never grants or selects a capability by itself: family, operation,
+    availability, visibility and authority checks still run against the original
+    intent after discovery returns candidates.
+    """
+
+    tokens = re.findall(r"[a-z0-9]+", str(intent or "").lower())
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        mapped = _DISCOVERY_TOKEN_ALIASES.get(token, token)
+        if mapped in seen:
+            continue
+        seen.add(mapped)
+        normalized.append(mapped)
+    return " ".join(normalized)
 
 
 def _operation_matches(capability_id: str, intent: str) -> bool:
@@ -65,9 +100,10 @@ class StrictFactoryCapabilityIntentResolver(SafeFactoryCapabilityIntentResolver)
             clean = " ".join(str(intent or "").split()).strip()
             if not clean:
                 continue
+            search_query = _registry_search_query(clean) or clean
             rows = self.registry.search(
                 self.scope_id,
-                clean,
+                search_query,
                 authority=self.authority,
                 limit=max(self.max_per_intent * 4, 8),
             )
