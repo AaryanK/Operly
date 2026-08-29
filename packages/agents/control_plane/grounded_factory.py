@@ -228,7 +228,6 @@ class GroundedFactoryBlueprintCompiler(FactoryBlueprintCompiler):
                 )
             )
         stages = rewritten_stages
-        by_id = {stage.id: stage for stage in stages}
 
         attached: dict[str, list[StageSpec]] = {}
         for stage in stages:
@@ -292,11 +291,7 @@ class GroundedAgentRuntimeWorker(SafeAgentRuntimeWorker):
                 "incomplete_stage": True,
             }
         )
-        return replace(
-            result,
-            status="failed",
-            evidence=evidence,
-        )
+        return replace(result, status="failed", evidence=evidence)
 
 
 class GroundedControlPlaneValidator(ControlPlaneValidator):
@@ -388,10 +383,15 @@ class GroundedRuntimeAwareAgentFactoryControlPlane(RuntimeAwareAgentFactoryContr
             self.semantic_validator,
             root_inference_budget,
         )
-        repair_planner = self._bind_budget(
-            self.repair_planner,
-            root_inference_budget,
-        )
+        if isinstance(self.repair_planner, GroundedDefectRepairPlanner):
+            repair_planner = GroundedDefectRepairPlanner(
+                root_inference_budget=root_inference_budget
+            )
+        else:
+            repair_planner = self._bind_budget(
+                self.repair_planner,
+                root_inference_budget,
+            )
         validator = GroundedControlPlaneValidator(
             python_test=self.python_validator,
             semantic=semantic_validator,
