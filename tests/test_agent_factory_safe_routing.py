@@ -266,7 +266,7 @@ async def test_runner_promotes_validated_result_into_next_stage_capsule():
                 StageSpec("stage-2", "Prepare", dependencies=("stage-1",)),
             )
         ),
-        acceptance=AcceptanceContract(),
+        acceptance=AcceptanceContract(()),
     )
 
     assert result.completed is True
