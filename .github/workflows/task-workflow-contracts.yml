@@ -52,7 +52,6 @@ jobs:
           packages/company/events/service.py
           packages/connectors/discord/runtime.py
           packages/connectors/discord/task_delivery.py
-          packages/connectors/discord/scheduled_tasks.py
           packages/business_brain/personal_agent.py
           apps/api/approvals_router.py
       - name: Run durable task contracts
