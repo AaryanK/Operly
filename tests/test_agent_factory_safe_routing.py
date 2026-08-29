@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from packages.agents.control_plane import FactoryCapabilityIntentResolver
 from packages.agents.control_plane.contracts import (
     AcceptanceContract,
     ContextCapsule,
@@ -80,6 +81,26 @@ async def test_capability_resolver_does_not_substitute_gmail_write_or_context_se
     assert "gmail.create_draft" not in selected
     assert "context.search" not in selected
     assert "crm.search_contacts" not in selected
+
+
+@pytest.mark.asyncio
+async def test_strict_resolver_requires_create_operation_for_create_tasks():
+    resolver = FactoryCapabilityIntentResolver(
+        registry=FakeRegistry(
+            [
+                {"id": "task.list"},
+                {"id": "artifact.create_text"},
+                {"id": "task.get"},
+                {"id": "task.create"},
+            ]
+        ),
+        scope_id="workspace-1",
+        authority={"tasks:read", "tasks:write"},
+    )
+
+    selected = await resolver(("Create tasks",))
+
+    assert selected == ["task.create"]
 
 
 @pytest.mark.asyncio
