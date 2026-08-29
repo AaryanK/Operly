@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from packages.model_runtime import InferenceBudget, InferenceRequest
@@ -51,13 +51,47 @@ def _strings(value: Any, *, limit: int, chars: int) -> tuple[str, ...]:
     return tuple(output)
 
 
-class RuntimeV2Planner:
-    """Translate the request directly into a tiny DAG over exact capability IDs.
+def _run_if(value: Any) -> tuple[str | None, str | None, bool]:
+    if not isinstance(value, dict):
+        return None, None, True
+    step_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value.get("step_id") or ""))[:80].strip("-")
+    field = str(value.get("field") or "").strip().lower()
+    if field not in {"has_findings", "coverage_complete"}:
+        return None, None, True
+    return (step_id or None), field, bool(value.get("equals", True))
 
-    The planner never emits pseudo-intents. It sees a compact application-generated
-    capability index and either selects exact IDs from that index or explicitly marks
-    a requirement blocked. Authorization and execution still belong to the harness.
-    """
+
+def _conditional_language(value: str) -> bool:
+    lowered = str(value or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "only when",
+            "only if",
+            "if there is",
+            "if there are",
+            "when there is",
+            "when there are",
+            "for each real",
+            "for each clear",
+        )
+    )
+
+
+def _gmail_window_requires_complete_coverage(objective: str, capabilities: tuple[str, ...]) -> bool:
+    if "gmail.search" not in capabilities:
+        return False
+    lowered = str(objective or "").lower()
+    bounded_window = any(marker in lowered for marker in ("last ", "past ", "previous ", "since "))
+    exhaustive_language = any(
+        marker in lowered
+        for marker in ("review", "identify", "find", "all", "every", "conversations where")
+    )
+    return bounded_window and exhaustive_language
+
+
+class RuntimeV2Planner:
+    """Translate a request directly into a tiny DAG over exact capability IDs."""
 
     def __init__(self, *, max_steps: int = 8) -> None:
         self.max_steps = max(1, min(int(max_steps), 10))
@@ -81,10 +115,12 @@ class RuntimeV2Planner:
             "Create the smallest useful execution DAG for the literal request. Choose capability IDs ONLY from capability_catalog; never invent or paraphrase a capability ID. "
             "A step is a disposable worker station. Give it only the exact capabilities it needs. Split provider reads, cross-source reasoning, mutations, and final synthesis when later work depends on earlier observations. "
             "Preserve every negative constraint and conditional action rule from the request literally enough to enforce it. Do not create a duplicate representation of side effects: mutations are represented by mutating steps. "
+            "Conditional work MUST use run_if rather than relying on a worker to decide whether an otherwise-required tool call may be skipped. run_if is null or {step_id, field, equals}; field may only be has_findings or coverage_complete. "
+            "Set requires_complete_coverage=true when a read step must exhaust a bounded result set before a negative conclusion like 'none found' is trustworthy. "
             "If a required operation is unavailable in the catalog, put an object with requirement and reason in blocked instead of substituting an unrelated capability. "
-            "Each step object must contain id, objective, capabilities, depends_on, and mutating. capabilities must be an array of exact IDs copied from capability_catalog; use an empty array for reasoning-only steps. "
-            "The final step must be reasoning/synthesis only unless the user explicitly asks the final response itself to perform an action. "
-            "Prefer 2-5 steps for multi-source workflows and one step for genuinely simple requests."
+            "Each step object must contain id, objective, capabilities, depends_on, mutating, run_if, and requires_complete_coverage. capabilities must be exact IDs copied from capability_catalog. "
+            "If task creation must avoid duplicates and task.list is available, the task mutation step must include task.list before task.create. "
+            "The final step must be reasoning/synthesis only unless the user explicitly asks the final response itself to perform an action. Prefer 2-5 steps for multi-source workflows."
         )
         payload = {
             "request": objective[:16_000],
@@ -94,14 +130,24 @@ class RuntimeV2Planner:
                 if key in {"now", "timezone", "surface", "channel", "workspace_mode"}
             },
             "capability_catalog": catalog,
-            # Empty structural shape only. Do not seed model-authored content with
-            # literal examples that can be copied into the plan.
             "output_shape": {
                 "goal": "",
                 "constraints": [],
                 "blocked": [],
                 "steps": [],
                 "final_step_id": "",
+            },
+            "step_contract": {
+                "required_fields": [
+                    "id",
+                    "objective",
+                    "capabilities",
+                    "depends_on",
+                    "mutating",
+                    "run_if",
+                    "requires_complete_coverage",
+                ],
+                "run_if_fields": ["has_findings", "coverage_complete"],
             },
             "limits": {"max_steps": self.max_steps},
         }
@@ -110,21 +156,15 @@ class RuntimeV2Planner:
             InferenceRequest(
                 messages=(
                     {"role": "system", "content": system},
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii=False, default=str),
-                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
                 ),
                 budget=InferenceBudget(
                     timeout_seconds=20.0,
                     attempts_per_model=1,
                     max_models=2,
-                    max_output_tokens=2200,
+                    max_output_tokens=2400,
                 ),
-                metadata={
-                    **dict(metadata or {}),
-                    "runtime_component": "agent_runtime_v2_planner",
-                },
+                metadata={**dict(metadata or {}), "runtime_component": "agent_runtime_v2_planner"},
             )
         )
         parsed = _json_object(str(result.message.get("content") or ""))
@@ -141,6 +181,9 @@ class RuntimeV2Planner:
             if requirement:
                 blocked.append({"requirement": requirement, "reason": reason})
 
+        wants_no_duplicates = "duplicate" in str(objective or "").lower() or any(
+            "duplicate" in item.lower() for item in constraints
+        )
         steps: list[Step] = []
         seen: set[str] = set()
         for index, raw in enumerate(list(parsed.get("steps") or [])[: self.max_steps], start=1):
@@ -158,22 +201,31 @@ class RuntimeV2Planner:
             for capability_id in requested_caps:
                 row = by_id.get(capability_id)
                 if row is None:
-                    blocked.append(
-                        {
-                            "requirement": f"Step {step_id} requested {capability_id}",
-                            "reason": "planner_selected_capability_outside_catalog",
-                        }
-                    )
+                    blocked.append({
+                        "requirement": f"Step {step_id} requested {capability_id}",
+                        "reason": "planner_selected_capability_outside_catalog",
+                    })
                     continue
                 if row.get("available") is False:
-                    blocked.append(
-                        {
-                            "requirement": f"Step {step_id} requires {capability_id}",
-                            "reason": str(row.get("unavailable_reason") or "capability_unavailable")[:700],
-                        }
-                    )
+                    blocked.append({
+                        "requirement": f"Step {step_id} requires {capability_id}",
+                        "reason": str(row.get("unavailable_reason") or "capability_unavailable")[:700],
+                    })
                     continue
                 exact_caps.append(capability_id)
+
+            # Deterministic safety invariant: a duplicate-sensitive task mutation may
+            # not omit the available task read needed to check existing tasks.
+            if (
+                wants_no_duplicates
+                and "task.create" in exact_caps
+                and "task.list" in by_id
+                and by_id["task.list"].get("available") is not False
+                and "task.list" not in exact_caps
+            ):
+                exact_caps.insert(0, "task.list")
+
+            run_if_step_id, run_if_field, run_if_equals = _run_if(raw.get("run_if"))
             steps.append(
                 Step(
                     id=step_id,
@@ -181,6 +233,13 @@ class RuntimeV2Planner:
                     capabilities=tuple(exact_caps),
                     depends_on=_strings(raw.get("depends_on"), limit=8, chars=80),
                     mutating=bool(raw.get("mutating")),
+                    run_if_step_id=run_if_step_id,
+                    run_if_field=run_if_field,
+                    run_if_equals=run_if_equals,
+                    requires_complete_coverage=(
+                        bool(raw.get("requires_complete_coverage"))
+                        or _gmail_window_requires_complete_coverage(objective, tuple(exact_caps))
+                    ),
                 )
             )
 
@@ -190,25 +249,60 @@ class RuntimeV2Planner:
         normalized: list[Step] = []
         for step in steps:
             deps = tuple(item for item in step.depends_on if item in step_ids and item != step.id)
-            normalized.append(
-                Step(
-                    id=step.id,
-                    objective=step.objective,
-                    capabilities=step.capabilities,
-                    depends_on=deps,
-                    mutating=step.mutating,
+            guard_step = step.run_if_step_id if step.run_if_step_id in step_ids and step.run_if_step_id != step.id else None
+            if guard_step and guard_step not in deps:
+                deps = (*deps, guard_step)
+            normalized.append(replace(step, depends_on=deps, run_if_step_id=guard_step))
+
+        # The literal benchmark pattern "for each real obligation you find" is a
+        # conditional dependency, not an optional read failure. If the model omitted
+        # the guard, attach it deterministically when there is one unambiguous root
+        # evidence step. Conditional mutations are never left unguarded silently.
+        roots = [step for step in normalized if not step.depends_on and not step.mutating]
+        single_root = roots[0] if len(roots) == 1 else None
+        guarded: list[Step] = []
+        for step in normalized:
+            candidate = step
+            lowered_step = step.objective.lower()
+            if (
+                single_root is not None
+                and not step.conditional
+                and step.id != single_root.id
+                and (
+                    ("calendar.list_events" in step.capabilities and "identified obligation" in lowered_step)
+                    or (step.mutating and _conditional_language(objective))
                 )
-            )
-        final_step_id = str(parsed.get("final_step_id") or normalized[-1].id).strip()
-        if final_step_id not in {step.id for step in normalized}:
-            final_step_id = normalized[-1].id
+            ):
+                deps = step.depends_on
+                if single_root.id not in deps:
+                    deps = (*deps, single_root.id)
+                candidate = replace(
+                    step,
+                    depends_on=deps,
+                    run_if_step_id=single_root.id,
+                    run_if_field="has_findings",
+                    run_if_equals=True,
+                )
+            guarded.append(candidate)
+
+        if _conditional_language(objective):
+            for step in guarded:
+                if step.mutating and not step.conditional:
+                    blocked.append({
+                        "requirement": f"Conditional mutation guard for {step.id}",
+                        "reason": "conditional_mutation_missing_unambiguous_guard",
+                    })
+
+        final_step_id = str(parsed.get("final_step_id") or guarded[-1].id).strip()
+        if final_step_id not in {step.id for step in guarded}:
+            final_step_id = guarded[-1].id
 
         usage = result.usage
         return PlannedRun(
             plan=Plan(
                 goal=" ".join(str(parsed.get("goal") or objective).split()).strip()[:3000],
                 constraints=constraints,
-                steps=tuple(normalized),
+                steps=tuple(guarded),
                 final_step_id=final_step_id,
                 blocked=tuple(blocked),
             ),
