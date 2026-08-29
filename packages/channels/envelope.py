@@ -21,7 +21,6 @@ class ChannelEnvelope:
     external_space_id: str | None = None
     space_name: str | None = None
     is_direct: bool = False
-    images: list[str] = field(default_factory=list)
     attachments: list[ChannelAttachment] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 

@@ -59,10 +59,6 @@ class AgentService:
     async def run(self, request: AgentInput) -> dict:
         if not request.tenant_id or not request.principal_id:
             raise AgentSecurityError("Tenant and principal are required")
-        if request.images:
-            raise ValueError(
-                "Raw image payloads are retired. Persist attachments to the Artifact Store before invoking Agent Runtime v2."
-            )
 
         user_text = bounded_text(request.text, MAX_USER_TEXT).strip()
         attachment_context = bounded_text(request.attachment_context, MAX_USER_TEXT).strip()

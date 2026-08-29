@@ -463,7 +463,6 @@ class ChannelService:
                 channel=envelope.provider,
                 conversation_id=conversation_id,
                 text=envelope.text,
-                images=list(envelope.images),
                 attachment_context=attachment_prompt,
                 attachment_names=attachment_names,
                 metadata=request_metadata,
