@@ -17,6 +17,12 @@ from packages.agents.compaction import compact_tool_content, serialized_chars
 from .contracts import ContextCapsule, Defect, StageSpec
 
 
+# These facts are control-plane bookkeeping. Exact executable tools are already
+# supplied to the model as function schemas, so replaying their IDs in the prompt is
+# redundant and makes every worker turn larger without adding execution context.
+_INTERNAL_FACT_KEYS = frozenset({"resolved_capability_ids", "capability_ids"})
+
+
 @dataclass(frozen=True, slots=True)
 class FactoryStagePromptPolicy:
     """Hard prompt budgets for a single disposable factory stage."""
@@ -152,12 +158,29 @@ class FactoryStagePromptPipeline:
             break
         return output
 
+    def _stage_payload(self) -> dict[str, Any]:
+        """Project only worker-relevant stage state into the model prompt.
+
+        Dependencies, validation IDs, capability intents, context intents and role are
+        Factory concerns. By the time a disposable worker starts, those have already
+        been resolved into the capsule and exact tool schemas. Replaying the whole
+        StageSpec on every reason-act-observe turn is both redundant and expensive.
+        """
+
+        return {
+            "id": self.stage.id,
+            "objective": self.stage.objective,
+        }
+
     def _context_payload(self, *, include_materialized: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "context_refs": list(self.capsule.context_refs),
             "artifact_refs": list(self.capsule.artifact_refs),
-            "facts": {key: value for key, value in self.capsule.facts},
-            "capability_ids": list(self.capsule.capability_ids),
+            "facts": {
+                key: value
+                for key, value in self.capsule.facts
+                if key not in _INTERNAL_FACT_KEYS
+            },
         }
         if include_materialized:
             payload["materialized"] = self._bounded_materialized()
@@ -172,16 +195,13 @@ class FactoryStagePromptPipeline:
 
     def _payload(self, *, include_materialized: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "stage": self.stage.as_dict(),
+            "stage": self._stage_payload(),
             "context_capsule": self._context_payload(
                 include_materialized=include_materialized
             ),
             "worker_contract": {
-                "do_only_stage": True,
-                "do_not_replay_prior_worker_history": True,
-                "return_artifact_or_evidence_handles": True,
-                "materialized_context_is_single_use": True,
-                "prefer_direct_capabilities": True,
+                "scope": "stage_only",
+                "durable_outputs": "tool_evidence_or_refs",
             },
         }
         if self.defect is not None:

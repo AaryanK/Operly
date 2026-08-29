@@ -90,6 +90,28 @@ def _operation_matches(capability_id: str, intent: str) -> bool:
     return True
 
 
+def _intent_tool_budget(intent: str, configured_limit: int) -> int:
+    """Return the smallest useful schema budget for one capability intent.
+
+    Explicit operations such as create/search/list/send should map to one executable
+    operation. Generic read/analyze intents may legitimately need a discovery/read pair
+    (for example Gmail search + read_message), so they get at most two. Completely
+    generic family intents get one rather than expanding into every adjacent operation.
+
+    This is a context projection budget, not an execution/retry cap: a stage may still
+    declare multiple operation intents and receive one small tool set covering each.
+    """
+
+    limit = max(1, int(configured_limit))
+    intent_tokens = _tokens(intent)
+    for intent_group, _capability_group in _OPERATION_GROUPS:
+        if intent_tokens & intent_group:
+            return 1
+    if intent_tokens & _READ_FALLBACK_INTENT:
+        return min(2, limit)
+    return 1
+
+
 class StrictFactoryCapabilityIntentResolver(SafeFactoryCapabilityIntentResolver):
     """Resolve only authorized capabilities matching both domain and operation."""
 
@@ -100,12 +122,13 @@ class StrictFactoryCapabilityIntentResolver(SafeFactoryCapabilityIntentResolver)
             clean = " ".join(str(intent or "").split()).strip()
             if not clean:
                 continue
+            per_intent_limit = _intent_tool_budget(clean, self.max_per_intent)
             search_query = _registry_search_query(clean) or clean
             rows = self.registry.search(
                 self.scope_id,
                 search_query,
                 authority=self.authority,
-                limit=max(self.max_per_intent * 4, 8),
+                limit=max(per_intent_limit * 4, 8),
             )
             added = 0
             for row in rows:
@@ -123,7 +146,7 @@ class StrictFactoryCapabilityIntentResolver(SafeFactoryCapabilityIntentResolver)
                 seen.add(capability_id)
                 selected.append(capability_id)
                 added += 1
-                if added >= self.max_per_intent or len(selected) >= self.max_total:
+                if added >= per_intent_limit or len(selected) >= self.max_total:
                     break
             if len(selected) >= self.max_total:
                 break
