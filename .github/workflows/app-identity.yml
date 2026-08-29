@@ -33,10 +33,11 @@ jobs:
         run: python -m compileall -q packages/app_identity packages/capabilities/app_identity_provider.py packages/coding_harness/source_service.py packages/runtime_plugins/app_identity_source_validation.py apps/api/app_identity_router.py apps/api/main.py apps/api/workspace_entities_router.py apps/runner
       - name: Verify production API route assembly in a fresh interpreter
         run: |
+          set +e
           SESSION_SECRET=identity-ci-session-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
           OPERLY_RUNTIME_BINDING_SECRET=app-identity-ci-runtime-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
           OPERLY_APP_IDENTITY_SECRET=app-identity-ci-session-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
-          python - <<'PY'
+          python - <<'PY' >app-identity-route-debug.txt 2>&1
           from apps.api.main import app
 
           expected = {
@@ -45,9 +46,6 @@ jobs:
               "/api/app-identities/{application_id}/invitations",
               "/api/runtime/entities/schema",
           }
-          # FastAPI >=0.137 stores included routers as route-tree nodes rather
-          # than flattening them into app.routes. OpenAPI traverses the effective
-          # route tree and therefore verifies the externally exposed paths.
           app.openapi_schema = None
           paths = set(app.openapi()["paths"])
           missing = sorted(expected - paths)
@@ -59,6 +57,17 @@ jobs:
           }
           assert "/api/api/runtime/app-identity/register" not in paths
           PY
+          status=$?
+          cat app-identity-route-debug.txt
+          exit $status
+      - name: Upload route assembly failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-identity-route-debug
+          path: app-identity-route-debug.txt
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Run identity and shared-data acceptance tests
         env:
           OPERLY_RUNTIME_BINDING_SECRET: app-identity-ci-runtime-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
