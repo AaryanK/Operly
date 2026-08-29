@@ -81,7 +81,8 @@ class RuntimeV2Planner:
             "Create the smallest useful execution DAG for the literal request. Choose capability IDs ONLY from capability_catalog; never invent or paraphrase a capability ID. "
             "A step is a disposable worker station. Give it only the exact capabilities it needs. Split provider reads, cross-source reasoning, mutations, and final synthesis when later work depends on earlier observations. "
             "Preserve every negative constraint and conditional action rule from the request literally enough to enforce it. Do not create a duplicate representation of side effects: mutations are represented by mutating steps. "
-            "If a required operation is unavailable in the catalog, put it in blocked instead of substituting an unrelated capability. "
+            "If a required operation is unavailable in the catalog, put an object with requirement and reason in blocked instead of substituting an unrelated capability. "
+            "Each step object must contain id, objective, capabilities, depends_on, and mutating. capabilities must be an array of exact IDs copied from capability_catalog; use an empty array for reasoning-only steps. "
             "The final step must be reasoning/synthesis only unless the user explicitly asks the final response itself to perform an action. "
             "Prefer 2-5 steps for multi-source workflows and one step for genuinely simple requests."
         )
@@ -93,25 +94,14 @@ class RuntimeV2Planner:
                 if key in {"now", "timezone", "surface", "channel", "workspace_mode"}
             },
             "capability_catalog": catalog,
-            "output": {
-                "goal": "single sentence",
+            # Empty structural shape only. Do not seed model-authored content with
+            # literal examples that can be copied into the plan.
+            "output_shape": {
+                "goal": "",
                 "constraints": [],
-                "blocked": [
-                    {
-                        "requirement": "what cannot currently be done",
-                        "reason": "why, using catalog availability when present",
-                    }
-                ],
-                "steps": [
-                    {
-                        "id": "short-stable-id",
-                        "objective": "bounded station objective",
-                        "capabilities": ["exact.catalog.capability"],
-                        "depends_on": [],
-                        "mutating": False,
-                    }
-                ],
-                "final_step_id": "id of final synthesis step",
+                "blocked": [],
+                "steps": [],
+                "final_step_id": "",
             },
             "limits": {"max_steps": self.max_steps},
         }
