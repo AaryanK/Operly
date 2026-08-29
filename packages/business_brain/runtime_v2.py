@@ -5,7 +5,6 @@ firewall, approvals and connectors. It replaces only orchestration.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -17,16 +16,8 @@ from packages.capabilities.agent_harness import PluginAgentHarness, PluginInvoca
 from packages.security.execution_context import ExecutionContext
 
 
-_RUNTIME_V2_ENV = "OPERLY_AGENT_RUNTIME_V2"
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on", "enabled", "v2"})
-
-
 class RuntimeV2Engine(RuntimeV2ProjectedEngineMixin, _BaseRuntimeV2Engine):
     """Runtime v2 engine with capability-aware worker-state projection."""
-
-
-def workspace_runtime_v2_enabled() -> bool:
-    return str(os.getenv(_RUNTIME_V2_ENV, "0")).strip().lower() in _TRUE_VALUES
 
 
 def _mentions(lowered: str, *values: str) -> bool:

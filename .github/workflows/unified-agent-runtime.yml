@@ -17,7 +17,6 @@ on:
       - "packages/agents/**"
       - "packages/artifacts/**"
       - "packages/business_brain/agent.py"
-      - "packages/business_brain/factory_runtime.py"
       - "packages/business_brain/runtime_v2.py"
       - "packages/business_brain/attachments/**"
       - "packages/capabilities/artifact_provider.py"
@@ -45,18 +44,6 @@ on:
       - "tests/test_action_effect_policy.py"
       - "tests/test_agent_runtime_v2.py"
       - "tests/test_agent_runtime_v2_structured_outputs.py"
-      - "tests/test_agent_factory_bindings.py"
-      - "tests/test_agent_factory_compiler_efficiency.py"
-      - "tests/test_agent_factory_control_plane.py"
-      - "tests/test_agent_factory_distribution_resume.py"
-      - "tests/test_agent_factory_root_budget.py"
-      - "tests/test_agent_factory_safe_routing.py"
-      - "tests/test_agent_factory_worker_adapter.py"
-      - "tests/test_factory_ai_debug_observability.py"
-      - "tests/test_factory_pseudo_intent_discovery.py"
-      - "tests/test_factory_worker_context_projection.py"
-      - "tests/test_factory_stage_working_state.py"
-      - "tests/test_factory_grounded_recovery.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
       - "tests/test_file_runtime_provider.py"
@@ -88,7 +75,7 @@ jobs:
       - run: pip install -r requirements.txt pytest pytest-asyncio
       - name: Compile unified runtime
         run: |
-          python -m compileall -q packages/agent_runtime_v2 packages/agents/control_plane
+          python -m compileall -q packages/agent_runtime_v2
           python -m py_compile \
             apps/api/agent_router.py \
             apps/api/personal_agent_router.py \
@@ -105,7 +92,6 @@ jobs:
             packages/artifacts/delivery.py \
             packages/artifacts/service.py \
             packages/business_brain/agent.py \
-            packages/business_brain/factory_runtime.py \
             packages/business_brain/runtime_v2.py \
             packages/business_brain/attachments/batch_processor.py \
             packages/capabilities/artifact_provider.py \
@@ -145,18 +131,6 @@ jobs:
           tests/test_action_effect_policy.py
           tests/test_agent_runtime_v2.py
           tests/test_agent_runtime_v2_structured_outputs.py
-          tests/test_agent_factory_bindings.py
-          tests/test_agent_factory_compiler_efficiency.py
-          tests/test_agent_factory_control_plane.py
-          tests/test_agent_factory_distribution_resume.py
-          tests/test_agent_factory_root_budget.py
-          tests/test_agent_factory_safe_routing.py
-          tests/test_agent_factory_worker_adapter.py
-          tests/test_factory_ai_debug_observability.py
-          tests/test_factory_pseudo_intent_discovery.py
-          tests/test_factory_worker_context_projection.py
-          tests/test_factory_stage_working_state.py
-          tests/test_factory_grounded_recovery.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
           tests/test_file_runtime_provider.py
