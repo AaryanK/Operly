@@ -47,6 +47,12 @@ def _decoded_payload(payload_json: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _event_payload(row: ModelRuntimeTrace) -> dict[str, Any]:
+    envelope = _decoded_payload(row.payload_json)
+    payload = envelope.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
 def _usage_values(value: Any) -> tuple[int, int, int]:
     if not isinstance(value, dict):
         return (0, 0, 0)
@@ -60,6 +66,16 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
     ordered = sorted(rows, key=lambda row: row.created_at)
     errors = [row for row in ordered if row.phase == "error"]
     successes = [row for row in ordered if row.phase == "success"]
+    terminal_blocks = [
+        row
+        for row in ordered
+        if row.phase == "capability.rejected" and _event_payload(row).get("state") == "blocked"
+    ]
+    terminal_completions = [
+        row
+        for row in ordered
+        if row.phase == "workflow.completed" and _event_payload(row).get("state") == "completed"
+    ]
     models: list[dict[str, str]] = []
     seen_models: set[tuple[str, str]] = set()
     components: list[str] = []
@@ -84,11 +100,17 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
             output_tokens += out_count
             total_tokens += total_count
 
-    if errors and not successes:
+    # Factory fail-closed runs may intentionally make zero model calls. Their
+    # application-authored terminal event is therefore the source of run truth.
+    # Only a rejection explicitly marked state=blocked is terminal; ordinary
+    # capability rejections can still be recovered by the runtime.
+    if terminal_blocks:
+        status = "blocked"
+    elif errors and not successes and not terminal_completions:
         status = "failed"
-    elif errors and successes:
+    elif errors and (successes or terminal_completions):
         status = "recovered"
-    elif successes:
+    elif successes or terminal_completions:
         status = "success"
     else:
         status = "running"
@@ -263,43 +285,21 @@ async def get_conversation_runtime_trace(
                 TenantMember.tenant_id == workspace_conversation.tenant_id,
             )
         )
-        if membership is not None:
-            report = await conversation_trace_report(
-                db,
-                conversation_id=workspace_conversation.id,
-                user_id=user_id,
-                tenant_id=workspace_conversation.tenant_id,
-            )
-            return {
-                "scope": "workspace",
-                "tenantId": workspace_conversation.tenant_id,
-                **report,
-            }
+        if membership is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return await conversation_trace_report(db, workspace_conversation.id)
 
     principal = await db.scalar(
-        select(Principal).where(
-            Principal.kind == "human",
-            Principal.user_id == user_id,
-        )
+        select(Principal).where(Principal.user_id == user_id)
     )
     if principal is not None:
         personal_conversation = await db.scalar(
             select(PrincipalConversation).where(
+                PrincipalConversation.id == conversation_id,
                 PrincipalConversation.principal_id == principal.id,
-                PrincipalConversation.provider == "operly_web",
-                PrincipalConversation.external_conversation_id == conversation_id,
             )
         )
         if personal_conversation is not None:
-            report = await conversation_trace_report(
-                db,
-                conversation_id=personal_conversation.external_conversation_id,
-                user_id=user_id,
-            )
-            return {
-                "scope": "personal",
-                "principalConversationId": personal_conversation.id,
-                **report,
-            }
+            return await conversation_trace_report(db, personal_conversation.id)
 
     raise HTTPException(status_code=404, detail="Conversation not found")
