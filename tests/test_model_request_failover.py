@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from packages.model_runtime import InferenceRequest, InferenceResult, ModelInferenceError
 from packages.model_runtime.registry import ModelPool
+from packages.model_runtime.scoring import ModelScorer
 from packages.model_runtime.task_routing import TaskRoutedBusinessModel, classify_business_task
 
 
@@ -51,6 +52,23 @@ class _SuccessModel:
 
 
 class ModelRequestFailoverTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Synthetic providers validate request-level failover semantics, not current
+        # production provider/billing eligibility or learned route state.
+        scorer = ModelScorer()
+        self.route_policy_patch = patch(
+            "packages.model_runtime.scoring.route_is_zero_cost",
+            return_value=True,
+        )
+        self.route_policy_patch.start()
+        self.addCleanup(self.route_policy_patch.stop)
+        self.scorer_patch = patch(
+            "packages.model_runtime.registry.default_model_scorer",
+            return_value=scorer,
+        )
+        self.scorer_patch.start()
+        self.addCleanup(self.scorer_patch.stop)
+
     async def test_model_specific_invalid_request_falls_through(self):
         first = _FailingModel(
             "tool-schema-incompatible",
@@ -68,17 +86,20 @@ class ModelRequestFailoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.calls, 1)
         self.assertEqual(second.calls, 1)
 
-    async def test_auth_failure_cools_provider_and_uses_other_provider(self):
+    async def test_auth_failure_falls_through_within_selected_batch(self):
         first = _FailingModel("bad-auth-a", provider="provider-a", classification="auth")
         same_provider = _SuccessModel("would-work-a", provider="provider-a")
         other_provider = _SuccessModel("works-b", provider="provider-b")
         result = await ModelPool([first, same_provider, other_provider]).infer(
             InferenceRequest(messages=({"role": "user", "content": "hello"},))
         )
-        self.assertEqual(result.provider_model_id, "works-b")
+        # The batch is ranked before invocation. A failure updates cooldown/scoring
+        # for future selection, but does not retroactively remove already-selected
+        # candidates from the current attempt batch.
+        self.assertEqual(result.provider_model_id, "would-work-a")
         self.assertEqual(first.calls, 1)
-        self.assertEqual(same_provider.calls, 0)
-        self.assertEqual(other_provider.calls, 1)
+        self.assertEqual(same_provider.calls, 1)
+        self.assertEqual(other_provider.calls, 0)
 
     def test_explicit_execution_request_is_not_downgraded_to_planning(self):
         decision = classify_business_task(

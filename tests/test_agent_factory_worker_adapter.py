@@ -92,8 +92,7 @@ class RejectedRuntime(FakeRuntime):
         FakeRuntime.seen_metadata.append(dict(kwargs["inference_metadata"]))
         return {
             "message": "I could not run the action.",
-            # AgentRuntime may not classify every durable action status itself. The
-            # worker adapter must preserve the terminal status from the observation.
+            # Factory worker must preserve the terminal status from the observation.
             "execution_truth": None,
             "trace": [
                 SimpleNamespace(
@@ -176,7 +175,7 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     tool_ids = {
         item["function"]["name"] for item in FakeRuntime.seen_tools[-1]
     }
-    assert tool_ids == {"capability.search", "files.process"}
+    assert tool_ids == {"files.process"}
     messages = FakeRuntime.seen_messages[-1]
     assert len(messages) == 2
     assert "disposable OPERLY factory worker" in messages[0]["content"]
@@ -184,6 +183,7 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     assert FakeRuntime.seen_metadata[-1]["runtime_run_id"] == "factory-run-1"
     assert FakeRuntime.seen_metadata[-1]["factory_stage_id"] == "pdf"
     assert FakeRuntime.seen_metadata[-1]["factory_attempt"] == 1
+    assert FakeRuntime.seen_metadata[-1]["factory_context_pipeline"] == "bounded-reset-v2"
     execution_budget = FakeRuntime.seen_execution_budgets[-1]
     assert execution_budget.base_steps == 8
     assert execution_budget.max_steps == 10
@@ -192,6 +192,34 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     assert inference_budget.attempts_per_model == 1
     assert inference_budget.max_models == 2
     assert inference_budget.max_output_tokens == 2_000
+
+
+@pytest.mark.asyncio
+async def test_unresolved_capability_intent_does_not_expose_discovery_tools(monkeypatch):
+    monkeypatch.setattr(worker_module, "AgentRuntime", FakeRuntime)
+    _reset_runtime_observations()
+
+    adapter = AgentRuntimeWorker(
+        schemas=lambda: [
+            _tool("capability.search"),
+            _tool("capability.describe"),
+            _tool("gmail.search"),
+        ],
+        invoke=lambda *_args: {},
+        model_resolver=lambda _role: object(),
+    )
+    await adapter(
+        StageSpec(
+            "mail",
+            "Search mail",
+            capability_intents=("search email",),
+        ),
+        ContextCapsule(stage_id="mail", objective="Search mail"),
+        1,
+        None,
+    )
+
+    assert FakeRuntime.seen_tools[-1] == []
 
 
 @pytest.mark.asyncio
