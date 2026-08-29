@@ -5,7 +5,14 @@ import pytest
 
 import packages.agent_runtime_v2.engine as engine_module
 import packages.agent_runtime_v2.planner as planner_module
+import packages.business_brain.runtime_v2 as runtime_v2_module
 from packages.agent_runtime_v2 import Plan, RuntimeV2Engine, RuntimeV2Planner, Step
+from packages.agent_runtime_v2.contracts import Observation, StepState
+from packages.agent_runtime_v2.state_projection import (
+    RuntimeV2ProjectedEngineMixin,
+    current_observations,
+    project_result,
+)
 
 
 class SequenceModel:
@@ -260,3 +267,162 @@ async def test_runtime_v2_blocks_before_workers_when_planner_reports_requirement
     assert state.status == "blocked"
     assert state.stop_reason == "planner_blocked_requirement"
     assert model.requests == []
+
+
+def test_runtime_v2_projection_preserves_context_refs_after_large_search():
+    refs = [
+        {
+            "id": f"gmail:message:{index}",
+            "source": "gmail",
+            "title": f"Subject {index}",
+            "snippet": "x" * 2_000,
+            "estimated_tokens": 300,
+        }
+        for index in range(20)
+    ]
+    projected = project_result(
+        "context.search",
+        {
+            "ok": True,
+            "status": "VERIFIED",
+            "plugin": "context.search",
+            "action_id": "action-not-a-context-ref",
+            "approval_id": "approval-not-a-context-ref",
+            "verification": {"success": True},
+            "observation": {
+                "refs": refs,
+                "ranked_refs": [row["id"] for row in refs],
+                "count": 20,
+                "sources": ["gmail"],
+                "estimated_tokens_if_all_materialized": 6_000,
+            },
+        },
+    )
+
+    assert projected["usable_refs"] == [row["id"] for row in refs]
+    assert projected["observation"]["refs"][0]["id"] == "gmail:message:0"
+    assert projected["observation"]["refs"][-1]["id"] == "gmail:message:19"
+    assert "action_id" not in projected
+    assert "approval_id" not in projected
+    assert len(projected["observation"]["refs"][0]["snippet"]) <= 700
+
+
+def test_runtime_v2_current_state_drops_corrected_argument_error():
+    step_state = StepState(id="scan_emails")
+    step_state.observations.extend(
+        [
+            Observation(
+                capability_id="context.search",
+                arguments={"query": "after:2026-08-22", "limit": 50},
+                result={
+                    "ok": False,
+                    "status": "INVALID_ARGUMENTS",
+                    "error": "limit exceeds maximum",
+                },
+                signature="bad-limit",
+            ),
+            Observation(
+                capability_id="context.search",
+                arguments={"query": "after:2026-08-22", "limit": 20},
+                result={
+                    "ok": True,
+                    "status": "VERIFIED",
+                    "verification": {"success": True},
+                    "observation": {
+                        "ranked_refs": ["gmail:message:1", "gmail:message:2"],
+                        "count": 2,
+                    },
+                },
+                signature="good-limit",
+            ),
+        ]
+    )
+
+    current = current_observations(step_state.observations)
+    assert [item.signature for item in current] == ["good-limit"]
+
+    payload = RuntimeV2ProjectedEngineMixin._working_payload(step_state)
+    assert len(payload) == 1
+    assert payload[0]["arguments"]["limit"] == 20
+    assert payload[0]["result"]["usable_refs"] == [
+        "gmail:message:1",
+        "gmail:message:2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_v2_catalog_keeps_exact_gmail_calendar_and_task_operations():
+    rows = {
+        capability_id: {"id": capability_id}
+        for capability_id in (
+            "gmail.search",
+            "gmail.read_message",
+            "gmail.read_thread",
+            "calendar.list_events",
+            "task.list",
+            "task.create",
+            "files.create_document",
+            "crm.search_contacts",
+        )
+    }
+
+    class Definition:
+        description = "test"
+        risk_level = "read_only"
+        input_schema = {"type": "object", "required": []}
+
+    class Registry:
+        def search(self, _tenant_id, query, *, authority, limit):
+            del authority, limit
+            if query in rows:
+                return [rows[query]]
+            if query.startswith("gmail"):
+                return [
+                    rows["crm.search_contacts"],
+                    rows["gmail.read_thread"],
+                    rows["gmail.search"],
+                    rows["gmail.read_message"],
+                    rows["files.create_document"],
+                ]
+            if query.startswith("calendar"):
+                return [rows["crm.search_contacts"], rows["calendar.list_events"]]
+            if query.startswith("task"):
+                return [
+                    rows["files.create_document"],
+                    rows["task.create"],
+                    rows["task.list"],
+                ]
+            return []
+
+        def definition(self, _capability_id):
+            return Definition()
+
+        def availability(self, _tenant_id, _capability_id, *, authority):
+            del authority
+            return SimpleNamespace(available=True, reason=None, next_action=None)
+
+    class Harness:
+        def capability_authorized(self, _capability_id, _authority, _context):
+            return True
+
+    catalog = await runtime_v2_module._compact_catalog(
+        objective=(
+            "Review my emails, check my calendar, and create tasks without duplicate "
+            "tasks. I may owe someone a document."
+        ),
+        tenant_id="tenant",
+        authority={"all"},
+        registry=Registry(),
+        plugin_harness=Harness(),
+        plugin_context=SimpleNamespace(),
+    )
+    capability_ids = [row["id"] for row in catalog]
+
+    assert "gmail.search" in capability_ids
+    assert "gmail.read_message" in capability_ids
+    assert "gmail.read_thread" in capability_ids
+    assert "calendar.list_events" in capability_ids
+    assert "task.list" in capability_ids
+    assert "task.create" in capability_ids
+    assert "crm.search_contacts" not in capability_ids
+    assert "files.create_document" not in capability_ids
