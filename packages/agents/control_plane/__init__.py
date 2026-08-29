@@ -20,7 +20,7 @@ from .evidence import FactoryEvidenceLedger
 from .factory import FactoryRunResponse
 from .inference_budget import FactoryInferenceBudget, FactoryInferenceBudgetExceeded
 from .repair import DefectRepairPlanner
-from .safe_factory import SafeAgentFactoryControlPlane as AgentFactoryControlPlane
+from .runtime_aware_factory import RuntimeAwareAgentFactoryControlPlane as AgentFactoryControlPlane
 from .sandbox_validation import SandboxPythonValidator
 from .semantic_validation import EvidenceBoundedSemanticValidator
 from .stage_runner import FactoryExecutionResult, FactoryStageRunner, StageAttempt
