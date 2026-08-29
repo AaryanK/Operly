@@ -10,6 +10,10 @@ from packages.business_brain.factory_runtime import (
     run_workspace_factory,
     workspace_factory_enabled,
 )
+from packages.business_brain.runtime_v2 import (
+    run_workspace_runtime_v2,
+    workspace_runtime_v2_enabled,
+)
 from packages.business_brain.security import (
     MAX_ASSISTANT_TEXT,
     MAX_USER_TEXT,
@@ -27,8 +31,7 @@ from packages.security.execution_context import ExecutionContextError, resolve_e
 from packages.security.surfaces import SurfaceKind
 
 
-# Legacy controller prompt. The Factory path does not inherit this transcript/prompt;
-# each factory station receives a fresh bounded stage capsule instead.
+# Legacy controller prompt. Runtime v2 and Factory do not inherit this transcript/prompt.
 SYSTEM_PROMPT = """
 You are OPERLY, the assistant operating inside an application-resolved scope.
 The application owns identity, workspace, permissions, context visibility and tools.
@@ -42,11 +45,11 @@ Keep answers concise and operational.
 class AgentService:
     """Workspace runtime over one governed capability harness.
 
-    ``OPERLY_WORKSPACE_AGENT_FACTORY=1`` cuts ordinary Workspace/Guest Workspace turns
-    to the Factory control plane. The legacy controller remains a deployment fallback
-    and handles image-bearing turns until image refs are represented in the same
-    scoped artifact/context contract. Both paths use the same ExecutionContext and
-    PluginAgentHarness authorization boundary.
+    ``OPERLY_AGENT_RUNTIME_V2=1`` selects the clean exact-capability Runtime v2 for
+    ordinary Workspace/Guest Workspace turns. ``OPERLY_WORKSPACE_AGENT_FACTORY=1``
+    remains the v1 Factory fallback when v2 is disabled. The legacy controller remains
+    available for rollback and image-bearing turns. All three paths reuse the same
+    ExecutionContext and PluginAgentHarness authorization boundary.
     """
 
     def __init__(self) -> None:
@@ -144,9 +147,8 @@ class AgentService:
             attachment_label = " [Attachments: " + ", ".join(request.attachment_names[:10]) + "]"
         stored_user_text = (user_text or "Uploaded attachment(s)") + attachment_label
 
-        # Persist the user turn before either controller executes. The Factory does not
-        # inherit this row automatically; AuthorizedContextBindings can retrieve a
-        # bounded conversation slice only when a stage explicitly asks for it.
+        # Persist the user turn before any controller executes. Runtime v2 never replays
+        # this transcript automatically; its step state is built explicitly by the Engine.
         async with session_scope() as db:
             db.add(
                 AgentMessage(
@@ -173,9 +175,39 @@ class AgentService:
             principal_id=request.principal_id,
         )
 
-        # The deployment switch is environment-only, so connector/client metadata
-        # cannot select a more permissive controller. Image turns remain on the legacy
-        # multimodal path until images are first-class scoped artifact refs.
+        # Runtime v2 takes precedence when explicitly enabled. The switch is
+        # environment-only, so client metadata cannot choose a more permissive path.
+        if workspace_runtime_v2_enabled() and not request.images:
+            run = await run_workspace_runtime_v2(
+                objective=objective,
+                request=request,
+                conversation_id=conversation.id,
+                execution=execution,
+                plugin_harness=self.plugin_harness,
+                plugin_context=plugin_context,
+            )
+            answer = bounded_text(
+                run.get("message") or "Done.",
+                MAX_ASSISTANT_TEXT,
+            ).strip()
+            await self._persist_assistant(
+                tenant_id=request.tenant_id,
+                conversation_id=conversation.id,
+                answer=answer,
+            )
+            return {
+                "conversation_id": conversation.id,
+                "message": answer,
+                "stop_reason": run.get("stop_reason"),
+                "runtime_run_id": run.get("runtime_run_id"),
+                "replans": 0,
+                "run_plan": run.get("run_plan"),
+                "execution_truth": run.get("execution_truth"),
+                "runtime_v2": run.get("runtime_v2"),
+                "runtime_controller": "agent_runtime_v2",
+            }
+
+        # Factory v1 remains available for controlled comparison and rollback.
         if workspace_factory_enabled() and not request.images:
             run = await run_workspace_factory(
                 objective=objective,
@@ -206,8 +238,8 @@ class AgentService:
                 "runtime_controller": "factory",
             }
 
-        # Legacy fallback. Context is eagerly assembled here only when the Factory is
-        # disabled (or the request needs the legacy multimodal path).
+        # Legacy fallback. Context is eagerly assembled here only when both newer
+        # controllers are disabled (or the request needs the legacy multimodal path).
         async with session_scope() as db:
             history = await load_conversation_messages(
                 db,
