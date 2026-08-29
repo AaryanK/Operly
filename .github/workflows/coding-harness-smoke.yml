@@ -19,7 +19,6 @@ on:
       - "packages/service_bindings/**"
       - "packages/solutions/**"
       - "packages/database/**"
-      - "packages/studio/**"
       - "packages/capability_sandbox/**"
       - "tests/**"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -40,7 +39,6 @@ on:
       - "packages/service_bindings/**"
       - "packages/solutions/**"
       - "packages/database/**"
-      - "packages/studio/**"
       - "packages/capability_sandbox/**"
       - "tests/**"
       - ".github/workflows/coding-harness-smoke.yml"
@@ -92,6 +90,7 @@ jobs:
           tests/test_studio_phase0_semantic_planning_repair.py
           tests/test_coding_harness_runtime_resolution.py
           tests/test_coding_harness_execution_loop.py
+          tests/test_software_generation_runtime.py
           tests/test_coding_model_authorization.py
           tests/test_coding_context_window.py
           tests/test_coding_context_working_set.py
@@ -101,7 +100,5 @@ jobs:
           tests/test_software_project_persistence.py
           tests/test_general_software_construction.py
           tests/test_fullstack_runtime_contract.py
-          tests/test_studio_agent_generation.py
-          tests/test_studio_agent_controller.py
           tests/test_studio_real_capability_contracts.py
           tests/test_studio_behavior_first_finish_gate.py
