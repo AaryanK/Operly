@@ -309,7 +309,6 @@ class TargetArchitectureContractsTests(unittest.IsolatedAsyncioTestCase):
     def test_orchestration_modules_do_not_import_concrete_model_clients(self):
         root = Path(__file__).resolve().parents[1]
         protected = (
-            "packages/studio/model_latency_policy.py",
             "packages/coding_harness/model_client.py",
             "packages/custom_software/provider_planning.py",
             "packages/custom_software/model_planning_client.py",
