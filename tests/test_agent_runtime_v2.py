@@ -287,6 +287,7 @@ def test_runtime_v2_projection_preserves_context_refs_after_large_search():
             "status": "VERIFIED",
             "plugin": "context.search",
             "action_id": "action-not-a-context-ref",
+            "approval_id": "approval-not-a-context-ref",
             "verification": {"success": True},
             "observation": {
                 "refs": refs,
@@ -301,7 +302,8 @@ def test_runtime_v2_projection_preserves_context_refs_after_large_search():
     assert projected["usable_refs"] == [row["id"] for row in refs]
     assert projected["observation"]["refs"][0]["id"] == "gmail:message:0"
     assert projected["observation"]["refs"][-1]["id"] == "gmail:message:19"
-    assert projected["action_id"] == "action-not-a-context-ref"
+    assert "action_id" not in projected
+    assert "approval_id" not in projected
     assert len(projected["observation"]["refs"][0]["snippet"]) <= 700
 
 
