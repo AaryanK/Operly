@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import apps.api.agent_router as agent_router_module
 import packages.business_brain.runtime_v2 as runtime_v2_module
 
 
@@ -64,3 +65,33 @@ async def test_runtime_v2_appointment_request_catalog_includes_calendar_list_eve
 
     assert [row["id"] for row in catalog] == ["calendar.list_events"]
     assert catalog[0]["required_fields"] == ["time_min", "time_max"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_web_chat_propagates_trusted_tenant_timezone(monkeypatch):
+    captured = {}
+
+    async def fake_run_agent(_auth, request):
+        captured["request"] = request
+        return {"message": "ok"}
+
+    async def fake_project_result(_auth, result):
+        return result
+
+    monkeypatch.setattr(agent_router_module, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(agent_router_module, "_project_result", fake_project_result)
+
+    auth = SimpleNamespace(
+        tenant=SimpleNamespace(id="tenant", timezone="America/Chicago"),
+        user=SimpleNamespace(id="user", display_name="User"),
+        role="owner",
+    )
+    result = await agent_router_module.chat(
+        agent_router_module.ChatInput(
+            message="Show today's appointments and identify scheduling conflicts. Do not modify anything."
+        ),
+        auth=auth,
+    )
+
+    assert result == {"message": "ok"}
+    assert captured["request"].metadata["timezone"] == "America/Chicago"
