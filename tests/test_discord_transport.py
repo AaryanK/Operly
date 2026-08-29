@@ -8,10 +8,7 @@ import pytest
 
 from packages.artifacts.delivery import _strip_model_artifact_links
 from packages.channels.envelope import ChannelResponse
-from packages.connectors.discord.artifact_delivery import (
-    response_artifact_scope,
-    send_discord_response,
-)
+from packages.connectors.discord.transport import _response_scope, send_discord_response
 
 
 class FakeSentMessage:
@@ -48,14 +45,9 @@ class FakeArtifactService:
     def __init__(self, db) -> None:
         del db
 
-    async def get(self, scope, artifact_id):
-        assert scope.kind == "workspace"
-        assert scope.tenant_id == "tenant-a"
-        assert artifact_id == "artifact-1"
-        return SimpleNamespace(filename="contacts.xlsx", size_bytes=8)
-
     async def read_bytes(self, scope, artifact_id):
         assert scope.kind == "workspace"
+        assert scope.tenant_id == "tenant-a"
         assert artifact_id == "artifact-1"
         return b"PK\x03\x04xlsx"
 
@@ -74,7 +66,7 @@ def test_model_artifact_uuid_is_not_treated_as_a_navigation_target():
     assert cleaned == "I exported it here: contacts.xlsx"
 
 
-def test_channel_response_keeps_base_message_for_rich_adapter():
+def test_channel_response_keeps_base_message_for_rich_transport():
     response = ChannelResponse(
         message="Created the spreadsheet.",
         tenant_id="tenant-a",
@@ -89,7 +81,7 @@ def test_channel_response_keeps_base_message_for_rich_adapter():
 
     assert response.base_message == "Created the spreadsheet."
     assert "Files:" in response.message
-    assert response_artifact_scope(response).tenant_id == "tenant-a"
+    assert _response_scope(response).tenant_id == "tenant-a"
 
 
 @pytest.mark.asyncio
@@ -110,10 +102,10 @@ async def test_discord_sends_verified_artifact_as_native_file_without_duplicate_
     message = FakeMessage()
 
     with patch(
-        "packages.connectors.discord.artifact_delivery.ArtifactService",
+        "packages.connectors.discord.transport.ArtifactService",
         FakeArtifactService,
     ), patch(
-        "packages.connectors.discord.artifact_delivery.session_scope",
+        "packages.connectors.discord.transport.session_scope",
         fake_session_scope,
     ):
         await send_discord_response(message, response)

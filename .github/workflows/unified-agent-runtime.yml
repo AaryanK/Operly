@@ -27,6 +27,7 @@ on:
       - "packages/capabilities/personal_google_provider.py"
       - "packages/capabilities/defaults.py"
       - "packages/capabilities/contracts.py"
+      - "packages/channels/attachment_ingress.py"
       - "packages/channels/envelope.py"
       - "packages/channels/service.py"
       - "packages/connectors/discord/**"
@@ -45,7 +46,8 @@ on:
       - "tests/test_agent_runtime_v2.py"
       - "tests/test_agent_runtime_v2_structured_outputs.py"
       - "tests/test_artifact_delivery.py"
-      - "tests/test_discord_artifact_delivery.py"
+      - "tests/test_discord_transport.py"
+      - "tests/test_discord_runtime_cutover.py"
       - "tests/test_file_runtime_provider.py"
       - "tests/test_unified_agent_artifact_runtime.py"
       - "tests/test_agent_computer_storage_ingress_resume.py"
@@ -101,10 +103,14 @@ jobs:
             packages/capabilities/file_authoring_provider.py \
             packages/capabilities/gmail_artifact_provider.py \
             packages/capabilities/personal_google_provider.py \
+            packages/channels/attachment_ingress.py \
             packages/channels/envelope.py \
             packages/channels/service.py \
-            packages/connectors/discord/artifact_delivery.py \
+            packages/connectors/discord/client.py \
+            packages/connectors/discord/authority.py \
             packages/connectors/discord/secure_runtime.py \
+            packages/connectors/discord/slash_commands.py \
+            packages/connectors/discord/transport.py \
             packages/database/artifact_models.py \
             packages/database/schema.py \
             packages/coding_harness/execution_loop.py \
@@ -132,7 +138,8 @@ jobs:
           tests/test_agent_runtime_v2.py
           tests/test_agent_runtime_v2_structured_outputs.py
           tests/test_artifact_delivery.py
-          tests/test_discord_artifact_delivery.py
+          tests/test_discord_transport.py
+          tests/test_discord_runtime_cutover.py
           tests/test_file_runtime_provider.py
           tests/test_unified_agent_artifact_runtime.py
           tests/test_agent_computer_storage_ingress_resume.py

@@ -1,8 +1,7 @@
 """Translate live Discord authority into Operly Guest Workspace permissions.
 
-This module is deliberately connector-owned: only the Discord adapter/runtime is
-allowed to infer Discord permissions. The language model and arbitrary capability
-arguments never participate in this translation.
+Only the Discord connector may derive these platform permissions. Models and
+capability arguments never participate in this translation.
 """
 from __future__ import annotations
 
@@ -22,9 +21,7 @@ async def resolve_discord_authority(metadata: dict) -> DiscordAuthority | None:
     if not guild_id or not channel_id or not user_id:
         return None
 
-    # Delayed import avoids connector boot cycles. This executes only after the
-    # Discord runtime has been loaded and a message is being resolved.
-    from packages.connectors.discord.bot_shared import bot
+    from packages.connectors.discord.client import bot
 
     try:
         guild = bot.get_guild(int(guild_id))
@@ -37,8 +34,6 @@ async def resolve_discord_authority(metadata: dict) -> DiscordAuthority | None:
         if channel is None:
             channel = await bot.fetch_channel(int(channel_id))
     except Exception:
-        # Platform authority is security state. If it cannot be confirmed, callers
-        # must fall back to Operly-native guest assistance without Discord data/tools.
         return None
 
     try:

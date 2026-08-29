@@ -1,14 +1,15 @@
-from urllib.parse import quote
+import os
 
 import discord
 from discord import app_commands
 
 from packages.channels.identity import IdentityService
-from packages.channels.linking import IdentityLinkService
 from packages.channels.space_bindings import ExternalSpaceBindingService, SpaceBindingError
-from packages.connectors.discord import bot_shared as legacy
 from packages.database.db import session_scope
-from packages.database.models import DiscordGuild
+
+
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+DISCORD_SIGN_IN_URL = f"{PUBLIC_BASE_URL}/api/identities/discord/sign-in"
 
 
 def _workspace_match(memberships, reference: str):
@@ -24,54 +25,30 @@ def _workspace_match(memberships, reference: str):
 def build_tree(client: discord.Client) -> app_commands.CommandTree:
     tree = app_commands.CommandTree(client)
 
-    @tree.command(name="link", description="Securely link this Discord identity to Operly")
-    @app_commands.describe(code="Optional one-time code created from Operly Connections")
-    async def link(interaction: discord.Interaction, code: str | None = None):
+    @tree.command(name="link", description="Sign in to Operly with this Discord identity")
+    async def link(interaction: discord.Interaction):
         async with session_scope() as db:
             existing = await IdentityService.resolve_external_identity(
                 db,
                 provider="discord",
                 external_user_id=str(interaction.user.id),
             )
-            if existing:
-                await interaction.response.send_message(
-                    "This Discord identity is already linked to Operly.",
-                    ephemeral=True,
-                )
-                return
-
-            if code:
-                try:
-                    await IdentityLinkService.claim_from_channel(
-                        db,
-                        provider="discord",
-                        external_user_id=str(interaction.user.id),
-                        code=code,
-                        display_name=interaction.user.display_name,
-                    )
-                except ValueError as error:
-                    await interaction.response.send_message(str(error), ephemeral=True)
-                    return
-                await db.commit()
-                await interaction.response.send_message(
-                    "Discord is now linked to your Operly identity. Existing guest DM history has been retained.",
-                    ephemeral=True,
-                )
-                return
-
-            challenge = await IdentityLinkService.create_from_channel(
-                db,
-                provider="discord",
-                external_user_id=str(interaction.user.id),
-                display_name=interaction.user.display_name,
+        if existing:
+            await interaction.response.send_message(
+                "This Discord identity is already connected to Operly.",
+                ephemeral=True,
             )
-            await db.commit()
+            return
 
-        url = f"{legacy.PUBLIC_BASE_URL}/settings?identity_link={quote(challenge.token or '', safe='')}"
         view = discord.ui.View(timeout=600)
-        view.add_item(discord.ui.Button(label="Authenticate with Operly", url=url))
+        view.add_item(
+            discord.ui.Button(
+                label="Sign in to Operly with Discord",
+                url=DISCORD_SIGN_IN_URL,
+            )
+        )
         await interaction.response.send_message(
-            "Authenticate with Operly to claim this Discord identity. The link expires in 10 minutes.",
+            "Sign in to Operly with Discord, then return here.",
             view=view,
             ephemeral=True,
         )
@@ -86,14 +63,14 @@ def build_tree(client: discord.Client) -> app_commands.CommandTree:
             )
             if not identity:
                 await interaction.response.send_message(
-                    "You are currently using Operly as a guest. Use `/link` to authenticate; your guest DM history will be retained.",
+                    "This Discord identity is not connected. Use `/link` to sign in.",
                     ephemeral=True,
                 )
                 return
             memberships = await IdentityService.memberships(db, user_id=identity.user_id)
         names = ", ".join(tenant.name for _, tenant in memberships) or "no workspaces"
         await interaction.response.send_message(
-            f"This Discord identity is linked to Operly. Available workspaces: {names}.",
+            f"This Discord identity is connected to Operly. Available workspaces: {names}.",
             ephemeral=True,
         )
 
@@ -167,7 +144,10 @@ def build_tree(client: discord.Client) -> app_commands.CommandTree:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         external_admin = bool(member and member.guild_permissions.manage_guild)
         if not external_admin:
-            await interaction.response.send_message("Discord Manage Server permission is required.", ephemeral=True)
+            await interaction.response.send_message(
+                "Discord Manage Server permission is required.",
+                ephemeral=True,
+            )
             return
 
         async with session_scope() as db:
@@ -202,22 +182,6 @@ def build_tree(client: discord.Client) -> app_commands.CommandTree:
             except SpaceBindingError as error:
                 await interaction.response.send_message(str(error), ephemeral=True)
                 return
-
-            # Temporary compatibility projection for older Discord reporting code.
-            legacy_guild = await db.get(DiscordGuild, interaction.guild.id)
-            if legacy_guild is None:
-                db.add(
-                    DiscordGuild(
-                        guild_id=interaction.guild.id,
-                        tenant_id=tenant.id,
-                        guild_name=interaction.guild.name[:200],
-                        enabled=True,
-                    )
-                )
-            else:
-                legacy_guild.tenant_id = tenant.id
-                legacy_guild.guild_name = interaction.guild.name[:200]
-                legacy_guild.enabled = True
             await db.commit()
         await interaction.response.send_message(
             f"Bound this Discord server to `{tenant.name}`.",
@@ -227,12 +191,18 @@ def build_tree(client: discord.Client) -> app_commands.CommandTree:
     @tree.command(name="unbind", description="Disconnect this Discord server from its Operly workspace")
     async def unbind(interaction: discord.Interaction):
         if interaction.guild is None:
-            await interaction.response.send_message("Run `/unbind` inside a Discord server.", ephemeral=True)
+            await interaction.response.send_message(
+                "Run `/unbind` inside a Discord server.",
+                ephemeral=True,
+            )
             return
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         external_admin = bool(member and member.guild_permissions.manage_guild)
         if not external_admin:
-            await interaction.response.send_message("Discord Manage Server permission is required.", ephemeral=True)
+            await interaction.response.send_message(
+                "Discord Manage Server permission is required.",
+                ephemeral=True,
+            )
             return
         async with session_scope() as db:
             identity = await IdentityService.resolve_external_identity(
@@ -254,10 +224,10 @@ def build_tree(client: discord.Client) -> app_commands.CommandTree:
             except SpaceBindingError as error:
                 await interaction.response.send_message(str(error), ephemeral=True)
                 return
-            legacy_guild = await db.get(DiscordGuild, interaction.guild.id)
-            if legacy_guild:
-                legacy_guild.enabled = False
             await db.commit()
-        await interaction.response.send_message("Discord server disconnected from Operly.", ephemeral=True)
+        await interaction.response.send_message(
+            "Discord server disconnected from Operly.",
+            ephemeral=True,
+        )
 
     return tree
