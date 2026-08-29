@@ -30,6 +30,7 @@ class FactoryStagePromptPolicy:
     initial_materialized_chars: int = 6_000
     continuation_tool_chars: int = 1_800
     assistant_content_chars: int = 1_200
+    working_state_chars: int = 6_000
 
     def normalized(self) -> "FactoryStagePromptPolicy":
         return FactoryStagePromptPolicy(
@@ -41,6 +42,9 @@ class FactoryStagePromptPolicy:
             ),
             assistant_content_chars=max(
                 200, min(int(self.assistant_content_chars), 2_000)
+            ),
+            working_state_chars=max(
+                1_000, min(int(self.working_state_chars), 12_000)
             ),
         )
 
@@ -121,11 +125,15 @@ class FactoryStagePromptPipeline:
         capsule: ContextCapsule,
         defect: Defect | None = None,
         policy: FactoryStagePromptPolicy | None = None,
+        working_state: list[dict[str, Any]] | None = None,
     ) -> None:
         self.stage = stage
         self.capsule = capsule
         self.defect = defect
         self.policy = (policy or FactoryStagePromptPolicy()).normalized()
+        # AgentRuntimeWorker owns this mutable list for the lifetime of the Factory run.
+        # The prompt pipeline only projects a bounded snapshot of it into each model turn.
+        self.working_state = working_state if working_state is not None else []
 
     def _bounded_materialized(self) -> list[dict[str, Any]]:
         budget = min(
@@ -158,6 +166,35 @@ class FactoryStagePromptPipeline:
             break
         return output
 
+    def _bounded_working_state(self) -> list[dict[str, Any]]:
+        """Project verified observations accumulated by earlier disposable workers.
+
+        Working state is deliberately distinct from promoted stage evidence. It may be
+        reused by this stage and its repair attempts, but downstream stages still depend
+        on normal validation/promotion before treating anything as authoritative.
+        """
+
+        budget = self.policy.working_state_chars
+        output: list[dict[str, Any]] = []
+        used = 0
+        for raw_item in list(self.working_state)[-16:]:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            size = serialized_chars(item)
+            remaining = budget - used
+            if remaining <= 0:
+                break
+            if size <= remaining:
+                output.append(item)
+                used += size
+                continue
+            if remaining < 400:
+                break
+            output.append(_large_item_preview(item, max_chars=remaining))
+            break
+        return output
+
     def _stage_payload(self) -> dict[str, Any]:
         """Project only worker-relevant stage state into the model prompt.
 
@@ -181,6 +218,7 @@ class FactoryStagePromptPipeline:
                 for key, value in self.capsule.facts
                 if key not in _INTERNAL_FACT_KEYS
             },
+            "working_state": self._bounded_working_state(),
         }
         if include_materialized:
             payload["materialized"] = self._bounded_materialized()
@@ -188,8 +226,10 @@ class FactoryStagePromptPipeline:
             payload["materialized"] = []
             payload["materialized_context_replay"] = "disabled"
             payload["retrieval_rule"] = (
-                "Use supplied refs/direct tools for any additional data; do not reconstruct "
-                "or request the prior workspace transcript."
+                "Use supplied refs/direct tools for additional data. Treat verified "
+                "working_state observations as already completed work: do not repeat an "
+                "identical read unless pagination, a successful mutation, or freshness "
+                "requires it. Do not reconstruct the prior workspace transcript."
             )
         return payload
 
@@ -202,13 +242,16 @@ class FactoryStagePromptPipeline:
             "worker_contract": {
                 "scope": "stage_only",
                 "durable_outputs": "tool_evidence_or_refs",
+                "working_state": "verified_observations_not_yet_promoted",
+                "do_not_repeat_cached_reads": True,
             },
         }
         if self.defect is not None:
             payload["repair_defect"] = self.defect.as_dict()
             payload["repair_instruction"] = (
-                "Use the defect evidence to choose a materially different repair when the "
-                "previous strategy failed."
+                "Preserve completed working_state observations. Use the defect evidence "
+                "to choose only the remaining work or a materially different repair; do "
+                "not restart already verified reads."
             )
         return payload
 
@@ -229,11 +272,12 @@ class FactoryStagePromptPipeline:
         self,
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Keep only the current tool protocol turn plus a reference-first stage envelope.
+        """Keep the latest tool protocol turn plus persistent stage working state.
 
         Provider APIs generally require the assistant tool-call message immediately before
-        matching tool results. We retain that one protocol turn, but discard every older
-        assistant/tool round and never include materialized workspace context again.
+        matching tool results. We retain that one protocol turn and discard older raw
+        turns, while the run-scoped working-state ledger preserves verified observations
+        that still matter to subsequent reasoning and repair attempts.
         """
 
         latest_assistant_index: int | None = None
