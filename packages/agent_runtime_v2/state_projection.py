@@ -1,9 +1,8 @@
 """Capability-aware state projection for Agent Runtime v2.
 
-The durable RunState keeps full verified observations for audit/reuse. Disposable
-workers receive a small semantic projection instead of generic string compaction.
-Provider data identifiers and references remain usable; harness control-plane IDs do
-not leak into worker state where they could be mistaken for content references.
+Raw verified observations remain durable in RunState. Disposable workers receive a
+bounded semantic projection, and downstream stages prefer accepted StepOutput over
+replaying provider payloads.
 """
 from __future__ import annotations
 
@@ -13,92 +12,36 @@ from typing import Any, Iterable
 
 from .contracts import Observation, RunState, Step, StepState
 
-_CONTROL_PLANE_IDS = frozenset({"action_id", "approval_id"})
+_CONTROL_KEYS = frozenset(
+    {"action_id", "approval_id", "authority", "principal_id", "owner_id", "scope_id"}
+)
 _IDENTITY_KEYS = frozenset(
     {
-        "id",
-        "ids",
-        "ref",
-        "refs",
-        "ranked_refs",
-        "message_id",
-        "message_ids",
-        "thread_id",
-        "thread_ids",
-        "event_id",
-        "event_ids",
-        "task_id",
-        "task_ids",
-        "artifact_id",
-        "contact_id",
-        "draft_id",
-        "attachment_id",
-        "external_reference",
-        "materialized_refs",
+        "id", "ids", "ref", "refs", "ranked_refs", "message_id", "message_ids",
+        "thread_id", "thread_ids", "event_id", "event_ids", "task_id", "task_ids",
+        "artifact_id", "contact_id", "draft_id", "attachment_id", "external_reference",
+        "materialized_refs", "next_page_token", "page_token",
     }
 )
 _CONTENT_KEYS = frozenset(
     {
-        "source",
-        "sources",
-        "provider",
-        "type",
-        "kind",
-        "name",
-        "title",
-        "subject",
-        "snippet",
-        "preview",
-        "summary",
-        "content",
-        "body",
-        "text",
-        "from",
-        "sender",
-        "to",
-        "cc",
-        "date",
-        "timestamp",
-        "created_at",
-        "updated_at",
-        "start",
-        "end",
-        "start_time",
-        "end_time",
-        "attendees",
-        "status",
-        "count",
-        "query",
-        "url",
-        "uri",
-        "timezone",
-        "estimated_tokens",
-        "estimated_tokens_if_all_materialized",
-        "contents_materialized",
-        "federated",
+        "source", "sources", "provider", "type", "kind", "name", "title", "subject",
+        "snippet", "preview", "summary", "content", "body", "text", "from", "sender",
+        "to", "cc", "date", "timestamp", "created_at", "updated_at", "start", "end",
+        "start_time", "end_time", "attendees", "status", "count", "query", "url", "uri",
+        "timezone", "estimated_tokens", "estimated_tokens_if_all_materialized",
+        "contents_materialized", "federated", "returned_count", "requested_limit",
+        "result_size_estimate", "truncated",
     }
 )
 _CONTAINER_KEYS = frozenset(
-    {
-        "observation",
-        "results",
-        "items",
-        "messages",
-        "threads",
-        "events",
-        "tasks",
-        "contexts",
-        "references",
-        "matches",
-        "data",
-        "evidence",
-    }
+    {"observation", "results", "items", "messages", "threads", "events", "tasks", "contexts", "references", "matches", "data", "evidence"}
 )
 
 
 def _is_identity_key(key: str) -> bool:
     clean = str(key or "").strip().lower()
-    if clean in _CONTROL_PLANE_IDS:
+    if clean in _CONTROL_KEYS:
         return False
     return (
         clean in _IDENTITY_KEYS
@@ -113,14 +56,13 @@ def _scalar(value: Any, *, key: str) -> Any:
     if not isinstance(value, str):
         return value
     if _is_identity_key(key):
-        # Provider IDs/refs are opaque and must remain byte-for-byte usable.
         return value
     clean = key.lower()
     if clean in {"content", "body", "text"}:
-        return value[:1_200]
+        return value[:1_000]
     if clean in {"snippet", "preview", "summary"}:
-        return value[:700]
-    return value[:500]
+        return value[:500]
+    return value[:400]
 
 
 def _project_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
@@ -130,60 +72,67 @@ def _project_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
         return None
     if isinstance(value, list):
         limit = 20 if _is_identity_key(key) or key in {"refs", "ranked_refs"} else 10
-        projected = [
-            _project_value(item, key=key, depth=depth + 1)
-            for item in value[:limit]
-        ]
-        return [item for item in projected if item is not None]
+        rows = [_project_value(item, key=key, depth=depth + 1) for item in value[:limit]]
+        return [item for item in rows if item is not None]
     if not isinstance(value, dict):
-        return str(value)[:500]
+        return str(value)[:400]
 
     output: dict[str, Any] = {}
-    # Preserve provider/content identity fields first, irrespective of provider shape.
     for raw_key, item in value.items():
         clean = str(raw_key)
+        lowered = clean.lower()
+        if lowered in _CONTROL_KEYS:
+            continue
         if _is_identity_key(clean):
             projected = _project_value(item, key=clean, depth=depth + 1)
             if projected is not None:
                 output[clean] = projected
-
     for raw_key, item in value.items():
         clean = str(raw_key)
         lowered = clean.lower()
-        if clean in output or lowered in _CONTROL_PLANE_IDS:
+        if clean in output or lowered in _CONTROL_KEYS:
             continue
         if lowered in _CONTENT_KEYS or lowered in _CONTAINER_KEYS:
             projected = _project_value(item, key=lowered, depth=depth + 1)
             if projected not in (None, {}, []):
                 output[clean] = projected
-
-    # Some providers wrap useful rows under an unanticipated key. Keep that branch
-    # only when it itself contains provider/content IDs or refs.
-    if depth < 2:
-        for raw_key, item in value.items():
-            clean = str(raw_key)
-            if clean in output or clean.lower() in _CONTROL_PLANE_IDS or not isinstance(item, (dict, list)):
-                continue
-            probe = _project_value(item, key=clean, depth=depth + 1)
-            if isinstance(probe, dict) and any(_is_identity_key(k) for k in probe):
-                output[clean] = probe
-            elif isinstance(probe, list) and probe and any(
-                isinstance(row, dict) and any(_is_identity_key(k) for k in row)
-                for row in probe
-            ):
-                output[clean] = probe
     return output
 
 
-def project_result(capability_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    """Return a worker-safe semantic projection while retaining usable IDs/refs."""
+def _gmail_search_projection(observation: dict[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    for key in (
+        "query", "next_page_token", "page_token", "returned_count", "requested_limit",
+        "result_size_estimate", "truncated",
+    ):
+        if key in observation:
+            projected[key] = _scalar(observation[key], key=key)
+    messages = observation.get("messages")
+    if isinstance(messages, list):
+        compact_messages: list[dict[str, Any]] = []
+        for row in messages[:50]:
+            if not isinstance(row, dict):
+                continue
+            compact: dict[str, Any] = {}
+            for key in ("id", "thread_id", "date", "from", "to", "subject"):
+                if row.get(key) is not None:
+                    compact[key] = _scalar(row.get(key), key=key)
+            if row.get("snippet"):
+                compact["snippet"] = str(row.get("snippet"))[:220]
+            if isinstance(row.get("label_ids"), list):
+                compact["label_ids"] = [str(item)[:80] for item in row["label_ids"][:8]]
+            compact_messages.append(compact)
+        projected["messages"] = compact_messages
+        projected.setdefault("returned_count", len(messages))
+    return projected
 
+
+def project_result(capability_id: str, result: dict[str, Any]) -> dict[str, Any]:
     result = dict(result or {})
     projected: dict[str, Any] = {}
     for key in ("ok", "success", "status", "plugin", "retryable", "changed", "error", "reason"):
         if key in result:
             projected[key] = _scalar(result[key], key=key)
-
     verification = result.get("verification")
     if isinstance(verification, dict):
         projected["verification"] = {
@@ -193,21 +142,21 @@ def project_result(capability_id: str, result: dict[str, Any]) -> dict[str, Any]
         }
 
     observation = result.get("observation")
-    if isinstance(observation, dict):
-        projected_observation = _project_value(observation, key="observation")
-        if projected_observation:
-            projected["observation"] = projected_observation
+    observation = observation if isinstance(observation, dict) else {}
+    if capability_id == "gmail.search" and observation:
+        projected["observation"] = _gmail_search_projection(observation)
+    elif observation:
+        body = _project_value(observation, key="observation")
+        if body:
+            projected["observation"] = body
 
-    # Some test/providers expose useful rows at the result root rather than under
-    # observation. Project those too without lifecycle/authority/control-plane noise.
+    # Test providers and a few internal capabilities return evidence at the root.
     root_projection = _project_value(result)
     for key, value in root_projection.items():
         if key not in projected and key not in {"verification", "observation"}:
             projected[key] = value
 
     if capability_id == "context.search":
-        # context.get requires these opaque refs, so make them unmistakable to the
-        # next disposable worker even when the provider wraps them deeply.
         obs = projected.get("observation")
         if isinstance(obs, dict):
             ranked = obs.get("ranked_refs")
@@ -227,7 +176,7 @@ def _successful(result: dict[str, Any]) -> bool:
     if result.get("ok") is False or result.get("success") is False:
         return False
     status = str(result.get("status") or result.get("lifecycle_status") or "").upper()
-    if status in {"DENIED", "FAILED", "UNVERIFIED", "CANCELLED", "EXPIRED", "VERIFICATION_FAILED", "INVALID_ARGUMENTS"}:
+    if status in {"DENIED", "FAILED", "UNVERIFIED", "CANCELLED", "EXPIRED", "VERIFICATION_FAILED", "INVALID_ARGUMENTS", "INCOMPLETE_COVERAGE", "MISSING_READ_EVIDENCE"}:
         return False
     verification = result.get("verification")
     if isinstance(verification, dict) and verification.get("success") is True:
@@ -246,18 +195,9 @@ def current_observations(
     max_items: int = 6,
     successes_per_capability: int = 2,
 ) -> list[Observation]:
-    """Coalesce append-only trace observations into small current working state.
-
-    Repeated identical reads collapse by signature. Once a capability succeeds, old
-    argument/schema failures for that capability no longer need to be replayed. We
-    retain at most a couple of distinct successful reads per capability because
-    multiple paginated/search queries can be legitimate working state.
-    """
-
     rows = list(observations)
     if not rows:
         return []
-
     last_by_signature: dict[str, tuple[int, Observation]] = {}
     for index, item in enumerate(rows):
         last_by_signature[item.signature] = (index, item)
@@ -282,14 +222,11 @@ def current_observations(
     for capability_id, failure in latest_failure.items():
         if capability_id not in successes:
             selected.append(failure)
-
     selected.sort(key=lambda pair: pair[0])
     return [item for _, item in selected[-max(1, max_items):]]
 
 
 class RuntimeV2ProjectedEngineMixin:
-    """Drop-in overrides used by RuntimeV2Engine without changing execution logic."""
-
     @staticmethod
     def _observation_payload(item: Observation) -> dict[str, Any]:
         return {
@@ -313,14 +250,20 @@ class RuntimeV2ProjectedEngineMixin:
             dependency = state.steps.get(dependency_id)
             if dependency is None:
                 continue
+            if dependency.output is not None:
+                payload[dependency_id] = {
+                    "status": dependency.status,
+                    "output": dependency.output.as_dict(),
+                }
+                continue
             payload[dependency_id] = {
                 "status": dependency.status,
-                "summary": dependency.summary[:6_000],
+                "summary": dependency.summary[:3_000],
                 "observations": [
                     cls._observation_payload(item)
                     for item in current_observations(
                         dependency.observations,
-                        max_items=4,
+                        max_items=2,
                         successes_per_capability=1,
                     )
                 ],
