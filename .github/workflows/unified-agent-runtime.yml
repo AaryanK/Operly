@@ -50,6 +50,7 @@ on:
       - "tests/test_agent_factory_worker_adapter.py"
       - "tests/test_factory_ai_debug_observability.py"
       - "tests/test_factory_pseudo_intent_discovery.py"
+      - "tests/test_factory_grounded_recovery.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_artifact_delivery.py"
       - "tests/test_file_runtime_provider.py"
@@ -144,6 +145,7 @@ jobs:
           tests/test_agent_factory_worker_adapter.py
           tests/test_factory_ai_debug_observability.py
           tests/test_factory_pseudo_intent_discovery.py
+          tests/test_factory_grounded_recovery.py
           tests/test_artifact_delivery.py
           tests/test_discord_artifact_delivery.py
           tests/test_file_runtime_provider.py
