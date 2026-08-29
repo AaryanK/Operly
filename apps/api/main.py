@@ -19,6 +19,7 @@ from apps.api.analytics_router import router as analytics_router
 from apps.api.app_identity_router import admin_router as app_identity_admin_router
 from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
 from apps.api.approvals_router import router as approvals_router
+from apps.api.artifact_router import router as artifact_router
 from apps.api.business import router as business_router
 from apps.api.capability_diagnostics_router import router as capability_diagnostics_router
 from apps.api.channel_identity_router import router as channel_identity_router
@@ -67,7 +68,10 @@ PUBLIC_BASE_URL = (
     or RAILWAY_PUBLIC_URL
     or "http://localhost:8000"
 )
-PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
+PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {
+    "production",
+    "prod",
+}
 
 
 async def bootstrap_admin() -> None:
@@ -104,7 +108,9 @@ async def bootstrap_admin() -> None:
             )
         if user.email_verified_at is None:
             user.email_verified_at = user.created_at
-        membership = await db.scalar(select(TenantMember).where(TenantMember.user_id == user.id))
+        membership = await db.scalar(
+            select(TenantMember).where(TenantMember.user_id == user.id)
+        )
         if membership:
             return
         tenants = (await db.scalars(select(Tenant).order_by(Tenant.created_at))).all()
@@ -138,7 +144,9 @@ async def warm_model_discovery() -> None:
     if not provider_is_configured("openrouter"):
         return
     try:
-        timeout = float(os.getenv("OPERLY_STARTUP_MODEL_DISCOVERY_TIMEOUT_SECONDS", "4"))
+        timeout = float(
+            os.getenv("OPERLY_STARTUP_MODEL_DISCOVERY_TIMEOUT_SECONDS", "4")
+        )
     except ValueError:
         timeout = 4.0
     try:
@@ -207,6 +215,7 @@ for router in (
     access_router,
     mcp_router,
     approvals_router,
+    artifact_router,
     integrations_router,
     business_router,
     agent_router,
@@ -259,7 +268,9 @@ def react_shell(*, status_code: int = 200) -> HTMLResponse:
     headers = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
     if status_code == 404:
         headers["X-Robots-Tag"] = "noindex, nofollow"
-    return HTMLResponse(index.read_text(encoding="utf-8"), status_code=status_code, headers=headers)
+    return HTMLResponse(
+        index.read_text(encoding="utf-8"), status_code=status_code, headers=headers
+    )
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -268,6 +279,10 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/"):
+    if (
+        route in KNOWN_REACT_ROUTES
+        or route == "channels"
+        or route.startswith("channels/")
+    ):
         return react_shell()
     return react_shell(status_code=404)
