@@ -183,7 +183,10 @@ async def test_worker_adapter_starts_fresh_stage_prompt_and_filters_tools(monkey
     assert FakeRuntime.seen_metadata[-1]["runtime_run_id"] == "factory-run-1"
     assert FakeRuntime.seen_metadata[-1]["factory_stage_id"] == "pdf"
     assert FakeRuntime.seen_metadata[-1]["factory_attempt"] == 1
-    assert FakeRuntime.seen_metadata[-1]["factory_context_pipeline"] == "bounded-reset-v2"
+    assert (
+        FakeRuntime.seen_metadata[-1]["factory_context_pipeline"]
+        == "bounded-reset-v3-working-state"
+    )
     execution_budget = FakeRuntime.seen_execution_budgets[-1]
     assert execution_budget.base_steps == 8
     assert execution_budget.max_steps == 10
