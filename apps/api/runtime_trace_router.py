@@ -277,7 +277,7 @@ async def get_ai_run(
         (
             await db.scalars(
                 select(ModelRuntimeTrace)
-                .where(*filters, ModelRuntimeTrace.run_id.in_([run_id]))
+                .where(*filters)
                 .order_by(ModelRuntimeTrace.created_at.asc())
                 .limit(10000)
             )
