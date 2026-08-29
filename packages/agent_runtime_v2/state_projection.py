@@ -2,7 +2,8 @@
 
 The durable RunState keeps full verified observations for audit/reuse. Disposable
 workers receive a small semantic projection instead of generic string compaction.
-Identifiers and provider references are never intentionally discarded.
+Provider data identifiers and references remain usable; harness control-plane IDs do
+not leak into worker state where they could be mistaken for content references.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Any, Iterable
 
 from .contracts import Observation, RunState, Step, StepState
 
+_CONTROL_PLANE_IDS = frozenset({"action_id", "approval_id"})
 _IDENTITY_KEYS = frozenset(
     {
         "id",
@@ -27,7 +29,6 @@ _IDENTITY_KEYS = frozenset(
         "event_ids",
         "task_id",
         "task_ids",
-        "action_id",
         "artifact_id",
         "contact_id",
         "draft_id",
@@ -97,6 +98,8 @@ _CONTAINER_KEYS = frozenset(
 
 def _is_identity_key(key: str) -> bool:
     clean = str(key or "").strip().lower()
+    if clean in _CONTROL_PLANE_IDS:
+        return False
     return (
         clean in _IDENTITY_KEYS
         or clean.endswith("_id")
@@ -136,7 +139,7 @@ def _project_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
         return str(value)[:500]
 
     output: dict[str, Any] = {}
-    # Preserve identity-bearing fields first, irrespective of provider shape.
+    # Preserve provider/content identity fields first, irrespective of provider shape.
     for raw_key, item in value.items():
         clean = str(raw_key)
         if _is_identity_key(clean):
@@ -147,7 +150,7 @@ def _project_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
     for raw_key, item in value.items():
         clean = str(raw_key)
         lowered = clean.lower()
-        if clean in output:
+        if clean in output or lowered in _CONTROL_PLANE_IDS:
             continue
         if lowered in _CONTENT_KEYS or lowered in _CONTAINER_KEYS:
             projected = _project_value(item, key=lowered, depth=depth + 1)
@@ -155,11 +158,11 @@ def _project_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
                 output[clean] = projected
 
     # Some providers wrap useful rows under an unanticipated key. Keep that branch
-    # only when it itself contains IDs/refs; this is intentionally conservative.
+    # only when it itself contains provider/content IDs or refs.
     if depth < 2:
         for raw_key, item in value.items():
             clean = str(raw_key)
-            if clean in output or not isinstance(item, (dict, list)):
+            if clean in output or clean.lower() in _CONTROL_PLANE_IDS or not isinstance(item, (dict, list)):
                 continue
             probe = _project_value(item, key=clean, depth=depth + 1)
             if isinstance(probe, dict) and any(_is_identity_key(k) for k in probe):
@@ -195,8 +198,8 @@ def project_result(capability_id: str, result: dict[str, Any]) -> dict[str, Any]
         if projected_observation:
             projected["observation"] = projected_observation
 
-    # Some test/providers expose their useful rows at the result root rather than
-    # under observation. Project those too without copying lifecycle/authority noise.
+    # Some test/providers expose useful rows at the result root rather than under
+    # observation. Project those too without lifecycle/authority/control-plane noise.
     root_projection = _project_value(result)
     for key, value in root_projection.items():
         if key not in projected and key not in {"verification", "observation"}:
