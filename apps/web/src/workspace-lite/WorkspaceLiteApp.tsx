@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { OperlyMark } from "../ui/OperlyMark";
-import { WorkspaceOSPanel } from "./WorkspaceOSPanel";
+import { WorkspaceHumanPanel } from "./WorkspaceHumanPanel";
 
 type Workspace = {
   id: string;
@@ -136,7 +136,7 @@ function CreateWorkspace({
       <form className="workspace-lite-modal" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
         <span className="workspace-lite-kicker">NEW WORKSPACE</span>
         <h2>Create a workspace</h2>
-        <p>Create a business workspace. Native modules can be enabled or disabled from workspace settings.</p>
+        <p>Give it a name. Once inside, Operly can shape the workspace around what this organization actually does.</p>
         <label>
           <span>Workspace name</span>
           <input name="name" autoFocus maxLength={200} required />
@@ -200,7 +200,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         method: "POST",
         body: JSON.stringify({ tenant_id: workspaceId }),
       });
-      go(destination || `/channels/${encodeURIComponent(workspaceId)}/dashboard`);
+      go(destination || `/channels/${encodeURIComponent(workspaceId)}/home`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not switch workspace");
       setBusy(false);
@@ -232,7 +232,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      go(`/channels/${encodeURIComponent(result.workspace.id)}/dashboard`);
+      go(`/channels/${encodeURIComponent(result.workspace.id)}/home`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create workspace");
       setBusy(false);
@@ -292,7 +292,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
             <section className="workspace-lite-heading">
               <span className="workspace-lite-kicker">YOUR OPERLY</span>
               <h1>Workspaces</h1>
-              <p>Each workspace is its own permission boundary and business operating environment.</p>
+              <p>Each workspace is its own permission boundary and operating environment.</p>
             </section>
 
             <div className="workspace-lite-grid">
@@ -311,7 +311,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
               ))}
               <button className="workspace-lite-card workspace-lite-create-card" type="button" disabled={busy} onClick={() => setCreateOpen(true)}>
                 <span className="workspace-lite-card-icon">+</span>
-                <span><strong>Create workspace</strong><small>Spin up another business environment</small></span>
+                <span><strong>Create workspace</strong><small>Start another operating environment</small></span>
               </button>
             </div>
           </main>
@@ -334,7 +334,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         )}
 
         {!accountView && !personalView && selectedWorkspace && selectedWorkspace.current && (
-          <WorkspaceOSPanel workspaceId={selectedWorkspace.id} pathname={pathname} />
+          <WorkspaceHumanPanel workspaceId={selectedWorkspace.id} pathname={pathname} />
         )}
 
         {!accountView && !personalView && selectedWorkspace && !selectedWorkspace.current && (
