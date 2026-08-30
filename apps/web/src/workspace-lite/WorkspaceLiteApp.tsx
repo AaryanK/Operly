@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { OperlyMark } from "../ui/OperlyMark";
+import { WorkspaceOSPanel } from "./WorkspaceOSPanel";
 
 type Workspace = {
   id: string;
@@ -135,7 +136,7 @@ function CreateWorkspace({
       <form className="workspace-lite-modal" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
         <span className="workspace-lite-kicker">NEW WORKSPACE</span>
         <h2>Create a workspace</h2>
-        <p>Create the workspace record now. AI and runtime features remain off.</p>
+        <p>Create a business workspace. Native modules can be enabled or disabled from workspace settings.</p>
         <label>
           <span>Workspace name</span>
           <input name="name" autoFocus maxLength={200} required />
@@ -162,6 +163,12 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
     [selectedWorkspaceId, workspaces],
   );
 
+  const refreshWorkspaces = useCallback(async () => {
+    const result = await api<Workspace[]>("/auth/workspaces");
+    setWorkspaces(result);
+    return result;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     api<Workspace[]>("/auth/workspaces")
@@ -185,7 +192,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
     else if (selectedWorkspace) document.title = `${selectedWorkspace.name} · OPERLY`;
   }, [pathname, selectedWorkspace]);
 
-  const switchWorkspace = async (workspaceId: string) => {
+  const switchWorkspace = useCallback(async (workspaceId: string, destination?: string) => {
     setBusy(true);
     setError("");
     try {
@@ -193,12 +200,17 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         method: "POST",
         body: JSON.stringify({ tenant_id: workspaceId }),
       });
-      go(`/channels/${encodeURIComponent(workspaceId)}`);
+      go(destination || `/channels/${encodeURIComponent(workspaceId)}/dashboard`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not switch workspace");
       setBusy(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedWorkspace || selectedWorkspace.current || busy) return;
+    void switchWorkspace(selectedWorkspace.id, pathname);
+  }, [busy, pathname, selectedWorkspace, switchWorkspace]);
 
   const switchPersonal = async () => {
     setBusy(true);
@@ -220,7 +232,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      go(`/channels/${encodeURIComponent(result.workspace.id)}`);
+      go(`/channels/${encodeURIComponent(result.workspace.id)}/dashboard`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create workspace");
       setBusy(false);
@@ -259,7 +271,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
         workspaces={workspaces}
         busy={busy}
         onPersonal={switchPersonal}
-        onWorkspace={switchWorkspace}
+        onWorkspace={(workspaceId) => void switchWorkspace(workspaceId)}
         onCreate={() => setCreateOpen(true)}
       />
 
@@ -268,6 +280,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
           <a className="workspace-lite-brand" href="/account"><OperlyMark /><span>OPERLY</span></a>
           <div className="workspace-lite-topbar-actions">
             <a href="/account">Workspaces</a>
+            <button className="workspace-lite-button" type="button" disabled={busy} onClick={() => void refreshWorkspaces()}>Refresh</button>
             <button className="workspace-lite-button" type="button" disabled={busy} onClick={logout}>Sign out</button>
           </div>
         </header>
@@ -279,7 +292,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
             <section className="workspace-lite-heading">
               <span className="workspace-lite-kicker">YOUR OPERLY</span>
               <h1>Workspaces</h1>
-              <p>Your account and workspace records are live. Choose a workspace to enter it, or create a new one.</p>
+              <p>Each workspace is its own permission boundary and business operating environment.</p>
             </section>
 
             <div className="workspace-lite-grid">
@@ -288,7 +301,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
                 <span><strong>Personal</strong><small>Private account scope</small></span>
               </button>
               {workspaces.map((workspace) => (
-                <button className="workspace-lite-card" key={workspace.id} type="button" disabled={busy} onClick={() => switchWorkspace(workspace.id)}>
+                <button className="workspace-lite-card" key={workspace.id} type="button" disabled={busy} onClick={() => void switchWorkspace(workspace.id)}>
                   <span className="workspace-lite-card-icon workspace-lite-initials">{initials(workspace.name)}</span>
                   <span className="workspace-lite-card-copy">
                     <strong>{workspace.name}</strong>
@@ -298,7 +311,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
               ))}
               <button className="workspace-lite-card workspace-lite-create-card" type="button" disabled={busy} onClick={() => setCreateOpen(true)}>
                 <span className="workspace-lite-card-icon">+</span>
-                <span><strong>Create workspace</strong><small>Add another Operly space</small></span>
+                <span><strong>Create workspace</strong><small>Spin up another business environment</small></span>
               </button>
             </div>
           </main>
@@ -310,30 +323,22 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
               <div className="workspace-lite-space-logo"><OperlyMark /></div>
               <span className="workspace-lite-kicker">PERSONAL</span>
               <h1>Your private Operly</h1>
-              <p>This is your personal account scope. The AI/runtime layer is intentionally not enabled yet.</p>
+              <p>This is your personal account scope. Workspace business data is not visible here unless you explicitly enter that workspace.</p>
             </section>
             <section className="workspace-lite-detail-grid">
               <article><span>Scope</span><strong>Personal</strong></article>
               <article><span>Visibility</span><strong>Private to your account</strong></article>
-              <article><span>Runtime</span><strong>Not enabled</strong></article>
+              <article><span>AI runtime</span><strong>Not enabled</strong></article>
             </section>
           </main>
         )}
 
-        {!accountView && !personalView && selectedWorkspace && (
-          <main className="workspace-lite-main workspace-lite-space-view">
-            <section className="workspace-lite-space-hero">
-              <div className="workspace-lite-space-logo workspace-lite-initials">{initials(selectedWorkspace.name)}</div>
-              <span className="workspace-lite-kicker">WORKSPACE</span>
-              <h1>{selectedWorkspace.name}</h1>
-              <p>The workspace itself is live and selectable. AI/runtime modules are intentionally not enabled yet.</p>
-            </section>
-            <section className="workspace-lite-detail-grid">
-              <article><span>Your role</span><strong>{selectedWorkspace.role}</strong></article>
-              <article><span>Workspace ID</span><strong className="workspace-lite-mono">{selectedWorkspace.id}</strong></article>
-              <article><span>Current session</span><strong>{selectedWorkspace.current ? "Yes" : "Selected from this view"}</strong></article>
-            </section>
-          </main>
+        {!accountView && !personalView && selectedWorkspace && selectedWorkspace.current && (
+          <WorkspaceOSPanel workspaceId={selectedWorkspace.id} pathname={pathname} />
+        )}
+
+        {!accountView && !personalView && selectedWorkspace && !selectedWorkspace.current && (
+          <div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Entering {selectedWorkspace.name}…</span></div>
         )}
 
         {!accountView && !personalView && selectedWorkspaceId && !selectedWorkspace && (
@@ -347,7 +352,7 @@ export function WorkspaceLiteApp({ pathname }: { pathname: string }) {
           </main>
         )}
 
-        <footer className="workspace-lite-footer"><span>© 2026 OPERLY</span><nav><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></footer>
+        {(accountView || personalView || !selectedWorkspace) && <footer className="workspace-lite-footer"><span>© 2026 OPERLY</span><nav><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></footer>}
       </div>
 
       {createOpen && <CreateWorkspace busy={busy} onCancel={() => setCreateOpen(false)} onCreate={createWorkspace} />}
