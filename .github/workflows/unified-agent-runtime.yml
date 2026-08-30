@@ -47,6 +47,7 @@ on:
       - "tests/test_agent_runtime_v2.py"
       - "tests/test_agent_runtime_v2_structured_outputs.py"
       - "tests/test_runtime_v2_approval_resume.py"
+      - "tests/test_artifact_api_routes.py"
       - "tests/test_artifact_delivery.py"
       - "tests/test_discord_transport.py"
       - "tests/test_discord_runtime_cutover.py"
@@ -140,6 +141,7 @@ jobs:
           tests/test_agent_runtime_v2.py
           tests/test_agent_runtime_v2_structured_outputs.py
           tests/test_runtime_v2_approval_resume.py
+          tests/test_artifact_api_routes.py
           tests/test_artifact_delivery.py
           tests/test_discord_transport.py
           tests/test_discord_runtime_cutover.py
