@@ -1,4 +1,3 @@
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -12,47 +11,10 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
-from apps.api.access_router import router as access_router
-from apps.api.admin_router import router as admin_router
-from apps.api.agent_router import router as agent_router
-from apps.api.analytics_router import router as analytics_router
-from apps.api.app_identity_router import admin_router as app_identity_admin_router
-from apps.api.app_identity_router import runtime_router as app_identity_runtime_router
-from apps.api.approvals_router import router as approvals_router
-from apps.api.artifact_router import router as artifact_router
-from apps.api.business import router as business_router
-from apps.api.capability_diagnostics_router import router as capability_diagnostics_router
-from apps.api.channel_identity_router import router as channel_identity_router
-from apps.api.company_router import router as company_router
-from apps.api.connectors_router import router as connectors_router
-from apps.api.csrf import CSRFMiddleware
-from apps.api.flow_router import router as flow_router
-from apps.api.integrations_router import router as integrations_router
-from apps.api.mcp_router import router as mcp_router
-from apps.api.operations_router import router as operations_router
-from apps.api.personal_agent_router import router as personal_agent_router
-from apps.api.personal_connectors_router import router as personal_connectors_router
-from apps.api.public_safety import PublicEndpointSafetyMiddleware
-from apps.api.relational_data_router import router as relational_data_router
-from apps.api.request_safety import AuthRequestSafetyMiddleware
-from apps.api.runtime_trace_router import router as runtime_trace_router
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
-from apps.api.session import router as session_router
-from apps.api.software_projects_router import router as software_projects_router
-from apps.api.solution_generation_router import router as solution_generation_router
-from apps.api.solutions_router import public_router as solutions_public_router
-from apps.api.solutions_router import router as solutions_router
-from apps.api.studio_source_router import router as studio_source_router
-from apps.api.system_router import router as system_router
-from apps.api.workspace_entities_router import router as workspace_entities_router
-from apps.api.workspace_router import router as workspace_router
-from packages.capabilities.defaults import bootstrap_builtin_plugins
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
-from packages.model_runtime.catalog import provider_is_configured
-from packages.model_runtime.discovery import refresh_model_discovery
-from packages.plugins import default_plugin_runtime
 
 load_dotenv(override=False)
 
@@ -76,11 +38,13 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
+    """Preserve deterministic account/workspace bootstrap during the runtime rebuild."""
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
     if not password:
         return
+
     async with session_scope() as db:
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
         if user is None:
@@ -92,6 +56,7 @@ async def bootstrap_admin() -> None:
             )
             db.add(user)
             await db.flush()
+
         password_identity = await db.scalar(
             select(AuthIdentity).where(
                 AuthIdentity.user_id == user.id,
@@ -109,11 +74,13 @@ async def bootstrap_admin() -> None:
             )
         if user.email_verified_at is None:
             user.email_verified_at = user.created_at
+
         membership = await db.scalar(
             select(TenantMember).where(TenantMember.user_id == user.id)
         )
         if membership:
             return
+
         tenants = (await db.scalars(select(Tenant).order_by(Tenant.created_at))).all()
         if len(tenants) == 1:
             tenant = tenants[0]
@@ -125,10 +92,12 @@ async def bootstrap_admin() -> None:
 
 
 def validate_runtime_configuration() -> None:
+    """Validate only deterministic platform configuration during kernel rebuild."""
     if not os.getenv("SESSION_SECRET"):
         raise RuntimeError("SESSION_SECRET is missing")
     if not PRODUCTION:
         return
+
     token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
     if len(token_pepper.encode("utf-8")) < 32:
         raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
@@ -140,44 +109,20 @@ def validate_runtime_configuration() -> None:
         raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
 
 
-async def warm_model_discovery() -> None:
-    """Bounded catalog warmup so the first worker can see small tool-capable models."""
-    if not provider_is_configured("openrouter"):
-        return
-    try:
-        timeout = float(
-            os.getenv("OPERLY_STARTUP_MODEL_DISCOVERY_TIMEOUT_SECONDS", "4")
-        )
-    except ValueError:
-        timeout = 4.0
-    try:
-        await asyncio.wait_for(
-            refresh_model_discovery(provider="openrouter", ttl_seconds=0.0, force=True),
-            timeout=max(1.0, min(timeout, 10.0)),
-        )
-    except (asyncio.TimeoutError, RuntimeError):
-        return
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    del app
     validate_runtime_configuration()
     await init_db()
     await bootstrap_admin()
-    bootstrap_builtin_plugins()
-    await warm_model_discovery()
-    plugin_runtime = default_plugin_runtime()
-    await plugin_runtime.start()
-    try:
-        yield
-    finally:
-        await plugin_runtime.stop()
+    yield
 
 
-app = FastAPI(title="OPERLY API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CSRFMiddleware)
-app.add_middleware(AuthRequestSafetyMiddleware)
-app.add_middleware(PublicEndpointSafetyMiddleware)
+app = FastAPI(
+    title="OPERLY API",
+    version="0.2.0-rebuild",
+    lifespan=lifespan,
+)
 
 allowed_hosts = {"healthcheck.railway.app"}
 public_host = urlparse(PUBLIC_BASE_URL).hostname
@@ -189,6 +134,7 @@ if RUNNING_ON_RAILWAY:
     allowed_hosts.add("*.up.railway.app")
 if not PRODUCTION:
     allowed_hosts.update({"localhost", "127.0.0.1", "testserver"})
+
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(allowed_hosts))
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -205,40 +151,27 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-for router in (
-    system_router,
-    session_router,
-    analytics_router,
-    admin_router,
-    personal_agent_router,
-    personal_connectors_router,
-    workspace_router,
-    access_router,
-    mcp_router,
-    approvals_router,
-    artifact_router,
-    integrations_router,
-    business_router,
-    agent_router,
-    runtime_trace_router,
-    flow_router,
-    relational_data_router,
-    company_router,
-    connectors_router,
-    capability_diagnostics_router,
-    channel_identity_router,
-    operations_router,
-    studio_source_router,
-    software_projects_router,
-    solutions_router,
-    solution_generation_router,
-    solutions_public_router,
-):
-    app.include_router(router)
 
-app.include_router(workspace_entities_router)
-app.include_router(app_identity_runtime_router)
-app.include_router(app_identity_admin_router)
+@app.get("/api/health")
+async def health():
+    return {
+        "ok": True,
+        "service": "operly",
+        "runtime": "rebuild",
+        "capabilities_enabled": False,
+    }
+
+
+@app.get("/api/rebuild-status")
+async def rebuild_status():
+    return {
+        "state": "foundation-only",
+        "deterministic_core": True,
+        "legacy_runtime_removed": True,
+        "capabilities_enabled": False,
+        "message": "Operly is running on the post-demolition foundation while the new kernel is built.",
+    }
+
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_DIST = WEB_ROOT / "dist"
@@ -254,7 +187,6 @@ KNOWN_REACT_ROUTES = {
     "personal",
     "app",
     "admin",
-    "FLOW",
     "privacy",
     "terms",
 }
@@ -272,7 +204,9 @@ def react_shell(*, status_code: int = 200) -> HTMLResponse:
     if status_code == 404:
         headers["X-Robots-Tag"] = "noindex, nofollow"
     return HTMLResponse(
-        index.read_text(encoding="utf-8"), status_code=status_code, headers=headers
+        index.read_text(encoding="utf-8"),
+        status_code=status_code,
+        headers=headers,
     )
 
 
@@ -282,10 +216,6 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if (
-        route in KNOWN_REACT_ROUTES
-        or route == "channels"
-        or route.startswith("channels/")
-    ):
+    if route in KNOWN_REACT_ROUTES or route.startswith("assets/"):
         return react_shell()
     return react_shell(status_code=404)
