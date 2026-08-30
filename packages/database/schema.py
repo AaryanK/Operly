@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0046_mature_workspace_suite"
+ALEMBIC_HEAD = "0047_operly_kernel_v3"
 
 
 def import_all_models() -> None:
@@ -28,6 +28,7 @@ def import_all_models() -> None:
     from packages.database import software_project_models  # noqa: F401
     from packages.database import scope_models  # noqa: F401
     from packages.database import model_trace_models  # noqa: F401
+    from packages.database import kernel_models  # noqa: F401
 
 
 def synchronous_database_url(url: str) -> str:
