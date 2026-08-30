@@ -4,37 +4,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.database.workspace_security_models import WorkspaceRole, WorkspaceRolePermission
 
 
+BUSINESS_READ_PERMISSIONS = {
+    "crm:read", "catalog:read", "inventory:read", "orders:read", "quotes:read",
+    "finance:read", "suppliers:read", "fulfillment:read", "support:read",
+    "appointments:read", "team:read", "documents:read", "marketing:read",
+    "integrations:read",
+}
+
+BUSINESS_WRITE_PERMISSIONS = {
+    "crm:write", "catalog:write", "inventory:write", "orders:write", "quotes:write",
+    "finance:write", "suppliers:write", "fulfillment:write", "support:write",
+    "appointments:write", "team:write", "documents:write", "marketing:write",
+}
+
+
 DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
     "owner": {
-        "company:read", "research:read", "analytics:read", "crm:read", "crm:write",
+        "company:read", "research:read", "analytics:read",
         "website:read", "website:write", "messaging:draft", "messaging:curate",
         "messaging:read", "messaging:write", "messaging:send", "gmail:read",
         "gmail:write", "gmail:draft", "calendar:read", "calendar:write",
         "solution:read", "solution:generate", "solution:write", "tasks:read",
         "tasks:write", "memory:read", "memory:write", "messages:read",
         "actions:read", "actions:approve", "model:invoke", "files:process", "computer:execute",
-        "catalog:write", "inventory:write", "orders:write", "quotes:write",
         "operations:read", "operations:write", "reminders:write",
         "discord:read", "discord:write",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
         "workspace:read", "workspace:settings:manage", "workspace:members:manage",
         "workspace:roles:manage", "workspace:channels:manage", "workspace:clients:manage",
-        "workspace:tools:expose",
+        "workspace:tools:expose", "workspace:modules:manage", "integrations:manage",
+        *BUSINESS_READ_PERMISSIONS,
+        *BUSINESS_WRITE_PERMISSIONS,
     },
     "manager": {
-        "company:read", "research:read", "analytics:read", "crm:read", "crm:write",
+        "company:read", "research:read", "analytics:read",
         "website:read", "website:write", "messaging:draft", "messaging:curate",
         "messaging:read", "messaging:write", "messaging:send", "gmail:read",
         "gmail:write", "gmail:draft", "calendar:read", "calendar:write",
         "solution:read", "tasks:read", "tasks:write", "memory:read", "memory:write",
         "messages:read", "actions:read", "actions:approve", "model:invoke", "files:process", "computer:execute",
-        "catalog:write", "inventory:write", "orders:write",
-        "quotes:write", "operations:read", "operations:write", "reminders:write",
+        "operations:read", "operations:write", "reminders:write",
         "discord:read", "discord:write",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
         "workspace:read",
+        *BUSINESS_READ_PERMISSIONS,
+        *BUSINESS_WRITE_PERMISSIONS,
     },
     "agent": {
         "company:read", "research:read", "analytics:read", "crm:read", "crm:write",
@@ -46,6 +62,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "context:human:read", "context:human:write",
         "context:tenant:read", "context:tenant:write", "context:conversation:read",
         "context:conversation:write", "workspace:read",
+        *BUSINESS_READ_PERMISSIONS,
     },
     "employee": {
         "company:read", "analytics:read", "crm:read", "website:read", "solution:read",
@@ -53,6 +70,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "model:invoke", "files:process",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:conversation:read", "context:conversation:write", "workspace:read",
+        *BUSINESS_READ_PERMISSIONS,
     },
 }
 
