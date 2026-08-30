@@ -192,7 +192,7 @@ class AttachmentPluginTests(unittest.TestCase):
 
 class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
     async def test_personal_attachment_turn_uses_transport_then_channel_agent(self):
-        from packages.channels.envelope import ChannelAttachment, ChannelResponse
+        from packages.channels.envelope import ChannelAttachment
         from packages.connectors.discord import secure_runtime
 
         class _Typing:
@@ -226,11 +226,13 @@ class DiscordAttachmentHandoffTests(unittest.IsolatedAsyncioTestCase):
             tenant_id="t-1",
             allow_tenant_context=False,
         )
-        response = ChannelResponse(
+        response = SimpleNamespace(
             message="approval created",
             base_message="approval created",
+            tenant_id=None,
             user_id="u-1",
             status="ok",
+            artifacts=[],
         )
         collected = [
             ChannelAttachment(
