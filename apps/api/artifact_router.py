@@ -23,7 +23,7 @@ from packages.artifacts.service import (
 )
 
 
-router = APIRouter(tags=["artifacts"])
+router = APIRouter(prefix="/api", tags=["artifacts"])
 MAX_UPLOAD_FILES = 50
 
 
