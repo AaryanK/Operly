@@ -7,6 +7,7 @@ mutates production work.
 from __future__ import annotations
 
 import json
+import os
 from collections import OrderedDict
 from typing import Any
 
@@ -20,6 +21,23 @@ from packages.database.model_trace import _trace_json
 from packages.database.model_trace_models import ModelRuntimeTrace
 
 router = APIRouter(prefix="/api/flow", tags=["flow"])
+
+
+def _flow_enabled() -> bool:
+    configured = os.getenv("OPERLY_FLOW_ENABLED")
+    if configured is not None:
+        return configured.strip().lower() in {"1", "true", "yes", "on"}
+    environment = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).strip().lower()
+    return environment not in {"production", "prod"}
+
+
+async def require_flow_admin(
+    account: AccountAuthContext = Depends(require_platform_admin),
+) -> AccountAuthContext:
+    """Keep FLOW convenient locally while requiring explicit production enablement."""
+    if not _flow_enabled():
+        raise HTTPException(status_code=404, detail="FLOW is disabled in this environment")
+    return account
 
 
 def _decoded_payload(payload_json: str | None) -> dict[str, Any]:
@@ -178,7 +196,7 @@ async def _recent_run_rows(
 async def list_flow_runs(
     limit: int = Query(default=100, ge=1, le=250),
     surface: str | None = Query(default=None, max_length=80),
-    _: AccountAuthContext = Depends(require_platform_admin),
+    _: AccountAuthContext = Depends(require_flow_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """List the most recent durable runtime executions across the Operly platform."""
@@ -203,7 +221,7 @@ async def list_flow_runs(
 @router.get("/runs/{run_id}")
 async def get_flow_run(
     run_id: str,
-    _: AccountAuthContext = Depends(require_platform_admin),
+    _: AccountAuthContext = Depends(require_flow_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Return the complete redacted event path for one canonical runtime execution."""
