@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AdminPage } from "../admin/AdminPage";
+import { FlowPage } from "../flow/FlowPage";
 import { LegalPage } from "../legal/LegalPage";
 import { PublicApp } from "../public/PublicApp";
 import { ProductApp } from "./ProductApp";
@@ -16,6 +17,7 @@ export function App() {
   }, []);
 
   if (pathname === "/admin") return <AdminPage />;
+  if (pathname === "/FLOW") return <FlowPage />;
   if (pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (pathname === "/terms") return <LegalPage kind="terms" />;
   if (pathname === "/channels" || pathname.startsWith("/channels/")) return <ProductApp />;
