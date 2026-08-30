@@ -26,6 +26,7 @@ from apps.api.channel_identity_router import router as channel_identity_router
 from apps.api.company_router import router as company_router
 from apps.api.connectors_router import router as connectors_router
 from apps.api.csrf import CSRFMiddleware
+from apps.api.flow_router import router as flow_router
 from apps.api.integrations_router import router as integrations_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.operations_router import router as operations_router
@@ -220,6 +221,7 @@ for router in (
     business_router,
     agent_router,
     runtime_trace_router,
+    flow_router,
     relational_data_router,
     company_router,
     connectors_router,
@@ -252,6 +254,7 @@ KNOWN_REACT_ROUTES = {
     "personal",
     "app",
     "admin",
+    "FLOW",
     "privacy",
     "terms",
 }

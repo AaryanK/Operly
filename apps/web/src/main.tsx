@@ -26,6 +26,7 @@ import "./ui/react-public-admin-palette.css";
 import "./ui/react-public-live.css";
 import "./ui/product-shell.css";
 import "./ui/workspace-mobile.css";
+import "./ui/flow.css";
 
 initializeTheme();
 installArtifactDownloadHandling();
