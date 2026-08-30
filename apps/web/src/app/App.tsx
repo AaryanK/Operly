@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { LegalPage } from "../legal/LegalPage";
 import { MinimalApp } from "../minimal/MinimalApp";
-import { WorkspaceLiteApp } from "../workspace-lite/WorkspaceLiteApp";
+import { WorkspaceSafeApp } from "../workspace-lite/WorkspaceSafeApp";
 
 function currentPath() {
   return window.location.pathname.replace(/\/+$/, "") || "/";
@@ -26,7 +26,7 @@ export function App() {
     || pathname === "/channels"
     || pathname.startsWith("/channels/")
   ) {
-    return <WorkspaceLiteApp pathname={pathname} />;
+    return <WorkspaceSafeApp pathname={pathname} />;
   }
   return <MinimalApp pathname={pathname} />;
 }
