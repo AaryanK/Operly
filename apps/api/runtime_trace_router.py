@@ -6,7 +6,7 @@ from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
@@ -98,8 +98,6 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
 
     for row in ordered:
         model_key = (row.provider, row.provider_model_id)
-        # `operly/runtime` is orchestration telemetry, not a model candidate. Keeping it
-        # out prevents zero-model Factory runs from misleadingly claiming a model.
         if model_key != ("operly", "runtime") and model_key not in seen_models:
             seen_models.add(model_key)
             models.append({"provider": row.provider, "model": row.provider_model_id})
@@ -122,16 +120,9 @@ def _runtime_run_summary(run_id: str, rows: list[ModelRuntimeTrace]) -> dict[str
             output_tokens += out_count
             total_tokens += total_count
 
-    # Older Factory rows may have recorded aggregate root-budget usage only on the
-    # terminal orchestration event. Preserve that total when model rows were not yet
-    # correlated to the Factory run; new runs should get exact input/output counts.
     if total_tokens == 0 and reported_runtime_tokens:
         total_tokens = reported_runtime_tokens
 
-    # Factory fail-closed runs may intentionally make zero worker/model calls. Their
-    # application-authored terminal event is therefore the source of run truth.
-    # Only a rejection explicitly marked state=blocked is terminal; ordinary
-    # capability rejections can still be recovered by the runtime.
     if terminal_blocks:
         status = "blocked"
     elif errors and not successes and not terminal_completions:
@@ -315,19 +306,29 @@ async def get_conversation_runtime_trace(
         )
         if membership is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        return await conversation_trace_report(db, workspace_conversation.id)
+        return await conversation_trace_report(
+            db,
+            conversation_id=workspace_conversation.id,
+            user_id=user_id,
+            tenant_id=workspace_conversation.tenant_id,
+        )
 
-    principal = await db.scalar(
-        select(Principal).where(Principal.user_id == user_id)
-    )
+    principal = await db.scalar(select(Principal).where(Principal.user_id == user_id))
     if principal is not None:
         personal_conversation = await db.scalar(
             select(PrincipalConversation).where(
-                PrincipalConversation.id == conversation_id,
                 PrincipalConversation.principal_id == principal.id,
+                or_(
+                    PrincipalConversation.id == conversation_id,
+                    PrincipalConversation.external_conversation_id == conversation_id,
+                ),
             )
         )
         if personal_conversation is not None:
-            return await conversation_trace_report(db, personal_conversation.id)
+            return await conversation_trace_report(
+                db,
+                conversation_id=personal_conversation.external_conversation_id,
+                user_id=user_id,
+            )
 
     raise HTTPException(status_code=404, detail="Conversation not found")
