@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
 import "./ui/minimal.css";
+import "./ui/workspace-lite.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Operly frontend root was not found");
