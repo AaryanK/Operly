@@ -306,12 +306,17 @@ async def get_conversation_runtime_trace(
         )
         if membership is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        return await conversation_trace_report(
+        report = await conversation_trace_report(
             db,
             conversation_id=workspace_conversation.id,
             user_id=user_id,
             tenant_id=workspace_conversation.tenant_id,
         )
+        return {
+            "scope": "workspace",
+            "tenantId": workspace_conversation.tenant_id,
+            **report,
+        }
 
     principal = await db.scalar(select(Principal).where(Principal.user_id == user_id))
     if principal is not None:
@@ -325,10 +330,15 @@ async def get_conversation_runtime_trace(
             )
         )
         if personal_conversation is not None:
-            return await conversation_trace_report(
+            report = await conversation_trace_report(
                 db,
                 conversation_id=personal_conversation.external_conversation_id,
                 user_id=user_id,
             )
+            return {
+                "scope": "personal",
+                "tenantId": None,
+                **report,
+            }
 
     raise HTTPException(status_code=404, detail="Conversation not found")
