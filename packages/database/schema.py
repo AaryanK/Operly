@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0045_workspace_business_os"
+ALEMBIC_HEAD = "0046_mature_workspace_suite"
 
 
 def import_all_models() -> None:
