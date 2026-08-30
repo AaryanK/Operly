@@ -11,8 +11,12 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
+from apps.api.csrf import CSRFMiddleware
+from apps.api.public_safety import PublicEndpointSafetyMiddleware
+from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
+from apps.api.session import router as session_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 
@@ -38,7 +42,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
-    """Preserve deterministic account/workspace bootstrap during the runtime rebuild."""
+    """Keep deterministic account bootstrap without starting the product runtime."""
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
@@ -92,7 +96,6 @@ async def bootstrap_admin() -> None:
 
 
 def validate_runtime_configuration() -> None:
-    """Validate only deterministic platform configuration during kernel rebuild."""
     if not os.getenv("SESSION_SECRET"):
         raise RuntimeError("SESSION_SECRET is missing")
     if not PRODUCTION:
@@ -120,9 +123,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPERLY API",
-    version="0.2.0-rebuild",
+    version="0.2.0-auth-shell",
     lifespan=lifespan,
 )
+
+# Keep the hardened account boundary while the AI/product runtime remains offline.
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(AuthRequestSafetyMiddleware)
+app.add_middleware(PublicEndpointSafetyMiddleware)
 
 allowed_hosts = {"healthcheck.railway.app"}
 public_host = urlparse(PUBLIC_BASE_URL).hostname
@@ -151,13 +159,17 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
+# Intentionally mount only account/session endpoints. Product/AI routers stay offline.
+app.include_router(session_router)
+
 
 @app.get("/api/health")
 async def health():
     return {
         "ok": True,
         "service": "operly",
-        "runtime": "rebuild",
+        "runtime": "auth-shell",
+        "account_access": True,
         "capabilities_enabled": False,
     }
 
@@ -165,11 +177,11 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "foundation-only",
+        "state": "auth-shell",
         "deterministic_core": True,
-        "legacy_runtime_removed": True,
+        "account_access": True,
         "capabilities_enabled": False,
-        "message": "Operly is running on the post-demolition foundation while the new kernel is built.",
+        "message": "Operly account access is live while the next product runtime is being built.",
     }
 
 
@@ -184,9 +196,9 @@ KNOWN_REACT_ROUTES = {
     "forgot-password",
     "reset-password",
     "onboarding",
+    "account",
     "personal",
     "app",
-    "admin",
     "privacy",
     "terms",
 }
@@ -216,6 +228,10 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if route in KNOWN_REACT_ROUTES or route.startswith("assets/"):
+    if (
+        route in KNOWN_REACT_ROUTES
+        or route == "channels"
+        or route.startswith("channels/")
+    ):
         return react_shell()
     return react_shell(status_code=404)
