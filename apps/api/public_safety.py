@@ -15,7 +15,11 @@ class PublicEndpointSafetyMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_public_endpoint(path: str) -> bool:
-        return path.startswith("/api/public/") or path == "/api/workspace-invitations/inspect"
+        return (
+            path.startswith("/api/public/")
+            or path == "/api/workspace-invitations/inspect"
+            or path == "/api/workspace-os/invitation/inspect"
+        )
 
     async def dispatch(self, request, call_next):
         if self._is_public_endpoint(request.url.path):
