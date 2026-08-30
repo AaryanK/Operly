@@ -13,7 +13,7 @@ from apps.api.dependencies import (
 )
 from apps.api.schemas import ApprovalDecision
 from packages.actions.service import ActionService
-from packages.business_brain.factory_runtime import resume_workspace_factory_after_action
+from packages.business_brain.runtime_v2_resume import resume_workspace_runtime_v2_after_action
 from packages.capabilities.agent_harness import ROLE_AUTHORITY
 from packages.capabilities.defaults import default_registry
 from packages.capabilities.personal_google_provider import PersonalGoogleCapabilityProvider
@@ -103,30 +103,29 @@ async def _personal_action_registry(
     )
 
 
-async def _resume_factory_after_workspace_action(
+async def _resume_runtime_v2_after_workspace_action(
     *,
     tenant_id: str,
     action_id: str | None,
 ) -> dict | None:
-    """Resume a correlated Factory run without changing approval durability truth.
+    """Continue the correlated Runtime-v2 run after action truth is durable.
 
-    Approval/action execution is committed before this function is called. A Factory
-    continuation failure therefore cannot roll back or cause the already-executed
-    external side effect to be repeated by a retried approval request.
+    The external side effect is committed before continuation starts. A continuation
+    failure therefore cannot roll back or replay the already-executed action.
     """
 
     clean_action_id = str(action_id or "").strip()
     if not clean_action_id:
         return None
     try:
-        return await resume_workspace_factory_after_action(
+        return await resume_workspace_runtime_v2_after_action(
             tenant_id=tenant_id,
             action_id=clean_action_id,
         )
     except (LookupError, ValueError, PermissionError) as error:
         return {
             "resumed": False,
-            "reason": "factory_resume_failed",
+            "reason": "runtime_v2_resume_failed",
             "error": str(error)[:2000],
         }
 
@@ -294,11 +293,10 @@ async def decide_approval(
     else:
         row.status = payload.status
 
-    # The action outcome and any legacy task continuation must become durable before
-    # the Factory opens a fresh session to consume terminal evidence. This also makes
-    # approval requests non-replayable if Factory continuation itself later fails.
+    # The action outcome and Task continuation become durable before Runtime v2
+    # re-authorizes the original principal and consumes the terminal action evidence.
     await db.commit()
-    factory_resume = await _resume_factory_after_workspace_action(
+    runtime_resume = await _resume_runtime_v2_after_workspace_action(
         tenant_id=auth.tenant.id,
         action_id=business_action_id,
     )
@@ -306,5 +304,5 @@ async def decide_approval(
         "ok": True,
         "business_action_id": business_action_id,
         "task_resumed": task_resumed,
-        "factory_resume": factory_resume,
+        "runtime_resume": runtime_resume,
     }
