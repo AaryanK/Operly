@@ -17,6 +17,7 @@ from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
+from apps.api.workspace_os_router import router as workspace_os_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 
@@ -42,7 +43,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
-    """Keep deterministic account bootstrap without starting the product runtime."""
+    """Keep deterministic account bootstrap without starting the AI runtime."""
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
@@ -123,11 +124,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPERLY API",
-    version="0.2.0-auth-shell",
+    version="0.3.0-workspace-os",
     lifespan=lifespan,
 )
 
-# Keep the hardened account boundary while the AI/product runtime remains offline.
+# Keep the hardened account boundary while the AI/model/agent runtime remains offline.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -159,8 +160,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-# Intentionally mount only account/session endpoints. Product/AI routers stay offline.
+# Deterministic product surface only: accounts + workspace business OS.
+# Agent/model/tool/MCP/studio/FLOW routers intentionally remain offline.
 app.include_router(session_router)
+app.include_router(workspace_os_router)
 
 
 @app.get("/api/health")
@@ -168,20 +171,22 @@ async def health():
     return {
         "ok": True,
         "service": "operly",
-        "runtime": "auth-shell",
+        "runtime": "workspace-os",
         "account_access": True,
-        "capabilities_enabled": False,
+        "workspace_os_enabled": True,
+        "ai_runtime_enabled": False,
     }
 
 
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "auth-shell",
+        "state": "workspace-business-os",
         "deterministic_core": True,
         "account_access": True,
-        "capabilities_enabled": False,
-        "message": "Operly account access is live while the next product runtime is being built.",
+        "workspace_os_enabled": True,
+        "ai_runtime_enabled": False,
+        "message": "Operly workspaces and native business modules are live; the AI runtime remains offline.",
     }
 
 
