@@ -1,0 +1,226 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f7f3ff;
+  background: #0c0912;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #0c0912; color: #f7f3ff; }
+a { color: inherit; text-decoration: none; }
+button, input { font: inherit; }
+
+.minimal-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(107, 76, 185, 0.18), transparent 28rem),
+    linear-gradient(180deg, #100c18 0%, #0a0810 100%);
+}
+
+.minimal-header,
+.minimal-footer {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.minimal-header { padding: 24px 0; }
+.minimal-header nav,
+.minimal-footer nav { display: flex; align-items: center; gap: 14px; }
+.minimal-header a:not(.minimal-button),
+.minimal-footer a { color: #bdb5ca; }
+.minimal-header a:not(.minimal-button):hover,
+.minimal-footer a:hover { color: #fff; }
+
+.minimal-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.minimal-brand-mark,
+.minimal-brand-mark img { width: 34px; height: 34px; display: block; }
+
+.minimal-footer {
+  margin-top: auto;
+  padding: 30px 0;
+  color: #8f879d;
+  font-size: 14px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+.minimal-landing {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 96px 0 72px;
+}
+.minimal-hero { max-width: 780px; }
+.minimal-hero-mark { margin-bottom: 28px; }
+.minimal-hero-mark .operly-mark,
+.minimal-hero-mark img { width: 72px; height: 72px; display: block; }
+.minimal-kicker {
+  display: block;
+  color: #b99cff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  margin-bottom: 14px;
+}
+.minimal-hero h1,
+.minimal-card h1,
+.minimal-account-card h1 {
+  margin: 0;
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+}
+.minimal-hero h1 { font-size: clamp(44px, 7vw, 82px); max-width: 900px; }
+.minimal-hero p {
+  max-width: 680px;
+  color: #bdb5ca;
+  font-size: 20px;
+  line-height: 1.6;
+  margin: 24px 0 0;
+}
+.minimal-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+.minimal-button {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 12px;
+  min-height: 44px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.04);
+  color: #f7f3ff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.minimal-button:hover { background: rgba(255,255,255,0.08); }
+.minimal-button:disabled { opacity: 0.65; cursor: wait; }
+.minimal-button-primary {
+  background: linear-gradient(135deg, #6d5dfc, #9d68ef);
+  border-color: transparent;
+}
+.minimal-button-primary:hover { filter: brightness(1.06); background: linear-gradient(135deg, #6d5dfc, #9d68ef); }
+.minimal-full { width: 100%; }
+
+.minimal-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 90px;
+}
+.minimal-info-grid article,
+.minimal-account-card {
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.035);
+  border-radius: 18px;
+  padding: 26px;
+}
+.minimal-info-grid strong { display: block; font-size: 17px; margin-bottom: 9px; }
+.minimal-info-grid p,
+.minimal-account-card p { margin: 0; color: #aaa2b7; line-height: 1.6; }
+
+.minimal-auth-main,
+.minimal-account-main {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 48px 0 80px;
+}
+.minimal-card,
+.minimal-account-card {
+  width: min(100%, 520px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px;
+  background: rgba(15, 11, 23, 0.88);
+  box-shadow: 0 28px 80px rgba(0,0,0,0.28);
+  padding: 34px;
+}
+.minimal-card h1,
+.minimal-account-card h1 { font-size: clamp(34px, 5vw, 48px); }
+.minimal-card > p,
+.minimal-account-card > p { color: #aaa2b7; line-height: 1.6; margin: 14px 0 26px; }
+.minimal-field { display: grid; gap: 8px; margin: 0 0 18px; color: #d8d1e2; font-size: 14px; font-weight: 700; }
+.minimal-field input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 11px;
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+  padding: 0 14px;
+  outline: none;
+}
+.minimal-field input:focus { border-color: #8f72ff; box-shadow: 0 0 0 3px rgba(143,114,255,0.14); }
+.minimal-password-wrap { position: relative; }
+.minimal-password-wrap input { padding-right: 72px; }
+.minimal-password-wrap button {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  bottom: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #d5cbe7;
+  background: rgba(255,255,255,0.08);
+  cursor: pointer;
+}
+.minimal-error,
+.minimal-success {
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 0 0 18px;
+  line-height: 1.45;
+}
+.minimal-error { color: #ffb3ae; border: 1px solid rgba(255,106,95,0.34); background: rgba(130,42,36,0.22); }
+.minimal-success { color: #bcefc7; border: 1px solid rgba(88,190,111,0.3); background: rgba(34,101,49,0.2); }
+.minimal-card-links {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #aaa2b7;
+  font-size: 13px;
+}
+.minimal-card-links a,
+.minimal-card > a { color: #c6adff; }
+
+.minimal-account-main { align-items: start; padding-top: 96px; }
+.minimal-account-card { width: min(100%, 680px); }
+.minimal-account-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.minimal-account-meta span {
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.04);
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #c8c0d3;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .minimal-header,
+  .minimal-footer,
+  .minimal-landing,
+  .minimal-auth-main,
+  .minimal-account-main { width: min(100% - 28px, 1180px); }
+  .minimal-header { padding: 18px 0; }
+  .minimal-header nav { gap: 8px; }
+  .minimal-header nav > a:not(.minimal-button) { display: none; }
+  .minimal-landing { padding-top: 64px; }
+  .minimal-hero p { font-size: 17px; }
+  .minimal-info-grid { grid-template-columns: 1fr; margin-top: 56px; }
+  .minimal-card { padding: 24px; }
+  .minimal-card-links { align-items: flex-start; flex-direction: column; }
+  .minimal-footer { align-items: flex-start; flex-direction: column; }
+}
