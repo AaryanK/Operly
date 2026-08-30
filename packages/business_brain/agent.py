@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from packages.business_brain.runtime_v2 import run_workspace_runtime_v2
+from packages.business_brain.runtime_v2_resume import checkpoint_workspace_runtime_v2
 from packages.business_brain.security import (
     MAX_ASSISTANT_TEXT,
     MAX_USER_TEXT,
@@ -143,6 +144,14 @@ class AgentService:
             execution=execution,
             plugin_harness=self.plugin_harness,
             plugin_context=plugin_context,
+        )
+        await checkpoint_workspace_runtime_v2(
+            run=run,
+            objective=objective,
+            request=request,
+            conversation_id=conversation.id,
+            execution=execution,
+            user_id=user_id,
         )
         answer = bounded_text(
             run.get("message") or "Done.",
