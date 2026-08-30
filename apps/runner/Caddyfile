@@ -1,4 +1,0 @@
-{$RUNNER_DOMAIN} {
-    encode zstd gzip
-    reverse_proxy runner:8080
-}
