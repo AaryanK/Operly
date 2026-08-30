@@ -1,7 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
@@ -10,9 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.auth_cookies import session_secret_from_request
 from apps.api.security import hash_token
 from packages.database.db import SessionFactory
-from packages.database.model_trace import ensure_model_trace_sink
 from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
-from packages.model_runtime.trace_context import runtime_trace_scope
 
 
 async def get_db():
@@ -50,16 +47,8 @@ async def get_account_auth_context(
 ) -> AsyncIterator[AccountAuthContext]:
     """Authenticate the account without requiring a workspace membership.
 
-    Personal AI, account settings, session management, and workspace discovery use
-    this dependency. Workspace/business routes must continue through
-    ``get_auth_context`` so a personal session never implicitly gains workspace
-    authority.
-
-    The dependency also establishes a request-level model trace scope. Any shared
-    model-runtime invocation beneath this authenticated request therefore receives a
-    stable run/conversation correlation even when the individual callsite did not
-    explicitly opt into AgentRuntime. More-specific agent/Studio scopes may override
-    these synthetic HTTP identifiers.
+    This dependency is deliberately AI/runtime independent so the minimal account
+    shell can keep operating while the model and agent runtime are rebuilt.
     """
 
     secret = session_secret_from_request(request)
@@ -84,28 +73,7 @@ async def get_account_auth_context(
         auth_session.last_activity_at = now
         await db.commit()
 
-    # Install once per process before entering the ambient correlation scope. This
-    # makes non-AgentRuntime model callsites observable too; registration is
-    # idempotent and tracing failures never break inference.
-    ensure_model_trace_sink()
-    context = AccountAuthContext(user=user, session=auth_session)
-    request_run_id = str(uuid4())
-    request_trace = {
-        "runtime_run_id": request_run_id,
-        "conversation_id": f"http:{request_run_id}",
-        "user_id": user.id,
-        "principal_id": f"user:{user.id}",
-        "channel": "web",
-        # Account-scoped work is private by default. A workspace dependency below
-        # this scope explicitly upgrades the trace to workspace/request after live
-        # membership has been verified.
-        "surface": "private/direct",
-        "runtime_component": f"http:{request.method.lower()}:{request.url.path}",
-        "http_path": request.url.path,
-        "http_method": request.method,
-    }
-    with runtime_trace_scope(request_trace):
-        yield context
+    yield AccountAuthContext(user=user, session=auth_session)
 
 
 async def get_auth_context(
@@ -134,18 +102,9 @@ async def get_auth_context(
     if not membership or not tenant:
         raise HTTPException(status_code=403, detail="Workspace access denied")
 
-    context = AuthContext(
+    yield AuthContext(
         user=account.user,
         tenant=tenant,
         role=membership.role,
         session=account.session,
     )
-    with runtime_trace_scope(
-        {
-            "tenant_id": tenant.id,
-            "principal_id": f"web-user:{account.user.id}",
-            "channel": "web",
-            "surface": "workspace/request",
-        }
-    ):
-        yield context
