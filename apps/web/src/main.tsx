@@ -5,6 +5,7 @@ import { App } from "./app/App";
 import "./ui/minimal.css";
 import "./ui/workspace-lite.css";
 import "./ui/workspace-os.css";
+import "./ui/workspace-human.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
