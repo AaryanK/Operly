@@ -47,7 +47,13 @@ def email_verification(to_email: str, display_name: str, code: str, verify_url: 
     )
     return _envelope(
         to_email,
-        MessageContent("Verify your OPERLY email", f"Your verification code is {code}", "Verify your email", "", text),
+        MessageContent(
+            "Verify your OPERLY email",
+            f"Your verification code is {code}",
+            "Verify your email",
+            "",
+            text,
+        ),
         "verify_email.html",
         display_name=display_name,
         code=code,
@@ -64,7 +70,13 @@ def password_reset(to_email: str, display_name: str, code: str, reset_url: str, 
     )
     return _envelope(
         to_email,
-        MessageContent("Reset your OPERLY password", "A password reset was requested for your OPERLY account", "Reset your password", "", text),
+        MessageContent(
+            "Reset your OPERLY password",
+            "A password reset was requested for your OPERLY account",
+            "Reset your password",
+            "",
+            text,
+        ),
         "password_reset.html",
         display_name=display_name,
         code=code,
@@ -75,14 +87,54 @@ def password_reset(to_email: str, display_name: str, code: str, reset_url: str, 
 
 def welcome(to_email: str, display_name: str, app_url: str) -> EmailEnvelope:
     text = f"Welcome to OPERLY, {display_name}.\n\nYour workspace is ready: {app_url}"
-    return _envelope(to_email, MessageContent("Welcome to OPERLY", "Your OPERLY workspace is ready", "Your workspace is ready", "", text), "welcome.html", display_name=display_name, action_url=app_url)
+    return _envelope(
+        to_email,
+        MessageContent(
+            "Welcome to OPERLY",
+            "Your OPERLY workspace is ready",
+            "Your workspace is ready",
+            "",
+            text,
+        ),
+        "welcome.html",
+        display_name=display_name,
+        action_url=app_url,
+    )
 
 
 def password_changed(to_email: str, display_name: str, app_url: str) -> EmailEnvelope:
-    text = f"Hi {display_name},\n\nYour OPERLY password was changed. If this was not you, contact support immediately.\n\nOpen OPERLY: {app_url}"
-    return _envelope(to_email, MessageContent("Your OPERLY password was changed", "Security notice for your OPERLY account", "Your password was changed", "", text), "password_changed.html", display_name=display_name, action_url=app_url)
+    text = (
+        f"Hi {display_name},\n\nYour OPERLY password was changed. "
+        f"If this was not you, contact support immediately.\n\nOpen OPERLY: {app_url}"
+    )
+    return _envelope(
+        to_email,
+        MessageContent(
+            "Your OPERLY password was changed",
+            "Security notice for your OPERLY account",
+            "Your password was changed",
+            "",
+            text,
+        ),
+        "password_changed.html",
+        display_name=display_name,
+        action_url=app_url,
+    )
 
 
 def security_alert(to_email: str, display_name: str, summary: str, app_url: str) -> EmailEnvelope:
     text = f"Hi {display_name},\n\n{summary}\n\nReview your account: {app_url}"
-    return _envelope(to_email, MessageContent("OPERLY account security notice", "A security event may need your attention", "Account security notice", "", text), "security_alert.html", display_name=display_name, summary=summary, action_url=app_url)
+    return _envelope(
+        to_email,
+        MessageContent(
+            "OPERLY account security notice",
+            "A security event may need your attention",
+            "Account security notice",
+            "",
+            text,
+        ),
+        "security_alert.html",
+        display_name=display_name,
+        summary=summary,
+        action_url=app_url,
+    )
