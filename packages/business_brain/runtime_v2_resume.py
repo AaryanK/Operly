@@ -1,12 +1,12 @@
-"""Durable approval continuation for the canonical Workspace Agent Runtime v2.
+"""Durable approval continuation for canonical Workspace Agent Runtime v2.
 
-Runtime v2 owns orchestration. This module binds its in-memory RunState to the
-existing AgentRunRecord persistence layer so a governed capability can stop at
-WAITING_APPROVAL and continue after the durable action reaches a terminal state.
+Runtime v2 owns orchestration. This module binds its RunState to the existing
+AgentRunRecord store so a governed capability can stop at WAITING_APPROVAL and
+continue after the durable action reaches a terminal state.
 
-The continuation always re-authorizes the original principal against current
-workspace membership/permissions. The approving admin never becomes the resumed
-worker's authority. Already-verified mutations are replay-protected during resume.
+Continuation always re-authorizes the original user against current workspace
+membership and permissions. The approving admin never becomes resumed authority.
+Verified mutations are replay-protected while the unfinished plan continues.
 """
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ from packages.security.surfaces import SurfaceKind
 
 _WAITING_RUN_STATES = ("waiting_approval", "waiting_external", "running")
 _TERMINAL_ACTION_STATES = frozenset({"VERIFIED", "REJECTED", "FAILED", "VERIFICATION_FAILED"})
+_APPROVAL_WAIT_STATES = frozenset({"WAITING_APPROVAL", "AWAITING_APPROVAL"})
 
 
 def _json_object(value: str | None) -> dict[str, Any]:
@@ -58,7 +59,11 @@ def _step_output(raw: Any) -> StepOutput | None:
             for item in list(raw.get("findings") or [])[:100]
             if isinstance(item, dict)
         ),
-        refs=tuple(str(item) for item in list(raw.get("refs") or [])[:200] if str(item).strip()),
+        refs=tuple(
+            str(item)
+            for item in list(raw.get("refs") or [])[:200]
+            if str(item).strip()
+        ),
         coverage_complete=(
             bool(coverage.get("complete"))
             if coverage.get("complete") is not None
@@ -99,7 +104,9 @@ def _plan(raw: Any) -> Plan:
     return Plan(
         goal=str(value.get("goal") or "")[:20_000],
         constraints=tuple(
-            str(item) for item in list(value.get("constraints") or [])[:100] if str(item).strip()
+            str(item)
+            for item in list(value.get("constraints") or [])[:100]
+            if str(item).strip()
         ),
         steps=tuple(steps),
         final_step_id=str(value.get("final_step_id") or "").strip(),
@@ -169,17 +176,14 @@ def _state(raw: Any) -> RunState:
     )
 
 
-def _resume_context(
-    *,
-    request,
-    conversation_id: str,
-    execution,
-    user_id: str | None,
-) -> dict[str, Any]:
+def _resume_context(*, request, conversation_id: str, execution, user_id: str | None) -> dict[str, Any]:
     return {
         "tenant_id": request.tenant_id,
         "user_id": user_id,
-        "principal_id": request.principal_id,
+        # ActionService persists the authority-layer principal, not the web surface
+        # conversation alias (for example user:<id> vs web-user:<id>).
+        "principal_id": execution.principal_id or request.principal_id,
+        "conversation_principal_id": request.principal_id,
         "conversation_id": conversation_id,
         "channel": request.channel,
         "surface": execution.surface.value,
@@ -187,13 +191,27 @@ def _resume_context(
     }
 
 
+def _has_approval_wait(runtime_state: dict[str, Any]) -> bool:
+    raw_steps = runtime_state.get("steps") if isinstance(runtime_state.get("steps"), dict) else {}
+    for step in raw_steps.values():
+        if not isinstance(step, dict):
+            continue
+        for observation in list(step.get("observations") or []):
+            if not isinstance(observation, dict):
+                continue
+            result = observation.get("result") if isinstance(observation.get("result"), dict) else {}
+            status = str(result.get("status") or result.get("lifecycle_status") or "").upper()
+            if status in _APPROVAL_WAIT_STATES:
+                return True
+    return False
+
+
 def _checkpoint_lifecycle(runtime_state: dict[str, Any]) -> str:
     status = str(runtime_state.get("status") or "").lower()
-    stop_reason = str(runtime_state.get("stop_reason") or "").lower()
     if status == "completed":
         return "completed"
     if status == "waiting":
-        return "waiting_approval" if stop_reason == "waiting_external" else "waiting_external"
+        return "waiting_approval" if _has_approval_wait(runtime_state) else "waiting_external"
     if status in {"blocked", "failed"}:
         return "failed"
     return "running"
@@ -221,15 +239,11 @@ async def checkpoint_workspace_runtime_v2(
         execution=execution,
         user_id=user_id,
     )
-    metadata = {
-        **durable["resume_context"],
-        "_conversation_id": conversation_id,
-    }
     lifecycle = _checkpoint_lifecycle(runtime_state)
     await checkpoint_agent_run(
         runtime_run_id=runtime_run_id,
         objective=objective,
-        metadata=metadata,
+        metadata={**durable["resume_context"], "_conversation_id": conversation_id},
         state=durable,
         event_type=f"runtime_v2.{lifecycle}",
         lifecycle_state=lifecycle,
@@ -237,11 +251,7 @@ async def checkpoint_workspace_runtime_v2(
             "status": runtime_state.get("status"),
             "stop_reason": runtime_state.get("stop_reason"),
         },
-        error=(
-            str(run.get("message") or "")[:20_000]
-            if lifecycle == "failed"
-            else None
-        ),
+        error=(str(run.get("message") or "")[:20_000] if lifecycle == "failed" else None),
     )
 
 
@@ -289,16 +299,16 @@ async def _waiting_run_for_action(
     return None
 
 
-def _terminal_action_result(action: BusinessActionRecord) -> dict[str, Any]:
-    status = str(action.status or "").strip().upper()
-    result = _json_object(action.result_json)
-    verification = _json_object(action.verification_json)
+def _terminal_action_result(action: dict[str, Any]) -> dict[str, Any]:
+    status = str(action.get("status") or "").strip().upper()
+    result = _json_object(action.get("result_json"))
+    verification = _json_object(action.get("verification_json"))
     observation = result.get("evidence") if isinstance(result.get("evidence"), dict) else result
     return {
         "ok": status == "VERIFIED",
         "status": status,
-        "action_id": action.id,
-        "approval_id": action.approval_id,
+        "action_id": action.get("id"),
+        "approval_id": action.get("approval_id"),
         "observation": observation,
         "verification": verification,
         "lifecycle": {
@@ -334,15 +344,8 @@ def _verified_mutation_receipts(state: RunState) -> list[tuple[str, dict[str, An
     return receipts
 
 
-async def _continue_state(
-    *,
-    engine: RuntimeV2Engine,
-    state: RunState,
-    schemas,
-    invoke,
-    metadata: dict[str, Any],
-) -> RunState:
-    """Continue only non-terminal steps of a reconstructed Runtime-v2 state."""
+async def _continue_state(*, engine: RuntimeV2Engine, state: RunState, schemas, invoke, metadata: dict[str, Any]) -> RunState:
+    """Continue only unfinished steps of a reconstructed Runtime-v2 state."""
 
     state.status = "running"
     state.stop_reason = None
@@ -416,11 +419,7 @@ def _state_message(state: RunState) -> str:
         final = state.steps.get(state.plan.final_step_id)
         return final.summary if final is not None and final.summary else "Completed."
     failing = next(
-        (
-            item
-            for item in state.steps.values()
-            if item.status in {"blocked", "failed", "waiting"}
-        ),
+        (item for item in state.steps.values() if item.status in {"blocked", "failed", "waiting"}),
         None,
     )
     if failing is not None and failing.summary:
@@ -428,23 +427,17 @@ def _state_message(state: RunState) -> str:
     return f"Runtime v2 stopped: {state.stop_reason or state.status}."
 
 
-async def _checkpoint_resumed_state(
-    *,
-    state: RunState,
-    resume_context: dict[str, Any],
-    message: str,
-) -> None:
+async def _checkpoint_resumed_state(*, state: RunState, resume_context: dict[str, Any], message: str) -> None:
     durable = state.as_dict()
     durable["resume_context"] = dict(resume_context)
     lifecycle = _checkpoint_lifecycle(durable)
-    metadata = {
-        **resume_context,
-        "_conversation_id": resume_context.get("conversation_id"),
-    }
     await checkpoint_agent_run(
         runtime_run_id=state.run_id,
         objective=state.objective,
-        metadata=metadata,
+        metadata={
+            **resume_context,
+            "_conversation_id": resume_context.get("conversation_id"),
+        },
         state=durable,
         event_type=f"runtime_v2.resume.{lifecycle}",
         lifecycle_state=lifecycle,
@@ -466,11 +459,7 @@ async def resume_workspace_runtime_v2_after_action(
 
     async with session_scope() as db:
         action = await db.get(BusinessActionRecord, clean_action_id)
-        if (
-            action is None
-            or action.scope_kind != "workspace"
-            or action.tenant_id != tenant_id
-        ):
+        if action is None or action.scope_kind != "workspace" or action.tenant_id != tenant_id:
             return None
         action_status = str(action.status or "").strip().upper()
         if action_status not in _TERMINAL_ACTION_STATES:
@@ -490,10 +479,7 @@ async def resume_workspace_runtime_v2_after_action(
             "principal_id": action.principal_id,
         }
 
-    located = await _waiting_run_for_action(
-        tenant_id=tenant_id,
-        action_id=clean_action_id,
-    )
+    located = await _waiting_run_for_action(tenant_id=tenant_id, action_id=clean_action_id)
     if located is None:
         return None
     run, raw_state, (step_id, observation_index) = located
@@ -504,9 +490,7 @@ async def resume_workspace_runtime_v2_after_action(
     )
     user_id = str(resume_context.get("user_id") or "").strip() or None
     principal_id = str(resume_context.get("principal_id") or "").strip()
-    conversation_id = str(
-        resume_context.get("conversation_id") or run.conversation_id or ""
-    ).strip() or None
+    conversation_id = str(resume_context.get("conversation_id") or run.conversation_id or "").strip() or None
     channel = str(resume_context.get("channel") or run.channel or "operly")
     surface = SurfaceKind.coerce(resume_context.get("surface") or run.surface)
 
@@ -534,10 +518,7 @@ async def resume_workspace_runtime_v2_after_action(
                 channel=channel,
                 surface=surface,
                 conversation_id=conversation_id,
-                metadata={
-                    "principal_id": principal_id,
-                    "_surface_kind": surface.value,
-                },
+                metadata={"principal_id": principal_id, "_surface_kind": surface.value},
                 require_membership=True,
             )
     except ExecutionContextError:
@@ -546,6 +527,13 @@ async def resume_workspace_runtime_v2_after_action(
             "runtime_run_id": run.id,
             "step_id": step_id,
             "reason": "original_authority_unavailable",
+        }
+    if execution.principal_id != principal_id:
+        return {
+            "resumed": False,
+            "runtime_run_id": run.id,
+            "step_id": step_id,
+            "reason": "original_principal_changed",
         }
 
     state = _state(raw_state)
@@ -558,29 +546,14 @@ async def resume_workspace_runtime_v2_after_action(
             "reason": "runtime_waiting_observation_unavailable",
         }
 
-    action_copy = BusinessActionRecord(
-        id=action_snapshot["id"],
-        tenant_id=tenant_id,
-        scope_kind="workspace",
-        objective=state.objective,
-        capability=action_snapshot["capability"],
-        arguments_json=action_snapshot["arguments_json"],
-        risk_level="low",
-        status=action_snapshot["status"],
-        approval_id=action_snapshot["approval_id"],
-        result_json=action_snapshot["result_json"],
-        verification_json=action_snapshot["verification_json"],
-    )
-    terminal_result = _terminal_action_result(action_copy)
+    terminal_result = _terminal_action_result(action_snapshot)
     step_state.observations[observation_index].result = copy.deepcopy(terminal_result)
 
     if action_status != "VERIFIED":
         step_state.status = "blocked"
-        step_state.summary = f"Approved action {clean_action_id} ended in {action_status}."
+        step_state.summary = f"Action {clean_action_id} ended in {action_status}."
         state.status = "blocked"
-        state.stop_reason = (
-            "approval_rejected" if action_status == "REJECTED" else "approved_action_failed"
-        )
+        state.stop_reason = "approval_rejected" if action_status == "REJECTED" else "approved_action_failed"
         message = _state_message(state)
         lifecycle = "cancelled" if action_status == "REJECTED" else "failed"
         durable = state.as_dict()
@@ -593,18 +566,14 @@ async def resume_workspace_runtime_v2_after_action(
             event_type=f"runtime_v2.resume.{lifecycle}",
             lifecycle_state=lifecycle,
             payload={"action_id": clean_action_id, "action_status": action_status},
-            error=(message[:20_000] if lifecycle == "failed" else None),
+            error=message[:20_000] if lifecycle == "failed" else None,
         )
         return {
             "resumed": True,
             "runtime_run_id": state.run_id,
             "step_id": step_id,
             "stop_reason": state.stop_reason,
-            "execution_truth": {
-                "status": state.status.upper(),
-                "completed": False,
-                "verified": False,
-            },
+            "execution_truth": {"status": state.status.upper(), "completed": False, "verified": False},
             "runtime_v2": state.as_dict(),
             "message": message,
         }
@@ -638,14 +607,17 @@ async def resume_workspace_runtime_v2_after_action(
         authority=set(execution.permissions),
         registry=registry,
     )
-    remaining_capabilities = {
-        capability
-        for step in state.plan.steps
-        if state.steps.get(step.id) is not None
-        and state.steps[step.id].status not in {"completed", "skipped"}
-        for capability in step.capabilities
-    }
-    session_view.expose(sorted(remaining_capabilities))
+    session_view.expose(
+        sorted(
+            {
+                capability
+                for step in state.plan.steps
+                if state.steps.get(step.id) is not None
+                and state.steps[step.id].status not in {"completed", "skipped"}
+                for capability in step.capabilities
+            }
+        )
+    )
 
     async def schemas():
         return await plugin_harness.schemas(plugin_context)
@@ -656,38 +628,28 @@ async def resume_workspace_runtime_v2_after_action(
         for receipt_name, receipt_arguments, receipt_result in receipts:
             if name == receipt_name and arguments == receipt_arguments:
                 return copy.deepcopy(receipt_result)
-        return await plugin_harness.invoke(
-            name,
-            arguments,
-            plugin_context,
-            call_id=call_id,
-        )
+        return await plugin_harness.invoke(name, arguments, plugin_context, call_id=call_id)
 
-    metadata = {
-        "runtime_run_id": state.run_id,
-        "runtime_controller": "agent_runtime_v2",
-        "tenant_id": tenant_id,
-        "user_id": user_id,
-        "principal_id": principal_id,
-        "conversation_id": conversation_id,
-        "channel": channel,
-        "surface": execution.surface.value,
-        "workspace_mode": execution.workspace_mode,
-        "resumed_from_action_id": clean_action_id,
-    }
     state = await _continue_state(
         engine=RuntimeV2Engine(),
         state=state,
         schemas=schemas,
         invoke=invoke,
-        metadata=metadata,
+        metadata={
+            "runtime_run_id": state.run_id,
+            "runtime_controller": "agent_runtime_v2",
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "principal_id": principal_id,
+            "conversation_id": conversation_id,
+            "channel": channel,
+            "surface": execution.surface.value,
+            "workspace_mode": execution.workspace_mode,
+            "resumed_from_action_id": clean_action_id,
+        },
     )
     message = _state_message(state)
-    await _checkpoint_resumed_state(
-        state=state,
-        resume_context=resume_context,
-        message=message,
-    )
+    await _checkpoint_resumed_state(state=state, resume_context=resume_context, message=message)
 
     if conversation_id and message:
         async with session_scope() as db:
