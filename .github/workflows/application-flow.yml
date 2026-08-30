@@ -64,7 +64,7 @@ jobs:
           AUTH_TOKEN_PEPPER: test-auth-token-pepper-that-is-long-enough
           OPERLY_ENV: test
         run: >-
-          python -m pytest -q
+          python -m pytest -q --junitxml=application-flow.xml
           tests/test_account_scope_workspace_creation.py
           tests/test_authentication.py
           tests/test_railway_auth_origin.py
@@ -90,6 +90,15 @@ jobs:
           tests/test_multi_provider_model_portfolio.py
           tests/test_openai_compatible_tool_arguments.py
           tests/test_harness_native_tasks.py
+
+      - name: Upload application flow failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-flow-junit
+          path: application-flow.xml
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Smoke Railway-style production startup
         env:
