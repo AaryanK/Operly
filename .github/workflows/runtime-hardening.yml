@@ -154,7 +154,7 @@ jobs:
           OPERLY_SEMANTIC_EMBEDDING_BACKEND: hashing
           OPERLY_PLANNING_MODE: deterministic_test
         run: >-
-          python -m pytest -q
+          python -m pytest -q --junitxml=runtime-hardening.xml
           tests/test_agent_runtime_hardening.py
           tests/test_assistant_first_personal_dm.py
           tests/test_authority_boundaries.py
@@ -176,6 +176,14 @@ jobs:
           tests/test_scope_aware_action_migration.py
           tests/test_human_identity_invites_federated_history.py
           tests/test_provider_history_adapter_registry.py
+      - name: Upload runtime hardening failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-hardening-junit
+          path: runtime-hardening.xml
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Verify migration chain on SQLite
         env:
           DATABASE_URL: sqlite+aiosqlite:///./runtime-hardening.db
