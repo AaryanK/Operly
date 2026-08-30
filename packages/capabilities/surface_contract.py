@@ -11,7 +11,7 @@ from packages.capabilities.defaults import default_registry
 REQUIRED_SURFACES = ("web", "discord", "primary_agent", "remote_api")
 SURFACE_ADAPTERS = {
     "web": "apps/web/src/main.tsx",
-    "discord": "packages/connectors/discord/bot_shared.py",
+    "discord": "packages/connectors/discord/transport.py",
     "primary_agent": "packages/capabilities/agent_harness.py",
     "remote_api": "apps/api/agent_router.py",
 }
