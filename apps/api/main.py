@@ -18,6 +18,7 @@ from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
+from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 
@@ -124,7 +125,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPERLY API",
-    version="0.3.0-workspace-os",
+    version="0.4.0-human-workspace",
     lifespan=lifespan,
 )
 
@@ -161,9 +162,11 @@ app.add_middleware(
 )
 
 # Deterministic product surface only: accounts + workspace business OS.
+# workspace_simple_router is only an intent/workflow facade over those same records.
 # Agent/model/tool/MCP/studio/FLOW routers intentionally remain offline.
 app.include_router(session_router)
 app.include_router(workspace_os_router)
+app.include_router(workspace_simple_router)
 
 
 @app.get("/api/health")
@@ -171,9 +174,10 @@ async def health():
     return {
         "ok": True,
         "service": "operly",
-        "runtime": "workspace-os",
+        "runtime": "human-workspace-os",
         "account_access": True,
         "workspace_os_enabled": True,
+        "human_workflows_enabled": True,
         "ai_runtime_enabled": False,
     }
 
@@ -181,12 +185,13 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "workspace-business-os",
+        "state": "human-workspace-os",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
+        "human_workflows_enabled": True,
         "ai_runtime_enabled": False,
-        "message": "Operly workspaces and native business modules are live; the AI runtime remains offline.",
+        "message": "Operly exposes a simple human operating layer over the deterministic workspace business OS; the AI runtime remains offline.",
     }
 
 
