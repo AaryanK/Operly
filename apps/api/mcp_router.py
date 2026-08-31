@@ -356,11 +356,19 @@ async def mcp_endpoint(
     routed_name: str | None = Header(default=None, alias="Mcp-Name"),
     db: AsyncSession = Depends(get_db),
 ):
-    if protocol_version and protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
-        return _mcp_response(_rpc_error(payload.get("id"), -32600, "Unsupported MCP protocol version"), status_code=400)
-    context = await _request_context(request, authorization, db)
-    method = str(payload.get("method") or routed_method or "")
     request_id = payload.get("id")
+    if protocol_version and protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+        return _mcp_response(_rpc_error(request_id, -32600, "Unsupported MCP protocol version"), status_code=400)
+
+    body_method = str(payload.get("method") or "").strip()
+    header_method = str(routed_method or "").strip()
+    if body_method and header_method and body_method != header_method:
+        return _mcp_response(
+            _rpc_error(request_id, -32600, "MCP method header/body mismatch"),
+            status_code=400,
+        )
+    method = body_method or header_method
+    context = await _request_context(request, authorization, db)
 
     if method == "notifications/initialized":
         return Response(status_code=204, headers={"MCP-Protocol-Version": MCP_PROTOCOL_VERSION})
@@ -387,7 +395,14 @@ async def mcp_endpoint(
         params = payload.get("params") or {}
         if not isinstance(params, dict):
             return _mcp_response(_rpc_error(request_id, -32602, "Tool call params must be an object"))
-        name = str(params.get("name") or routed_name or "")
+        body_name = str(params.get("name") or "").strip()
+        header_name = str(routed_name or "").strip()
+        if body_name and header_name and body_name != header_name:
+            return _mcp_response(
+                _rpc_error(request_id, -32602, "MCP tool name header/body mismatch"),
+                status_code=400,
+            )
+        name = body_name or header_name
         arguments = params.get("arguments") or {}
         meta = params.get("_meta") or {}
         if not isinstance(arguments, dict) or not isinstance(meta, dict):
