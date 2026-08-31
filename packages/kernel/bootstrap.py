@@ -4,6 +4,11 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
 from packages.kernel.runtime import OperlyKernelRuntime
+from packages.kernel.workspace_business_provider import (
+    PROVIDER_ID as WORKSPACE_BUSINESS_PROVIDER_ID,
+    WorkspaceBusinessProvider,
+    workspace_business_capabilities,
+)
 from packages.kernel.workspace_control_provider import (
     PROVIDER_ID as WORKSPACE_CONTROL_PROVIDER_ID,
     WorkspaceControlProvider,
@@ -193,11 +198,13 @@ def build_kernel_runtime() -> OperlyKernelRuntime:
         (
             *builtin_capabilities(),
             *workspace_control_capabilities(),
+            *workspace_business_capabilities(),
             *workspace_record_capabilities(),
         )
     )
     providers = ProviderRegistry()
     providers.register("operly.native", NativeOperlyProvider())
     providers.register(WORKSPACE_CONTROL_PROVIDER_ID, WorkspaceControlProvider())
+    providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, WorkspaceBusinessProvider())
     providers.register(WORKSPACE_OS_PROVIDER_ID, WorkspaceOSProvider())
     return OperlyKernelRuntime(registry=registry, providers=providers)
