@@ -11,9 +11,10 @@ const ActivityPage = lazy(() => import("../workspace/ActivityPage").then((module
 const AgentComputerPage = lazy(() => import("../workspace/AgentComputerPage").then((module) => ({ default: module.AgentComputerPage })));
 const ConnectionsPage = lazy(() => import("../workspace/ConnectionsPage").then((module) => ({ default: module.ConnectionsPage })));
 const CapabilitiesPage = lazy(() => import("../workspace/CapabilitiesPage").then((module) => ({ default: module.CapabilitiesPage })));
+const AccessPage = lazy(() => import("../workspace/AccessPage").then((module) => ({ default: module.AccessPage })));
 
 type Workspace = WorkspaceSummary & { current: boolean };
-type AdvancedSection = "workflows" | "activity" | "agent-computer" | "connections" | "capabilities";
+type AdvancedSection = "workflows" | "activity" | "agent-computer" | "connections" | "capabilities" | "access";
 
 const ADVANCED_WORKSPACE_SECTIONS = new Set<AdvancedSection>([
   "workflows",
@@ -21,6 +22,7 @@ const ADVANCED_WORKSPACE_SECTIONS = new Set<AdvancedSection>([
   "agent-computer",
   "connections",
   "capabilities",
+  "access",
 ]);
 
 function go(path: string) {
@@ -52,6 +54,7 @@ function AdvancedWorkspacePage({ workspace, section }: { workspace: Workspace; s
     case "agent-computer": return <AgentComputerPage workspace={workspace} />;
     case "connections": return <ConnectionsPage workspace={workspace} />;
     case "capabilities": return <CapabilitiesPage workspace={workspace} />;
+    case "access": return <AccessPage workspace={workspace} />;
   }
 }
 
@@ -139,6 +142,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
             <WorkspaceControlLink workspaceId={selected.id} section="agent-computer" active={advancedSection === "agent-computer"}>Computer</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="connections" active={advancedSection === "connections"}>Integrations</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="capabilities" active={advancedSection === "capabilities"}>All tools</WorkspaceControlLink>
+            <WorkspaceControlLink workspaceId={selected.id} section="access" active={advancedSection === "access"}>AI & MCP</WorkspaceControlLink>
           </>}
           <a href="/account">Workspaces</a>
           <button className="workspace-lite-button" onClick={() => void load()}>Refresh</button>
