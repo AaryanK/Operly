@@ -86,6 +86,35 @@ def _validate_existing(
     return None
 
 
+async def find_completed_request(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    request: RuntimeRequest,
+) -> RuntimeResponse | None:
+    """Return an exact completed replay without reserving execution.
+
+    The Kernel calls this only *after* resolving the capability and re-evaluating the
+    caller's current scope/surface/permissions. That prevents a cached response from
+    becoming a stale-authority bypass after a role or permission change.
+    """
+
+    request_id = str(request.request_id or "").strip()
+    if not request_id:
+        return None
+    key = _idempotency_key(context, request_id)
+    existing = await db.scalar(
+        select(KernelRequestClaim).where(KernelRequestClaim.idempotency_key == key)
+    )
+    if existing is None:
+        return None
+    return _validate_existing(
+        existing,
+        request=request,
+        arguments_hash=_arguments_hash(request),
+    )
+
+
 async def reserve_request(
     db: AsyncSession,
     *,
@@ -93,6 +122,8 @@ async def reserve_request(
     request: RuntimeRequest,
     run_id: str,
 ) -> IdempotencyReservation:
+    """Claim an authorized request immediately before side-effecting execution."""
+
     request_id = str(request.request_id or "").strip()
     if not request_id:
         return IdempotencyReservation(claim=None)
@@ -130,8 +161,8 @@ async def reserve_request(
         await db.flush()
         return IdempotencyReservation(claim=claim)
     except IntegrityError:
-        # Another transaction won the same scoped request key. Acquiring the unique
-        # row is the first database mutation in the Kernel loop, so rollback is safe.
+        # Another transaction won the same scoped request key. This reservation occurs
+        # immediately before provider execution, so rolling back is safe.
         await db.rollback()
         existing = await db.scalar(
             select(KernelRequestClaim).where(KernelRequestClaim.idempotency_key == key)
