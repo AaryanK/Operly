@@ -62,7 +62,8 @@
 }
 
 .integration-provider-card p,
-.integration-connect-actions p {
+.integration-connect-actions p,
+.integration-foundation-note p {
   margin: .3rem 0 0;
   opacity: .72;
 }
@@ -79,7 +80,8 @@
 }
 
 .integration-split,
-.integration-discord-layout {
+.integration-discord-layout,
+.integration-calendar-layout {
   display: grid;
   grid-template-columns: minmax(280px, .82fr) minmax(0, 1.55fr);
   gap: 1rem;
@@ -142,7 +144,8 @@
 
 .integration-message-body,
 .integration-job pre,
-.integration-approval-card pre {
+.integration-approval-card pre,
+.integration-structured-result {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 52vh;
@@ -167,11 +170,16 @@
   margin-bottom: 1rem;
 }
 
-.integration-form label {
+.integration-form label,
+.integration-inline-field {
   display: grid;
   gap: .35rem;
   font-size: .9rem;
   font-weight: 650;
+}
+
+.integration-inline-field {
+  margin-bottom: .75rem;
 }
 
 .integration-form label small {
@@ -182,6 +190,7 @@
 .integration-form input,
 .integration-form textarea,
 .integration-form select,
+.integration-inline-field select,
 .integration-search input,
 .integration-search button,
 .integration-chat-compose textarea {
@@ -204,6 +213,16 @@
 
 .integration-check input {
   width: auto;
+}
+
+.integration-readonly-event {
+  display: grid;
+  gap: .8rem;
+}
+
+.integration-readonly-event p {
+  margin: 0;
+  opacity: .75;
 }
 
 .integration-canva-layout {
@@ -249,8 +268,56 @@
   gap: 1rem;
 }
 
+.integration-toolbar {
+  margin-bottom: .9rem;
+}
+
+.integration-asset-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .8rem;
+}
+
+.integration-asset-summary span {
+  display: grid;
+  gap: .15rem;
+}
+
+.integration-asset-summary strong {
+  font-size: 1.35rem;
+}
+
+.integration-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-top: .7rem;
+}
+
+.integration-token-list code {
+  max-width: 100%;
+  padding: .3rem .45rem;
+  border: 1px solid var(--integration-border);
+  border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.integration-job {
+  margin-top: .9rem;
+}
+
 .integration-chat-pane {
   min-height: 62vh;
+}
+
+.integration-installations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin-bottom: .75rem;
 }
 
 .integration-chat-log {
@@ -297,6 +364,10 @@
   margin-top: 1rem;
 }
 
+.integration-foundation-note {
+  margin-top: 1rem;
+}
+
 .integration-approval-backdrop {
   position: fixed;
   inset: 0;
@@ -337,10 +408,14 @@
   .integration-canva-layout,
   .integration-split,
   .integration-discord-layout,
+  .integration-calendar-layout,
   .integration-template-layout {
     grid-template-columns: 1fr;
   }
-  .integration-canva-layout .full-span { grid-column: auto; }
+
+  .integration-canva-layout .full-span {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 620px) {
@@ -348,8 +423,18 @@
   .integration-chat-compose {
     grid-template-columns: 1fr;
   }
+
   .integration-provider-card {
     grid-template-columns: auto 1fr;
   }
-  .integration-provider-card .status-chip { grid-column: 1 / -1; width: fit-content; }
+
+  .integration-provider-card .status-chip {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+
+  .integration-asset-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
