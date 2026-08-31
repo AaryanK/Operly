@@ -14,11 +14,11 @@ def uid() -> str:
 
 
 class AgentComputerSessionRecord(Base):
-    """Durable, workspace-scoped task session for the governed Agent Computer UI.
+    """Durable Workspace session for an agent's governed Computer.
 
-    The session never stores provider credentials or shell handles. It stores only the
-    selected Workspace capability invocation and the Kernel run/approval handles needed
-    to resume that exact invocation.
+    The database stores an opaque runtime session handle plus task/capability/run
+    metadata. Provider credentials, container credentials and raw secret material
+    stay outside the Operly database and are never copied into the agent context.
     """
 
     __tablename__ = "agent_computer_sessions"
@@ -43,6 +43,16 @@ class AgentComputerSessionRecord(Base):
     current_request_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     current_run_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     approval_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+
+    # Opaque handle to the isolated compute backend. This is not a credential and
+    # cannot be used without the server-side runner token.
+    runtime_session_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    runtime_state: Mapped[str] = mapped_column(String(40), nullable=False, default="stopped", index=True)
+    runtime_profile: Mapped[str] = mapped_column(String(40), nullable=False, default="general")
+    network_policy: Mapped[str] = mapped_column(String(30), nullable=False, default="web")
+    runtime_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    runtime_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
