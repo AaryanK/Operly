@@ -20,6 +20,7 @@ class SurfaceKind(StrEnum):
     DISCORD_DM = "discord_dm"
     DISCORD_GUILD = "discord_guild"
     SYSTEM_TASK = "system_task"
+    MCP_CLIENT = "mcp_client"
 
     @classmethod
     def coerce(cls, value: object) -> "SurfaceKind":
@@ -88,6 +89,8 @@ def capability_surface_allowed(capability_id: str, surface: SurfaceKind | str) -
 
     This is a visibility/privacy gate only. Workspace permissions, connector scopes,
     approvals, and the canonical firewall remain independently authoritative.
+    MCP deliberately does not inherit personal/private visibility merely because its
+    authenticated principal is a human Workspace member.
     """
 
     kind = SurfaceKind.coerce(surface)

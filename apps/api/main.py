@@ -11,8 +11,10 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
+from apps.api.access_router import router as access_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.kernel_router import router as kernel_router
+from apps.api.mcp_router import router as mcp_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
@@ -109,10 +111,10 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.6.0-workflow", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.7.0-mcp", lifespan=lifespan)
 
-# Models/agents remain offline. Human and deterministic interfaces resolve Workspace
-# authority and execute through the same governed capability runtime.
+# Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
+# agent all resolve current authority and execute through the same governed runtime.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -140,7 +142,15 @@ app.add_middleware(
     allow_origins=sorted(allowed_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-CSRF-Token"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-CSRF-Token",
+        "MCP-Protocol-Version",
+        "Mcp-Method",
+        "Mcp-Name",
+    ],
+    expose_headers=["MCP-Protocol-Version", "WWW-Authenticate"],
 )
 
 app.include_router(session_router)
@@ -149,6 +159,8 @@ app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
 app.include_router(agent_computer_router)
+app.include_router(access_router)
+app.include_router(mcp_router)
 app.include_router(kernel_router)
 app.include_router(studio_public_router)
 
@@ -167,6 +179,9 @@ async def health():
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
+        "mcp_enabled": True,
+        "mcp_protocol_version": "2026-07-28",
+        "mcp_authority_model": "live-workspace-authority-plus-client-narrowing",
         "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot_configured": discord["configured"],
         "discord_bot_running": discord["task_running"],
@@ -179,7 +194,7 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "deterministic-workflows",
+        "state": "deterministic-workflows-and-mcp",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
@@ -189,15 +204,18 @@ async def rebuild_status():
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
+        "mcp_enabled": True,
+        "mcp_protocol_version": "2026-07-28",
+        "mcp_gateway": "canonical-workspace-capability-runtime",
         "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot": discord_bot_lifecycle.status(),
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Workflow is a durable orchestration layer over the same governed Workspace tools. "
-            "Schedules and manual runs preserve live Workspace authority, normal approvals, "
-            "Kernel run IDs, step attempts, and workflow trace events. AI planning remains offline."
+            "Workflow and MCP are deterministic orchestration/presentation layers over the same governed Workspace tools. "
+            "MCP client grants only narrow current Workspace authority; provider checks and human approvals remain authoritative. "
+            "The future Operly AI planner can consume this same MCP gateway without receiving a second execution path."
         ),
     }
 
