@@ -2,7 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import "./ui/tokens.css";
 import "./ui/minimal.css";
+import "./ui/app.css";
 import "./ui/workspace-lite.css";
 import "./ui/workspace-os.css";
 import "./ui/workspace-human.css";
