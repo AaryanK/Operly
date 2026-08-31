@@ -46,6 +46,19 @@ class ProviderRegistry:
         except KeyError as error:
             raise LookupError(f"Capability provider is unavailable: {key}") from error
 
+    async def is_available(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        capability: CapabilitySpec,
+    ) -> bool:
+        provider = self.get(capability.provider_id)
+        checker = getattr(provider, "is_available", None)
+        if checker is None:
+            return True
+        return bool(await checker(db, context=context, capability=capability))
+
 
 Handler = Callable[
     [AsyncSession, ExecutionContext, dict[str, Any], dict[str, Any]],
@@ -63,6 +76,16 @@ class NativeOperlyProvider:
             "tasks.create": self._tasks_create,
             "tasks.update_status": self._tasks_update_status,
         }
+
+    async def is_available(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        capability: CapabilitySpec,
+    ) -> bool:
+        del db, context, capability
+        return True
 
     async def execute(
         self,
