@@ -59,32 +59,57 @@ class AgentComputerRuntimeContractTests(unittest.TestCase):
         ):
             self.assertEqual(specs[capability_id].risk, CapabilityRisk.MEDIUM)
 
-    def test_computer_runtime_is_not_the_api_server_shell(self):
+    def test_computer_runtime_uses_existing_sandbox_runner_not_api_shell(self):
         root = Path(__file__).resolve().parents[1]
         client = (root / "packages" / "workspace_modules" / "agent_computer" / "sandbox.py").read_text(encoding="utf-8")
         provider = (root / "packages" / "workspace_modules" / "agent_computer" / "native_tools.py").read_text(encoding="utf-8")
         router = (root / "packages" / "workspace_modules" / "agent_computer" / "router.py").read_text(encoding="utf-8")
-        self.assertIn("OPERLY_AGENT_COMPUTER_RUNNER_URL", client)
+        self.assertIn("OPERLY_SANDBOX_RUNNER_URL", client)
+        self.assertIn("OPERLY_SANDBOX_RUNNER_TOKEN", client)
+        self.assertNotIn("OPERLY_AGENT_COMPUTER_RUNNER_URL", client)
         self.assertIn("ComputerRunnerClient", provider)
         self.assertIn("computer.runtime.start", router)
-        self.assertNotIn("create_subprocess", client)
-        self.assertNotIn("create_subprocess", provider)
-        self.assertNotIn("create_subprocess", router)
-        self.assertNotIn("subprocess.run", client)
-        self.assertNotIn("subprocess.run", provider)
-        self.assertNotIn("subprocess.run", router)
+        for source in (client, provider, router):
+            self.assertNotIn("create_subprocess", source)
+            self.assertNotIn("subprocess.run", source)
+            self.assertNotIn("async_playwright", source)
 
-    def test_reference_runner_is_development_only_and_has_real_python_browser_tools(self):
+    def test_railway_sandbox_runner_is_the_execution_plane(self):
         root = Path(__file__).resolve().parents[1]
-        runner = (root / "apps" / "computer_runner" / "main.py").read_text(encoding="utf-8")
-        dockerfile = (root / "apps" / "computer_runner" / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn('ENVIRONMENT in {"production", "prod"}', runner)
-        self.assertIn("intentionally refuses production", runner)
-        self.assertIn('["python3", "-c", code]', runner)
-        self.assertIn('["/bin/bash", "-lc", command]', runner)
-        self.assertIn("async_playwright", runner)
-        self.assertIn("browser.screenshot", runner)
-        self.assertIn("playwright install --with-deps chromium", dockerfile)
+        runner_dir = root / "apps" / "sandbox_runner"
+        server = (runner_dir / "server.mjs").read_text(encoding="utf-8")
+        helper = (runner_dir / "computer_tool.py").read_text(encoding="utf-8")
+        package = (runner_dir / "package.json").read_text(encoding="utf-8")
+
+        self.assertFalse((root / "apps" / "computer_runner").exists())
+        self.assertIn('from "railway"', server)
+        self.assertIn("Sandbox.create", server)
+        self.assertIn("Sandbox.connect", server)
+        self.assertIn('service: "operly-sandbox-runner"', server)
+        self.assertIn('"railway": "3.10.0"', package)
+        self.assertIn("/v1/computer/sessions", server)
+        self.assertIn("OPERLY_RUNNER_TOKEN", server)
+        self.assertIn("RAILWAY_ENVIRONMENT_ID", server)
+        self.assertIn("private_network: false", server)
+
+        self.assertIn("def python_exec", helper)
+        self.assertIn("def terminal_exec", helper)
+        self.assertIn("def browser_tool", helper)
+        self.assertIn("def web_fetch", helper)
+        self.assertIn("def git_tool", helper)
+        self.assertIn("def process_list", helper)
+        self.assertIn("safe_path", helper)
+        self.assertIn("private/link-local network targets are blocked", helper)
+
+    def test_runner_control_protocol_is_authenticated_and_signed(self):
+        root = Path(__file__).resolve().parents[1]
+        client = (root / "packages" / "workspace_modules" / "agent_computer" / "sandbox.py").read_text(encoding="utf-8")
+        server = (root / "apps" / "sandbox_runner" / "server.mjs").read_text(encoding="utf-8")
+        self.assertIn("X-Operly-Signature", client)
+        self.assertIn("compare_digest", client)
+        self.assertIn("x-operly-signature", server)
+        self.assertIn("timingSafeEqual", server)
+        self.assertIn("METHOD", (root / "apps" / "sandbox_runner" / "README.md").read_text(encoding="utf-8"))
 
     def test_computer_runtime_persists_only_an_opaque_backend_handle(self):
         root = Path(__file__).resolve().parents[1]
