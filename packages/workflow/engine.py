@@ -30,6 +30,9 @@ from packages.workflow.spec import (
 from packages.workflow.tracing import record_workflow_event
 
 
+_STOP_STATES = frozenset({"cancelled", "orphaned"})
+
+
 def _loads(raw: str | None, fallback: Any) -> Any:
     try:
         return json.loads(raw or "")
@@ -150,7 +153,34 @@ class WorkflowEngine:
             self._workspace_runtime = build_workspace_runtime()
         return self._workspace_runtime
 
-    async def execute_run(self, db: AsyncSession, run_id: str) -> WorkflowRun:
+    async def _still_owned(
+        self,
+        db: AsyncSession,
+        run: WorkflowRun,
+        expected_lease_token: str | None,
+    ) -> bool:
+        """Return whether this worker still owns the right to dispatch more work.
+
+        Provider outcomes may return after an operator cancellation, an expired lease,
+        or another scheduler marking the run orphaned. Those outcomes remain valuable
+        trace evidence, but a stale worker must never dispatch a subsequent step or
+        overwrite the durable terminal state.
+        """
+
+        await db.refresh(run)
+        if run.status in _STOP_STATES:
+            return False
+        if expected_lease_token is not None and run.lease_token != expected_lease_token:
+            return False
+        return True
+
+    async def execute_run(
+        self,
+        db: AsyncSession,
+        run_id: str,
+        *,
+        expected_lease_token: str | None = None,
+    ) -> WorkflowRun:
         run = await db.get(WorkflowRun, run_id)
         if run is None:
             raise LookupError("Workflow run is unavailable")
@@ -161,6 +191,8 @@ class WorkflowEngine:
             "failed",
             "orphaned",
         }:
+            return run
+        if expected_lease_token is not None and run.lease_token != expected_lease_token:
             return run
 
         workflow = await db.get(WorkflowDefinition, run.workflow_id)
@@ -225,11 +257,7 @@ class WorkflowEngine:
         step_rows = {row.step_key: row for row in rows}
 
         for index, step in enumerate(spec["steps"]):
-            await db.refresh(run)
-            if run.status == "cancelled":
-                run.lease_token = None
-                run.lease_until = None
-                await db.commit()
+            if not await self._still_owned(db, run, expected_lease_token):
                 return run
 
             step_key = str(step["id"])
@@ -304,6 +332,8 @@ class WorkflowEngine:
                 step_rows[step_key] = waiting
                 if waiting.status == "waiting":
                     return run
+                if not await self._still_owned(db, run, expected_lease_token):
+                    return run
                 continue
 
             action = await self._action_step(
@@ -311,6 +341,8 @@ class WorkflowEngine:
             )
             step_rows[step_key] = action
             if action.status == "waiting_approval":
+                return run
+            if not await self._still_owned(db, run, expected_lease_token):
                 return run
             if action.status == "failed" and step.get("on_error") != "continue":
                 return await self._fail(
@@ -320,6 +352,9 @@ class WorkflowEngine:
                     action.error_code or "step_failed",
                     action.error_message or f"Step {step_key} failed",
                 )
+
+        if not await self._still_owned(db, run, expected_lease_token):
+            return run
 
         failed_continued = [row for row in step_rows.values() if row.status == "failed"]
         run.status = "completed_with_errors" if failed_continued else "completed"
