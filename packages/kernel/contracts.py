@@ -86,6 +86,7 @@ class RuntimeRequest:
     arguments: Mapping[str, Any] = field(default_factory=dict)
     conversation_id: str | None = None
     request_id: str | None = None
+    approval_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
