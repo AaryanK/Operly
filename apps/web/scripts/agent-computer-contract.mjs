@@ -16,7 +16,9 @@ const [
   computerRouter,
   nativeTools,
   sandboxClient,
-  referenceRunner,
+  railwayRunner,
+  railwayComputer,
+  railwayPackage,
   studioProvider,
   tools,
   main,
@@ -28,7 +30,9 @@ const [
   text("packages/workspace_modules/agent_computer/router.py"),
   text("packages/workspace_modules/agent_computer/native_tools.py"),
   text("packages/workspace_modules/agent_computer/sandbox.py"),
-  text("apps/computer_runner/main.py"),
+  text("apps/sandbox_runner/server.mjs"),
+  text("apps/sandbox_runner/computer_tool.py"),
+  text("apps/sandbox_runner/package.json"),
   text("packages/workspace_modules/studio/provider.py"),
   text("packages/workspace_modules/tools/__init__.py"),
   text("apps/api/main.py"),
@@ -45,12 +49,13 @@ for (const file of [
   "packages/workspace_modules/studio/router.py",
   "packages/database/agent_computer_models.py",
   "alembic/versions/0050_workspace_agent_computer.py",
-  "apps/computer_runner/main.py",
-  "apps/computer_runner/Dockerfile",
-  "apps/computer_runner/requirements.txt",
-  "apps/computer_runner/README.md",
+  "apps/sandbox_runner/package.json",
+  "apps/sandbox_runner/server.mjs",
+  "apps/sandbox_runner/computer_tool.py",
+  "apps/sandbox_runner/README.md",
   "apps/web/src/ui/agent-computer.css",
 ]) assert(await exists(file), `Agent Computer implementation is missing ${file}`);
+assert(!(await exists("apps/computer_runner")), "Agent Computer must not create a second runner service");
 
 assert(routes.includes('| "agent-computer"'), "Workspace route type must expose Agent Computer");
 assert(routes.includes('{ id: "agent-computer", label: "Agent Computer"'), "Workspace navigation must expose Agent Computer");
@@ -106,17 +111,35 @@ for (const capability of [
 ]) assert(nativeTools.includes(`"${capability}"`), `Agent Computer native tool surface is missing ${capability}`);
 assert(nativeTools.includes('permissions=("computer:execute",)'), "Every native Computer capability must require computer:execute");
 assert(nativeTools.includes("ComputerRunnerClient"), "Computer provider must cross the runner boundary");
-assert(sandboxClient.includes("OPERLY_AGENT_COMPUTER_RUNNER_URL"), "Computer runtime must use an explicit runner endpoint");
+
+assert(sandboxClient.includes("OPERLY_SANDBOX_RUNNER_URL"), "Computer runtime must reuse the existing Sandbox Runner endpoint");
+assert(sandboxClient.includes("OPERLY_SANDBOX_RUNNER_TOKEN"), "Computer runtime must reuse the existing Sandbox Runner token");
+assert(!sandboxClient.includes("OPERLY_AGENT_COMPUTER_RUNNER_URL"), "Agent Computer must not invent a second runner deployment contract");
+assert(sandboxClient.includes("X-Operly-Signature"), "Control-plane calls to the Sandbox Runner must be signed");
 assert(!sandboxClient.includes("create_subprocess"), "Operly API-side Computer client must never execute a local process");
 assert(!nativeTools.includes("create_subprocess"), "Operly Workspace provider must never execute a local process");
 assert(!computerRouter.includes("create_subprocess"), "Agent Computer router must never execute a local process");
 
-assert(referenceRunner.includes('ENVIRONMENT in {"production", "prod"}'), "Unsafe reference runner must refuse production");
-assert(referenceRunner.includes("intentionally refuses production"), "Reference runner must clearly fail closed in production");
-assert(referenceRunner.includes('["python3", "-c", code]'), "Reference runner must provide actual Python execution");
-assert(referenceRunner.includes('["/bin/bash", "-lc", command]'), "Reference runner must provide actual terminal execution");
-assert(referenceRunner.includes("async_playwright"), "Reference runner must provide Playwright browser support");
-assert(referenceRunner.includes("Private/link-local network targets are blocked"), "Reference runner web tools must block private network targets");
+assert(railwayPackage.includes('"railway": "3.10.0"'), "Sandbox Runner must use the Railway Sandbox SDK");
+assert(railwayRunner.includes('from "railway"'), "Sandbox Runner must import Railway Sandbox");
+assert(railwayRunner.includes("Sandbox.create"), "Each Computer runtime must allocate a Railway Sandbox");
+assert(railwayRunner.includes("Sandbox.connect"), "Computer runtime handles must reconnect to Railway Sandboxes");
+assert(railwayRunner.includes('service: "operly-sandbox-runner"'), "Existing Operly Sandbox Runner remains the execution-plane service");
+assert(railwayRunner.includes("private_network: false"), "Agent Computer must not join the Operly private service network");
+assert(railwayRunner.includes("OPERLY_RUNNER_TOKEN"), "Runner-side authentication must use the existing runner token");
+assert(railwayRunner.includes("RAILWAY_ENVIRONMENT_ID"), "Runner must allocate sandboxes in its Railway environment");
+
+for (const primitive of [
+  "def terminal_exec",
+  "def python_exec",
+  "def files_read",
+  "def files_write",
+  "def process_list",
+  "def git_tool",
+  "def web_fetch",
+  "def browser_tool",
+]) assert(railwayComputer.includes(primitive), `Railway sandbox helper is missing ${primitive}`);
+assert(railwayComputer.includes("private/link-local network targets are blocked"), "Explicit web/browser helpers must reject private network targets");
 
 for (const capability of [
   "studio.projects.list",
@@ -145,4 +168,4 @@ assert(main.includes("studio_public_router"), "FastAPI must mount verified Studi
 assert(schema.includes('ALEMBIC_HEAD = "0050_workspace_agent_computer"'), "Schema head must include Agent Computer migration");
 assert(schema.includes("agent_computer_models"), "Agent Computer models must be registered with Base metadata");
 
-console.log("General Agent Computer, native runtime, and Studio deployment contracts passed.");
+console.log("Agent Computer control plane + Railway Sandbox execution plane contracts passed.");
