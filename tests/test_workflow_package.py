@@ -52,7 +52,10 @@ class WorkflowPackageTests(unittest.TestCase):
                 {
                     "id": "build",
                     "capability_id": "computer.python.exec",
-                    "arguments": {"computer_session_id": "{{trigger.computer_session_id}}", "code": "print(1)"},
+                    "arguments": {
+                        "computer_session_id": "{{trigger.computer_session_id}}",
+                        "code": "print(1)",
+                    },
                     "depends_on": ["mail"],
                 },
                 {
@@ -72,14 +75,23 @@ class WorkflowPackageTests(unittest.TestCase):
                 "steps": [{"id": "loop", "capability_id": "workflow.run.start", "arguments": {}}]
             })
 
-    def test_dependencies_must_be_backward_and_waits_are_bounded(self):
-        with self.assertRaises(WorkflowSpecError):
-            validate_workflow_spec({
+    def test_dependencies_must_be_strictly_backward_and_waits_are_bounded(self):
+        for invalid in (
+            {
                 "steps": [
                     {"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["b"]},
                     {"id": "b", "capability_id": "workspace.summary.read"},
                 ]
-            })
+            },
+            {
+                "steps": [
+                    {"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["a"]},
+                ]
+            },
+        ):
+            with self.assertRaises(WorkflowSpecError):
+                validate_workflow_spec(invalid)
+
         validated = validate_workflow_spec({
             "steps": [
                 {"id": "a", "kind": "wait", "seconds": 60},
@@ -92,6 +104,10 @@ class WorkflowPackageTests(unittest.TestCase):
             ]
         })
         self.assertEqual(validated["steps"][0]["kind"], "wait")
+        with self.assertRaises(WorkflowSpecError):
+            validate_workflow_spec({
+                "steps": [{"id": "too-long", "kind": "wait", "seconds": 31 * 24 * 60 * 60 + 1}]
+            })
 
     def test_schedules_support_once_interval_daily_weekly_and_cron(self):
         after = datetime(2026, 8, 31, 5, 0, 0)
@@ -111,11 +127,13 @@ class WorkflowPackageTests(unittest.TestCase):
         engine = (root / "packages" / "workflow" / "engine.py").read_text(encoding="utf-8")
         scheduler = (root / "packages" / "workflow" / "scheduler.py").read_text(encoding="utf-8")
         tracing = (root / "packages" / "workflow" / "tracing.py").read_text(encoding="utf-8")
+        access = (root / "packages" / "workflow" / "access.py").read_text(encoding="utf-8")
+        package = (root / "packages" / "workflow" / "__init__.py").read_text(encoding="utf-8")
         composition = (
             root / "packages" / "workspace_modules" / "tools" / "__init__.py"
         ).read_text(encoding="utf-8")
         schema = (root / "packages" / "database" / "schema.py").read_text(encoding="utf-8")
-        package = (root / "packages" / "workflow" / "__init__.py").read_text(encoding="utf-8")
+
         self.assertIn("build_workspace_runtime", engine)
         self.assertIn("resolve_execution_context", engine)
         self.assertIn("RuntimeRequest", engine)
@@ -132,7 +150,9 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIn("WorkflowTraceEvent", tracing)
         self.assertIn("workflow_capabilities", composition)
         self.assertIn("WorkflowProvider", composition)
-        self.assertIn("A non-owner may only control their own workflow runs", package)
+        self.assertIn("A non-owner may only access their own workflows", access)
+        self.assertIn("from packages.workflow.access import WorkflowProvider", package)
+        self.assertNotIn("class WorkflowProvider", package)
         self.assertIn('ALEMBIC_HEAD = "0051_workflow_engine"', schema)
 
     def test_workflow_does_not_import_external_provider_executors(self):
