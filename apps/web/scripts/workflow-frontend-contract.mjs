@@ -13,6 +13,7 @@ const rootApp = read("src/app/App.tsx");
 const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 const entry = read("src/main.tsx");
 const liveStyles = read("src/ui/workspace-lite.css");
+const surfacePolish = read("src/ui/surface-polish.css");
 
 const requiredCapabilities = [
   "workflow.list",
@@ -77,9 +78,10 @@ for (const [section, label] of [["workflows", "Workflows"], ["activity", "Activi
 }
 if (!liveShell.includes("event.preventDefault(); navigate(path);")) failures.push("Advanced workspace links must use in-app navigation instead of forcing a second document bootstrap");
 
-for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css"]) {
+for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css", "surface-polish.css"]) {
   if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for advanced workspace surfaces`);
 }
+if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/agent-computer.css')) failures.push("surface-polish.css must load after component-specific advanced workspace styles");
 for (const marker of [
   "@media (pointer: coarse)",
   ".workspace-lite-advanced .metric-grid",
@@ -89,9 +91,20 @@ for (const marker of [
 ]) {
   if (!liveStyles.includes(marker)) failures.push(`Live workspace responsive styles missing: ${marker}`);
 }
+for (const marker of [
+  ".workspace-lite-shell { color-scheme: dark; }",
+  ".workspace-lite-advanced .metric-card",
+  ".workspace-lite-advanced .data-card",
+  ".workspace-lite-advanced input:not([type=\"checkbox\"]):not([type=\"radio\"])",
+  ".workspace-lite-advanced .computer-screen",
+  ".workspace-lite-advanced .integration-tabs",
+  ".workspace-lite-advanced details code",
+]) {
+  if (!surfacePolish.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
+}
 
 if (failures.length) {
   console.error("Workflow frontend contract failed:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities and supported advanced tools share the live authenticated, responsive workspace shell.`);
+console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities and supported advanced tools share one authenticated, responsive dark workspace surface.`);

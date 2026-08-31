@@ -134,6 +134,242 @@ html[data-theme="dark"] .history-head-actions button {
   border-color: rgba(255,255,255,.08);
 }
 
+/* The live Workspace OS is intentionally dark. Advanced tools mounted inside
+   it must inherit the same surface system even when the account appearance or
+   browser reports a light color scheme. This prevents white cards and native
+   light controls from leaking into Workflow, Activity, Computer, Integrations
+   and All tools. */
+.workspace-lite-shell { color-scheme: dark; }
+.workspace-lite-advanced {
+  --ui-canvas: #0b0f18;
+  --ui-panel: #15111e;
+  --ui-panel-muted: #1b1627;
+  --ui-ink: #f7f3ff;
+  --ui-muted: #aaa2b7;
+  --ui-muted-2: #786f88;
+  --ui-line: rgba(212,190,255,.12);
+  --ui-line-strong: rgba(212,190,255,.22);
+  --ui-accent: #9b72ff;
+  --ui-accent-strong: #c4a7ff;
+  --ui-accent-soft: rgba(155,114,255,.14);
+  --ui-danger: #ff8f9d;
+  color: var(--ui-ink);
+  color-scheme: dark;
+}
+.workspace-lite-advanced > .workspace-page,
+.workspace-lite-advanced .surface-header {
+  color: var(--ui-ink);
+}
+.workspace-lite-advanced .surface-header {
+  border-color: var(--ui-line);
+  background:
+    radial-gradient(circle at 88% -25%, rgba(155,114,255,.10), transparent 30rem),
+    rgba(21,17,30,.96);
+}
+.workspace-lite-advanced .surface-header p,
+.workspace-lite-advanced .metric-card > span,
+.workspace-lite-advanced .metric-card > small,
+.workspace-lite-advanced .data-row small,
+.workspace-lite-advanced .data-row p,
+.workspace-lite-advanced .connector-copy p,
+.workspace-lite-advanced .connector-copy small,
+.workspace-lite-advanced .plugin-card p,
+.workspace-lite-advanced .role-key,
+.workspace-lite-advanced details,
+.workspace-lite-advanced details summary {
+  color: var(--ui-muted);
+}
+
+.workspace-lite-advanced .metric-card,
+.workspace-lite-advanced .data-card,
+.workspace-lite-advanced .presence-card,
+.workspace-lite-advanced .solution-compose-card,
+.workspace-lite-advanced .solutions-library,
+.workspace-lite-advanced .info-banner,
+.workspace-lite-advanced .inline-form,
+.workspace-lite-advanced .plugin-card,
+.workspace-lite-advanced .connector-card,
+.workspace-lite-advanced .role-card,
+.workspace-lite-advanced .computer-screen-shell,
+.workspace-lite-advanced .computer-project-preview,
+.workspace-lite-advanced .computer-approval-checkpoint,
+.workspace-lite-advanced .computer-result-card,
+.workspace-lite-advanced .computer-native-tool-console,
+.workspace-lite-advanced .computer-timeline,
+.workspace-lite-advanced .integration-provider-card,
+.workspace-lite-advanced .integration-approval-card {
+  border-color: var(--ui-line);
+  background: linear-gradient(180deg, rgba(25,20,35,.98), rgba(18,14,27,.98));
+  color: var(--ui-ink);
+  box-shadow: 0 12px 34px rgba(0,0,0,.20);
+}
+.workspace-lite-advanced .metric-card {
+  background: linear-gradient(145deg, rgba(29,23,42,.98), rgba(19,15,29,.98));
+}
+.workspace-lite-advanced .empty-panel,
+.workspace-lite-advanced .loading-panel {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+  color: var(--ui-muted);
+}
+.workspace-lite-advanced .data-row,
+.workspace-lite-advanced .message-row {
+  border-color: var(--ui-line);
+}
+
+.workspace-lite-advanced input:not([type="checkbox"]):not([type="radio"]),
+.workspace-lite-advanced textarea,
+.workspace-lite-advanced select {
+  border: 1px solid var(--ui-line-strong);
+  background: #100c18;
+  color: var(--ui-ink);
+  accent-color: var(--ui-accent);
+}
+.workspace-lite-advanced input::placeholder,
+.workspace-lite-advanced textarea::placeholder { color: #766d86; }
+.workspace-lite-advanced input:focus,
+.workspace-lite-advanced textarea:focus,
+.workspace-lite-advanced select:focus {
+  outline: none;
+  border-color: rgba(196,167,255,.55);
+  box-shadow: 0 0 0 3px rgba(155,114,255,.14);
+}
+.workspace-lite-advanced select option {
+  background: #100c18;
+  color: var(--ui-ink);
+}
+
+.workspace-lite-advanced button:not(.primary-button):not(.danger-button):not(.text-button):not(.icon-action),
+.workspace-lite-advanced .secondary-button,
+.workspace-lite-advanced .button-link {
+  border: 1px solid var(--ui-line);
+  background: rgba(255,255,255,.045);
+  color: #ece7f4;
+}
+.workspace-lite-advanced button:not(.primary-button):not(.danger-button):not(.text-button):not(.icon-action):hover,
+.workspace-lite-advanced .secondary-button:hover,
+.workspace-lite-advanced .button-link:hover {
+  border-color: rgba(196,167,255,.30);
+  background: rgba(155,114,255,.11);
+  color: #fff;
+}
+.workspace-lite-advanced .primary-button {
+  border-color: transparent;
+  background: linear-gradient(135deg, #7655e8, #a16cf2);
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(104,72,199,.22);
+}
+.workspace-lite-advanced .danger-button {
+  background: #2b171f;
+  border-color: #633144;
+  color: #ffabb6;
+}
+
+.workspace-lite-advanced details code,
+.workspace-lite-advanced pre,
+.workspace-lite-advanced .integration-message-body,
+.workspace-lite-advanced .integration-job pre,
+.workspace-lite-advanced .integration-approval-card pre,
+.workspace-lite-advanced .integration-structured-result {
+  border-color: var(--ui-line);
+  background: #0b0810;
+  color: #d7cee2;
+}
+.workspace-lite-advanced .status-chip {
+  background: #211b2c;
+  color: #b9afc8;
+}
+.workspace-lite-advanced .status-active,
+.workspace-lite-advanced .status-connected,
+.workspace-lite-advanced .status-healthy,
+.workspace-lite-advanced .status-completed,
+.workspace-lite-advanced .status-succeeded,
+.workspace-lite-advanced .status-live,
+.workspace-lite-advanced .status-exposed {
+  background: #173225;
+  color: #96e2b3;
+}
+.workspace-lite-advanced .status-pending,
+.workspace-lite-advanced .status-attention,
+.workspace-lite-advanced .status-publishing {
+  background: #392d16;
+  color: #efd184;
+}
+.workspace-lite-advanced .status-failed,
+.workspace-lite-advanced .status-error,
+.workspace-lite-advanced .status-disabled,
+.workspace-lite-advanced .status-rejected,
+.workspace-lite-advanced .status-hidden {
+  background: #361b23;
+  color: #ff9eab;
+}
+
+.workspace-lite-advanced .computer-screen-shell {
+  overflow: hidden;
+  background: #100c18;
+}
+.workspace-lite-advanced .computer-screen-bar {
+  border-color: var(--ui-line);
+  background: #15111e;
+}
+.workspace-lite-advanced .computer-screen {
+  background:
+    radial-gradient(circle at 76% 0%, rgba(155,114,255,.09), transparent 25rem),
+    linear-gradient(180deg, #15111e, #0d0a15);
+}
+.workspace-lite-advanced .computer-session-list > button {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+  color: var(--ui-ink);
+}
+.workspace-lite-advanced .computer-session-list > button.active {
+  border-color: rgba(196,167,255,.42);
+  background: rgba(155,114,255,.12);
+  outline-color: rgba(196,167,255,.52);
+}
+.workspace-lite-advanced .computer-glyph,
+.workspace-lite-advanced .computer-security-grid > span,
+.workspace-lite-advanced .computer-approval-checkpoint dl > div {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+}
+
+.workspace-lite-advanced .integration-tabs {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+}
+.workspace-lite-advanced .integration-tabs button { background: transparent; }
+.workspace-lite-advanced .integration-tabs button.active,
+.workspace-lite-advanced .integration-scroll-list > button.active,
+.workspace-lite-advanced .canva-card-grid > button.active {
+  border-color: rgba(196,167,255,.30);
+  background: rgba(155,114,255,.12);
+  color: #fff;
+  outline-color: rgba(196,167,255,.46);
+}
+.workspace-lite-advanced .integration-provider-icon,
+.workspace-lite-advanced .canva-card-grid img {
+  border-color: var(--ui-line);
+  background: #211a2d;
+}
+.workspace-lite-advanced .integration-scroll-list > button,
+.workspace-lite-advanced .canva-card-grid > button {
+  border-color: var(--ui-line);
+  color: var(--ui-ink);
+}
+
+.workspace-lite-advanced .inline-error {
+  border-color: #623241;
+  background: #2a171f;
+  color: #ffabb6;
+}
+.workspace-lite-advanced .approval-substance,
+.workspace-lite-advanced .success-banner {
+  border: 1px solid rgba(116,213,151,.24);
+  background: rgba(33,93,55,.20);
+  color: #bceccb;
+}
+
 @media (max-width: 680px) {
   .workspace-nav-toggle { display: none; }
   .history-collapse { display: none; }
