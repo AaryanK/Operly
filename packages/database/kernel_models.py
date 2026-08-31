@@ -36,12 +36,7 @@ class KernelRun(Base):
 
 
 class KernelRequestClaim(Base):
-    """Scoped idempotency reservation for externally retryable Kernel requests.
-
-    This is runtime state, not audit state. It may retain the normalized response so an
-    authenticated caller retrying the exact same request can receive the original
-    result without executing the business side effect again.
-    """
+    """Scoped idempotency reservation for externally retryable Kernel requests."""
 
     __tablename__ = "kernel_request_claims"
 
@@ -65,6 +60,39 @@ class KernelRequestClaim(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True
     )
+
+
+class KernelApproval(Base):
+    """Durable, argument-bound approval for one governed capability invocation."""
+
+    __tablename__ = "kernel_approvals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    scope_kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    requested_by_principal_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    capability_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    arguments_json: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    source_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
+    decided_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    consumed_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
 class KernelRunStep(Base):
