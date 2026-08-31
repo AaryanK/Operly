@@ -22,6 +22,7 @@ async def record_workflow_event(
     event_type: str,
     workflow_run_id: str | None = None,
     step_run_id: str | None = None,
+    step_attempt_id: str | None = None,
     actor_type: str = "system",
     actor_id: str | None = None,
     owner_user_id: str | None = None,
@@ -31,17 +32,21 @@ async def record_workflow_event(
     approval_id: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> WorkflowTraceEvent:
-    """Persist a workflow-domain trace and a global Kernel event in one transaction.
+    """Persist Workflow-domain and global Kernel trace records atomically.
 
-    Exact step arguments/results live on WorkflowStepRun.  The event plane stores
-    correlation metadata rather than duplicating potentially private business data.
+    Exact action inputs/outputs live on ``WorkflowStepAttempt``. The event plane keeps
+    correlation and lifecycle metadata so Activity/FLOW-style consumers do not become
+    a second uncontrolled copy of provider/business payloads.
     """
+
+    del owner_user_id  # Workspace Kernel events intentionally do not use personal owner scope.
     at = datetime.utcnow()
     trace = WorkflowTraceEvent(
         workspace_id=workspace_id,
         workflow_id=workflow_id,
         workflow_run_id=workflow_run_id,
         step_run_id=step_run_id,
+        step_attempt_id=step_attempt_id,
         event_type=event_type,
         actor_type=actor_type,
         actor_id=actor_id,
@@ -71,6 +76,7 @@ async def record_workflow_event(
                     "workflow_id": workflow_id,
                     "workflow_run_id": workflow_run_id,
                     "workflow_step_run_id": step_run_id,
+                    "workflow_step_attempt_id": step_attempt_id,
                     "kernel_run_id": kernel_run_id,
                     "approval_id": approval_id,
                     **(payload or {}),
