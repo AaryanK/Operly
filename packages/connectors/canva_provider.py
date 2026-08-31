@@ -21,6 +21,8 @@ CANVA_SCOPES = [
     "design:meta:read",
     "design:content:read",
     "design:content:write",
+    "brandtemplate:meta:read",
+    "brandtemplate:content:read",
     "asset:read",
     "asset:write",
     "folder:read",
@@ -87,9 +89,13 @@ def canva_capabilities(scopes: set[str]) -> list[str]:
     if "design:meta:read" in scopes:
         capabilities.extend(["canva.list_designs", "canva.get_design"])
     if "design:content:read" in scopes:
-        capabilities.append("canva.export_design")
+        capabilities.extend(["canva.export_design", "canva.read_design_dataset"])
     if "design:content:write" in scopes:
-        capabilities.append("canva.create_design")
+        capabilities.extend(["canva.create_design", "canva.autofill_design"])
+    if "brandtemplate:meta:read" in scopes:
+        capabilities.append("canva.list_brand_templates")
+    if "brandtemplate:content:read" in scopes:
+        capabilities.append("canva.read_brand_template_dataset")
     if "asset:read" in scopes:
         capabilities.append("canva.list_assets")
     if "asset:write" in scopes:
