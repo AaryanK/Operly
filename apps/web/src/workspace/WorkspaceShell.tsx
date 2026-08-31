@@ -6,6 +6,7 @@ import { WorkspaceHome } from "./WorkspaceHome";
 
 const AccessPage = lazy(() => import("./AccessPage").then((module) => ({ default: module.AccessPage })));
 const AIDebugPage = lazy(() => import("./AIDebugPage").then((module) => ({ default: module.AIDebugPage })));
+const CapabilitiesPage = lazy(() => import("./CapabilitiesPage").then((module) => ({ default: module.CapabilitiesPage })));
 const CRMPage = lazy(() => import("./DataPages").then((module) => ({ default: module.CRMPage })));
 const OperationsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.OperationsPage })));
 const ActivityPage = lazy(() => import("./ActivityPage").then((module) => ({ default: module.ActivityPage })));
@@ -44,6 +45,7 @@ const navGlyphs: Record<WorkspaceSection, string> = {
   solutions: "◇",
   connections: "↗",
   plugins: "⬡",
+  capabilities: "◆",
   members: "♙",
   access: "⌁",
   "ai-debug": "⌘",
@@ -65,6 +67,7 @@ function WorkspaceContent({ workspace, section, onScopeRefresh }: Props) {
     case "solutions": return <DeferredPage><SolutionsPage workspace={workspace} /></DeferredPage>;
     case "connections": return <DeferredPage><ConnectionsPage workspace={workspace} /></DeferredPage>;
     case "plugins": return <DeferredPage><PluginsPage workspace={workspace} /></DeferredPage>;
+    case "capabilities": return <DeferredPage><CapabilitiesPage workspace={workspace} /></DeferredPage>;
     case "members": return <DeferredPage><MembersPage workspace={workspace} /></DeferredPage>;
     case "access": return <DeferredPage><AccessPage workspace={workspace} /></DeferredPage>;
     case "ai-debug": return <DeferredPage><AIDebugPage workspace={workspace} /></DeferredPage>;
