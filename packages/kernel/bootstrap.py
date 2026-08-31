@@ -4,6 +4,11 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
 from packages.kernel.runtime import OperlyKernelRuntime
+from packages.kernel.workspace_os_provider import (
+    PROVIDER_ID as WORKSPACE_OS_PROVIDER_ID,
+    WorkspaceOSProvider,
+    workspace_record_capabilities,
+)
 
 
 def _object(properties: dict, *, required: list[str] | None = None) -> dict:
@@ -179,7 +184,8 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
 
 
 def build_kernel_runtime() -> OperlyKernelRuntime:
-    registry = CapabilityRegistry(builtin_capabilities())
+    registry = CapabilityRegistry((*builtin_capabilities(), *workspace_record_capabilities()))
     providers = ProviderRegistry()
     providers.register("operly.native", NativeOperlyProvider())
+    providers.register(WORKSPACE_OS_PROVIDER_ID, WorkspaceOSProvider())
     return OperlyKernelRuntime(registry=registry, providers=providers)
