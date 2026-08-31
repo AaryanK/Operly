@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import json
+import re
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -8,10 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.principal_models import ClientGrant, WorkspaceToolExposure
+from packages.mcp.gateway import McpGateway, McpRequestContext
 from packages.security.permissions import resolve_workspace_permissions
 from packages.security.principals import PrincipalService
 
 router = APIRouter(prefix="/api/access", tags=["access"])
+gateway = McpGateway()
 
 SUPPORTED_EXTERNAL_CLIENTS = {
     "chatgpt": {
@@ -21,6 +27,9 @@ SUPPORTED_EXTERNAL_CLIENTS = {
         "owner_managed": True,
     }
 }
+
+_SCOPE_CAPABILITY = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*(?:\.\*)?$")
+_SCOPE_PERMISSION = re.compile(r"^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$")
 
 
 class ClientGrantInput(BaseModel):
@@ -32,8 +41,8 @@ class ClientGrantInput(BaseModel):
 class ToolExposureInput(BaseModel):
     tool_id: str = Field(min_length=3, max_length=160)
     exposed: bool = False
-    access_mode: str = Field(default="authenticated", pattern="^(public|authenticated)$")
-    surface: str = Field(default="mcp", min_length=1, max_length=40)
+    access_mode: Literal["authenticated"] = "authenticated"
+    surface: Literal["mcp"] = "mcp"
 
 
 async def _require_manage(db: AsyncSession, auth: AuthContext, permission: str) -> None:
@@ -47,8 +56,32 @@ def _require_owner(auth: AuthContext) -> None:
         raise HTTPException(403, "Only the workspace owner can manage external AI access")
 
 
+def _normalize_scopes(values: list[str]) -> list[str]:
+    cleaned = sorted({str(item or "").strip().lower() for item in values if str(item or "").strip()})
+    if not cleaned:
+        return ["workspace:*"]
+    for scope in cleaned:
+        if scope == "workspace:*":
+            continue
+        if _SCOPE_CAPABILITY.fullmatch(scope) or _SCOPE_PERMISSION.fullmatch(scope):
+            continue
+        raise HTTPException(
+            422,
+            f"Invalid MCP capability scope: {scope}. Use workspace:*, a capability ID, a namespace wildcard such as computer.*, or a Workspace permission such as crm:read.",
+        )
+    return cleaned
+
+
+def _scopes(row: ClientGrant) -> list[str]:
+    try:
+        return [str(item) for item in json.loads(row.scopes_json or "[]")]
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
 @router.get("/external-clients")
 async def external_clients(auth: AuthContext = Depends(get_auth_context)):
+    del auth
     return list(SUPPORTED_EXTERNAL_CLIENTS.values())
 
 
@@ -63,6 +96,33 @@ async def current_principal(auth: AuthContext = Depends(get_auth_context), db: A
         "workspace_id": auth.tenant.id,
         "workspace": auth.tenant.name,
         "role": auth.role,
+    }
+
+
+@router.get("/mcp-catalog")
+async def mcp_catalog(auth: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    """Preview every currently authorized Workspace tool before client narrowing.
+
+    Explicit MCP hide policies are returned separately by /tool-exposure so owners can
+    still find and unhide a tool. This endpoint never executes anything.
+    """
+
+    await _require_manage(db, auth, "workspace:read")
+    preview = McpRequestContext(
+        tenant_id=auth.tenant.id,
+        user_id=auth.user.id,
+        client_id="operly-owner-preview",
+        token_scopes=frozenset({"workspace:*"}),
+        objective="Preview Operly MCP capability catalog",
+        enforce_exposure=False,
+    )
+    tools = await gateway.list_tools(db, preview)
+    return {
+        "protocol_version": "2026-07-28",
+        "endpoint": "/mcp",
+        "default_policy": "authorized tools are exposed unless explicitly hidden",
+        "tool_count": len(tools),
+        "tools": tools,
     }
 
 
@@ -83,7 +143,7 @@ async def list_client_grants(auth: AuthContext = Depends(get_auth_context), db: 
             "id": row.id,
             "client_id": row.client_id,
             "workspace_id": row.tenant_id,
-            "scopes": json.loads(row.scopes_json or "[]"),
+            "scopes": _scopes(row),
             "status": row.status,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
         }
@@ -113,7 +173,7 @@ async def create_client_grant(
             ClientGrant.client_id == client_id,
         )
     )
-    scopes = sorted({str(item).strip() for item in payload.scopes if str(item).strip()})
+    scopes = _normalize_scopes(payload.scopes)
     if existing:
         existing.scopes_json = json.dumps(scopes, separators=(",", ":"))
         existing.status = "active"
@@ -129,7 +189,13 @@ async def create_client_grant(
         )
         db.add(row)
     await db.commit()
-    return {"id": row.id, "client_id": row.client_id, "workspace_id": row.tenant_id, "scopes": scopes}
+    return {
+        "id": row.id,
+        "client_id": row.client_id,
+        "workspace_id": row.tenant_id,
+        "scopes": scopes,
+        "authority_note": "This grant only narrows the user's live Workspace authority; it never grants a permission by itself.",
+    }
 
 
 @router.delete("/client-grants/{grant_id}")
@@ -160,7 +226,10 @@ async def list_tool_exposure(auth: AuthContext = Depends(get_auth_context), db: 
     await _require_manage(db, auth, "workspace:read")
     rows = (
         await db.scalars(
-            select(WorkspaceToolExposure).where(WorkspaceToolExposure.tenant_id == auth.tenant.id)
+            select(WorkspaceToolExposure).where(
+                WorkspaceToolExposure.tenant_id == auth.tenant.id,
+                WorkspaceToolExposure.surface == "mcp",
+            )
         )
     ).all()
     return [
@@ -168,7 +237,7 @@ async def list_tool_exposure(auth: AuthContext = Depends(get_auth_context), db: 
             "tool_id": row.tool_id,
             "surface": row.surface,
             "exposed": row.exposed,
-            "access_mode": row.access_mode,
+            "access_mode": "authenticated",
         }
         for row in rows
     ]
@@ -181,26 +250,27 @@ async def set_tool_exposure(
     db: AsyncSession = Depends(get_db),
 ):
     await _require_manage(db, auth, "workspace:tools:expose")
+    tool_id = payload.tool_id.strip().lower()
     row = await db.scalar(
         select(WorkspaceToolExposure).where(
             WorkspaceToolExposure.tenant_id == auth.tenant.id,
-            WorkspaceToolExposure.tool_id == payload.tool_id,
-            WorkspaceToolExposure.surface == payload.surface,
+            WorkspaceToolExposure.tool_id == tool_id,
+            WorkspaceToolExposure.surface == "mcp",
         )
     )
     if row is None:
         row = WorkspaceToolExposure(
             tenant_id=auth.tenant.id,
-            tool_id=payload.tool_id,
-            surface=payload.surface,
+            tool_id=tool_id,
+            surface="mcp",
         )
         db.add(row)
     row.exposed = payload.exposed
-    row.access_mode = payload.access_mode
+    row.access_mode = "authenticated"
     await db.commit()
     return {
         "tool_id": row.tool_id,
-        "surface": row.surface,
+        "surface": "mcp",
         "exposed": row.exposed,
-        "access_mode": row.access_mode,
+        "access_mode": "authenticated",
     }
