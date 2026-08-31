@@ -3,7 +3,6 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Row, list, object, text, useIntegrationRuntime } from "./runtime";
 
 const SUPPORTED_EXPORTS = new Set(["pdf", "jpg", "png", "gif", "pptx", "mp4"]);
-
 type JobKind = "export" | "autofill";
 
 function Empty({ children }: { children: React.ReactNode }) {
@@ -71,12 +70,16 @@ function buildAutofillData(dataset: Row, fields: FormData) {
       data[fieldName] = { type: "text", text: raw };
     }
   }
-  if (!Object.keys(data).length) throw new Error("Enter at least one Canva autofill field.");
+  if (!Object.keys(data).length) {
+    throw new Error("Enter at least one Canva Autofill field.");
+  }
   return data;
 }
 
 function AutofillFields({ dataset, uploads }: { dataset: Row; uploads: Row[] }) {
-  if (!Object.keys(dataset).length) return <Empty>No Data Autofill fields are exposed.</Empty>;
+  if (!Object.keys(dataset).length) {
+    return <Empty>No Data Autofill fields are exposed.</Empty>;
+  }
   return (
     <>
       <datalist id="canva-upload-assets">
@@ -137,6 +140,7 @@ export function CanvaPanel() {
   const [exportFormats, setExportFormats] = useState<string[]>([]);
   const [jobKind, setJobKind] = useState<JobKind | null>(null);
   const [job, setJob] = useState<Row | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
   const designsReady = runtime.available("canva.designs.list");
 
   async function loadDesigns() {
@@ -177,6 +181,7 @@ export function CanvaPanel() {
   async function selectDesign(design: Row) {
     const designId = text(design.id);
     if (!designId) return;
+    setInputError(null);
     setDataset({});
     setExportFormats([]);
     await runtime.invoke(
@@ -214,6 +219,7 @@ export function CanvaPanel() {
   async function selectTemplate(row: Row) {
     const templateId = text(row.id);
     if (!templateId) return;
+    setInputError(null);
     setTemplateDataset({});
     if (runtime.available("canva.brand_template.get")) {
       await runtime.invoke(
@@ -246,7 +252,9 @@ export function CanvaPanel() {
 
   async function createDesign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const fields = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setInputError(null);
     await runtime.invoke(
       "canva.design.create",
       {
@@ -258,15 +266,19 @@ export function CanvaPanel() {
         const body = object(value);
         const design = Object.keys(object(body.design)).length ? object(body.design) : body;
         setSelected(design);
-        event.currentTarget.reset();
+        form.reset();
         await loadDesigns();
       },
     );
   }
 
-  async function autofillSelected(form: HTMLFormElement, mode: "update_design" | "create_from_design") {
+  async function autofillSelected(
+    form: HTMLFormElement,
+    mode: "update_design" | "create_from_design",
+  ) {
     if (!selected) return;
     try {
+      setInputError(null);
       const fields = new FormData(form);
       const data = buildAutofillData(dataset, fields);
       const title = text(fields.get("title"));
@@ -279,23 +291,26 @@ export function CanvaPanel() {
           data,
         },
         mode === "update_design"
-          ? `Update Data Autofill fields in “${text(selected.title, selected.id)}”`
-          : `Create an autofilled copy of “${text(selected.title, selected.id)}”`,
+          ? `Update Data Autofill fields in “${text(selected.title, text(selected.id))}”`
+          : `Create an autofilled copy of “${text(selected.title, text(selected.id))}”`,
         (value) => {
           setJobKind("autofill");
           setJob(jobFrom(value));
+          if (mode === "create_from_design") form.reset();
         },
       );
     } catch (caught) {
-      window.alert(caught instanceof Error ? caught.message : "Invalid Canva autofill data");
+      setInputError(caught instanceof Error ? caught.message : "Invalid Canva Autofill data");
     }
   }
 
   async function autofillTemplate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!template) return;
+    const form = event.currentTarget;
     try {
-      const fields = new FormData(event.currentTarget);
+      setInputError(null);
+      const fields = new FormData(form);
       const data = buildAutofillData(templateDataset, fields);
       await runtime.invoke(
         "canva.autofill.create",
@@ -309,16 +324,18 @@ export function CanvaPanel() {
         (value) => {
           setJobKind("autofill");
           setJob(jobFrom(value));
+          form.reset();
         },
       );
     } catch (caught) {
-      window.alert(caught instanceof Error ? caught.message : "Invalid Canva autofill data");
+      setInputError(caught instanceof Error ? caught.message : "Invalid Canva Autofill data");
     }
   }
 
   async function exportDesign(format: string) {
     const designId = text(selected?.id);
     if (!designId || !format) return;
+    setInputError(null);
     await runtime.invoke(
       "canva.design.export.create",
       { design_id: designId, format },
@@ -365,6 +382,8 @@ export function CanvaPanel() {
 
   return (
     <section className="integration-canva-layout">
+      {inputError && <div className="inline-error page-error full-span">{inputError}</div>}
+
       <article className="data-card">
         <div className="card-heading">
           <div>
