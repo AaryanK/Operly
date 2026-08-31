@@ -30,6 +30,12 @@ const TOOL_IDS = Object.freeze([
 const TOOL_SET = new Set(TOOL_IDS);
 
 let cachedTemplate = null;
+let templateWarmPromise = null;
+let templateWarmState = "idle";
+let templateWarmStartedAt = null;
+let templateWarmedAt = null;
+let templateWarmLastError = null;
+
 function computerTemplate() {
   if (cachedTemplate) return cachedTemplate;
   cachedTemplate = Sandbox.template()
@@ -47,6 +53,47 @@ function computerTemplate() {
     .run("id -u operly >/dev/null 2>&1 || useradd -m -u 10001 -s /bin/bash operly")
     .run("mkdir -p /workspace/work /workspace/.operly/requests /workspace/.operly/processes && chown -R operly:operly /workspace");
   return cachedTemplate;
+}
+
+function templateWarmStatus() {
+  return {
+    state: templateWarmState,
+    ready: templateWarmState === "ready",
+    started_at: templateWarmStartedAt,
+    warmed_at: templateWarmedAt,
+    last_error: templateWarmLastError ? "template build failed" : null,
+  };
+}
+
+function ensureComputerTemplateWarm() {
+  if (templateWarmState === "ready") return Promise.resolve();
+  if (templateWarmPromise) return templateWarmPromise;
+
+  templateWarmState = "warming";
+  templateWarmStartedAt = new Date().toISOString();
+  templateWarmLastError = null;
+  const started = Date.now();
+  console.log("Agent Computer template warm started");
+
+  templateWarmPromise = computerTemplate()
+    .build({ environmentId: ENVIRONMENT_ID })
+    .then(() => {
+      templateWarmState = "ready";
+      templateWarmedAt = new Date().toISOString();
+      templateWarmLastError = null;
+      console.log(`Agent Computer template ready in ${Date.now() - started}ms`);
+    })
+    .catch((error) => {
+      templateWarmState = "failed";
+      templateWarmLastError = String(error?.message || error).slice(0, 1000);
+      console.error(`Agent Computer template warm failed after ${Date.now() - started}ms: ${templateWarmLastError}`);
+      throw error;
+    })
+    .finally(() => {
+      templateWarmPromise = null;
+    });
+
+  return templateWarmPromise;
 }
 
 function hmac(value) {
@@ -150,8 +197,18 @@ async function harden(box, networkPolicy) {
 async function createSession(payload) {
   if (!ENVIRONMENT_ID) throw Object.assign(new Error("RAILWAY_ENVIRONMENT_ID is required"), { statusCode: 503 });
   const request = cleanCreate(payload);
-  const options = { environmentId: ENVIRONMENT_ID, idleTimeoutMinutes: Math.max(1, Math.min(Math.ceil(request.ttlSeconds / 60), 360)) };
-  if (request.networkPolicy === "off") options.networkIsolation = "ISOLATED";
+  const started = Date.now();
+
+  // Build the content-addressed base image once and let all later Computer
+  // sessions fork the Railway-cached template instead of building it in the
+  // user's request path.
+  await ensureComputerTemplateWarm();
+
+  const options = {
+    environmentId: ENVIRONMENT_ID,
+    idleTimeoutMinutes: Math.max(1, Math.min(Math.ceil(request.ttlSeconds / 60), 360)),
+    networkIsolation: "ISOLATED",
+  };
   const box = await Sandbox.create(computerTemplate(), options);
   try {
     await writeHelper(box);
@@ -167,6 +224,7 @@ async function createSession(payload) {
     await box.files.write("/workspace/.operly/session.json", meta, { mode: 0o600 });
     await box.exec("chown operly:operly /workspace/.operly/session.json /opt/operly-computer-tool.py", { timeoutSec: 10 });
     await harden(box, request.networkPolicy);
+    console.log(`Agent Computer session ${String(box.id || "").slice(0, 24)} ready in ${Date.now() - started}ms`);
     return {
       id: String(box.id || ""), session_id: String(box.id || ""), state: "active",
       isolation: "railway_sandbox_vm_v2", provider: "railway-sandbox",
@@ -260,7 +318,15 @@ const server = http.createServer(async (req, res) => {
   let pathname = "/";
   try { pathname = new URL(req.url || "/", "http://runner.invalid").pathname; } catch {}
   if (pathname === "/health" && req.method === "GET") {
-    return sendJson(res, 200, { ok: true, service: "operly-sandbox-runner", computer_runtime: true, isolation: "railway-sandbox", private_network_default: false, tools: TOOL_IDS.length }, { signed: false });
+    return sendJson(res, 200, {
+      ok: true,
+      service: "operly-sandbox-runner",
+      computer_runtime: true,
+      isolation: "railway-sandbox",
+      private_network_default: false,
+      tools: TOOL_IDS.length,
+      computer_template: templateWarmStatus(),
+    }, { signed: false });
   }
   if (!pathname.startsWith("/v1/computer/")) return sendJson(res, 404, { detail: "Not found" }, { signed: false });
   try {
@@ -277,10 +343,14 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const status = Number(error?.statusCode || 400);
     const safeMessage = status >= 500 ? "Sandbox runner operation failed" : String(error?.message || error);
+    console.error(`Sandbox runner ${req.method || "GET"} ${pathname} failed: ${String(error?.message || error).slice(0, 1000)}`);
     return sendJson(res, status, { detail: safeMessage });
   }
 });
 
 if (!RUNNER_TOKEN) { console.error("OPERLY_RUNNER_TOKEN is required"); process.exit(1); }
 if (!ENVIRONMENT_ID) { console.error("RAILWAY_ENVIRONMENT_ID is required"); process.exit(1); }
-server.listen(PORT, "0.0.0.0", () => console.log(`Operly Sandbox Runner listening on :${PORT}`));
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Operly Sandbox Runner listening on :${PORT}`);
+  void ensureComputerTemplateWarm().catch(() => {});
+});

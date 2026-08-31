@@ -30,6 +30,13 @@ class ComputerRunnerClient:
             5.0,
             min(float(os.getenv("OPERLY_AGENT_COMPUTER_TIMEOUT_SECONDS", "120")), 900.0),
         )
+        self.start_timeout_seconds = max(
+            self.timeout_seconds,
+            min(
+                float(os.getenv("OPERLY_AGENT_COMPUTER_START_TIMEOUT_SECONDS", "360")),
+                900.0,
+            ),
+        )
 
     @property
     def configured(self) -> bool:
@@ -82,6 +89,12 @@ class ComputerRunnerClient:
                     headers=headers,
                     content=raw,
                 )
+        except httpx.TimeoutException as error:
+            if method.upper() == "POST" and path == "/v1/computer/sessions":
+                raise ComputerRunnerError(
+                    "Operly Sandbox Runner timed out while provisioning the Computer runtime"
+                ) from error
+            raise ComputerRunnerError("Operly Sandbox Runner request timed out") from error
         except httpx.HTTPError as error:
             raise ComputerRunnerError("Operly Sandbox Runner is unavailable") from error
 
@@ -146,6 +159,7 @@ class ComputerRunnerClient:
                 "ttl_seconds": ttl_seconds,
                 "network_policy": effective_network_policy,
             },
+            timeout_seconds=self.start_timeout_seconds,
         )
 
     async def status(self, runtime_session_id: str) -> dict[str, Any]:
