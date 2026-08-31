@@ -1,0 +1,477 @@
+.agent-computer-page {
+  --computer-border: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.agent-computer-header .page-actions {
+  align-items: center;
+}
+
+.agent-computer-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, .62fr) minmax(440px, 1.7fr) minmax(230px, .72fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.computer-session-rail,
+.computer-authority-panel {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+
+.computer-new-task {
+  width: 100%;
+  margin-bottom: .75rem;
+}
+
+.computer-session-list {
+  display: grid;
+  gap: .45rem;
+}
+
+.computer-session-list > button {
+  display: grid;
+  gap: .22rem;
+  width: 100%;
+  padding: .72rem;
+  text-align: left;
+  border: 1px solid var(--computer-border);
+  border-radius: 12px;
+  background: transparent;
+}
+
+.computer-session-list > button.active {
+  background: color-mix(in srgb, Canvas 88%, currentColor 12%);
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
+.computer-session-list small,
+.computer-session-list span {
+  opacity: .68;
+}
+
+.computer-screen-shell {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--computer-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, Canvas 96%, currentColor 4%);
+  box-shadow: 0 12px 38px color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.computer-screen-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 .8rem;
+  border-bottom: 1px solid var(--computer-border);
+}
+
+.computer-screen-bar > small {
+  justify-self: end;
+  opacity: .6;
+}
+
+.computer-window-dots {
+  display: flex;
+  gap: .32rem;
+}
+
+.computer-window-dots span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .22;
+}
+
+.computer-screen {
+  min-height: 690px;
+  padding: clamp(1rem, 2.5vw, 1.7rem);
+  background:
+    linear-gradient(color-mix(in srgb, Canvas 97%, currentColor 3%), color-mix(in srgb, Canvas 92%, currentColor 8%));
+}
+
+.computer-task-composer {
+  display: grid;
+  gap: 1rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.computer-screen-intro {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: .9rem;
+  align-items: start;
+  margin-bottom: .3rem;
+}
+
+.computer-screen-intro h2,
+.computer-screen-intro p {
+  margin: .2rem 0 0;
+}
+
+.computer-screen-intro p {
+  opacity: .72;
+}
+
+.computer-glyph {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--computer-border);
+  border-radius: 14px;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.computer-task-composer > label {
+  display: grid;
+  gap: .38rem;
+  font-weight: 680;
+}
+
+.computer-task-composer > label > span {
+  font-weight: 400;
+  opacity: .55;
+}
+
+.computer-task-composer select,
+.computer-task-composer input,
+.computer-task-composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.computer-project-preview {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .35rem .8rem;
+  padding: .85rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 14px;
+  background: Canvas;
+}
+
+.computer-project-preview > div {
+  display: grid;
+}
+
+.computer-project-preview > div span,
+.computer-project-preview p {
+  opacity: .67;
+}
+
+.computer-project-preview p,
+.computer-project-preview a {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.computer-run-button {
+  min-height: 46px;
+  font-weight: 750;
+}
+
+.computer-guardrail-note {
+  padding: .65rem .75rem;
+  border: 1px dashed var(--computer-border);
+  border-radius: 10px;
+  opacity: .72;
+}
+
+.computer-session-view {
+  display: grid;
+  gap: 1rem;
+}
+
+.computer-session-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.computer-session-head h2 {
+  margin: .2rem 0 0;
+  max-width: 760px;
+}
+
+.computer-state {
+  flex: none;
+  padding: .35rem .58rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 999px;
+  text-transform: capitalize;
+  font-size: .82rem;
+}
+
+.computer-state-success {
+  font-weight: 700;
+}
+
+.computer-state-waiting {
+  font-weight: 700;
+  text-decoration: underline dotted;
+}
+
+.computer-state-failed {
+  font-weight: 700;
+}
+
+.computer-approval-checkpoint,
+.computer-result-card {
+  display: grid;
+  gap: .8rem;
+  padding: 1rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 15px;
+  background: Canvas;
+}
+
+.computer-approval-checkpoint h3,
+.computer-approval-checkpoint p,
+.computer-result-card h3,
+.computer-result-card p {
+  margin: .15rem 0 0;
+}
+
+.computer-approval-checkpoint dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .65rem;
+  margin: 0;
+}
+
+.computer-approval-checkpoint dl > div {
+  min-width: 0;
+  padding: .65rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 10px;
+}
+
+.computer-approval-checkpoint dt {
+  opacity: .6;
+  font-size: .75rem;
+}
+
+.computer-approval-checkpoint dd {
+  margin: .2rem 0 0;
+  overflow-wrap: anywhere;
+  font-size: .82rem;
+  font-weight: 650;
+}
+
+.computer-approval-checkpoint pre,
+.computer-result-card pre {
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: .75rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, Canvas 94%, currentColor 6%);
+}
+
+.computer-result-failed {
+  border-style: dashed;
+}
+
+.computer-timeline {
+  display: grid;
+  gap: .7rem;
+  padding: 1rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 15px;
+  background: Canvas;
+}
+
+.computer-timeline-step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: .7rem;
+  position: relative;
+}
+
+.computer-timeline-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 15px;
+  bottom: -12px;
+  width: 1px;
+  background: var(--computer-border);
+}
+
+.computer-step-dot {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin-top: .27rem;
+  border: 2px solid Canvas;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 1px var(--computer-border);
+}
+
+.computer-timeline-step > div {
+  display: grid;
+  gap: .2rem;
+  min-width: 0;
+}
+
+.computer-timeline-step > div > div {
+  display: flex;
+  justify-content: space-between;
+  gap: .7rem;
+}
+
+.computer-timeline-step p {
+  margin: 0;
+  opacity: .75;
+}
+
+.computer-timeline-step code,
+.computer-timeline-step small {
+  overflow-wrap: anywhere;
+  opacity: .62;
+}
+
+.computer-session-actions {
+  justify-content: flex-end;
+}
+
+.computer-security-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+  margin-bottom: 1rem;
+}
+
+.computer-security-grid > span {
+  display: grid;
+  gap: .15rem;
+  padding: .6rem;
+  border: 1px solid var(--computer-border);
+  border-radius: 10px;
+}
+
+.computer-security-grid small {
+  opacity: .6;
+}
+
+.computer-capability-list {
+  display: grid;
+  gap: .65rem;
+}
+
+.computer-capability-list > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: .55rem;
+  align-items: start;
+}
+
+.computer-capability-list > div > div {
+  display: grid;
+  min-width: 0;
+}
+
+.computer-capability-list small {
+  overflow-wrap: anywhere;
+  opacity: .62;
+}
+
+.computer-capability-ready,
+.computer-capability-off {
+  width: 9px;
+  height: 9px;
+  margin-top: .35rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.computer-capability-off {
+  opacity: .2;
+}
+
+.computer-boundary-note {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--computer-border);
+}
+
+.computer-boundary-note p {
+  margin: .35rem 0 0;
+  opacity: .68;
+}
+
+@media (max-width: 1250px) {
+  .agent-computer-layout {
+    grid-template-columns: minmax(190px, .55fr) minmax(0, 1.6fr);
+  }
+  .computer-authority-panel {
+    grid-column: 1 / -1;
+    position: static;
+    display: grid;
+    grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+    gap: 1rem;
+    max-height: none;
+  }
+  .computer-authority-panel .card-heading,
+  .computer-boundary-note {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .agent-computer-layout {
+    grid-template-columns: 1fr;
+  }
+  .computer-session-rail,
+  .computer-authority-panel {
+    position: static;
+    max-height: none;
+  }
+  .computer-session-rail {
+    order: 2;
+  }
+  .computer-screen-shell {
+    order: 1;
+  }
+  .computer-authority-panel {
+    order: 3;
+    grid-template-columns: 1fr;
+  }
+  .computer-authority-panel .card-heading,
+  .computer-boundary-note {
+    grid-column: auto;
+  }
+  .computer-screen {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .computer-screen-bar {
+    grid-template-columns: 1fr auto;
+  }
+  .computer-screen-bar > strong {
+    display: none;
+  }
+  .computer-approval-checkpoint dl,
+  .computer-security-grid {
+    grid-template-columns: 1fr;
+  }
+  .computer-session-head {
+    display: grid;
+  }
+}
