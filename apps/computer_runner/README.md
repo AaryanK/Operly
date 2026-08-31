@@ -4,16 +4,17 @@ This service implements the `/v1` Agent Computer runtime protocol used by
 `packages.workspace_modules.agent_computer.sandbox.ComputerRunnerClient`.
 
 It is a **development/reference runner**. It intentionally refuses to boot when
-`OPERLY_ENV=production`, because processes in this implementation share one OS
-namespace. Production must place the same protocol behind a backend that gives
-**each Agent Computer session its own container or microVM** with CPU, memory,
-disk, lifetime and egress controls.
+`OPERLY_ENV=production`, because sessions in this implementation share one runner
+container/process namespace. Production must place the same protocol behind a
+backend that gives **each Agent Computer session its own container or microVM**
+with CPU, memory, disk, lifetime and egress controls.
 
 ## Agent workbench
 
 The reference image contains the normal local tools a coding/research agent needs:
 Python 3 + pip, Bash, Node.js + npm, Git, ripgrep, jq, curl/wget, zip/unzip,
-compiler/build tooling, Chromium and Playwright.
+compiler/build tooling, Chromium and Playwright. The image runs as a dedicated
+non-root `computer` user with a dedicated `/runtime` workspace.
 
 The protocol exposes these computer-native operations:
 
@@ -41,22 +42,23 @@ Its `network_policy=off` also disables those explicit web/browser operations and
 networked Git helpers.
 
 This reference implementation **cannot reliably firewall arbitrary Bash/Python
-sockets**, because it is deliberately just a separate development process. Its
-health response therefore reports `network_policy_enforcement` as
+sockets**. Its health response therefore reports `network_policy_enforcement` as
 `tool-level-reference-only`. A production container/microVM backend must enforce
 egress at the OS/network layer so the policy applies to every process, not merely
 to Operly's helper tools.
 
-## Local run
+## Development run
 
-Set a random shared runner token and run this service separately from the Operly
-API process:
+Prefer the provided Dockerfile even for development so agent commands are kept in
+a separate container rather than executed directly on the developer workstation:
 
 ```bash
-export OPERLY_ENV=development
-export OPERLY_AGENT_COMPUTER_DEV_RUNNER=1
-export OPERLY_AGENT_COMPUTER_RUNNER_TOKEN='replace-with-a-random-secret'
-uvicorn apps.computer_runner.main:app --host 127.0.0.1 --port 8092
+docker build -f apps/computer_runner/Dockerfile -t operly-computer .
+docker run --rm -p 127.0.0.1:8092:8092 \
+  -e OPERLY_ENV=development \
+  -e OPERLY_AGENT_COMPUTER_DEV_RUNNER=1 \
+  -e OPERLY_AGENT_COMPUTER_RUNNER_TOKEN='replace-with-a-random-secret' \
+  operly-computer
 ```
 
 Then point Operly at it:
@@ -66,8 +68,12 @@ export OPERLY_AGENT_COMPUTER_RUNNER_URL=http://127.0.0.1:8092
 export OPERLY_AGENT_COMPUTER_RUNNER_TOKEN='replace-with-the-same-random-secret'
 ```
 
-The Dockerfile installs the workbench and Chromium runtime. The normal Operly API
-image does not install a browser and never runs agent shell/Python commands itself.
+Direct `uvicorn apps.computer_runner.main:app` execution exists only for trusted
+runner development. Do not expose untrusted agent commands to a runner process on
+the workstation host.
+
+The normal Operly API image does not install a browser and never runs agent
+shell/Python commands itself.
 
 ## Production contract
 
