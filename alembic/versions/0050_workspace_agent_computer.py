@@ -34,6 +34,12 @@ def upgrade():
             sa.Column("current_request_id", sa.String(length=160), nullable=True),
             sa.Column("current_run_id", sa.String(length=80), nullable=True),
             sa.Column("approval_id", sa.String(length=80), nullable=True),
+            sa.Column("runtime_session_id", sa.String(length=160), nullable=True),
+            sa.Column("runtime_state", sa.String(length=40), nullable=False, server_default="stopped"),
+            sa.Column("runtime_profile", sa.String(length=40), nullable=False, server_default="general"),
+            sa.Column("network_policy", sa.String(length=30), nullable=False, server_default="web"),
+            sa.Column("runtime_started_at", sa.DateTime(), nullable=True),
+            sa.Column("runtime_updated_at", sa.DateTime(), nullable=True),
             sa.Column("error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -48,6 +54,8 @@ def upgrade():
         op.create_index("ix_agent_computer_sessions_solution_id", "agent_computer_sessions", ["solution_id"])
         op.create_index("ix_agent_computer_sessions_current_run_id", "agent_computer_sessions", ["current_run_id"])
         op.create_index("ix_agent_computer_sessions_approval_id", "agent_computer_sessions", ["approval_id"])
+        op.create_index("ix_agent_computer_sessions_runtime_session_id", "agent_computer_sessions", ["runtime_session_id"])
+        op.create_index("ix_agent_computer_sessions_runtime_state", "agent_computer_sessions", ["runtime_state"])
         op.create_index("ix_agent_computer_sessions_updated_at", "agent_computer_sessions", ["updated_at"])
         op.create_index(
             "ix_agent_computer_session_scope_updated",
