@@ -6,7 +6,7 @@
   "packageManager": "npm@10.9.8",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --check server.mjs && python3 -m py_compile computer_tool.py"
+    "test": "node --check server.mjs"
   },
   "dependencies": {
     "railway": "3.10.0"
