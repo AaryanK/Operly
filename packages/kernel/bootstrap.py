@@ -9,7 +9,7 @@ from packages.kernel.provider_availability import (
 )
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
-from packages.kernel.runtime import OperlyKernelRuntime
+from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
 from packages.kernel.workspace_business_provider import (
     PROVIDER_ID as WORKSPACE_BUSINESS_PROVIDER_ID,
     workspace_business_capabilities,
@@ -200,7 +200,7 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
     )
 
 
-def build_kernel_runtime() -> OperlyKernelRuntime:
+def build_kernel_runtime() -> AvailabilityAwareKernelRuntime:
     registry = CapabilityRegistry(
         (
             *builtin_capabilities(),
@@ -216,4 +216,4 @@ def build_kernel_runtime() -> OperlyKernelRuntime:
     providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, AvailableWorkspaceBusinessProvider())
     providers.register(WORKSPACE_GOOGLE_PROVIDER_ID, AvailableWorkspaceGoogleProvider())
     providers.register(WORKSPACE_OS_PROVIDER_ID, AvailableWorkspaceOSProvider())
-    return OperlyKernelRuntime(registry=registry, providers=providers)
+    return AvailabilityAwareKernelRuntime(registry=registry, providers=providers)
