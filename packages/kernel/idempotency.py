@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +45,7 @@ def _idempotency_key(context: ExecutionContext, request_id: str) -> str:
 def _arguments_hash(request: RuntimeRequest) -> str:
     payload = json.dumps(
         {
+            "goal": str(request.goal or ""),
             "capability_id": request.capability_id,
             "arguments": dict(request.arguments),
         },
@@ -75,9 +75,9 @@ def _validate_existing(
     request: RuntimeRequest,
     arguments_hash: str,
 ) -> RuntimeResponse | None:
-    if claim.arguments_hash != arguments_hash or claim.capability_id != request.capability_id:
+    if claim.arguments_hash != arguments_hash:
         raise IdempotencyConflict(
-            "request_id was already used with a different capability or argument payload"
+            "request_id was already used with a different goal, capability, or argument payload"
         )
     if claim.status == "completed":
         return _response_from_json(claim.response_json)
@@ -130,7 +130,7 @@ async def reserve_request(
         await db.flush()
         return IdempotencyReservation(claim=claim)
     except IntegrityError:
-        # Another transaction won the same scoped request key.  Acquiring the unique
+        # Another transaction won the same scoped request key. Acquiring the unique
         # row is the first database mutation in the Kernel loop, so rollback is safe.
         await db.rollback()
         existing = await db.scalar(
