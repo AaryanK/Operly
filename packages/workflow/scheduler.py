@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy import or_, select
 
-from packages.database.db import session_scope
+from packages.database.db import DATABASE_URL, session_scope
 from packages.database.kernel_models import KernelApproval
 from packages.workflow.engine import queue_workflow_run, workflow_engine
 from packages.workflow.models import (
@@ -44,8 +44,16 @@ class WorkflowScheduler:
                 float(os.getenv("OPERLY_WORKFLOW_HEARTBEAT_SECONDS", "60")),
             ),
         )
+        # SQLite is the development fallback and serializes writes. Keep it deliberately
+        # single-worker unless a developer opts in; production PostgreSQL defaults to
+        # bounded concurrency.
+        default_workers = "1" if DATABASE_URL.startswith("sqlite") else "8"
         self._max_workers = max(
-            1, min(int(os.getenv("OPERLY_WORKFLOW_MAX_WORKERS", "8")), 64)
+            1,
+            min(
+                int(os.getenv("OPERLY_WORKFLOW_MAX_WORKERS", default_workers)),
+                64,
+            ),
         )
 
     async def start(self) -> None:
@@ -144,30 +152,48 @@ class WorkflowScheduler:
             await self._handle_cancelled_worker(run_id, lease_token)
             raise
         except Exception as error:
-            await self._mark_dispatch_failure(run_id, error, lease_token=lease_token)
+            await self._mark_dispatch_failure(
+                run_id, error, lease_token=lease_token
+            )
         finally:
             heartbeat.cancel()
             try:
                 await heartbeat
             except asyncio.CancelledError:
                 pass
+            except Exception as error:
+                # A heartbeat failure must never mask the actual workflow worker
+                # outcome during task cleanup.
+                self._last_error = (
+                    f"heartbeat {run_id}: {type(error).__name__}: {error}"
+                )[:500]
 
     async def _lease_heartbeat(self, run_id: str, lease_token: str) -> None:
         while True:
             await asyncio.sleep(self._heartbeat_seconds)
-            async with session_scope() as db:
-                run = await db.scalar(
-                    select(WorkflowRun).where(
-                        WorkflowRun.id == run_id,
-                        WorkflowRun.lease_token == lease_token,
-                        WorkflowRun.status.in_(["queued", "running"]),
+            try:
+                async with session_scope() as db:
+                    run = await db.scalar(
+                        select(WorkflowRun).where(
+                            WorkflowRun.id == run_id,
+                            WorkflowRun.lease_token == lease_token,
+                            WorkflowRun.status.in_(["queued", "running"]),
+                        )
                     )
-                )
-                if run is None:
-                    return
-                run.lease_until = datetime.utcnow() + timedelta(
-                    seconds=self._lease_seconds
-                )
+                    if run is None:
+                        return
+                    run.lease_until = datetime.utcnow() + timedelta(
+                        seconds=self._lease_seconds
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                # Keep retrying on transient DB errors. If connectivity remains broken
+                # past the lease, another scheduler will fail closed to orphaned rather
+                # than replaying an uncertain external side effect.
+                self._last_error = (
+                    f"heartbeat {run_id}: {type(error).__name__}: {error}"
+                )[:500]
 
     async def _release_decided_approvals_and_waits(self) -> None:
         now = datetime.utcnow()
@@ -372,8 +398,10 @@ class WorkflowScheduler:
                 schedule.next_run_at = next_schedule_time(
                     schedule_spec, after=scheduled_for
                 )
-                if schedule.next_run_at is None:
+                exhausted = schedule.next_run_at is None
+                if exhausted:
                     schedule.enabled = False
+                    workflow.status = "disabled"
                 schedule.lease_token = None
                 schedule.lease_until = None
                 dedupe_key = f"schedule:{schedule.id}:{scheduled_for.isoformat()}"
@@ -411,6 +439,7 @@ class WorkflowScheduler:
                         "schedule_id": schedule.id,
                         "scheduled_for": scheduled_for.isoformat(),
                         "deduplicated": existing is not None,
+                        "exhausted": exhausted,
                         "next_run_at": (
                             schedule.next_run_at.isoformat()
                             if schedule.next_run_at
@@ -418,6 +447,24 @@ class WorkflowScheduler:
                         ),
                     },
                 )
+                if exhausted:
+                    await record_workflow_event(
+                        db,
+                        workspace_id=workflow.workspace_id,
+                        workflow_id=workflow.id,
+                        event_type="workflow.schedule.exhausted",
+                        actor_id="operly:scheduler",
+                        owner_user_id=workflow.owner_user_id,
+                        principal_id=(
+                            f"user:{workflow.owner_user_id}"
+                            if workflow.owner_user_id
+                            else None
+                        ),
+                        payload={
+                            "schedule_id": schedule.id,
+                            "scheduled_for": scheduled_for.isoformat(),
+                        },
+                    )
 
     async def _claim_runs(self, *, limit: int) -> list[tuple[str, str]]:
         now = datetime.utcnow()
