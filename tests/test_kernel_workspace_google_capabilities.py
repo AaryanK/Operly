@@ -1,7 +1,7 @@
 import unittest
 
 from packages.kernel.contracts import CapabilityRisk
-from packages.workspace_modules.tools.google import PROVIDER_ID, workspace_google_capabilities
+from packages.workspace_modules.integrations.google import PROVIDER_ID, workspace_google_capabilities
 
 
 class WorkspaceGoogleCapabilityTests(unittest.TestCase):
@@ -19,12 +19,8 @@ class WorkspaceGoogleCapabilityTests(unittest.TestCase):
 
     def test_google_reads_are_not_approval_gated(self):
         for capability_id in (
-            "google.connection.status",
-            "google.gmail.search",
-            "google.gmail.read_message",
-            "google.calendar.list_calendars",
-            "google.calendar.list_events",
-            "google.calendar.freebusy",
+            "google.connection.status", "google.gmail.search", "google.gmail.read_message",
+            "google.calendar.list_calendars", "google.calendar.list_events", "google.calendar.freebusy",
         ):
             spec = self.by_id[capability_id]
             self.assertEqual(spec.risk, CapabilityRisk.READ_ONLY)
@@ -32,11 +28,8 @@ class WorkspaceGoogleCapabilityTests(unittest.TestCase):
 
     def test_external_side_effects_are_approval_gated(self):
         for capability_id in (
-            "google.gmail.send_email",
-            "google.gmail.modify_labels",
-            "google.calendar.create_event",
-            "google.calendar.update_event",
-            "google.calendar.delete_event",
+            "google.gmail.send_email", "google.gmail.modify_labels",
+            "google.calendar.create_event", "google.calendar.update_event", "google.calendar.delete_event",
         ):
             self.assertTrue(self.by_id[capability_id].approval_required, capability_id)
 
