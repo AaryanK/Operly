@@ -85,9 +85,9 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
-      - name: Verify frontend capability coverage
+      - name: Verify Workflow frontend capability coverage
         working-directory: apps/web
-        run: npm run test:contracts
+        run: npm run test:workflow
 
       - name: Build frontend
         working-directory: apps/web
