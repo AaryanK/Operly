@@ -12,11 +12,13 @@ from packages.workflow.models import (
     WorkflowRun,
     WorkflowSchedule,
     WorkflowTraceEvent,
+    WorkflowVersion,
 )
 from packages.workflow.provider import (
     WorkflowProvider as BaseWorkflowProvider,
     _loads,
     _run_json,
+    _version_json,
     _workflow_json,
 )
 
@@ -100,6 +102,45 @@ class WorkflowProvider(BaseWorkflowProvider):
             value={"workflows": [_workflow_json(row, schedules.get(row.id)) for row in rows]}
         )
 
+    async def _delegated_get(
+        self,
+        db: AsyncSession,
+        context: ExecutionContext,
+        arguments: dict[str, Any],
+    ) -> CapabilityExecutionResult:
+        workflow = await self._owned_workflow(
+            db, context, str(arguments.get("workflow_id") or "")
+        )
+        version = await db.scalar(
+            select(WorkflowVersion).where(
+                WorkflowVersion.workflow_id == workflow.id,
+                WorkflowVersion.version == workflow.current_version,
+            )
+        )
+        schedule = await db.scalar(
+            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == workflow.id)
+        )
+        runs = (
+            await db.scalars(
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.workflow_id == workflow.id,
+                    WorkflowRun.authority_user_id == context.user_id,
+                )
+                .order_by(WorkflowRun.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+        return CapabilityExecutionResult(
+            value={
+                "workflow": _workflow_json(workflow, schedule),
+                "version": _version_json(version, include_definition=True) if version else None,
+                "recent_runs": [_run_json(run) for run in runs],
+            },
+            resource_type="workflow",
+            resource_id=workflow.id,
+        )
+
     async def _delegated_run_list(
         self,
         db: AsyncSession,
@@ -142,8 +183,6 @@ class WorkflowProvider(BaseWorkflowProvider):
             WorkflowTraceEvent.workspace_id == context.workspace_id,
             WorkflowTraceEvent.workflow_id.in_(owned_ids),
         )
-        # Run-scoped events can expose exact execution correlation. A delegated reader
-        # only receives those for runs that actually executed under that same user.
         statement = statement.where(
             (WorkflowTraceEvent.workflow_run_id.is_(None))
             | (WorkflowTraceEvent.workflow_run_id.in_(owned_run_ids))
@@ -206,13 +245,14 @@ class WorkflowProvider(BaseWorkflowProvider):
 
         if capability.id == "workflow.list":
             return await self._delegated_list(db, context, arguments)
+        if capability.id == "workflow.get":
+            return await self._delegated_get(db, context, arguments)
         if capability.id == "workflow.run.list":
             return await self._delegated_run_list(db, context, arguments)
         if capability.id == "workflow.trace":
             return await self._delegated_trace(db, context, arguments)
 
         workflow_scoped = {
-            "workflow.get",
             "workflow.version.list",
             "workflow.version.get",
             "workflow.update",
