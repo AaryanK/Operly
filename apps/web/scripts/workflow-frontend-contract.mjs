@@ -9,6 +9,8 @@ const routes = read("src/app/routes.ts");
 const shell = read("src/workspace/WorkspaceShell.tsx");
 const home = read("src/workspace/WorkspaceHome.tsx");
 const allTools = read("src/workspace/CapabilitiesPage.tsx");
+const rootApp = read("src/app/App.tsx");
+const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 
 const requiredCapabilities = [
   "workflow.list",
@@ -52,8 +54,14 @@ if (!shell.includes('import("./WorkflowPage")') || !shell.includes('case "workfl
 if (!home.includes('section: "workflows"') || !home.includes('title: "Automate work"')) failures.push("Workspace Home must make Workflow discoverable");
 if (!allTools.includes('api<CapabilityResponse>("/workspace-tools")') || !allTools.includes("no hidden API-only action")) failures.push("All tools must remain the universal capability fallback");
 
+if (!rootApp.includes('import { ProductApp } from "./ProductApp"')) failures.push("Live React root must be able to mount ProductApp");
+if (!rootApp.includes('"workflows"') || !rootApp.includes("PRODUCT_WORKSPACE_SECTIONS") || !rootApp.includes("usesProductWorkspace(pathname)")) failures.push("Live React root must route /channels/:workspace/workflows to ProductApp");
+for (const [section, label] of [["workflows", "Workflows"], ["activity", "Activity"], ["agent-computer", "Computer"], ["connections", "Integrations"], ["capabilities", "All tools"]]) {
+  if (!liveShell.includes(`workspaceControlPath(selected.id, \"${section}\")`) || !liveShell.includes(`>${label}</a>`)) failures.push(`Live workspace shell must visibly link to ${label}`);
+}
+
 if (failures.length) {
   console.error("Workflow frontend contract failed:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities have explicit UI coverage.`);
+console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities have explicit UI coverage and the live workspace shell routes to them.`);
