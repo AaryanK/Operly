@@ -22,6 +22,7 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.workflow import workflow_scheduler
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
 from packages.workspace_modules.integrations.router import router as workspace_integrations_router
@@ -100,13 +101,15 @@ async def lifespan(app: FastAPI):
     await init_db()
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
+    await workflow_scheduler.start()
     try:
         yield
     finally:
+        await workflow_scheduler.stop()
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.5.3-agent-computer", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.6.0-workflow", lifespan=lifespan)
 
 # Models/agents remain offline. Human and deterministic interfaces resolve Workspace
 # authority and execute through the same governed capability runtime.
@@ -162,6 +165,8 @@ async def health():
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
         "agent_computer_enabled": True,
+        "workflow_engine_enabled": True,
+        "workflow_scheduler": workflow_scheduler.status(),
         "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot_configured": discord["configured"],
         "discord_bot_running": discord["task_running"],
@@ -174,7 +179,7 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "deterministic-agent-computer",
+        "state": "deterministic-workflows",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
@@ -182,15 +187,17 @@ async def rebuild_status():
         "workspace_integrations_enabled": True,
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
+        "workflow_engine_enabled": True,
+        "workflow_scheduler": workflow_scheduler.status(),
         "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot": discord_bot_lifecycle.status(),
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Agent Computer is a governed deterministic interface over Workspace tools. "
-            "Studio deployment supports verified static or prebuilt bundles and pauses on the "
-            "normal Workspace approval boundary. AI planning remains offline."
+            "Workflow is a durable orchestration layer over the same governed Workspace tools. "
+            "Schedules and manual runs preserve live Workspace authority, normal approvals, "
+            "Kernel run IDs, step attempts, and workflow trace events. AI planning remains offline."
         ),
     }
 
