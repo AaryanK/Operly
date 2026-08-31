@@ -3,8 +3,14 @@ from datetime import datetime
 from pathlib import Path
 
 from packages.kernel.contracts import CapabilityRisk
-from packages.workflow.provider import workflow_capabilities
-from packages.workflow.spec import WorkflowSpecError, next_schedule_time, validate_schedule, validate_workflow_spec
+from packages.security.permissions import DEFAULT_ROLE_AUTHORITY, KNOWN_PERMISSIONS
+from packages.workflow import workflow_capabilities
+from packages.workflow.spec import (
+    WorkflowSpecError,
+    next_schedule_time,
+    validate_schedule,
+    validate_workflow_spec,
+)
 
 
 class WorkflowPackageTests(unittest.TestCase):
@@ -21,27 +27,70 @@ class WorkflowPackageTests(unittest.TestCase):
         for spec in specs.values():
             self.assertEqual(spec.scopes, frozenset({"workspace"}))
             self.assertEqual(spec.resource_scope, "workspace")
+            self.assertIn("workflow", spec.tags)
+            self.assertIn("operations", spec.tags)
         for capability_id in ("workflow.create", "workflow.update", "workflow.enable", "workflow.archive"):
             self.assertEqual(specs[capability_id].risk, CapabilityRisk.HIGH)
             self.assertTrue(specs[capability_id].approval_required)
         self.assertEqual(specs["workflow.run.start"].permissions, ("workflows:run",))
 
+    def test_builtin_workflow_authority_is_owner_only(self):
+        workflow_permissions = {"workflows:read", "workflows:write", "workflows:run"}
+        self.assertTrue(workflow_permissions <= KNOWN_PERMISSIONS)
+        self.assertTrue(workflow_permissions <= DEFAULT_ROLE_AUTHORITY["owner"])
+        for role in ("manager", "agent", "employee"):
+            self.assertFalse(workflow_permissions & DEFAULT_ROLE_AUTHORITY[role], role)
+
     def test_steps_can_target_any_non_workflow_workspace_capability(self):
         spec = validate_workflow_spec({
             "steps": [
-                {"id": "mail", "capability_id": "google.gmail.send_email", "arguments": {"to": "a@example.com"}},
-                {"id": "build", "capability_id": "computer.python.exec", "arguments": {"code": "print(1)"}, "depends_on": ["mail"]},
-                {"id": "deploy", "capability_id": "studio.solution.deploy", "arguments": {"project_id": "{{trigger.project_id}}"}, "depends_on": ["build"]},
+                {
+                    "id": "mail",
+                    "capability_id": "google.gmail.send_email",
+                    "arguments": {"to": "a@example.com"},
+                },
+                {
+                    "id": "build",
+                    "capability_id": "computer.python.exec",
+                    "arguments": {"computer_session_id": "{{trigger.computer_session_id}}", "code": "print(1)"},
+                    "depends_on": ["mail"],
+                },
+                {
+                    "id": "deploy",
+                    "capability_id": "studio.solution.deploy",
+                    "arguments": {"project_id": "{{trigger.project_id}}"},
+                    "depends_on": ["build"],
+                },
             ]
         })
-        self.assertEqual([step["capability_id"] for step in spec["steps"]], ["google.gmail.send_email", "computer.python.exec", "studio.solution.deploy"])
+        self.assertEqual(
+            [step["capability_id"] for step in spec["steps"]],
+            ["google.gmail.send_email", "computer.python.exec", "studio.solution.deploy"],
+        )
         with self.assertRaises(WorkflowSpecError):
-            validate_workflow_spec({"steps": [{"id": "loop", "capability_id": "workflow.run.start", "arguments": {}}]})
+            validate_workflow_spec({
+                "steps": [{"id": "loop", "capability_id": "workflow.run.start", "arguments": {}}]
+            })
 
     def test_dependencies_must_be_backward_and_waits_are_bounded(self):
         with self.assertRaises(WorkflowSpecError):
-            validate_workflow_spec({"steps": [{"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["b"]}, {"id": "b", "capability_id": "workspace.summary.read"}]})
-        validated = validate_workflow_spec({"steps": [{"id": "a", "kind": "wait", "seconds": 60}, {"id": "b", "capability_id": "workspace.summary.read", "depends_on": ["a"], "when": {"ref": "steps.a.status", "op": "eq", "value": "completed"}}]})
+            validate_workflow_spec({
+                "steps": [
+                    {"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["b"]},
+                    {"id": "b", "capability_id": "workspace.summary.read"},
+                ]
+            })
+        validated = validate_workflow_spec({
+            "steps": [
+                {"id": "a", "kind": "wait", "seconds": 60},
+                {
+                    "id": "b",
+                    "capability_id": "workspace.summary.read",
+                    "depends_on": ["a"],
+                    "when": {"ref": "steps.a.status", "op": "eq", "value": "completed"},
+                },
+            ]
+        })
         self.assertEqual(validated["steps"][0]["kind"], "wait")
 
     def test_schedules_support_once_interval_daily_weekly_and_cron(self):
@@ -54,31 +103,47 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIsNotNone(next_schedule_time(weekly, after=after))
         self.assertIsNotNone(validate_schedule({"type": "once", "at": "2026-09-01T00:00:00Z"}))
         self.assertIsNotNone(validate_schedule({"type": "daily", "time": "08:00", "timezone": "UTC"}))
+        with self.assertRaises(WorkflowSpecError):
+            validate_schedule({"type": "cron", "expression": "* *"})
 
     def test_execution_delegates_to_workspace_runtime_and_preserves_correlation(self):
         root = Path(__file__).resolve().parents[1]
         engine = (root / "packages" / "workflow" / "engine.py").read_text(encoding="utf-8")
         scheduler = (root / "packages" / "workflow" / "scheduler.py").read_text(encoding="utf-8")
-        composition = (root / "packages" / "workspace_modules" / "tools" / "__init__.py").read_text(encoding="utf-8")
+        tracing = (root / "packages" / "workflow" / "tracing.py").read_text(encoding="utf-8")
+        composition = (
+            root / "packages" / "workspace_modules" / "tools" / "__init__.py"
+        ).read_text(encoding="utf-8")
         schema = (root / "packages" / "database" / "schema.py").read_text(encoding="utf-8")
+        package = (root / "packages" / "workflow" / "__init__.py").read_text(encoding="utf-8")
         self.assertIn("build_workspace_runtime", engine)
         self.assertIn("resolve_execution_context", engine)
         self.assertIn("RuntimeRequest", engine)
         self.assertIn("workflow:{run.id}:{row.step_key}:attempt:{row.attempt}", engine)
-        self.assertIn("waiting_approval", engine)
+        self.assertIn("workflow.step.waiting_approval", engine)
+        self.assertIn("workflow.step.approval_resumed", engine)
+        self.assertIn("workflow.run.resumed", engine)
         self.assertIn("KernelApproval", scheduler)
         self.assertIn("with_for_update(skip_locked=True)", scheduler)
         self.assertIn("workflow_engine.execute_run", scheduler)
+        self.assertIn('run.status = "orphaned"', scheduler)
+        self.assertIn("execution_outcome_uncertain", scheduler)
+        self.assertIn("KernelEventRecord", tracing)
+        self.assertIn("WorkflowTraceEvent", tracing)
         self.assertIn("workflow_capabilities", composition)
         self.assertIn("WorkflowProvider", composition)
+        self.assertIn("A non-owner may only control their own workflow runs", package)
         self.assertIn('ALEMBIC_HEAD = "0051_workflow_engine"', schema)
 
     def test_workflow_does_not_import_external_provider_executors(self):
         root = Path(__file__).resolve().parents[1]
         engine = (root / "packages" / "workflow" / "engine.py").read_text(encoding="utf-8")
         for forbidden in (
-            "GoogleWorkspaceProvider", "WorkspaceCanvaProvider", "WorkspaceDiscordProvider",
-            "WorkspaceStudioProvider", "AgentComputerProvider",
+            "GoogleWorkspaceProvider",
+            "WorkspaceCanvaProvider",
+            "WorkspaceDiscordProvider",
+            "WorkspaceStudioProvider",
+            "AgentComputerProvider",
         ):
             self.assertNotIn(forbidden, engine)
 
