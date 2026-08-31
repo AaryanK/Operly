@@ -9,7 +9,7 @@ const text = (path) => readFile(resolve(repoRoot, path), "utf8");
 const exists = async (path) => { try { await access(resolve(repoRoot, path)); return true; } catch { return false; } };
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrations, discordBot, discordLifecycle, connections, connectionsPage, workspaceShell] = await Promise.all([
+const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrations, discordBot, discordLifecycle, connections, connectionsPage, workspaceShell, canvaAuthoring] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("packages/workspace_modules/tools/router.py"),
   text("apps/api/main.py"),
@@ -22,6 +22,7 @@ const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrat
   text("packages/workspace_modules/integrations/router.py"),
   text("apps/web/src/workspace/ConnectionsPage.tsx"),
   text("apps/web/src/workspace/WorkspaceShell.tsx"),
+  text("packages/workspace_modules/integrations/canva/authoring.py"),
 ]);
 
 assert(page.includes('api<CapabilityResponse>("/workspace-tools")'), "Workspace UI must discover tools through /workspace-tools");
@@ -46,6 +47,7 @@ for (const provider of ["google", "canva", "discord"]) {
   assert(await exists(`packages/workspace_modules/integrations/${provider}/provider.py`), `${provider} deterministic provider is missing`);
   assert(await exists(`packages/workspace_modules/integrations/${provider}/permissions.py`), `${provider} permission resolver is missing`);
 }
+assert(await exists("packages/workspace_modules/integrations/canva/authoring.py"), "Canva authoring capability package is missing");
 
 for (const legacy of ["workspace_os_provider.py", "workspace_control_provider.py", "workspace_business_provider.py", "workspace_google_provider.py", "provider_availability.py"]) {
   assert(!(await exists(`packages/kernel/${legacy}`)), `Workspace-owned code leaked back into packages/kernel/${legacy}`);
@@ -60,19 +62,32 @@ assert(!nativeProvider.includes("_workspace_modules"), "Generic native provider 
 
 assert(integrations.includes("workspace_google_capabilities"), "Google capabilities must be composed by Workspace integrations");
 assert(integrations.includes("workspace_canva_capabilities"), "Canva capabilities must be composed by Workspace integrations");
+assert(integrations.includes("workspace_canva_authoring_capabilities"), "Canva authoring capabilities must be composed by Workspace integrations");
 assert(integrations.includes("workspace_discord_capabilities"), "Discord capabilities must be composed by Workspace integrations");
 assert(connections.includes('prefix="/api/connectors"'), "Workspace integration package must own connector management endpoints");
 assert(main.includes("workspace_integrations_router"), "FastAPI must mount Workspace-owned connection management");
 assert(main.includes("await discord_bot_lifecycle.start()"), "Application lifespan must start the deterministic Discord bot");
 assert(main.includes("await discord_bot_lifecycle.stop()"), "Application lifespan must stop the deterministic Discord bot");
 
-assert(workspaceShell.includes('import("./ConnectionsPage")'), "Workspace shell must render the dedicated integration Connections page");
-assert(connectionsPage.includes('api<Connection[]>("/connectors")'), "Connections UI must load Workspace-owned connector state");
-assert(connectionsPage.includes('"/connectors/google/connect?tier=assistant"'), "Connections UI must initiate Google Workspace OAuth");
-assert(connectionsPage.includes('"/connectors/canva/connect"'), "Connections UI must initiate Canva OAuth");
-assert(connectionsPage.includes('api<DiscordStatus>("/connectors/discord/status")'), "Connections UI must inspect the deterministic Discord bot");
-assert(connectionsPage.includes("Add Discord bot"), "Connections UI must expose Discord installation");
-assert(connectionsPage.includes("Discord AI"), "Connections UI must show that Discord AI is disabled");
+assert(workspaceShell.includes('import("./ConnectionsPage")'), "Workspace shell must render the dedicated integration workbench");
+assert(connectionsPage.includes('api<ToolIndex>("/workspace-tools")'), "Integration workbench must discover currently executable Workspace tools");
+assert(connectionsPage.includes("tool.endpoint"), "Integration workbench must execute backend-advertised endpoints rather than bypassing Workspace tools");
+assert(connectionsPage.includes("/workspace-tools/approvals/"), "Integration workbench must resume approval-gated tools through the Workspace approval boundary");
+assert(connectionsPage.includes('"google.gmail.search"'), "Integration workbench must expose Gmail search");
+assert(connectionsPage.includes('"google.gmail.send_email"'), "Integration workbench must expose Gmail send");
+assert(connectionsPage.includes('"google.calendar.create_event"'), "Integration workbench must expose Calendar event creation");
+assert(connectionsPage.includes('"google.calendar.update_event"'), "Integration workbench must expose Calendar event editing");
+assert(connectionsPage.includes('"canva.autofill.create"'), "Integration workbench must expose real Canva data-aware authoring");
+assert(connectionsPage.includes('"discord.message.send"'), "Integration workbench must expose deterministic Discord messaging");
+assert(connectionsPage.includes('"/connectors/google/connect?tier=assistant"'), "Integration workbench must initiate Google Workspace OAuth");
+assert(connectionsPage.includes('"/connectors/canva/connect"'), "Integration workbench must initiate Canva OAuth");
+assert(connectionsPage.includes('api<DiscordStatus>("/connectors/discord/status")'), "Integration workbench must inspect the deterministic Discord bot");
+assert(connectionsPage.includes("AI off"), "Integration workbench must make Discord's deterministic-only state explicit");
+
+for (const capability of ["canva.design.dataset", "canva.brand_templates.list", "canva.brand_template.dataset", "canva.autofill.create", "canva.autofill.get"]) {
+  assert(canvaAuthoring.includes(`"${capability}"`), `Canva authoring provider is missing ${capability}`);
+}
+assert(canvaAuthoring.includes('approval=True'), "Canva in-place/new-design autofill must remain approval gated");
 
 for (const forbidden of ["AgentRuntime", "ChannelService.handle", "model_runtime", "secure_runtime", "packages.agents"]) {
   assert(!discordBot.includes(forbidden), `Deterministic Discord bot leaked AI runtime dependency: ${forbidden}`);
@@ -80,4 +95,4 @@ for (const forbidden of ["AgentRuntime", "ChannelService.handle", "model_runtime
 }
 assert(discordBot.includes("AI chat is not enabled yet"), "Discord bot must make the deterministic-only behavior explicit");
 
-console.log("Workspace tools and deterministic integration contracts passed.");
+console.log("Workspace tools and deterministic integration workbench contracts passed.");
