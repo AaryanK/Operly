@@ -5,21 +5,29 @@ on:
     paths:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
+      - "alembic/versions/0052_mcp_agent_gateway.py"
+      - "apps/api/access_router.py"
       - "apps/api/main.py"
+      - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
       - "apps/web/src/app/App.tsx"
       - "apps/web/src/app/routes.ts"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
+      - "apps/web/src/workspace/AccessPage.tsx"
       - "apps/web/src/workspace/WorkflowPage.tsx"
       - "apps/web/src/workspace/WorkspaceHome.tsx"
       - "apps/web/src/workspace/WorkspaceShell.tsx"
+      - "packages/database/principal_models.py"
       - "packages/database/schema.py"
+      - "packages/mcp/**"
       - "packages/security/permissions.py"
+      - "packages/security/surfaces.py"
       - "packages/workflow/**"
       - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
+      - "tests/test_mcp_gateway.py"
       - "tests/test_workflow_package.py"
   push:
     branches:
@@ -27,21 +35,29 @@ on:
     paths:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
+      - "alembic/versions/0052_mcp_agent_gateway.py"
+      - "apps/api/access_router.py"
       - "apps/api/main.py"
+      - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
       - "apps/web/src/app/App.tsx"
       - "apps/web/src/app/routes.ts"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
+      - "apps/web/src/workspace/AccessPage.tsx"
       - "apps/web/src/workspace/WorkflowPage.tsx"
       - "apps/web/src/workspace/WorkspaceHome.tsx"
       - "apps/web/src/workspace/WorkspaceShell.tsx"
+      - "packages/database/principal_models.py"
       - "packages/database/schema.py"
+      - "packages/mcp/**"
       - "packages/security/permissions.py"
+      - "packages/security/surfaces.py"
       - "packages/workflow/**"
       - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
+      - "tests/test_mcp_gateway.py"
       - "tests/test_workflow_package.py"
 
 permissions:
@@ -73,6 +89,33 @@ jobs:
 
       - name: Run Workflow package tests
         run: python -m unittest discover -s tests -p "test_workflow_package.py" -v
+
+  mcp-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MCP contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "SQLAlchemy>=2.0,<3" "aiosqlite>=0.20,<1" "itsdangerous>=2.2,<3" "fastapi>=0.115,<1" "python-multipart>=0.0.12,<1"
+
+      - name: Compile MCP and transport surfaces
+        run: |
+          python -m compileall -q packages/mcp
+          python -m py_compile apps/api/mcp_router.py apps/api/access_router.py packages/security/surfaces.py
+          python -m py_compile alembic/versions/0052_mcp_agent_gateway.py
+
+      - name: Run MCP agent capability tests
+        run: python -m unittest discover -s tests -p "test_mcp_gateway.py" -v
 
   workflow-frontend:
     runs-on: ubuntu-latest
