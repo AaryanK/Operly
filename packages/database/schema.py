@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0047_operly_kernel_v3"
+ALEMBIC_HEAD = "0048_kernel_request_idempotency"
 
 
 def import_all_models() -> None:
