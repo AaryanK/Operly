@@ -15,8 +15,9 @@ from apps.api.dependencies import (
     get_auth_context,
     get_db,
 )
-from packages.database.kernel_models import KernelEventRecord, KernelRun, KernelRunStep
+from packages.database.kernel_models import KernelApproval, KernelEventRecord, KernelRun, KernelRunStep
 from packages.kernel import RuntimeExecutionError, build_kernel_runtime
+from packages.kernel.approvals import ApprovalError, approval_json, decide_approval
 from packages.kernel.contracts import RuntimeRequest
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.security.execution_context import ExecutionContext, ScopeKind
@@ -32,9 +33,18 @@ class KernelExecuteInput(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     conversation_id: str | None = Field(default=None, max_length=160)
     request_id: str | None = Field(default=None, max_length=160)
+    approval_id: str | None = Field(default=None, max_length=80)
 
 
-async def _workspace_context(db: AsyncSession, auth: AuthContext, conversation_id: str | None = None) -> ExecutionContext:
+class ApprovalDecisionInput(BaseModel):
+    approved: bool
+
+
+async def _workspace_context(
+    db: AsyncSession,
+    auth: AuthContext,
+    conversation_id: str | None = None,
+) -> ExecutionContext:
     return await resolve_ingress_context(
         db,
         TrustedIngress(
@@ -83,6 +93,7 @@ def _runtime_request(payload: KernelExecuteInput) -> RuntimeRequest:
         arguments=payload.arguments,
         conversation_id=payload.conversation_id,
         request_id=payload.request_id,
+        approval_id=payload.approval_id,
     )
 
 
@@ -90,10 +101,10 @@ async def _execute(db: AsyncSession, context: ExecutionContext, payload: KernelE
     try:
         response = await _runtime.execute(db, context=context, request=_runtime_request(payload))
     except RuntimeExecutionError as error:
-        raise HTTPException(
-            status_code=error.status_code,
-            detail={"code": error.code, "message": str(error), "run_id": error.run_id},
-        ) from error
+        detail = {"code": error.code, "message": str(error), "run_id": error.run_id}
+        if error.approval_id:
+            detail["approval_id"] = error.approval_id
+        raise HTTPException(status_code=error.status_code, detail=detail) from error
     return response.as_dict()
 
 
@@ -188,6 +199,135 @@ async def _run_payload(db: AsyncSession, run: KernelRun) -> dict[str, Any]:
             for step in steps
         ],
     }
+
+
+def _approval_event(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    approval: KernelApproval,
+    actor_user_id: str,
+) -> None:
+    db.add(
+        KernelEventRecord(
+            event_type=f"approval.{approval.status}",
+            scope_kind=context.scope_kind.value,
+            workspace_id=context.workspace_id,
+            owner_user_id=context.user_id if context.is_personal else None,
+            principal_id=context.principal_id,
+            actor_type="human",
+            actor_id=actor_user_id,
+            initiator_principal_id=approval.requested_by_principal_id,
+            executor_principal_id=f"user:{actor_user_id}",
+            capability_id=approval.capability_id,
+            resource_type="approval",
+            resource_id=approval.id,
+            payload_json=json.dumps(
+                {"approval_id": approval.id, "status": approval.status},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    )
+
+
+@router.get("/approvals")
+async def workspace_approvals(
+    status: str | None = Query(default=None, max_length=30),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    context = await _workspace_context(db, auth)
+    if not context.can("actions:read") and not context.can("actions:approve"):
+        raise HTTPException(status_code=403, detail="Approval access denied")
+    filters = [
+        KernelApproval.scope_kind == "workspace",
+        KernelApproval.workspace_id == auth.tenant.id,
+    ]
+    if status:
+        filters.append(KernelApproval.status == status)
+    rows = (
+        await db.scalars(
+            select(KernelApproval)
+            .where(*filters)
+            .order_by(KernelApproval.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return {"approvals": [approval_json(row, include_arguments=True) for row in rows]}
+
+
+@router.post("/approvals/{approval_id}/decision")
+async def workspace_approval_decision(
+    approval_id: str,
+    payload: ApprovalDecisionInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    context = await _workspace_context(db, auth)
+    if not context.can("actions:approve"):
+        raise HTTPException(status_code=403, detail="Approval permission denied")
+    try:
+        row = await decide_approval(
+            db,
+            context=context,
+            approval_id=approval_id,
+            approved=payload.approved,
+            decided_by_user_id=auth.user.id,
+        )
+    except ApprovalError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    _approval_event(db, context=context, approval=row, actor_user_id=auth.user.id)
+    await db.commit()
+    return approval_json(row, include_arguments=True)
+
+
+@router.get("/personal/approvals")
+async def personal_approvals(
+    status: str | None = Query(default=None, max_length=30),
+    limit: int = Query(default=50, ge=1, le=200),
+    account: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    filters = [
+        KernelApproval.scope_kind == "personal",
+        KernelApproval.owner_user_id == account.user.id,
+    ]
+    if status:
+        filters.append(KernelApproval.status == status)
+    rows = (
+        await db.scalars(
+            select(KernelApproval)
+            .where(*filters)
+            .order_by(KernelApproval.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return {"approvals": [approval_json(row, include_arguments=True) for row in rows]}
+
+
+@router.post("/personal/approvals/{approval_id}/decision")
+async def personal_approval_decision(
+    approval_id: str,
+    payload: ApprovalDecisionInput,
+    account: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    context = await _personal_context(db, account)
+    try:
+        row = await decide_approval(
+            db,
+            context=context,
+            approval_id=approval_id,
+            approved=payload.approved,
+            decided_by_user_id=account.user.id,
+        )
+    except ApprovalError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    _approval_event(db, context=context, approval=row, actor_user_id=account.user.id)
+    await db.commit()
+    return approval_json(row, include_arguments=True)
 
 
 @router.get("/events")
