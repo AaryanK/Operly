@@ -8,6 +8,7 @@ export type WorkspaceSection =
   | "solutions"
   | "connections"
   | "plugins"
+  | "capabilities"
   | "members"
   | "access"
   | "ai-debug"
@@ -32,6 +33,7 @@ export const workspaceSections: Array<{
   { id: "solutions", label: "Solutions", group: "digital" },
   { id: "connections", label: "Connections", group: "extend" },
   { id: "plugins", label: "Plugins", group: "extend" },
+  { id: "capabilities", label: "Capabilities", group: "extend" },
   { id: "ai-debug", label: "AI Debug", group: "debug" },
   { id: "members", label: "Members & roles", group: "admin" },
   { id: "access", label: "AI & MCP access", group: "admin" },
