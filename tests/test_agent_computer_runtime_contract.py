@@ -1,3 +1,4 @@
+import ast
 import unittest
 from pathlib import Path
 
@@ -92,6 +93,7 @@ class AgentComputerRuntimeContractTests(unittest.TestCase):
         self.assertIn("RAILWAY_ENVIRONMENT_ID", server)
         self.assertIn("private_network: false", server)
 
+        ast.parse(helper)
         self.assertIn("def python_exec", helper)
         self.assertIn("def terminal_exec", helper)
         self.assertIn("def browser_tool", helper)
