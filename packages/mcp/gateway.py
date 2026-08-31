@@ -142,9 +142,10 @@ def agent_description(spec: CapabilitySpec) -> str:
             "Workflow tools manage durable, traceable orchestration. Use them when work must persist, wait, branch, retry safely, or run on a schedule instead of keeping the agent process alive."
         )
 
-    if spec.reversible:
-        parts.append("Operly marks this capability as reversible, but reversal is still a separate governed action where applicable.")
-
+    # Reversibility remains available as machine metadata but is intentionally not
+    # presented as behavioral advice. An agent must never assume that calling a
+    # compensating action is safe merely because a provider marks an operation as
+    # reversible; the compensating action has its own live authority/approval checks.
     return " ".join(parts)[:1800]
 
 
