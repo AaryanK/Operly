@@ -14,6 +14,11 @@ from packages.kernel.workspace_control_provider import (
     WorkspaceControlProvider,
     workspace_control_capabilities,
 )
+from packages.kernel.workspace_google_provider import (
+    PROVIDER_ID as WORKSPACE_GOOGLE_PROVIDER_ID,
+    WorkspaceGoogleProvider,
+    workspace_google_capabilities,
+)
 from packages.kernel.workspace_os_provider import (
     PROVIDER_ID as WORKSPACE_OS_PROVIDER_ID,
     WorkspaceOSProvider,
@@ -199,6 +204,7 @@ def build_kernel_runtime() -> OperlyKernelRuntime:
             *builtin_capabilities(),
             *workspace_control_capabilities(),
             *workspace_business_capabilities(),
+            *workspace_google_capabilities(),
             *workspace_record_capabilities(),
         )
     )
@@ -206,5 +212,6 @@ def build_kernel_runtime() -> OperlyKernelRuntime:
     providers.register("operly.native", NativeOperlyProvider())
     providers.register(WORKSPACE_CONTROL_PROVIDER_ID, WorkspaceControlProvider())
     providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, WorkspaceBusinessProvider())
+    providers.register(WORKSPACE_GOOGLE_PROVIDER_ID, WorkspaceGoogleProvider())
     providers.register(WORKSPACE_OS_PROVIDER_ID, WorkspaceOSProvider())
     return OperlyKernelRuntime(registry=registry, providers=providers)
