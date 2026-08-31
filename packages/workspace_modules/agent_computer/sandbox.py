@@ -17,17 +17,16 @@ class ComputerRunnerClient:
     computer operations cross this explicit runner boundary. A production runner
     is expected to isolate every session in its own container/microVM and enforce
     the requested network/resource policy.
+
+    Agent Computer intentionally has its own endpoint/token instead of silently
+    reusing the generated-software runner. A backend may implement both protocols,
+    but that is an explicit deployment decision rather than an environment-variable
+    fallback between unrelated protocols.
     """
 
     def __init__(self) -> None:
-        self.base_url = (
-            os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_URL", "").strip().rstrip("/")
-            or os.getenv("OPERLY_SANDBOX_RUNNER_URL", "").strip().rstrip("/")
-        )
-        self.token = (
-            os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_TOKEN", "").strip()
-            or os.getenv("OPERLY_SANDBOX_RUNNER_TOKEN", "").strip()
-        )
+        self.base_url = os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_URL", "").strip().rstrip("/")
+        self.token = os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_TOKEN", "").strip()
         self.timeout_seconds = max(
             5.0,
             min(float(os.getenv("OPERLY_AGENT_COMPUTER_TIMEOUT_SECONDS", "120")), 900.0),
@@ -54,7 +53,8 @@ class ComputerRunnerClient:
     ) -> dict[str, Any]:
         if not self.configured:
             raise ComputerRunnerError(
-                "Agent Computer runner is not configured. Set OPERLY_AGENT_COMPUTER_RUNNER_URL and OPERLY_AGENT_COMPUTER_RUNNER_TOKEN."
+                "Agent Computer runner is not configured. Set "
+                "OPERLY_AGENT_COMPUTER_RUNNER_URL and OPERLY_AGENT_COMPUTER_RUNNER_TOKEN."
             )
         timeout = max(1.0, min(timeout_seconds or self.timeout_seconds, 900.0))
         try:
