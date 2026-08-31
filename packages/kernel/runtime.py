@@ -15,6 +15,7 @@ from packages.kernel.approvals import (
 from packages.kernel.audit import RuntimeAuditBuffer, persist_audit
 from packages.kernel.contracts import (
     AuthorizationDecision,
+    CapabilityRisk,
     CapabilitySpec,
     RuntimePlan,
     RuntimeRequest,
@@ -25,6 +26,7 @@ from packages.kernel.idempotency import (
     IdempotencyConflict,
     IdempotencyInProgress,
     complete_request,
+    find_completed_request,
     reserve_request,
 )
 from packages.kernel.policy import CapabilityPolicyEngine
@@ -133,16 +135,6 @@ class OperlyKernelRuntime:
         planned_arguments: dict[str, Any] | None = None
         used_approval = None
         try:
-            reservation = await reserve_request(
-                db,
-                context=context,
-                request=request,
-                run_id=audit.run_id,
-            )
-            if reservation.replay is not None:
-                return reservation.replay
-            idempotency_claim = reservation.claim
-
             goal = str(request.goal or "").strip()
             if not goal and not request.capability_id:
                 raise ValueError("A goal or capability_id is required")
@@ -205,9 +197,32 @@ class OperlyKernelRuntime:
                 {"capability_id": plan.capability_id, "planner": "deterministic"},
             )
 
+            # Policy is always evaluated from the freshly resolved ExecutionContext
+            # before an idempotent response can be replayed. A cached result therefore
+            # cannot outlive revoked workspace membership, role permissions, or surface
+            # visibility. Approval is not required merely to replay an action that has
+            # already committed because replay performs no new side effect.
             authorization = self.policy.evaluate(context, capability)
             decision = authorization.decision
             authorization_reason = authorization.reason
+            if decision is AuthorizationDecision.DENY:
+                audit.step(
+                    8,
+                    RuntimeStage.AUTHORIZE.value,
+                    decision.value,
+                    {"reason": authorization_reason},
+                )
+                raise PermissionError(authorization_reason)
+
+            if capability.risk is not CapabilityRisk.READ_ONLY:
+                replay = await find_completed_request(
+                    db,
+                    context=context,
+                    request=request,
+                )
+                if replay is not None:
+                    return replay
+
             if decision is AuthorizationDecision.ASK and request.approval_id:
                 used_approval = await validate_approved_invocation(
                     db,
@@ -236,6 +251,20 @@ class OperlyKernelRuntime:
                 )
             if decision is not AuthorizationDecision.ALLOW:
                 raise PermissionError(authorization_reason)
+
+            # Claim only an already-authorized mutating request, immediately before
+            # provider execution. This keeps retried writes single-execution without
+            # allowing the idempotency layer to become an authorization shortcut.
+            if capability.risk is not CapabilityRisk.READ_ONLY:
+                reservation = await reserve_request(
+                    db,
+                    context=context,
+                    request=request,
+                    run_id=audit.run_id,
+                )
+                if reservation.replay is not None:
+                    return reservation.replay
+                idempotency_claim = reservation.claim
 
             provider = self.providers.get(capability.provider_id)
             execution_result = await provider.execute(
@@ -394,7 +423,8 @@ class OperlyKernelRuntime:
             ) from error
         except PermissionError as error:
             await db.rollback()
-            audit.step(13, RuntimeStage.RESPOND.value, "denied", {"code": "forbidden"})
+            if not audit.steps or audit.steps[-1]["name"] != RuntimeStage.RESPOND.value:
+                audit.step(13, RuntimeStage.RESPOND.value, "denied", {"code": "forbidden"})
             await self._persist_failure(
                 db,
                 audit=audit,
