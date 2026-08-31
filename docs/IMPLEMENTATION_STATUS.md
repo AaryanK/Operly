@@ -6,7 +6,7 @@ Updated for **Kernel v3** after the intentional legacy-runtime demolition.
 
 The live mainline before this branch contains the hardened account shell and deterministic workspace business OS. AI/model/agent/MCP/Studio runtime routers are intentionally offline. Earlier architecture documents that describe the deleted runtime as already implemented are historical and must not be treated as current runtime truth.
 
-This branch builds the deterministic Operly infrastructure first. AI is intentionally treated as a later interface/planner over that infrastructure, not as the runtime foundation.
+This branch builds the deterministic Operly infrastructure first. AI is intentionally a later interface/planner over that infrastructure, not the runtime foundation.
 
 ## Implemented in Kernel v3
 
@@ -14,21 +14,24 @@ This branch builds the deterministic Operly infrastructure first. AI is intentio
 - Existing Personal, full Workspace, and Guest Workspace authority semantics are reused rather than reimplemented.
 - One namespaced `CapabilityRegistry` with input/output contracts, permissions, scopes, risk, approval policy, resource scope, version, provider, events, tags, and aliases.
 - Separate capability discovery/visibility and effective execution authority.
-- One `ProviderRegistry`; orchestration resolves provider by capability metadata rather than vendor-specific branches.
+- One `ProviderRegistry`; orchestration resolves providers by capability metadata rather than vendor-specific branches.
 - One deterministic `CapabilityPolicyEngine` with `ALLOW / ASK / DENY` decisions.
 - Deterministic contract validation on both capability input and provider output.
-- A single 13-stage `OperlyKernelRuntime` matching the new architecture diagram.
+- A single 13-stage `OperlyKernelRuntime` matching the architecture diagram.
 - Minimum-context loading: role/surface/scope plus workspace identity/timezone only; resource data is fetched by the selected provider.
-- Transactional execution: validated writes + trace + events commit together; invalid/failed writes roll back and a failure trace is persisted separately.
+- Transactional execution: validated writes + trace + events commit together; invalid/failed writes roll back and failure provenance is persisted separately.
 - Durable `kernel_runs`, `kernel_run_steps`, and `kernel_events` persistence via migration `0047_operly_kernel_v3`.
 - Initial native capabilities for runtime status, workspace description, workspace modules, and personal task operations.
-- The mature deterministic Workspace OS record registry is now projected into Kernel capabilities automatically through `WorkspaceOSProvider`.
-- CRM, catalog, inventory, sales, finance, procurement, fulfillment, projects, operations, support, scheduling, tasks, team, documents, marketing, compliance, research, grants, and integration records receive standardized list/create/update/delete capability contracts from their existing record metadata instead of bespoke agent tools.
-- Generated Workspace OS capability schemas reuse the actual SQLAlchemy field types, required fields, select options, module permissions, and mutability rules already present in the business OS.
-- Workspace OS writes execute below the HTTP route layer so Kernel v3 still owns transaction commit/rollback, result validation, trace, and emitted events.
-- Destructive generated record capabilities are marked `MEDIUM` risk and `approval_required=True`; they remain blocked until deterministic approval fulfillment is implemented.
-- Resource-boundary enforcement remains inside the Workspace OS record helpers/queries in addition to capability permission checks.
-- Authenticated web endpoints exist for workspace and Personal capability discovery/execution plus scope-filtered traces and workspace event audit.
+- The mature deterministic Workspace OS record registry is projected into Kernel capabilities automatically through `WorkspaceOSProvider`.
+- CRM, catalog, inventory, sales, finance, procurement, fulfillment, projects, operations, support, scheduling, tasks, team, documents, marketing, compliance, research, grants, and integration records receive standardized list/create/update/delete capability contracts from existing business metadata instead of bespoke agent tools.
+- Generated Workspace OS capability schemas reuse actual SQLAlchemy field types, required fields, select options, module permissions, and mutability rules already present in the business OS.
+- Workspace OS writes execute below the HTTP route layer so Kernel v3 still owns commit/rollback, result validation, trace, and emitted events.
+- Destructive generated record capabilities are `MEDIUM` risk and `approval_required=True`.
+- Scoped request idempotency is persisted in `kernel_request_claims` via migration `0048_kernel_request_idempotency`; a repeated successful `request_id` replays its prior normalized response instead of repeating the business side effect, while reuse with a different deterministic request conflicts.
+- Durable exact-invocation approvals are persisted in `kernel_approvals` via migration `0049_kernel_approvals`.
+- An approval binds the scope, initiating principal, capability ID, and canonical argument hash. Approved execution rechecks current authority and the exact capability/arguments before running, then consumes the approval in the same transaction as execution.
+- Workspace approval decisions require `actions:approve`; Personal approvals remain account-owner scoped. Approval decisions emit provenance events.
+- Authenticated APIs expose workspace/Personal capability execution, approval listing/decision, run traces, and workspace event audit.
 - API health/rebuild status distinguishes `kernel_runtime_enabled=true` from `ai_runtime_enabled=false`.
 
 ## Deliberately still offline
@@ -37,20 +40,18 @@ This branch builds the deterministic Operly infrastructure first. AI is intentio
 - Legacy business-agent router and its removed dependencies.
 - MCP runtime.
 - Studio/generated-application execution runtime.
-- Discord/Slack/WhatsApp live agent loops until they are rewired as ingress adapters over the completed deterministic substrate.
+- Discord/Slack/WhatsApp live agent loops until they are rewired as ingress adapters over the deterministic substrate.
 - Durable workflow consumers/conditions on top of `kernel_events`.
-- Approval fulfillment UI/runtime for capabilities returning `ASK`.
 
 These are not separate architectures. Each must become an ingress adapter, provider, planner, event consumer, or client of Kernel v3.
 
 ## Infrastructure-first implementation order
 
-1. Finish the deterministic Workspace OS capability substrate: add remaining non-record operations (module management, inventory adjustments, membership/role administration, workspace settings, connector lifecycle) without creating parallel tool implementations.
-2. Add durable approval persistence, decision, immutable argument binding, and resume-after-approval for `ASK` decisions; wire Activity Center to this same state machine.
-3. Add request idempotency/deduplication before allowing retried automated writes.
-4. Add durable event subscriptions and workflow execution over `kernel_events`, with idempotent trigger delivery and deterministic authorization at every action.
-5. Standardize provider/plugin lifecycle, capability health/availability, connector-account scope resolution, and resource binding so external systems plug into the same registry.
-6. Route Discord, Slack, WhatsApp, MCP, web/mobile/API/SDK, and generated applications through the same ingress + capability boundary.
-7. **Only after those infrastructure layers are stable**, rebuild model/provider selection and add AI as a planner/interface over stages 1/2/7. AI must not own authority, resource access, execution, validation, or event provenance.
+1. Finish deterministic non-record Workspace OS capabilities: module/preset management, workspace settings, inventory adjustments, membership/role administration, and connector lifecycle.
+2. Add durable event subscriptions/workflow execution over `kernel_events`, with idempotent delivery and fresh authorization for every action.
+3. Standardize provider/plugin lifecycle, capability health/availability, connector-account scope resolution, and resource/service binding.
+4. Route Discord, Slack, WhatsApp, MCP, web/mobile/API/SDK, and generated applications through the same ingress + capability boundary.
+5. Add operational hardening: retention/cleanup for idempotency state, approval expiry/cancellation, workflow retry/dead-letter behavior, rate/usage quotas, and infrastructure observability.
+6. **Only after those infrastructure layers are stable**, rebuild model/provider selection and add AI as a planner/interface over stages 1/2/7. AI must not own authority, resource access, execution, validation, approvals, idempotency, or event provenance.
 
 See `docs/OPERLY_KERNEL_V3.md` for the normative rebuild mapping.
