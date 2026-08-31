@@ -1,104 +1,136 @@
-# Universal Studio Runtime implementation status
+# Operly rebuild implementation status
 
-This branch implements `docs/TARGET_ARCHITECTURE.md` in dependency order while deliberately keeping the authorization redesign as a separate follow-up.
+Updated for **Kernel v3** after the intentional legacy-runtime demolition.
 
-## Implemented in this branch
+## Current production direction
 
-### Model runtime
+The live mainline before this branch contains the hardened account shell and deterministic workspace business OS. AI/model/agent/MCP/Studio runtime routers are intentionally offline. Earlier architecture documents that describe the deleted runtime as already implemented are historical and must not be treated as current runtime truth.
 
-- Provider-neutral `Model.infer()` contract with `InferenceRequest`, `InferenceResult`, budgets, capabilities, tags and traits.
-- `ModelRegistry`, `ModelSelector`, configured `Model` objects and `ModelPool`.
-- Cross-provider model candidates/failover and normalized model-attempt telemetry hooks.
-- Coding harness, Studio latency policy, business agent, capability placement and active software planning paths consume the shared model runtime instead of concrete provider clients.
-- Studio no longer contains `OpenRouterClient`/provider-specific fallback mutation.
-- Active live software planning now uses `ModelPlanningClient -> model_for_role(role) -> Model.infer()`; requirements analysis, planning and validation are no longer tied to Ollama transport.
-- `model.invoke` remains a normal capability for bounded specialist delegation.
+This branch builds the deterministic Operly infrastructure first. AI is intentionally a later interface/planner over that infrastructure, not the runtime foundation.
 
-### Capability / agent runtime
+The implementation rule is now explicit:
 
-- Universal capability metadata includes plugin ownership, schemas, risk, permissions, execution mode, tags and semantic operations.
-- Semantic `capability.search` and exact `capability.describe` are real read-only capabilities.
-- `SessionCapabilityView` gives each model session a small permanent discovery kernel and progressively exposes exact schemas after description.
-- Discovery and authorization are separate states; search/describe can report a capability without granting execution authority.
-- Progressive exposure is live in `PluginAgentHarness`, with discovery state preserved across connector/registry refreshes while current authority is rechecked each turn.
-- `CapabilityFirewall` is the canonical invocation seam backed by the current `ActionService` approval/verification lifecycle.
-- Generic `AgentRuntime` owns the provider-neutral model -> capability -> observation loop. The business agent now uses it directly.
+> If an important action should eventually be available to an AI agent, first make it a deterministic Operly capability that a human, API client, workflow, or other interface can execute without AI.
 
-### Plugin runtime
+## Implemented in Kernel v3
 
-- Canonical `PluginManifest`, permission specs, lifecycle specs and `PluginRuntime` contribution registry.
-- First-party capability providers are bootstrapped through `PluginRuntime` rather than a separate agent-only registry path.
-- Runtime plugins and model provider/discoverer registrars can be contributed through plugin registration.
-- FastAPI lifespan starts/stops the plugin runtime.
-- Discord lifecycle is registered as a plugin lifecycle contribution rather than a vendor-specific application startup branch.
+### Governed execution substrate
 
-### Studio / software projects
+- One `TrustedIngress -> ExecutionContext` path that accepts identity/source facts but never request-provided roles or permissions.
+- Existing Personal, full Workspace, and Guest Workspace authority semantics are reused rather than reimplemented.
+- One namespaced `CapabilityRegistry` with input/output contracts, permissions, scopes, risk, approval policy, resource scope, version, provider, events, tags, and aliases.
+- Separate capability discovery/visibility and effective execution authority.
+- One `ProviderRegistry`; orchestration resolves providers by capability metadata rather than vendor-specific branches.
+- One deterministic `CapabilityPolicyEngine` with `ALLOW / ASK / DENY` decisions.
+- Deterministic contract validation on both capability input and provider output.
+- A single 13-stage `OperlyKernelRuntime` matching the architecture diagram.
+- Minimum-context loading: role/surface/scope plus workspace identity/timezone only; resource data is fetched by the selected provider.
+- Transactional execution: validated database writes + trace + events commit together; invalid/failed writes roll back and failure provenance is persisted separately.
+- Durable `kernel_runs`, `kernel_run_steps`, and `kernel_events` persistence via migration `0047_operly_kernel_v3`.
+- Scoped request idempotency in `kernel_request_claims` via migration `0048_kernel_request_idempotency`; a repeated successful `request_id` replays its prior normalized response instead of repeating the business side effect, while conflicting reuse is rejected. Current authority is recomputed before replay.
+- Durable exact-invocation approvals in `kernel_approvals` via migration `0049_kernel_approvals`.
+- An approval binds the scope, initiating principal, capability ID, and canonical argument hash. Approved execution rechecks current authority and the exact invocation before running, then consumes the approval with successful execution.
+- Workspace approval decisions require `actions:approve`; Personal approvals remain account-owner scoped. Approval decisions emit provenance events.
 
-- Canonical persisted `software_projects` and `service_bindings` tables plus migration `0030_universal_software_projects`.
-- `SoftwareProject` contracts and `SoftwareProjectService` create canonical-only projects and synchronize stable compatibility identities for Studio, ManagedApplication and GeneratedProject records.
-- Canonical project records track current source/runtime state from real Studio source versions and generated source bundles.
-- A dedicated `/api/software-projects` facade exists for canonical project and binding management while legacy APIs remain compatible.
-- AI-facing `StudioProvider` is source-first: `studio.generate_site` edits real source through `studio.source_agent` instead of generating a separate `SiteSchema` representation.
-- Studio version listing includes source-first and legacy versions; publishing uses the unified production service.
-- Canonical software project and binding operations are also normal discoverable capabilities (`software.project.*`, `software.binding.*`).
+### Deterministic tool fabric
 
-### Runtime / runner boundary
+The registry is intentionally layered so future agents can prefer business outcomes while lower-level deterministic primitives still exist.
 
-- `RuntimePlugin`, `RuntimePluginSpec` and `RuntimeRegistry` are real trusted execution contracts.
-- Existing `static-web-js` and `python-stdlib-web` profiles participate through runtime plugins.
-- Coding runtime detection/validation and build-submission construction use runtime plugins while preserving the existing isolated runner contract.
-- Generated code still never executes inside the Operly control plane.
+**Native/core capabilities**
 
-### Service bindings
+- runtime status;
+- workspace description and module visibility;
+- personal/workspace task list/create/status update.
 
-- Durable project-scoped `ServiceBindingRecord` persistence.
-- Semantic binding discovery through the workspace capability registry.
-- Binding configuration rejects raw credential/token/password/API-key fields; credential aliases/references may point to secrets owned elsewhere.
-- `CapabilityGateway` invokes a configured binding handle through the same `CapabilityFirewall` used by agents; generated code does not receive provider credentials.
-- Binding configuration may restrict allowed argument fields and supply non-secret defaults.
-- Creating a binding does not grant runtime authority and does not invoke the target capability.
+**Workspace record capabilities**
 
-### Tests / guardrails
+- The mature deterministic Workspace OS record registry is projected automatically through `WorkspaceOSProvider`.
+- CRM, catalog, inventory, sales, finance, procurement, fulfillment, projects, operations, support, scheduling, tasks, team, documents, marketing, compliance, research, grants, and integration records receive standardized list/create/update/delete contracts from existing business metadata instead of bespoke agent tools.
+- Generated schemas reuse real SQLAlchemy types, required fields, select options, module permissions, references, mutability rules, and existing business mutation hooks.
+- Destructive record capabilities are approval-gated.
 
-- Architecture invariant tests cover model failover, tag-based selection, discovery-vs-authority, progressive exposure, firewall decisions, plugin ownership, runtime registration, source-first Studio, software-project persistence and service-binding secrecy.
-- A planning-boundary test verifies the structured planner uses `Model.infer()` and that live `plan_service.py` contains no concrete provider transport dependency.
-- The coding-harness smoke workflow includes architecture branches and the new architecture/persistence/planning tests.
+**Workspace control capabilities**
 
-## Compatibility bridges intentionally still present
+`WorkspaceControlProvider` adds deterministic operations that do not fit generic CRUD:
 
-These are allowed during migration but must not receive new architectural authority:
+- workspace operating summary and activity feed;
+- workspace settings updates;
+- module enable/disable with dependency protection;
+- workspace preset listing/application;
+- member listing/addition/role changes/removal with last-owner invariants;
+- role/permission listing and updates;
+- invitation listing/creation/revocation;
+- inventory movement history and stock adjustments.
 
-- `packages/custom_software/live_planning.py` still contains the old `OllamaPlanningClient` implementation for legacy imports/tests; the active `plan_service` path no longer uses it.
-- `ModelRoute`, concrete OpenRouter/Ollama adapters and compatibility chat adapters remain inside/below `model_runtime` for existing callers.
-- The coding agent still exposes the historical short tool vocabulary (`read`, `write`, `edit`, `finish`, etc.) through `CodingToolRegistry`. Its workspace/sandbox semantics are valuable, but this remains the main second-registry compatibility bridge to migrate into universal session capabilities.
-- `SolutionService` and the Studio web UI still normalize/branch across Studio, managed-app and generated-project runtime generations while callers migrate to canonical `SoftwareProject` IDs.
-- Legacy `SiteSchema`, ApplicationBuilder orchestration and `packages/harness` remain available for parity/rollback but are no longer the desired source of new architecture.
+Access-changing operations are approval-gated and continue to enforce owner/role invariants inside the provider rather than trusting a caller.
 
-## Deliberately deferred / externally blocked
+**Agent-grade business outcomes**
 
-### Authorization redesign
+`WorkspaceBusinessProvider` adds higher-level deterministic tools so a future planner does not have to orchestrate fragile row-by-row mutations itself:
 
-Authorization/approval UX and principal/delegation semantics are intentionally unchanged beyond the stable `CapabilityFirewall` seam. The planned Discord-style authorization design must be specified in the next pass before broadening generated-runtime authority or high-risk service bindings.
+- `workspace.search` — permission/module-aware search across customers, organizations, opportunities, products, invoices, projects, tasks, appointments, suppliers, and research projects;
+- `workspace.attention.list` — deterministic overdue invoice, low-stock, due-task, appointment, follow-up, and urgent-support signals;
+- `workspace.customer.snapshot` — customer context with opportunities, orders, invoices, interactions, lifetime sales, and outstanding balance;
+- `workspace.sales.complete` — one governed transaction for order + lines + inventory movements + payment or invoice;
+- `workspace.finance.invoice.create_simple` — atomic invoice + line creation;
+- `workspace.finance.payment.record` — payment recording plus deterministic invoice-status synchronization.
 
-### Additional full-stack runtimes
+The financial/sales outcome tools are approval-gated and executed through Kernel transaction, idempotency, validation, trace, and event semantics.
 
-The control plane is ready for installable runtime plugins, but this repository does not contain the production external runner implementation that advertises `/v1/capabilities`. New Node/React/Next/FastAPI/worker profiles must be implemented and advertised by that isolated runner as well as registered here. This branch must not claim a runtime the runner cannot execute.
+**Kernel-native Google workspace tools**
 
-### Generated-runtime HTTP gateway
+A new `WorkspaceGoogleProvider` avoids reviving the demolished legacy capability runtime. It resolves the existing workspace OAuth record and granted scopes directly, never provider credentials or scopes supplied by the caller.
 
-The `CapabilityGateway` service contract exists, but a production HTTP/runtime identity transport is intentionally not exposed yet. Doing that safely depends on the next authorization/principal design so generated applications cannot mint broader authority than their project binding grants.
+Available contracts include:
 
-## Next implementation slices
+- Google connection status/scopes/health (credential-free metadata only);
+- Gmail search and message read;
+- Gmail draft creation;
+- Gmail send after exact-invocation approval;
+- Gmail label modification after approval;
+- Calendar list-calendars, list-events, and free/busy;
+- Calendar create/update/delete after approval.
 
-1. Design and implement the requested authorization/principal model behind `CapabilityFirewall`, including channel/runtime identities and approval behavior.
-2. Migrate coding workspace/preview/runner tools from `CodingToolRegistry` into universal session-scoped capability providers while retaining current model tool aliases during compatibility.
-3. Move Studio/solution UI and API orchestration from runtime-generation branching to canonical `SoftwareProject` as the primary project identity.
-4. Pair the first dependency-bearing `RuntimePlugin` with real support in the production isolated runner, then add it end-to-end.
-5. Add the generated-runtime gateway transport only after the authorization pass defines project/runtime principals and binding grants.
-6. Retire the legacy planning client, SiteSchema-primary paths, ApplicationBuilder authority, `ModelRoute` compatibility and `packages/harness` only after parity tests pass.
+The connector provider uses bounded network timeouts/retries for reads and avoids automatic retry of externally mutating requests inside the provider. Kernel request idempotency still protects ordinary retries, but distributed exactly-once guarantees for external providers remain a separate infrastructure hardening item because a process can fail after a provider accepts an external mutation but before local commit.
 
-## Current architectural checkpoint
+### Workspace interface
 
-A business can now have models, connectors and business operations registered as plugins; an agent starts with a bounded tool set and discovers additional capabilities semantically; model selection/failover can cross providers; Studio edits real source; canonical software projects persist independently of legacy runtime generation; and projects can persist semantic bindings to real workspace capabilities without storing provider credentials.
+- The normal Workspace navigation now includes **Capabilities** under Extend.
+- `CapabilitiesPage` is a human/debug client of `/api/kernel/capabilities` and `/api/kernel/execute`.
+- It shows only the current principal's effective capabilities, with provider, permissions, risk, approval requirement, resource scope, reversibility, and input/output contracts.
+- Users can search/filter the capability surface, enter deterministic JSON arguments, execute a capability, inspect the validated result and Kernel trace, and fulfill an exact approval before resuming the same invocation.
+- The console generates a stable `request_id` for an invocation so UI retries participate in Kernel idempotency.
 
-The remaining work is no longer a provider/model refactor. It is primarily the authorization pass, coding-tool capability convergence, Studio UI/project convergence, and adding real runner-supported full-stack runtimes.
+This is deliberately the same surface future AI planners will discover. There is no separate AI-only tool registry.
+
+### APIs and runtime truth
+
+- Authenticated APIs expose workspace/Personal capability discovery and execution, approval listing/decision, run traces, and workspace event audit.
+- API health/rebuild status distinguishes `kernel_runtime_enabled=true` from `ai_runtime_enabled=false`.
+
+## Deliberately still offline
+
+- Model inference and model planning.
+- Legacy business-agent router and its removed dependencies.
+- MCP execution surface.
+- Studio/generated-application execution runtime.
+- Discord/Slack/WhatsApp live agent loops until they are rewired as ingress adapters over the deterministic substrate.
+- Durable workflow consumers/conditions on top of `kernel_events`.
+
+These are not separate architectures. Each must become an ingress adapter, provider, planner, event consumer, or client of Kernel v3.
+
+## Remaining deterministic tool families
+
+Before adding AI, continue converging these areas onto the same capability boundary:
+
+1. Files/artifacts and knowledge retrieval/creation with workspace ownership, size/type contracts, and deterministic parsing boundaries.
+2. Durable workflow definitions/subscriptions over `kernel_events`, including idempotent action delivery, fresh authorization, retries, dead letters, loop prevention, and execution budgets.
+3. Additional connector providers (Canva and later Slack/WhatsApp/other integrations) using the same scoped-provider pattern as Google.
+4. Website/Solutions/Studio/deployment operations as project-scoped capabilities rather than direct runtime shortcuts.
+5. Channel/member/message operations needed by normal workspace collaboration interfaces.
+6. Provider/plugin lifecycle, capability health/availability, connector-account scope resolution, secrets references, and resource/service bindings.
+7. Operational hardening: retention/cleanup for idempotency and approval state, approval expiry/cancellation, external-effect reconciliation, rate/usage quotas, and infrastructure observability.
+8. Route Discord, Slack, WhatsApp, MCP, web/mobile/API/SDK, and generated applications through the same ingress + capability boundary.
+9. **Only after these infrastructure layers are stable**, rebuild model/provider selection and add AI over the reasoning/planning stages. AI must not own authority, resource access, execution, validation, approvals, idempotency, transactions, or provenance.
+
+See `docs/OPERLY_KERNEL_V3.md` for the normative rebuild mapping.

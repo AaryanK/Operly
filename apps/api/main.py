@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
 from apps.api.csrf import CSRFMiddleware
+from apps.api.kernel_router import router as kernel_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
@@ -44,7 +45,7 @@ PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower(
 
 
 async def bootstrap_admin() -> None:
-    """Keep deterministic account bootstrap without starting the AI runtime."""
+    """Keep deterministic account bootstrap without starting the model runtime."""
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
@@ -125,11 +126,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPERLY API",
-    version="0.4.0-human-workspace",
+    version="0.5.0-kernel-v3",
     lifespan=lifespan,
 )
 
-# Keep the hardened account boundary while the AI/model/agent runtime remains offline.
+# Keep the hardened account boundary. The deterministic Operly Kernel is online;
+# model/agent generation remains offline until it can plug into this same boundary.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -161,12 +163,13 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-# Deterministic product surface only: accounts + workspace business OS.
-# workspace_simple_router is only an intent/workflow facade over those same records.
-# Agent/model/tool/MCP/studio/FLOW routers intentionally remain offline.
+# Deterministic product surface: accounts + workspace business OS + one governed
+# identity/scope/capability/policy/execution kernel. Legacy agent/model/MCP/studio/FLOW
+# routers remain offline and may only return through the kernel when rebuilt.
 app.include_router(session_router)
 app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
+app.include_router(kernel_router)
 
 
 @app.get("/api/health")
@@ -174,10 +177,11 @@ async def health():
     return {
         "ok": True,
         "service": "operly",
-        "runtime": "human-workspace-os",
+        "runtime": "operly-kernel-v3",
         "account_access": True,
         "workspace_os_enabled": True,
         "human_workflows_enabled": True,
+        "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
     }
 
@@ -185,13 +189,18 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "human-workspace-os",
+        "state": "operly-kernel-v3",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
         "human_workflows_enabled": True,
+        "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
-        "message": "Operly exposes a simple human operating layer over the deterministic workspace business OS; the AI runtime remains offline.",
+        "message": (
+            "Operly now routes governed capabilities through Kernel v3: resolve trusted "
+            "identity/scope, filter effective capabilities, load minimum context, authorize, "
+            "execute, validate, trace and emit events. The model planner remains offline."
+        ),
     }
 
 
