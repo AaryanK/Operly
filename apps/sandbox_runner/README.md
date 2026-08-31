@@ -23,10 +23,11 @@ Studio-deploy or other Workspace authority.
 
 Network policies:
 
-- `off`: Railway Sandbox isolation plus a uid-level outbound egress guard.
+- `off`: Railway Sandbox isolation plus uid-level IPv4/IPv6 outbound egress guards.
 - `web`: public-web sandbox networking only. The sandbox is not joined to the project
-  private network; explicit web/browser helpers additionally reject private,
-  loopback, link-local and metadata targets.
+  private network; link-local/metadata destinations are blocked at the untrusted uid
+  layer, and explicit web/browser helpers additionally reject private, loopback,
+  link-local and metadata targets.
 
 ## Native Computer tools
 
