@@ -24,10 +24,10 @@ from packages.workflow.provider import (
 class WorkflowProvider(BaseWorkflowProvider):
     """Scope delegated Workflow authority to the principal's own definitions/runs.
 
-    Workspace owners are the administrative root. A future agent/custom role may be
-    explicitly granted workflow permissions, but that grant cannot be used to mutate,
-    execute, or inspect another principal's workflow and thereby borrow stronger
-    Workspace/connector authority or private trace data.
+    Workspace owners are administrative root. A future agent/custom role may be
+    explicitly granted workflow permissions, but that grant cannot inspect or execute
+    another principal's workflow and thereby borrow stronger Workspace/connector
+    authority or private attempt data.
     """
 
     async def _owned_workflow(
@@ -57,7 +57,7 @@ class WorkflowProvider(BaseWorkflowProvider):
             select(WorkflowRun).where(
                 WorkflowRun.id == run_id,
                 WorkflowRun.workspace_id == context.workspace_id,
-                WorkflowRun.owner_user_id == context.user_id,
+                WorkflowRun.authority_user_id == context.user_id,
             )
         )
         if row is None:
@@ -78,18 +78,24 @@ class WorkflowProvider(BaseWorkflowProvider):
         if not bool(arguments.get("include_archived")):
             statement = statement.where(WorkflowDefinition.status != "archived")
         rows = (
-            await db.scalars(statement.order_by(WorkflowDefinition.updated_at.desc()).limit(limit))
+            await db.scalars(
+                statement.order_by(WorkflowDefinition.updated_at.desc()).limit(limit)
+            )
         ).all()
-        schedules = {
-            row.workflow_id: row
-            for row in (
-                await db.scalars(
-                    select(WorkflowSchedule).where(
-                        WorkflowSchedule.workflow_id.in_([item.id for item in rows])
+        schedules = (
+            {
+                row.workflow_id: row
+                for row in (
+                    await db.scalars(
+                        select(WorkflowSchedule).where(
+                            WorkflowSchedule.workflow_id.in_([item.id for item in rows])
+                        )
                     )
-                )
-            ).all()
-        } if rows else {}
+                ).all()
+            }
+            if rows
+            else {}
+        )
         return CapabilityExecutionResult(
             value={"workflows": [_workflow_json(row, schedules.get(row.id)) for row in rows]}
         )
@@ -103,10 +109,13 @@ class WorkflowProvider(BaseWorkflowProvider):
         limit = max(1, min(int(arguments.get("limit") or 100), 200))
         statement = select(WorkflowRun).where(
             WorkflowRun.workspace_id == context.workspace_id,
-            WorkflowRun.owner_user_id == context.user_id,
+            WorkflowRun.authority_user_id == context.user_id,
         )
         if arguments.get("workflow_id"):
-            statement = statement.where(WorkflowRun.workflow_id == str(arguments["workflow_id"]))
+            workflow = await self._owned_workflow(
+                db, context, str(arguments["workflow_id"])
+            )
+            statement = statement.where(WorkflowRun.workflow_id == workflow.id)
         if arguments.get("status"):
             statement = statement.where(WorkflowRun.status == str(arguments["status"]))
         rows = (
@@ -125,20 +134,32 @@ class WorkflowProvider(BaseWorkflowProvider):
             WorkflowDefinition.workspace_id == context.workspace_id,
             WorkflowDefinition.owner_user_id == context.user_id,
         )
+        owned_run_ids = select(WorkflowRun.id).where(
+            WorkflowRun.workspace_id == context.workspace_id,
+            WorkflowRun.authority_user_id == context.user_id,
+        )
         statement = select(WorkflowTraceEvent).where(
             WorkflowTraceEvent.workspace_id == context.workspace_id,
             WorkflowTraceEvent.workflow_id.in_(owned_ids),
         )
+        # Run-scoped events can expose exact execution correlation. A delegated reader
+        # only receives those for runs that actually executed under that same user.
+        statement = statement.where(
+            (WorkflowTraceEvent.workflow_run_id.is_(None))
+            | (WorkflowTraceEvent.workflow_run_id.in_(owned_run_ids))
+        )
         if arguments.get("workflow_id"):
-            statement = statement.where(
-                WorkflowTraceEvent.workflow_id == str(arguments["workflow_id"])
+            workflow = await self._owned_workflow(
+                db, context, str(arguments["workflow_id"])
             )
+            statement = statement.where(WorkflowTraceEvent.workflow_id == workflow.id)
         if arguments.get("run_id"):
-            statement = statement.where(
-                WorkflowTraceEvent.workflow_run_id == str(arguments["run_id"])
-            )
+            run = await self._owned_run(db, context, str(arguments["run_id"]))
+            statement = statement.where(WorkflowTraceEvent.workflow_run_id == run.id)
         rows = (
-            await db.scalars(statement.order_by(WorkflowTraceEvent.created_at.desc()).limit(limit))
+            await db.scalars(
+                statement.order_by(WorkflowTraceEvent.created_at.desc()).limit(limit)
+            )
         ).all()
         return CapabilityExecutionResult(
             value={
@@ -149,6 +170,7 @@ class WorkflowProvider(BaseWorkflowProvider):
                         "workflow_id": row.workflow_id,
                         "workflow_run_id": row.workflow_run_id,
                         "step_run_id": row.step_run_id,
+                        "step_attempt_id": row.step_attempt_id,
                         "capability_id": row.capability_id,
                         "kernel_run_id": row.kernel_run_id,
                         "approval_id": row.approval_id,
@@ -191,6 +213,8 @@ class WorkflowProvider(BaseWorkflowProvider):
 
         workflow_scoped = {
             "workflow.get",
+            "workflow.version.list",
+            "workflow.version.get",
             "workflow.update",
             "workflow.enable",
             "workflow.disable",
@@ -203,10 +227,15 @@ class WorkflowProvider(BaseWorkflowProvider):
             "workflow.run.retry",
         }
         if capability.id in workflow_scoped:
-            await self._owned_workflow(db, context, str(arguments.get("workflow_id") or ""))
+            await self._owned_workflow(
+                db, context, str(arguments.get("workflow_id") or "")
+            )
         elif capability.id in run_scoped:
             await self._owned_run(db, context, str(arguments.get("run_id") or ""))
 
+        # workflow.create, schedule.preview and runtime.status do not target another
+        # principal's existing resource; their normal capability permission remains
+        # the complete authorization boundary for delegated roles.
         return await super().execute(
             db,
             context=context,
