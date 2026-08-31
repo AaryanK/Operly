@@ -6,8 +6,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Reference coding/research workbench. Production uses the same Agent Computer
+# protocol behind per-session container/microVM isolation rather than sharing
+# this process namespace.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash git curl ca-certificates procps \
+    && apt-get install -y --no-install-recommends \
+       bash \
+       build-essential \
+       ca-certificates \
+       curl \
+       file \
+       git \
+       jq \
+       nodejs \
+       npm \
+       procps \
+       ripgrep \
+       unzip \
+       wget \
+       zip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY apps/computer_runner/requirements.txt /tmp/computer-requirements.txt
