@@ -22,6 +22,7 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.workspace_modules.tools.router import router as workspace_tools_router
 
 load_dotenv(override=False)
 
@@ -126,12 +127,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPERLY API",
-    version="0.5.0-kernel-v3",
+    version="0.5.1-workspace-tools",
     lifespan=lifespan,
 )
 
-# Keep the hardened account boundary. The deterministic Operly Kernel is online;
-# model/agent generation remains offline until it can plug into this same boundary.
+# Keep the hardened account boundary. Workspace tools are owned by the Workspace OS
+# package and exposed through /api/workspace-tools; the generic Kernel remains only
+# the execution/policy substrate shared by Personal and future interfaces.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -163,12 +165,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-# Deterministic product surface: accounts + workspace business OS + one governed
-# identity/scope/capability/policy/execution kernel. Legacy agent/model/MCP/studio/FLOW
-# routers remain offline and may only return through the kernel when rebuilt.
 app.include_router(session_router)
 app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
+app.include_router(workspace_tools_router)
 app.include_router(kernel_router)
 
 
@@ -180,6 +180,7 @@ async def health():
         "runtime": "operly-kernel-v3",
         "account_access": True,
         "workspace_os_enabled": True,
+        "workspace_tools_enabled": True,
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
@@ -189,17 +190,18 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "operly-kernel-v3",
+        "state": "workspace-tools-over-kernel-v3",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
+        "workspace_tools_enabled": True,
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Operly now routes governed capabilities through Kernel v3: resolve trusted "
-            "identity/scope, filter effective capabilities, load minimum context, authorize, "
-            "execute, validate, trace and emit events. The model planner remains offline."
+            "Workspace OS owns deterministic tools and exposes them E2E through "
+            "/api/workspace-tools. The Kernel supplies shared policy, authorization, "
+            "execution, validation, idempotency, tracing and events. AI remains offline."
         ),
     }
 

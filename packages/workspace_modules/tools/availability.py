@@ -4,9 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.workspace_os_router import ENTITY_REGISTRY, _module_enabled
 from packages.kernel.contracts import CapabilitySpec
-from packages.kernel.workspace_business_provider import WorkspaceBusinessProvider
-from packages.kernel.workspace_control_provider import WorkspaceControlProvider
-from packages.kernel.workspace_google_provider import (
+from packages.security.execution_context import ExecutionContext
+from packages.workspace_modules.tools.business import WorkspaceBusinessProvider
+from packages.workspace_modules.tools.controls import WorkspaceControlProvider
+from packages.workspace_modules.tools.google import (
     CALENDAR,
     CALENDAR_FREEBUSY,
     CALENDAR_LIST_READONLY,
@@ -17,8 +18,7 @@ from packages.kernel.workspace_google_provider import (
     _google_connectors,
     _scopes,
 )
-from packages.kernel.workspace_os_provider import WorkspaceOSProvider
-from packages.security.execution_context import ExecutionContext
+from packages.workspace_modules.tools.records import WorkspaceOSProvider
 
 
 class AvailableWorkspaceOSProvider(WorkspaceOSProvider):

@@ -1,136 +1,107 @@
-# Operly Kernel v3
+# Operly governed execution substrate
 
-Status: **active rebuild architecture**
+Status: active deterministic infrastructure; AI planning remains offline.
 
-This document maps the current rebuild to the Operly architecture diagram built around one rule:
+The package historically named `packages/kernel` is the shared governed execution substrate. It is intentionally **not** the owner of Workspace business logic. Workspace tools are owned and composed by `packages/workspace_modules/tools`.
 
-> Resolve identity → resolve scope → resolve permissions → load minimum context → reason → authorize → execute → validate → trace → emit events → repeat.
+Core rule:
 
-The legacy AI/runtime stack was intentionally demolished before this implementation. Kernel v3 therefore does **not** restore provider-specific agent code. It establishes the deterministic control plane first, so future model planners, Discord/Slack/WhatsApp adapters, MCP, Studio, workflows, and generated applications all enter through the same authority and capability boundary.
+> Resolve identity → resolve scope → resolve permissions → resolve available tools → load minimum context → authorize → execute → validate → trace → emit events → respond.
 
-## 1. Ingress: any interface, one trusted context
+## 1. Shared substrate
 
-`packages/kernel/ingress.py` defines `TrustedIngress`. An ingress adapter may supply authenticated identity facts, source channel/space metadata, and the requested scope. It cannot supply a role or permissions.
+`packages/kernel` owns reusable cross-scope mechanics only:
 
-`resolve_ingress_context()` delegates to the existing security layer:
+- `ingress.py` — trusted ingress facts → `ExecutionContext`;
+- `contracts.py` — capability/request/result contracts;
+- `registry.py` — generic capability registry primitive;
+- `policy.py` — deterministic `ALLOW / ASK / DENY`;
+- `schema_validation.py` — deterministic input/output validation;
+- `providers.py` — generic provider registry and Personal/platform primitives;
+- `approvals.py` — exact invocation approval binding;
+- `idempotency.py` — scoped request claims/replay rules;
+- `runtime.py` — 13-stage governed execution;
+- `runtime_availability.py` — provider availability-aware discovery;
+- `audit.py` — trace/event persistence.
 
-- personal requests → `resolve_personal_execution_context()`;
-- full workspace requests → live workspace membership + role permissions;
-- provisional external spaces → existing Guest Workspace authority resolution;
-- source-platform permissions for Guest Workspaces remain trusted adapter metadata and are intersected with Operly's guest ceiling and admin policy.
+`packages/kernel/bootstrap.py` composes only generic/Personal primitives. It does not import `packages.workspace_modules`.
 
-The output is the canonical `ExecutionContext`. Everything after ingress consumes that context rather than request-provided authority.
+## 2. Workspace ownership
 
-## 2. Operly Universe: Personal and Workspace scopes
+All Workspace deterministic tool implementations live under `packages/workspace_modules/tools`:
 
-Kernel v3 preserves the existing explicit scope model:
+- `system.py` — Workspace identity and module visibility;
+- `records.py` — generated Workspace OS CRUD contracts/providers;
+- `controls.py` — Workspace settings/modules/presets/access/inventory controls;
+- `business.py` — higher-level deterministic business outcomes;
+- `google.py` — Workspace Google/Gmail/Calendar provider;
+- `availability.py` — Workspace-specific provider/module/OAuth preflight;
+- `runtime.py` — composes Workspace capabilities/providers over the shared substrate;
+- `router.py` — exposes the Workspace HTTP tool API.
 
-- **Personal**: account-owned private authority. Personal resources must be queried by `owner_user_id` and never by a selected workspace merely because the UI is focused there.
-- **Workspace**: workspace-owned authority. Full members resolve persisted role permissions. Guest Workspaces stay workspace-scoped but receive a narrower effective permission set.
+This direction is deliberate: the execution substrate must never become a second Workspace package.
 
-A future Personal AI may acquire a separate workspace context when the user asks it to act in a workspace. A personal context itself never silently becomes workspace authority.
+## 3. Scope and authority
 
-## 3. Capability Registry: the single source of truth
+`TrustedIngress` accepts authenticated identity/source facts but never caller-supplied roles or permissions. `resolve_ingress_context()` resolves Personal/full Workspace/Guest Workspace authority through the existing security layer.
 
-`packages/kernel/registry.py` owns the capability catalog. Every `CapabilitySpec` includes:
+A Workspace request therefore enters with a freshly resolved `ExecutionContext`. The tool registry then applies scope/surface/permission checks, and Workspace provider availability checks module state or connector authority before the tool is exposed.
 
-- stable namespaced ID and version;
-- provider identity;
-- input and output contracts;
-- supported scopes;
-- required permissions;
-- risk and approval policy;
-- resource scope;
-- reversibility;
-- aliases/tags for discovery;
-- emitted event types.
+Discovery is not authority. Execution rechecks its own invariants.
 
-Discovery and authority are different operations:
+## 4. Workspace E2E API
 
-- `visible()` answers what the current surface/scope may discover;
-- `effective()` answers what the current principal is presently allowed to use;
-- `search()` may find a visible capability without granting it.
+Workspace tools are not exposed through a generic Workspace Kernel route. The Workspace package owns:
 
-The web API exposes the effective registry through `/api/kernel/capabilities` and `/api/kernel/personal/capabilities`.
+- `GET /api/workspace-tools`;
+- `GET /api/workspace-tools/{capability_id}`;
+- `POST /api/workspace-tools/{capability_id}/execute`;
+- Workspace approval, event and run endpoints beneath `/api/workspace-tools`.
 
-## 4. Capability Providers
+Each discovered tool advertises its exact `method`, `endpoint`, and contract metadata. This allows the React UI, workflows, SDKs, MCP adapters, external channel adapters, and future AI planners to consume the same deterministic interface.
 
-`ProviderRegistry` maps provider IDs to execution implementations. The runtime only knows `CapabilitySpec.provider_id`; orchestration does not branch on vendor names.
+The generic `/api/kernel` router remains Personal-only.
 
-The first native provider proves the end-to-end contract with real deterministic Operly resources:
+## 5. Workspace frontend
 
-- `system.runtime.status`;
-- `workspace.describe`;
-- `workspace.modules.list`;
-- `tasks.list`;
-- `tasks.create`;
-- `tasks.update_status`.
+Workspace → Extend → **Capabilities** is a human/debug client of this API.
 
-Task providers enforce resource ownership again at the SQL query boundary, so a valid capability permission cannot be used to name a task from another workspace/personal scope.
+It discovers tools from `/api/workspace-tools` and invokes the exact endpoint returned by the backend. It does not call `/api/kernel/capabilities` or `/api/kernel/execute`.
 
-New CRM, ERP, connector, Studio, MCP, model, deployment, and external-tool providers should register capabilities without changing the kernel loop.
+The frontend path is therefore:
 
-## 5. Agent Runtime: the 13-stage loop
+**CapabilitiesPage → tool.endpoint → Workspace tool router → trusted context → availability → policy/approval/idempotency → Workspace provider → validation → trace/events → result.**
 
-`OperlyKernelRuntime.execute()` records and enforces these stages in order:
+This makes the human UI a real consumer of the same interface future agents will receive.
 
-1. Understand — normalize the inbound goal/request.
-2. Classify & deduce task — resolve the requested capability.
-3. Determine required scope — verify personal/workspace compatibility.
-4. Resolve authorized capabilities — recompute the effective registry from trusted permissions.
-5. Load minimum context — only role/surface/workspace identity needed for the invocation.
-6. Expose tools — expose the current effective capability set, not the global registry.
-7. Reason & plan — produce a capability plan and validate its arguments.
-8. Authorize — deterministic fail-closed policy; model/planner output cannot grant authority.
-9. Execute — invoke the registered provider.
-10. Validate result — deterministic output-contract validation.
-11. Record & trace — append the run/stage audit trail.
-12. Emit events — create canonical event records such as `task.created`.
-13. Respond / continue — return a normalized result and completion state.
+## 6. Governed execution stages
 
-The current planner is deliberately deterministic while the model runtime is offline. A model planner can replace stages 1/2/7 later without replacing stages 3/4/8/9/10/11/12.
+The shared runtime still enforces the same 13 stages:
 
-## 6. Security and Policy Plane
+1. Understand.
+2. Classify/deduce task.
+3. Resolve required scope.
+4. Resolve authorized capabilities.
+5. Load minimum context.
+6. Expose allowed tools.
+7. Plan invocation.
+8. Authorize deterministically.
+9. Execute provider.
+10. Validate result.
+11. Record/trace.
+12. Emit events.
+13. Respond/continue.
 
-`CapabilityPolicyEngine` is fail-closed and recomputes:
+The current planner is deterministic. A future model may replace reasoning/planning stages, but not scope resolution, authority, approval, execution, validation, idempotency or provenance.
 
-- scope compatibility;
-- surface visibility;
-- every required permission;
-- explicit approval requirement.
+## 7. Reliability
 
-A capability can return `ALLOW`, `ASK`, or `DENY`. No provider can upgrade a denied request. Guest Workspace restrictions flow through the same policy because their `ExecutionContext.permissions` are already the intersection of platform authority, Operly guest ceilings, and workspace-admin policy.
+Database mutations, successful trace rows and emitted events commit together. Failed execution/result validation rolls back the business mutation and preserves failure provenance separately.
 
-Input and output validation is deterministic and owned by the kernel. Providers receive already-authorized, contract-validated arguments.
+Request idempotency prevents ordinary duplicate database effects and exact-invocation approvals bind capability + canonical arguments + scope/principal. Current authority is rechecked before execution/replay.
 
-## 7. Audit, provenance, and event plane
+External APIs still require a dedicated outbox/reconciliation mechanism for truthful crash-safe exactly-once behavior; this is not overstated as solved.
 
-Migration `0047_operly_kernel_v3` adds:
+## 8. Future interfaces
 
-- `kernel_runs` — one row per governed runtime invocation;
-- `kernel_run_steps` — the ordered 13-stage trace;
-- `kernel_events` — normalized event/provenance records.
-
-Event records include scope, principal, human/system actor, initiator, executor, capability, resource type/id, payload, and timestamp. This provides the canonical `who did what?` chain required by workflows, integrations, FLOW/debugging, and compliance.
-
-Workspace users with `actions:read` can inspect the current event stream through `/api/kernel/events`; run traces are scope-filtered through `/api/kernel/runs/{id}` and `/api/kernel/personal/runs/{id}`.
-
-## 8. Transactional guarantee
-
-Capability side effects, successful trace rows, and emitted event records commit together. If execution or result validation fails, the business mutation is rolled back and a separate failed run trace is persisted. This prevents a provider from leaving an unvalidated partial write while still preserving failure provenance.
-
-## 9. What remains intentionally outside this slice
-
-Kernel v3 is the control-plane foundation, not a restoration of the demolished legacy runtime. The next slices should converge on it in this order:
-
-1. route Discord and future Slack/WhatsApp ingress through `TrustedIngress` + `ExecutionContext`;
-2. register deterministic CRM/ERP actions as capabilities instead of adding parallel agent tools;
-3. add approval fulfillment for `ASK` decisions and wire it to the Activity Center;
-4. attach the durable workflow engine to `kernel_events`;
-5. rebuild model selection/inference as capability providers and plug a model planner into stages 1/2/7;
-6. expose MCP through the exact same registry/policy/runtime path;
-7. rebuild Studio/generated-app bindings so generated software calls the kernel rather than provider credentials;
-8. add connector account/scopes resolvers to minimum context only when the chosen capability requires them;
-9. retire stale pre-demolition runtime documentation/imports after their remaining persistence models are migrated or removed.
-
-No future surface should call a provider directly as an optimization. The kernel is the execution authority.
+Discord, Slack, WhatsApp, MCP, generated applications, workflows and AI agents should become clients/adapters over the same Workspace tool surface. No future interface should receive special provider credentials or bypass Workspace tool authorization as an optimization.

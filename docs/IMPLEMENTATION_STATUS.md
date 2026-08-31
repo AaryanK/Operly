@@ -1,136 +1,141 @@
-# Operly rebuild implementation status
+# Operly implementation status
 
-Updated for **Kernel v3** after the intentional legacy-runtime demolition.
+Updated for the deterministic Workspace tool fabric built over the shared governed execution substrate.
 
-## Current production direction
+## Architectural rule
 
-The live mainline before this branch contains the hardened account shell and deterministic workspace business OS. AI/model/agent/MCP/Studio runtime routers are intentionally offline. Earlier architecture documents that describe the deleted runtime as already implemented are historical and must not be treated as current runtime truth.
+If an important action should eventually be available to an AI agent, first make it a deterministic Operly tool that a human, frontend, API client, workflow, SDK, or other interface can execute without AI.
 
-This branch builds the deterministic Operly infrastructure first. AI is intentionally a later interface/planner over that infrastructure, not the runtime foundation.
+Workspace business logic belongs to the Workspace package. The generic `packages/kernel` package is only shared execution infrastructure; it must not become a second Workspace OS package.
 
-The implementation rule is now explicit:
+## Package ownership
 
-> If an important action should eventually be available to an AI agent, first make it a deterministic Operly capability that a human, API client, workflow, or other interface can execute without AI.
+### Shared execution substrate — `packages/kernel`
 
-## Implemented in Kernel v3
+Owns only cross-scope mechanics:
 
-### Governed execution substrate
+- trusted ingress/context resolution;
+- capability contracts and registry primitives;
+- deterministic input/output validation;
+- `ALLOW / ASK / DENY` policy;
+- provider registry abstraction;
+- approval binding;
+- request idempotency;
+- minimum-context loading;
+- 13-stage governed execution;
+- transaction/rollback coordination;
+- trace and event persistence;
+- Personal/platform primitives.
 
-- One `TrustedIngress -> ExecutionContext` path that accepts identity/source facts but never request-provided roles or permissions.
-- Existing Personal, full Workspace, and Guest Workspace authority semantics are reused rather than reimplemented.
-- One namespaced `CapabilityRegistry` with input/output contracts, permissions, scopes, risk, approval policy, resource scope, version, provider, events, tags, and aliases.
-- Separate capability discovery/visibility and effective execution authority.
-- One `ProviderRegistry`; orchestration resolves providers by capability metadata rather than vendor-specific branches.
-- One deterministic `CapabilityPolicyEngine` with `ALLOW / ASK / DENY` decisions.
-- Deterministic contract validation on both capability input and provider output.
-- A single 13-stage `OperlyKernelRuntime` matching the architecture diagram.
-- Minimum-context loading: role/surface/scope plus workspace identity/timezone only; resource data is fetched by the selected provider.
-- Transactional execution: validated database writes + trace + events commit together; invalid/failed writes roll back and failure provenance is persisted separately.
-- Durable `kernel_runs`, `kernel_run_steps`, and `kernel_events` persistence via migration `0047_operly_kernel_v3`.
-- Scoped request idempotency in `kernel_request_claims` via migration `0048_kernel_request_idempotency`; a repeated successful `request_id` replays its prior normalized response instead of repeating the business side effect, while conflicting reuse is rejected. Current authority is recomputed before replay.
-- Durable exact-invocation approvals in `kernel_approvals` via migration `0049_kernel_approvals`.
-- An approval binds the scope, initiating principal, capability ID, and canonical argument hash. Approved execution rechecks current authority and the exact invocation before running, then consumes the approval with successful execution.
-- Workspace approval decisions require `actions:approve`; Personal approvals remain account-owner scoped. Approval decisions emit provenance events.
+It does **not** own Workspace CRM/ERP/provider implementations, Workspace HTTP endpoints, Workspace module administration, or Workspace connector actions.
 
-### Deterministic tool fabric
+### Workspace OS tools — `packages/workspace_modules/tools`
 
-The registry is intentionally layered so future agents can prefer business outcomes while lower-level deterministic primitives still exist.
+This package owns the Workspace deterministic tool surface:
 
-**Native/core capabilities**
+- `system.py` — workspace identity/module visibility;
+- `records.py` — generated Workspace OS record list/create/update/delete tools;
+- `controls.py` — settings, presets, modules, members, roles, invitations, inventory controls;
+- `business.py` — search, attention, customer snapshot, sales/invoice/payment business outcomes;
+- `google.py` — Gmail and Calendar tools over durable Workspace Google connections;
+- `availability.py` — module/provider/OAuth availability preflight;
+- `runtime.py` — Workspace composition root over the shared execution substrate;
+- `router.py` — authenticated Workspace tool HTTP API.
 
-- runtime status;
-- workspace description and module visibility;
-- personal/workspace task list/create/status update.
+The old `packages/kernel/workspace_*_provider.py` and `packages/kernel/provider_availability.py` files are removed.
 
-**Workspace record capabilities**
+## Workspace tool API
 
-- The mature deterministic Workspace OS record registry is projected automatically through `WorkspaceOSProvider`.
-- CRM, catalog, inventory, sales, finance, procurement, fulfillment, projects, operations, support, scheduling, tasks, team, documents, marketing, compliance, research, grants, and integration records receive standardized list/create/update/delete contracts from existing business metadata instead of bespoke agent tools.
-- Generated schemas reuse real SQLAlchemy types, required fields, select options, module permissions, references, mutability rules, and existing business mutation hooks.
-- Destructive record capabilities are approval-gated.
+Workspace tools have a first-class API boundary:
 
-**Workspace control capabilities**
+- `GET /api/workspace-tools` — current authorized + actually available tools;
+- `GET /api/workspace-tools/{capability_id}` — one tool contract;
+- `POST /api/workspace-tools/{capability_id}/execute` — execute that exact tool;
+- `GET /api/workspace-tools/approvals`;
+- `POST /api/workspace-tools/approvals/{approval_id}/decision`;
+- `GET /api/workspace-tools/events`;
+- `GET /api/workspace-tools/runs/{run_id}`.
 
-`WorkspaceControlProvider` adds deterministic operations that do not fit generic CRUD:
+Discovery returns the exact HTTP method and endpoint for each tool. Execution re-resolves trusted Workspace authority and provider availability before entering policy/approval/idempotency/execution/validation/trace/event handling.
 
-- workspace operating summary and activity feed;
-- workspace settings updates;
-- module enable/disable with dependency protection;
-- workspace preset listing/application;
-- member listing/addition/role changes/removal with last-owner invariants;
-- role/permission listing and updates;
-- invitation listing/creation/revocation;
-- inventory movement history and stock adjustments.
+The generic `/api/kernel` router is now Personal-only. Workspace frontend code does not call `/api/kernel/capabilities` or `/api/kernel/execute`.
 
-Access-changing operations are approval-gated and continue to enforce owner/role invariants inside the provider rather than trusting a caller.
+## Workspace UI
 
-**Agent-grade business outcomes**
+The Workspace navigation includes **Capabilities** under Extend.
 
-`WorkspaceBusinessProvider` adds higher-level deterministic tools so a future planner does not have to orchestrate fragile row-by-row mutations itself:
+`CapabilitiesPage` is an E2E client of the Workspace tool API. It:
 
-- `workspace.search` — permission/module-aware search across customers, organizations, opportunities, products, invoices, projects, tasks, appointments, suppliers, and research projects;
-- `workspace.attention.list` — deterministic overdue invoice, low-stock, due-task, appointment, follow-up, and urgent-support signals;
-- `workspace.customer.snapshot` — customer context with opportunities, orders, invoices, interactions, lifetime sales, and outstanding balance;
-- `workspace.sales.complete` — one governed transaction for order + lines + inventory movements + payment or invoice;
-- `workspace.finance.invoice.create_simple` — atomic invoice + line creation;
-- `workspace.finance.payment.record` — payment recording plus deterministic invoice-status synchronization.
+- loads `/api/workspace-tools`;
+- shows only current permission-authorized and provider-available tools;
+- displays the real endpoint for every tool;
+- displays provider, permissions, risk, approval policy, resource scope, reversibility, and input/output contracts;
+- invokes the backend-advertised `selected.endpoint` directly;
+- uses stable request IDs for idempotent retries;
+- handles exact-invocation approval and resume through `/workspace-tools/approvals/...`;
+- displays validated results and execution trace.
 
-The financial/sales outcome tools are approval-gated and executed through Kernel transaction, idempotency, validation, trace, and event semantics.
+So the operational path is:
 
-**Kernel-native Google workspace tools**
+**Workspace frontend → exact `/api/workspace-tools/{id}/execute` endpoint → trusted Workspace context → availability → deterministic authorization/approval/idempotency → Workspace provider → database/external provider → output validation → trace/events → frontend result.**
 
-A new `WorkspaceGoogleProvider` avoids reviving the demolished legacy capability runtime. It resolves the existing workspace OAuth record and granted scopes directly, never provider credentials or scopes supplied by the caller.
+There is no separate AI-only tool registry or Workspace-only Kernel runtime implementation.
 
-Available contracts include:
+## Deterministic Workspace tool families currently implemented
 
-- Google connection status/scopes/health (credential-free metadata only);
-- Gmail search and message read;
-- Gmail draft creation;
-- Gmail send after exact-invocation approval;
-- Gmail label modification after approval;
-- Calendar list-calendars, list-events, and free/busy;
-- Calendar create/update/delete after approval.
+### Workspace records
 
-The connector provider uses bounded network timeouts/retries for reads and avoids automatic retry of externally mutating requests inside the provider. Kernel request idempotency still protects ordinary retries, but distributed exactly-once guarantees for external providers remain a separate infrastructure hardening item because a process can fail after a provider accepts an external mutation but before local commit.
+The mature Workspace OS entity registry is projected into more than 100 standardized list/create/update/delete tool contracts across CRM, catalog, inventory, sales, finance, procurement, fulfillment, projects, operations, support, scheduling, tasks, team, documents, marketing, compliance, research, grants, and integrations.
 
-### Workspace interface
+Generated contracts reuse real field types, required fields, select options, permissions, references, mutability rules, and business mutation hooks. Destructive record operations are approval-gated.
 
-- The normal Workspace navigation now includes **Capabilities** under Extend.
-- `CapabilitiesPage` is a human/debug client of `/api/kernel/capabilities` and `/api/kernel/execute`.
-- It shows only the current principal's effective capabilities, with provider, permissions, risk, approval requirement, resource scope, reversibility, and input/output contracts.
-- Users can search/filter the capability surface, enter deterministic JSON arguments, execute a capability, inspect the validated result and Kernel trace, and fulfill an exact approval before resuming the same invocation.
-- The console generates a stable `request_id` for an invocation so UI retries participate in Kernel idempotency.
+### Workspace controls
 
-This is deliberately the same surface future AI planners will discover. There is no separate AI-only tool registry.
+Includes operating summary/activity, settings, module state, presets, members, role/permission administration, invitations, inventory movements and stock adjustments. Access-changing operations preserve ownership/role invariants and are approval-gated.
 
-### APIs and runtime truth
+### Business outcomes
 
-- Authenticated APIs expose workspace/Personal capability discovery and execution, approval listing/decision, run traces, and workspace event audit.
-- API health/rebuild status distinguishes `kernel_runtime_enabled=true` from `ai_runtime_enabled=false`.
+Includes `workspace.search`, `workspace.attention.list`, `workspace.customer.snapshot`, `workspace.sales.complete`, `workspace.finance.invoice.create_simple`, and `workspace.finance.payment.record`.
 
-## Deliberately still offline
+Outcome tools deliberately encapsulate multi-row business transactions so a future planner does not need to coordinate fragile low-level mutations.
 
-- Model inference and model planning.
-- Legacy business-agent router and its removed dependencies.
-- MCP execution surface.
-- Studio/generated-application execution runtime.
-- Discord/Slack/WhatsApp live agent loops until they are rewired as ingress adapters over the deterministic substrate.
-- Durable workflow consumers/conditions on top of `kernel_events`.
+### Google
 
-These are not separate architectures. Each must become an ingress adapter, provider, planner, event consumer, or client of Kernel v3.
+Includes Workspace Google connection status, Gmail search/read/draft/send/label modification and Calendar list/freebusy/create/update/delete. OAuth authority is resolved from durable Workspace connector state. External writes are approval-gated where appropriate.
 
-## Remaining deterministic tool families
+## Reliability infrastructure
 
-Before adding AI, continue converging these areas onto the same capability boundary:
+Implemented:
 
-1. Files/artifacts and knowledge retrieval/creation with workspace ownership, size/type contracts, and deterministic parsing boundaries.
-2. Durable workflow definitions/subscriptions over `kernel_events`, including idempotent action delivery, fresh authorization, retries, dead letters, loop prevention, and execution budgets.
-3. Additional connector providers (Canva and later Slack/WhatsApp/other integrations) using the same scoped-provider pattern as Google.
-4. Website/Solutions/Studio/deployment operations as project-scoped capabilities rather than direct runtime shortcuts.
-5. Channel/member/message operations needed by normal workspace collaboration interfaces.
-6. Provider/plugin lifecycle, capability health/availability, connector-account scope resolution, secrets references, and resource/service bindings.
-7. Operational hardening: retention/cleanup for idempotency and approval state, approval expiry/cancellation, external-effect reconciliation, rate/usage quotas, and infrastructure observability.
-8. Route Discord, Slack, WhatsApp, MCP, web/mobile/API/SDK, and generated applications through the same ingress + capability boundary.
-9. **Only after these infrastructure layers are stable**, rebuild model/provider selection and add AI over the reasoning/planning stages. AI must not own authority, resource access, execution, validation, approvals, idempotency, transactions, or provenance.
+- fresh authority resolution;
+- permission + surface filtering;
+- provider/module/OAuth availability preflight;
+- deterministic input/output contracts;
+- exact-invocation approval;
+- scoped request idempotency;
+- database transaction rollback on failure;
+- durable run/step/event provenance.
 
-See `docs/OPERLY_KERNEL_V3.md` for the normative rebuild mapping.
+External providers cannot yet be truthfully claimed as exactly-once across a process crash. External-effect reconciliation/outbox infrastructure remains a hardening item.
+
+## Tests / regression contracts
+
+Python contract tests cover the shared execution substrate and Workspace-owned tool contracts.
+
+`apps/web/scripts/workspace-tools-contract.mjs` guards the frontend-to-endpoint architecture: it fails if the Workspace UI falls back to generic Kernel routes, if Workspace provider code returns to `packages/kernel`, if the Workspace API/router leaves `workspace_modules`, or if the frontend stops invoking backend-advertised per-tool endpoints.
+
+This is a structural E2E contract. The repository does not currently include Playwright/browser E2E infrastructure, so browser automation is not claimed here.
+
+## Still deliberately offline / incomplete
+
+- model inference and AI planning/agent loop;
+- MCP execution surface;
+- Discord/Slack/WhatsApp agent loops;
+- Studio/generated-app execution bindings;
+- durable workflow consumers over `kernel_events`;
+- files/artifacts/knowledge tools on this Workspace boundary;
+- Canva and additional connector providers;
+- external-effect reconciliation/outbox;
+- quotas/rate limits, approval expiry/cleanup, dead letters and operational observability.
+
+AI should be added only after these deterministic surfaces are sufficiently complete. AI may plan/select Workspace tools, but it must not own authority, approvals, resource access, execution, validation, idempotency, transactions, or provenance.
