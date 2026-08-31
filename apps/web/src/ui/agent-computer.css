@@ -131,22 +131,34 @@
   font-weight: 800;
 }
 
-.computer-task-composer > label {
+.computer-task-composer > label,
+.computer-runtime-options > label,
+.computer-native-tool-console > label {
   display: grid;
   gap: .38rem;
   font-weight: 680;
 }
 
-.computer-task-composer > label > span {
+.computer-task-composer > label > span,
+.computer-native-tool-console > label > span {
   font-weight: 400;
   opacity: .55;
 }
 
 .computer-task-composer select,
 .computer-task-composer input,
-.computer-task-composer textarea {
+.computer-task-composer textarea,
+.computer-runtime-options select,
+.computer-native-tool-console select,
+.computer-native-tool-console textarea {
   width: 100%;
   box-sizing: border-box;
+}
+
+.computer-runtime-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .8rem;
 }
 
 .computer-project-preview {
@@ -226,7 +238,8 @@
 }
 
 .computer-approval-checkpoint,
-.computer-result-card {
+.computer-result-card,
+.computer-native-tool-console {
   display: grid;
   gap: .8rem;
   padding: 1rem;
@@ -269,7 +282,8 @@
 }
 
 .computer-approval-checkpoint pre,
-.computer-result-card pre {
+.computer-result-card pre,
+.computer-tool-result pre {
   max-height: 340px;
   overflow: auto;
   white-space: pre-wrap;
@@ -278,6 +292,37 @@
   border: 1px solid var(--computer-border);
   border-radius: 10px;
   background: color-mix(in srgb, Canvas 94%, currentColor 6%);
+}
+
+.computer-native-tool-console {
+  border-style: solid;
+}
+
+.computer-tool-description {
+  margin: 0;
+  opacity: .72;
+  line-height: 1.5;
+}
+
+.computer-tool-description code {
+  font-weight: 700;
+}
+
+.computer-tool-json {
+  min-height: 190px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
+.computer-tool-result {
+  min-width: 0;
+}
+
+.computer-tool-result pre {
+  max-height: 460px;
+  margin-bottom: 0;
 }
 
 .computer-result-failed {
@@ -468,7 +513,8 @@
     display: none;
   }
   .computer-approval-checkpoint dl,
-  .computer-security-grid {
+  .computer-security-grid,
+  .computer-runtime-options {
     grid-template-columns: 1fr;
   }
   .computer-session-head {
