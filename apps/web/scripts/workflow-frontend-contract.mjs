@@ -37,7 +37,7 @@ for (const id of requiredCapabilities) {
 for (const marker of [
   'api<ToolCatalog>("/workspace-tools")',
   '"/workspace-tools/approvals?limit=100"',
-  '"/workspace-tools/approvals/${encodeURIComponent',
+  '/workspace-tools/approvals/${encodeURIComponent',
   'actionTools',
   'Immutable attempt history',
   'Workflow trace',
