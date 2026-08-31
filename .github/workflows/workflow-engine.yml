@@ -1,0 +1,55 @@
+name: Workflow Engine
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/workflow-engine.yml"
+      - "alembic/versions/0051_workflow_engine.py"
+      - "apps/api/main.py"
+      - "packages/database/schema.py"
+      - "packages/security/permissions.py"
+      - "packages/workflow/**"
+      - "packages/workspace_modules/tools/__init__.py"
+      - "tests/test_workflow_package.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/workflow-engine.yml"
+      - "alembic/versions/0051_workflow_engine.py"
+      - "apps/api/main.py"
+      - "packages/database/schema.py"
+      - "packages/security/permissions.py"
+      - "packages/workflow/**"
+      - "packages/workspace_modules/tools/__init__.py"
+      - "tests/test_workflow_package.py"
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "SQLAlchemy>=2.0,<3" "aiosqlite>=0.20,<1"
+
+      - name: Compile Workflow package
+        run: |
+          python -m compileall -q packages/workflow
+          python -m py_compile alembic/versions/0051_workflow_engine.py
+
+      - name: Run Workflow package tests
+        run: python -m unittest discover -s tests -p "test_workflow_package.py" -v
