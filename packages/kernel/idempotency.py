@@ -154,6 +154,7 @@ async def complete_request(
         return
     claim.status = "completed"
     claim.run_id = response.run_id
+    claim.capability_id = response.capability_id
     claim.response_json = json.dumps(
         response.as_dict(), separators=(",", ":"), sort_keys=True, default=str
     )
