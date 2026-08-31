@@ -11,7 +11,7 @@ const CRMPage = lazy(() => import("./DataPages").then((module) => ({ default: mo
 const OperationsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.OperationsPage })));
 const ActivityPage = lazy(() => import("./ActivityPage").then((module) => ({ default: module.ActivityPage })));
 const PresencePage = lazy(() => import("./DataPages").then((module) => ({ default: module.PresencePage })));
-const ConnectionsPage = lazy(() => import("./DataPages").then((module) => ({ default: module.ConnectionsPage })));
+const ConnectionsPage = lazy(() => import("./ConnectionsPage").then((module) => ({ default: module.ConnectionsPage })));
 const MembersPage = lazy(() => import("./MembersPage").then((module) => ({ default: module.MembersPage })));
 const PluginsPage = lazy(() => import("./PluginsPage").then((module) => ({ default: module.PluginsPage })));
 const SolutionsPage = lazy(() => import("./SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
