@@ -78,11 +78,17 @@ async def _personal_context(
     )
 
 
-def _capabilities(context: ExecutionContext, query: str | None) -> list[dict[str, Any]]:
-    if query:
-        specs = _runtime.registry.search(query, context=context, effective_only=True, limit=30)
-    else:
-        specs = _runtime.registry.effective(context)
+async def _capabilities(
+    db: AsyncSession,
+    context: ExecutionContext,
+    query: str | None,
+) -> list[dict[str, Any]]:
+    specs = await _runtime.available_capabilities(
+        db,
+        context=context,
+        query=query,
+        limit=50 if query else 500,
+    )
     return [spec.public_dict() for spec in specs]
 
 
@@ -115,11 +121,12 @@ async def workspace_capabilities(
     db: AsyncSession = Depends(get_db),
 ):
     context = await _workspace_context(db, auth)
+    capabilities = await _capabilities(db, context, query)
     return {
         "scope_kind": context.scope_kind.value,
         "workspace_id": context.workspace_id,
         "workspace_mode": context.workspace_mode,
-        "capabilities": _capabilities(context, query),
+        "capabilities": capabilities,
     }
 
 
@@ -140,10 +147,11 @@ async def personal_capabilities(
     db: AsyncSession = Depends(get_db),
 ):
     context = await _personal_context(db, account)
+    capabilities = await _capabilities(db, context, query)
     return {
         "scope_kind": context.scope_kind.value,
         "user_id": context.user_id,
-        "capabilities": _capabilities(context, query),
+        "capabilities": capabilities,
     }
 
 
