@@ -126,8 +126,12 @@ async def consume_authorization_code(
     code_verifier: str,
     resource: str,
 ) -> dict[str, Any]:
+    # Lock the one-time code row so two concurrent token exchanges cannot both
+    # redeem the same authorization code on production PostgreSQL.
     row = await db.scalar(
-        select(McpAuthorizationCode).where(McpAuthorizationCode.code_hash == _code_hash(code))
+        select(McpAuthorizationCode)
+        .where(McpAuthorizationCode.code_hash == _code_hash(code))
+        .with_for_update()
     )
     now = datetime.utcnow()
     if row is None:
@@ -138,7 +142,9 @@ async def consume_authorization_code(
         raise McpOAuthError("MCP authorization code expired")
     if row.client_id != client_id or row.redirect_uri != redirect_uri or row.resource != resource:
         raise McpOAuthError("MCP authorization code binding mismatch")
-    if not code_verifier or not hmac.compare_digest(pkce_s256(code_verifier), row.code_challenge):
+    if not 43 <= len(str(code_verifier or "")) <= 128:
+        raise McpOAuthError("Invalid MCP PKCE verifier length")
+    if not hmac.compare_digest(pkce_s256(code_verifier), row.code_challenge):
         raise McpOAuthError("MCP PKCE verification failed")
 
     row.consumed_at = now
