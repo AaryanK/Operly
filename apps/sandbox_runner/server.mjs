@@ -34,27 +34,9 @@ function computerTemplate() {
   if (cachedTemplate) return cachedTemplate;
   cachedTemplate = Sandbox.template()
     .withPackages(
-      "bash",
-      "build-essential",
-      "ca-certificates",
-      "chromium",
-      "curl",
-      "ffmpeg",
-      "file",
-      "git",
-      "iptables",
-      "jq",
-      "nodejs",
-      "npm",
-      "poppler-utils",
-      "procps",
-      "python3",
-      "python3-pip",
-      "python3-venv",
-      "ripgrep",
-      "unzip",
-      "wget",
-      "zip",
+      "bash", "build-essential", "ca-certificates", "chromium", "curl", "ffmpeg", "file", "git",
+      "iptables", "jq", "nodejs", "npm", "poppler-utils", "procps", "python3", "python3-pip",
+      "python3-venv", "ripgrep", "unzip", "wget", "zip",
     )
     .run("python3 -m venv /opt/operly-py")
     .run(
@@ -158,8 +140,6 @@ async function writeHelper(box) {
 }
 
 async function harden(box, networkPolicy) {
-  // Railway Sandbox is the isolation boundary. Never join the Operly private network.
-  // Defense in depth blocks link-local/cloud-metadata addresses for the untrusted uid.
   const rules = [
     "iptables -C OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT",
   ];
@@ -179,14 +159,7 @@ async function createSession(payload) {
   const options = {
     environmentId: ENVIRONMENT_ID,
     idleTimeoutMinutes: Math.max(1, Math.min(Math.ceil(request.ttlSeconds / 60), 360)),
-    env: {
-      OPERLY_COMPUTER_SESSION_ID: request.clientSessionId,
-      OPERLY_COMPUTER_PROFILE: request.profile,
-      OPERLY_COMPUTER_NETWORK_POLICY: request.networkPolicy,
-    },
   };
-  // "web" intentionally uses Railway's default public-internet-only sandbox network.
-  // It is not attached to the project's private service network.
   if (request.networkPolicy === "off") options.networkIsolation = "ISOLATED";
   const box = await Sandbox.create(computerTemplate(), options);
   try {
@@ -204,15 +177,9 @@ async function createSession(payload) {
     await box.exec("chown operly:operly /workspace/.operly/session.json /opt/operly-computer-tool.py", { timeoutSec: 10 });
     await harden(box, request.networkPolicy);
     return {
-      id: String(box.id || ""),
-      session_id: String(box.id || ""),
-      state: "active",
-      isolation: "railway_sandbox_vm_v2",
-      provider: "railway-sandbox",
-      profile: request.profile,
-      network_policy: request.networkPolicy,
-      private_network: false,
-      tools: TOOL_IDS,
+      id: String(box.id || ""), session_id: String(box.id || ""), state: "active",
+      isolation: "railway_sandbox_vm_v2", provider: "railway-sandbox",
+      profile: request.profile, network_policy: request.networkPolicy, private_network: false, tools: TOOL_IDS,
     };
   } catch (error) {
     try { await box.destroy(); } catch {}
@@ -230,15 +197,10 @@ async function statusSession(runtimeId) {
     } catch {}
     const rawStatus = String(box.status || "RUNNING");
     return {
-      id: cleanId(runtimeId),
-      session_id: cleanId(runtimeId),
+      id: cleanId(runtimeId), session_id: cleanId(runtimeId),
       state: rawStatus === "RUNNING" ? "active" : rawStatus.toLowerCase(),
-      isolation: "railway_sandbox_vm_v2",
-      provider: "railway-sandbox",
-      private_network: false,
-      profile: meta.profile || null,
-      network_policy: meta.networkPolicy || null,
-      tools: TOOL_IDS,
+      isolation: "railway_sandbox_vm_v2", provider: "railway-sandbox", private_network: false,
+      profile: meta.profile || null, network_policy: meta.networkPolicy || null, tools: TOOL_IDS,
     };
   } catch {
     return { id: cleanId(runtimeId), session_id: cleanId(runtimeId), state: "expired", expired: true };
@@ -285,27 +247,17 @@ async function executeTool(runtimeId, toolId, args) {
   }
   const stdout = String(result.stdout || "").trim();
   let packet;
-  try {
-    packet = JSON.parse(stdout);
-  } catch {
-    throw Object.assign(new Error("Computer sandbox returned invalid tool output"), { statusCode: 502 });
-  }
+  try { packet = JSON.parse(stdout); }
+  catch { throw Object.assign(new Error("Computer sandbox returned invalid tool output"), { statusCode: 502 }); }
   if (!packet || typeof packet !== "object") throw Object.assign(new Error("invalid Computer tool response"), { statusCode: 502 });
   if (!packet.ok) {
     return {
-      runtime_state: "active",
-      ok: false,
-      error: String(packet.error || "Computer tool failed"),
-      error_type: String(packet.error_type || "ToolError"),
-      runner_exit_code: result.exitCode,
-      runner_stderr: String(result.stderr || "").slice(-12000),
+      runtime_state: "active", ok: false,
+      error: String(packet.error || "Computer tool failed"), error_type: String(packet.error_type || "ToolError"),
+      runner_exit_code: result.exitCode, runner_stderr: String(result.stderr || "").slice(-12000),
     };
   }
-  return {
-    runtime_state: "active",
-    ok: true,
-    ...packet.result,
-  };
+  return { runtime_state: "active", ok: true, ...packet.result };
 }
 
 function parseJson(raw) {
@@ -324,15 +276,10 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === "/health" && req.method === "GET") {
     return sendJson(res, 200, {
-      ok: true,
-      service: "operly-sandbox-runner",
-      computer_runtime: true,
-      isolation: "railway-sandbox",
-      private_network_default: false,
-      tools: TOOL_IDS.length,
+      ok: true, service: "operly-sandbox-runner", computer_runtime: true,
+      isolation: "railway-sandbox", private_network_default: false, tools: TOOL_IDS.length,
     }, { signed: false });
   }
-
   if (!pathname.startsWith("/v1/computer/")) {
     return sendJson(res, 404, { detail: "Not found" }, { signed: false });
   }
@@ -341,24 +288,16 @@ const server = http.createServer(async (req, res) => {
     const raw = await readBody(req);
     authenticate(req, pathname, raw);
     const payload = parseJson(raw);
-
     if (pathname === "/v1/computer/sessions" && req.method === "POST") {
       return sendJson(res, 201, await createSession(payload));
     }
-
     const statusMatch = pathname.match(/^\/v1\/computer\/sessions\/([^/]+)$/);
-    if (statusMatch && req.method === "GET") {
-      return sendJson(res, 200, await statusSession(statusMatch[1]));
-    }
-    if (statusMatch && req.method === "DELETE") {
-      return sendJson(res, 200, await destroySession(statusMatch[1]));
-    }
-
+    if (statusMatch && req.method === "GET") return sendJson(res, 200, await statusSession(statusMatch[1]));
+    if (statusMatch && req.method === "DELETE") return sendJson(res, 200, await destroySession(statusMatch[1]));
     const toolMatch = pathname.match(/^\/v1\/computer\/sessions\/([^/]+)\/tools\/([^/]+)$/);
     if (toolMatch && req.method === "POST") {
       return sendJson(res, 200, await executeTool(toolMatch[1], decodeURIComponent(toolMatch[2]), payload.arguments || {}));
     }
-
     return sendJson(res, 404, { detail: "Computer endpoint not found" });
   } catch (error) {
     const status = Number(error?.statusCode || 400);
@@ -367,15 +306,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (!RUNNER_TOKEN) {
-  console.error("OPERLY_RUNNER_TOKEN is required");
-  process.exit(1);
-}
-if (!ENVIRONMENT_ID) {
-  console.error("RAILWAY_ENVIRONMENT_ID is required");
-  process.exit(1);
-}
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Operly Sandbox Runner listening on :${PORT}`);
-});
+if (!RUNNER_TOKEN) { console.error("OPERLY_RUNNER_TOKEN is required"); process.exit(1); }
+if (!ENVIRONMENT_ID) { console.error("RAILWAY_ENVIRONMENT_ID is required"); process.exit(1); }
+server.listen(PORT, "0.0.0.0", () => console.log(`Operly Sandbox Runner listening on :${PORT}`));
