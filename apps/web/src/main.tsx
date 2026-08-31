@@ -7,6 +7,7 @@ import "./ui/workspace-lite.css";
 import "./ui/workspace-os.css";
 import "./ui/workspace-human.css";
 import "./ui/integration-workbench.css";
+import "./ui/agent-computer.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;

@@ -6,6 +6,7 @@ export type WorkspaceSection =
   | "activity"
   | "presence"
   | "solutions"
+  | "agent-computer"
   | "connections"
   | "plugins"
   | "capabilities"
@@ -31,6 +32,7 @@ export const workspaceSections: Array<{
   { id: "activity", label: "Activity", group: "business" },
   { id: "presence", label: "Presence", group: "digital" },
   { id: "solutions", label: "Solutions", group: "digital" },
+  { id: "agent-computer", label: "Agent Computer", group: "digital" },
   { id: "connections", label: "Integrations", group: "extend" },
   { id: "plugins", label: "Plugins", group: "extend" },
   { id: "capabilities", label: "Capabilities", group: "extend" },
