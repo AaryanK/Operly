@@ -1,7 +1,7 @@
 import unittest
 
-from packages.kernel.bootstrap import build_kernel_runtime
 from packages.workspace_modules.tools.records import capability_id, workspace_record_capabilities
+from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 class WorkspaceOSCapabilityInfrastructureTests(unittest.TestCase):
@@ -42,8 +42,8 @@ class WorkspaceOSCapabilityInfrastructureTests(unittest.TestCase):
         self.assertIn("name", create_contact.input_schema["required"])
         self.assertFalse(create_contact.input_schema["additionalProperties"])
 
-    def test_kernel_composition_registers_workspace_module_tool_surface(self):
-        runtime = build_kernel_runtime()
+    def test_workspace_composition_registers_workspace_module_tool_surface(self):
+        runtime = build_workspace_runtime()
         ids = {spec.id for spec in runtime.registry.all()}
         self.assertIn(capability_id("crm", "contacts", "list"), ids)
         self.assertIn(capability_id("finance", "payments", "create"), ids)

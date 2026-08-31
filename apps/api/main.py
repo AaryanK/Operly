@@ -20,9 +20,9 @@ from apps.api.security_headers import SecurityHeadersMiddleware
 from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
-from apps.api.workspace_tools_router import router as workspace_tools_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.workspace_modules.tools.router import router as workspace_tools_router
 
 load_dotenv(override=False)
 

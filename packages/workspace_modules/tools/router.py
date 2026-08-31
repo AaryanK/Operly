@@ -11,16 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.kernel_models import KernelApproval, KernelEventRecord, KernelRun, KernelRunStep
-from packages.kernel import RuntimeExecutionError, build_kernel_runtime
 from packages.kernel.approvals import ApprovalError, approval_json, decide_approval
 from packages.kernel.contracts import CapabilitySpec, RuntimeRequest
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
+from packages.kernel.runtime import RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
+from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 router = APIRouter(prefix="/api/workspace-tools", tags=["workspace-tools"])
-_runtime = build_kernel_runtime()
+_runtime = build_workspace_runtime()
 
 
 class WorkspaceToolExecuteInput(BaseModel):
@@ -82,8 +83,6 @@ async def _available_tools(
         query=query,
         limit=500 if not query else 50,
     )
-    # Workspace API exposes only Workspace-owned resources. Global/personal substrate
-    # capabilities can share the same runtime without leaking into this UI/tool surface.
     return tuple(spec for spec in specs if spec.resource_scope == "workspace")
 
 

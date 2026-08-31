@@ -1,9 +1,9 @@
 import unittest
 from pathlib import Path
 
-from apps.api.workspace_tools_router import workspace_tool_endpoint
 from packages.kernel.bootstrap import builtin_capabilities
 from packages.workspace_modules.tools import workspace_capabilities
+from packages.workspace_modules.tools.router import workspace_tool_endpoint
 
 
 class WorkspaceToolsE2EContractTests(unittest.TestCase):
@@ -17,8 +17,12 @@ class WorkspaceToolsE2EContractTests(unittest.TestCase):
             "provider_availability.py",
         ):
             self.assertFalse((root / "packages" / "kernel" / legacy).exists(), legacy)
-        for current in ("records.py", "controls.py", "business.py", "google.py", "availability.py", "system.py"):
+        for current in (
+            "records.py", "controls.py", "business.py", "google.py", "availability.py",
+            "system.py", "runtime.py", "router.py",
+        ):
             self.assertTrue((root / "packages" / "workspace_modules" / "tools" / current).exists(), current)
+        self.assertFalse((root / "apps" / "api" / "workspace_tools_router.py").exists())
 
     def test_generic_builtins_do_not_own_workspace_business_tools(self):
         ids = {spec.id for spec in builtin_capabilities()}

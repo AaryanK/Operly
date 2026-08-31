@@ -4,7 +4,6 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
 from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
-from packages.workspace_modules.tools import register_workspace_providers, workspace_capabilities
 
 
 def _object(properties: dict, *, required: list[str] | None = None) -> dict:
@@ -19,9 +18,9 @@ def _object(properties: dict, *, required: list[str] | None = None) -> dict:
 def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
     """Platform/personal primitives only.
 
-    Workspace-owned tools are composed from ``packages.workspace_modules.tools``.
-    Keeping them out of this module prevents the generic execution substrate from
-    becoming a second Workspace OS package.
+    Workspace capabilities and providers are composed exclusively by
+    ``packages.workspace_modules.tools.runtime``. The generic execution substrate has
+    no Workspace domain imports or provider registrations.
     """
     task = _object(
         {
@@ -129,8 +128,7 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
 
 
 def build_kernel_runtime() -> AvailabilityAwareKernelRuntime:
-    registry = CapabilityRegistry((*builtin_capabilities(), *workspace_capabilities()))
+    registry = CapabilityRegistry(builtin_capabilities())
     providers = ProviderRegistry()
     providers.register("operly.native", NativeOperlyProvider())
-    register_workspace_providers(providers)
     return AvailabilityAwareKernelRuntime(registry=registry, providers=providers)
