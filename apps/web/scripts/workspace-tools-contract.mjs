@@ -9,7 +9,7 @@ const text = (path) => readFile(resolve(repoRoot, path), "utf8");
 const exists = async (path) => { try { await access(resolve(repoRoot, path)); return true; } catch { return false; } };
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrations, discordBot, discordLifecycle, connections] = await Promise.all([
+const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrations, discordBot, discordLifecycle, connections, connectionsPage, workspaceShell] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("packages/workspace_modules/tools/router.py"),
   text("apps/api/main.py"),
@@ -20,6 +20,8 @@ const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrat
   text("packages/workspace_modules/integrations/discord/bot.py"),
   text("packages/workspace_modules/integrations/discord/lifecycle.py"),
   text("packages/workspace_modules/integrations/router.py"),
+  text("apps/web/src/workspace/ConnectionsPage.tsx"),
+  text("apps/web/src/workspace/WorkspaceShell.tsx"),
 ]);
 
 assert(page.includes('api<CapabilityResponse>("/workspace-tools")'), "Workspace UI must discover tools through /workspace-tools");
@@ -63,6 +65,14 @@ assert(connections.includes('prefix="/api/connectors"'), "Workspace integration 
 assert(main.includes("workspace_integrations_router"), "FastAPI must mount Workspace-owned connection management");
 assert(main.includes("await discord_bot_lifecycle.start()"), "Application lifespan must start the deterministic Discord bot");
 assert(main.includes("await discord_bot_lifecycle.stop()"), "Application lifespan must stop the deterministic Discord bot");
+
+assert(workspaceShell.includes('import("./ConnectionsPage")'), "Workspace shell must render the dedicated integration Connections page");
+assert(connectionsPage.includes('api<Connection[]>("/connectors")'), "Connections UI must load Workspace-owned connector state");
+assert(connectionsPage.includes('"/connectors/google/connect?tier=assistant"'), "Connections UI must initiate Google Workspace OAuth");
+assert(connectionsPage.includes('"/connectors/canva/connect"'), "Connections UI must initiate Canva OAuth");
+assert(connectionsPage.includes('api<DiscordStatus>("/connectors/discord/status")'), "Connections UI must inspect the deterministic Discord bot");
+assert(connectionsPage.includes("Add Discord bot"), "Connections UI must expose Discord installation");
+assert(connectionsPage.includes("Discord AI"), "Connections UI must show that Discord AI is disabled");
 
 for (const forbidden of ["AgentRuntime", "ChannelService.handle", "model_runtime", "secure_runtime", "packages.agents"]) {
   assert(!discordBot.includes(forbidden), `Deterministic Discord bot leaked AI runtime dependency: ${forbidden}`);
