@@ -6,6 +6,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.models import Tenant
+from packages.kernel.approvals import (
+    ApprovalError,
+    consume_approval,
+    create_pending_approval,
+    validate_approved_invocation,
+)
 from packages.kernel.audit import RuntimeAuditBuffer, persist_audit
 from packages.kernel.contracts import (
     AuthorizationDecision,
@@ -29,11 +35,20 @@ from packages.security.execution_context import ExecutionContext
 
 
 class RuntimeExecutionError(RuntimeError):
-    def __init__(self, message: str, *, run_id: str, code: str, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str,
+        code: str,
+        status_code: int = 400,
+        approval_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.run_id = run_id
         self.code = code
         self.status_code = status_code
+        self.approval_id = approval_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +76,7 @@ class MinimumContextLoader:
 
 
 class DeterministicPlanner:
-    """Temporary non-model planner used while AI runtime remains offline.
-
-    It can resolve an explicit capability ID or a single unambiguous registry match.
-    Replacing this with a model planner does not change authorization or execution.
-    """
+    """Temporary non-model planner used while AI runtime remains offline."""
 
     def resolve_capability(
         self,
@@ -80,9 +91,7 @@ class DeterministicPlanner:
         if not matches:
             raise CapabilityRegistryError("No capability matches this goal")
         if len(matches) > 1:
-            raise CapabilityRegistryError(
-                "Goal is ambiguous; provide capability_id explicitly"
-            )
+            raise CapabilityRegistryError("Goal is ambiguous; provide capability_id explicitly")
         return matches[0]
 
     def plan(self, request: RuntimeRequest, spec: CapabilitySpec) -> RuntimePlan:
@@ -121,6 +130,8 @@ class OperlyKernelRuntime:
         decision = AuthorizationDecision.DENY
         execution_result = None
         idempotency_claim = None
+        planned_arguments: dict[str, Any] | None = None
+        used_approval = None
         try:
             reservation = await reserve_request(
                 db,
@@ -185,7 +196,8 @@ class OperlyKernelRuntime:
             )
 
             plan = self.planner.plan(request, capability)
-            validate_schema(dict(plan.arguments), capability.input_schema)
+            planned_arguments = dict(plan.arguments)
+            validate_schema(planned_arguments, capability.input_schema)
             audit.step(
                 7,
                 RuntimeStage.REASON_PLAN.value,
@@ -195,11 +207,25 @@ class OperlyKernelRuntime:
 
             authorization = self.policy.evaluate(context, capability)
             decision = authorization.decision
+            authorization_reason = authorization.reason
+            if decision is AuthorizationDecision.ASK and request.approval_id:
+                used_approval = await validate_approved_invocation(
+                    db,
+                    context=context,
+                    approval_id=request.approval_id,
+                    capability_id=capability.id,
+                    arguments=planned_arguments,
+                )
+                decision = AuthorizationDecision.ALLOW
+                authorization_reason = "approved exact invocation"
             audit.step(
                 8,
                 RuntimeStage.AUTHORIZE.value,
                 decision.value,
-                {"reason": authorization.reason},
+                {
+                    "reason": authorization_reason,
+                    "approval_id": request.approval_id if used_approval is not None else None,
+                },
             )
             if decision is AuthorizationDecision.ASK:
                 raise RuntimeExecutionError(
@@ -209,14 +235,14 @@ class OperlyKernelRuntime:
                     status_code=409,
                 )
             if decision is not AuthorizationDecision.ALLOW:
-                raise PermissionError(authorization.reason)
+                raise PermissionError(authorization_reason)
 
             provider = self.providers.get(capability.provider_id)
             execution_result = await provider.execute(
                 db,
                 context=context,
                 capability=capability,
-                arguments=dict(plan.arguments),
+                arguments=planned_arguments,
                 minimum_context=minimum_context,
             )
             audit.step(
@@ -268,13 +294,34 @@ class OperlyKernelRuntime:
                 resource_type=execution_result.resource_type,
                 resource_id=execution_result.resource_id,
             )
+            await consume_approval(db, approval=used_approval, run_id=audit.run_id)
             await complete_request(db, claim=idempotency_claim, response=response)
             await db.commit()
             return response
         except RuntimeExecutionError as error:
             await db.rollback()
+            if (
+                error.code == "approval_required"
+                and capability is not None
+                and planned_arguments is not None
+            ):
+                approval = await create_pending_approval(
+                    db,
+                    context=context,
+                    capability_id=capability.id,
+                    arguments=planned_arguments,
+                    request_id=request.request_id,
+                    conversation_id=request.conversation_id,
+                    source_run_id=audit.run_id,
+                )
+                error.approval_id = approval.id
             if not audit.steps or audit.steps[-1]["name"] != RuntimeStage.RESPOND.value:
-                audit.step(13, RuntimeStage.RESPOND.value, "blocked", {"code": error.code})
+                audit.step(
+                    13,
+                    RuntimeStage.RESPOND.value,
+                    "blocked",
+                    {"code": error.code, "approval_id": error.approval_id},
+                )
             await self._persist_failure(
                 db,
                 audit=audit,
@@ -285,6 +332,21 @@ class OperlyKernelRuntime:
                 error=str(error),
             )
             raise
+        except ApprovalError as error:
+            await db.rollback()
+            audit.step(13, RuntimeStage.RESPOND.value, "blocked", {"code": "approval_invalid"})
+            await self._persist_failure(
+                db,
+                audit=audit,
+                context=context,
+                request=request,
+                capability=capability,
+                code="approval_invalid",
+                error=str(error),
+            )
+            raise RuntimeExecutionError(
+                str(error), run_id=audit.run_id, code="approval_invalid", status_code=409
+            ) from error
         except IdempotencyConflict as error:
             await db.rollback()
             audit.step(13, RuntimeStage.RESPOND.value, "blocked", {"code": "idempotency_conflict"})
