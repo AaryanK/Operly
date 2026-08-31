@@ -11,8 +11,9 @@ const titleCase = (value: unknown) => text(value, "Action").replaceAll("_", " ")
 
 const destinations: Array<{ section: WorkspaceSection; title: string; description: string }> = [
   { section: "operly", title: "Ask Operly", description: "Work with the workspace AI using this workspace's permissions and connectors." },
+  { section: "workflows", title: "Automate work", description: "Build, schedule, run, approve, and trace repeatable workflows without writing code." },
   { section: "capabilities", title: "Use any tool", description: "Open every action currently available to you with guided forms and clear safety checks." },
-  { section: "activity", title: "Review activity", description: "See actions, approvals, failures, and other work that needs attention." },
+  { section: "activity", title: "Review activity", description: "See actions, approvals, failures, workflow events, and other work that needs attention." },
   { section: "solutions", title: "Open Solutions", description: "Build and operate software without a second command composer on Home." },
 ];
 
@@ -49,7 +50,7 @@ export function WorkspaceHome({ workspace }: Props) {
   return (
     <main className="workspace-page">
       <header className="surface-header workspace-hero page-header">
-        <div><span className="eyebrow">Workspace</span><h1>{workspace.name}</h1><p>Home is the simple starting point. Ask Operly, use a tool directly, review activity, or open your Solutions.</p></div>
+        <div><span className="eyebrow">Workspace</span><h1>{workspace.name}</h1><p>Home is the simple starting point. Ask Operly, automate repeatable work, use a tool directly, review activity, or open your Solutions.</p></div>
         <button className="primary-button" onClick={() => navigate(workspacePath(workspace.id, "operly"))}>Ask Operly</button>
       </header>
       {error && <div className="inline-error page-error">{error}</div>}

@@ -6,6 +6,12 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "apps/api/main.py"
+      - "apps/web/package.json"
+      - "apps/web/scripts/workflow-frontend-contract.mjs"
+      - "apps/web/src/app/routes.ts"
+      - "apps/web/src/workspace/WorkflowPage.tsx"
+      - "apps/web/src/workspace/WorkspaceHome.tsx"
+      - "apps/web/src/workspace/WorkspaceShell.tsx"
       - "packages/database/schema.py"
       - "packages/security/permissions.py"
       - "packages/workflow/**"
@@ -18,6 +24,12 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "apps/api/main.py"
+      - "apps/web/package.json"
+      - "apps/web/scripts/workflow-frontend-contract.mjs"
+      - "apps/web/src/app/routes.ts"
+      - "apps/web/src/workspace/WorkflowPage.tsx"
+      - "apps/web/src/workspace/WorkspaceHome.tsx"
+      - "apps/web/src/workspace/WorkspaceShell.tsx"
       - "packages/database/schema.py"
       - "packages/security/permissions.py"
       - "packages/workflow/**"
@@ -53,3 +65,30 @@ jobs:
 
       - name: Run Workflow package tests
         run: python -m unittest discover -s tests -p "test_workflow_package.py" -v
+
+  workflow-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Verify Workflow frontend capability coverage
+        working-directory: apps/web
+        run: npm run test:workflow
+
+      - name: Build frontend
+        working-directory: apps/web
+        run: npm run build
