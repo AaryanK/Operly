@@ -77,21 +77,15 @@ async function readBody(req, limit = MAX_REQUEST_BYTES) {
 function authenticate(req, pathname, raw) {
   if (!RUNNER_TOKEN) throw Object.assign(new Error("runner token is not configured"), { statusCode: 503 });
   const auth = String(req.headers.authorization || "");
-  if (!safeEqual(auth, `Bearer ${RUNNER_TOKEN}`)) {
-    throw Object.assign(new Error("invalid runner authorization"), { statusCode: 401 });
-  }
+  if (!safeEqual(auth, `Bearer ${RUNNER_TOKEN}`)) throw Object.assign(new Error("invalid runner authorization"), { statusCode: 401 });
   const supplied = String(req.headers["x-operly-signature"] || "");
   const expected = hmac(canonical(req.method || "GET", pathname, raw));
-  if (!supplied || !safeEqual(supplied, expected)) {
-    throw Object.assign(new Error("invalid runner request signature"), { statusCode: 401 });
-  }
+  if (!supplied || !safeEqual(supplied, expected)) throw Object.assign(new Error("invalid runner request signature"), { statusCode: 401 });
 }
 
 function sendJson(res, status, value, { signed = true } = {}) {
   const body = Buffer.from(JSON.stringify(value));
-  if (body.length > MAX_RESPONSE_BYTES) {
-    return sendJson(res, 500, { detail: "runner response exceeded policy" }, { signed });
-  }
+  if (body.length > MAX_RESPONSE_BYTES) return sendJson(res, 500, { detail: "runner response exceeded policy" }, { signed });
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Content-Length", String(body.length));
@@ -108,9 +102,7 @@ function cleanId(value) {
 
 function cleanTool(value) {
   const clean = String(value || "").trim();
-  if (!TOOL_RE.test(clean) || !TOOL_SET.has(clean)) {
-    throw Object.assign(new Error("unknown Computer tool"), { statusCode: 404 });
-  }
+  if (!TOOL_RE.test(clean) || !TOOL_SET.has(clean)) throw Object.assign(new Error("unknown Computer tool"), { statusCode: 404 });
   return clean;
 }
 
@@ -142,10 +134,12 @@ async function writeHelper(box) {
 async function harden(box, networkPolicy) {
   const rules = [
     "iptables -C OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT",
+    "ip6tables -C OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT",
   ];
   if (networkPolicy === "off") {
     rules.push(
       "iptables -C OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT",
+      "ip6tables -C OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT",
     );
   }
   for (const rule of rules) {
@@ -156,10 +150,7 @@ async function harden(box, networkPolicy) {
 async function createSession(payload) {
   if (!ENVIRONMENT_ID) throw Object.assign(new Error("RAILWAY_ENVIRONMENT_ID is required"), { statusCode: 503 });
   const request = cleanCreate(payload);
-  const options = {
-    environmentId: ENVIRONMENT_ID,
-    idleTimeoutMinutes: Math.max(1, Math.min(Math.ceil(request.ttlSeconds / 60), 360)),
-  };
+  const options = { environmentId: ENVIRONMENT_ID, idleTimeoutMinutes: Math.max(1, Math.min(Math.ceil(request.ttlSeconds / 60), 360)) };
   if (request.networkPolicy === "off") options.networkIsolation = "ISOLATED";
   const box = await Sandbox.create(computerTemplate(), options);
   try {
@@ -197,8 +188,7 @@ async function statusSession(runtimeId) {
     } catch {}
     const rawStatus = String(box.status || "RUNNING");
     return {
-      id: cleanId(runtimeId), session_id: cleanId(runtimeId),
-      state: rawStatus === "RUNNING" ? "active" : rawStatus.toLowerCase(),
+      id: cleanId(runtimeId), session_id: cleanId(runtimeId), state: rawStatus === "RUNNING" ? "active" : rawStatus.toLowerCase(),
       isolation: "railway_sandbox_vm_v2", provider: "railway-sandbox", private_network: false,
       profile: meta.profile || null, network_policy: meta.networkPolicy || null, tools: TOOL_IDS,
     };
@@ -218,15 +208,11 @@ async function destroySession(runtimeId) {
   }
 }
 
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
-}
+function shellQuote(value) { return `'${String(value).replaceAll("'", `'"'"'`)}'`; }
 
 async function executeTool(runtimeId, toolId, args) {
   const box = await connect(runtimeId);
-  if (String(box.status || "") !== "RUNNING") {
-    throw Object.assign(new Error("Computer runtime is not running"), { statusCode: 409 });
-  }
+  if (String(box.status || "") !== "RUNNING") throw Object.assign(new Error("Computer runtime is not running"), { statusCode: 409 });
   const tool = cleanTool(toolId);
   const requestId = crypto.randomUUID();
   const requestPath = `${REQUESTS}/${requestId}.json`;
@@ -273,31 +259,20 @@ function parseJson(raw) {
 const server = http.createServer(async (req, res) => {
   let pathname = "/";
   try { pathname = new URL(req.url || "/", "http://runner.invalid").pathname; } catch {}
-
   if (pathname === "/health" && req.method === "GET") {
-    return sendJson(res, 200, {
-      ok: true, service: "operly-sandbox-runner", computer_runtime: true,
-      isolation: "railway-sandbox", private_network_default: false, tools: TOOL_IDS.length,
-    }, { signed: false });
+    return sendJson(res, 200, { ok: true, service: "operly-sandbox-runner", computer_runtime: true, isolation: "railway-sandbox", private_network_default: false, tools: TOOL_IDS.length }, { signed: false });
   }
-  if (!pathname.startsWith("/v1/computer/")) {
-    return sendJson(res, 404, { detail: "Not found" }, { signed: false });
-  }
-
+  if (!pathname.startsWith("/v1/computer/")) return sendJson(res, 404, { detail: "Not found" }, { signed: false });
   try {
     const raw = await readBody(req);
     authenticate(req, pathname, raw);
     const payload = parseJson(raw);
-    if (pathname === "/v1/computer/sessions" && req.method === "POST") {
-      return sendJson(res, 201, await createSession(payload));
-    }
+    if (pathname === "/v1/computer/sessions" && req.method === "POST") return sendJson(res, 201, await createSession(payload));
     const statusMatch = pathname.match(/^\/v1\/computer\/sessions\/([^/]+)$/);
     if (statusMatch && req.method === "GET") return sendJson(res, 200, await statusSession(statusMatch[1]));
     if (statusMatch && req.method === "DELETE") return sendJson(res, 200, await destroySession(statusMatch[1]));
     const toolMatch = pathname.match(/^\/v1\/computer\/sessions\/([^/]+)\/tools\/([^/]+)$/);
-    if (toolMatch && req.method === "POST") {
-      return sendJson(res, 200, await executeTool(toolMatch[1], decodeURIComponent(toolMatch[2]), payload.arguments || {}));
-    }
+    if (toolMatch && req.method === "POST") return sendJson(res, 200, await executeTool(toolMatch[1], decodeURIComponent(toolMatch[2]), payload.arguments || {}));
     return sendJson(res, 404, { detail: "Computer endpoint not found" });
   } catch (error) {
     const status = Number(error?.statusCode || 400);
