@@ -31,7 +31,7 @@ const groupLabels: Record<GroupKey, string> = {
   workspace: "Workspace",
   business: "Business",
   digital: "Digital presence",
-  extend: "Extend",
+  extend: "Tools & connections",
   debug: "Debug",
   admin: "Administration",
 };
