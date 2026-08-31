@@ -16,10 +16,17 @@ from packages.security.surfaces import SurfaceKind
 from packages.workflow.models import (
     WorkflowDefinition,
     WorkflowRun,
+    WorkflowStepAttempt,
     WorkflowStepRun,
     WorkflowVersion,
 )
-from packages.workflow.spec import WorkflowSpecError, evaluate_condition, render_value, validate_workflow_spec
+from packages.workflow.spec import (
+    MAX_WAIT_SECONDS,
+    WorkflowSpecError,
+    evaluate_condition,
+    render_value,
+    validate_workflow_spec,
+)
 from packages.workflow.tracing import record_workflow_event
 
 
@@ -52,7 +59,11 @@ def _step_context(run: WorkflowRun, rows: dict[str, WorkflowStepRun]) -> dict[st
             "status": row.status,
             "attempt": row.attempt,
             "result": _loads(row.result_json, {}),
-            "error": {"code": row.error_code, "message": row.error_message} if row.error_code else None,
+            "error": (
+                {"code": row.error_code, "message": row.error_message}
+                if row.error_code
+                else None
+            ),
         }
     return {
         "trigger": _loads(run.trigger_payload_json, {}),
@@ -85,18 +96,17 @@ async def queue_workflow_run(
         raise RuntimeError("Workflow version is unavailable")
 
     # Manual runs execute as the person who started them. Scheduled runs have no live
-    # human initiator and therefore execute as the durable workflow owner. The chosen
-    # user is still re-resolved against current Workspace membership/permissions at
-    # every action step.
+    # initiator and therefore execute as the durable definition owner. Every action
+    # re-resolves this user against current Workspace membership and permissions.
     authority_user_id = initiated_by_user_id or workflow.owner_user_id
     if not authority_user_id:
-        raise PermissionError("Workflow run has no executable owner")
+        raise PermissionError("Workflow run has no executable authority user")
 
     run = WorkflowRun(
         workflow_id=workflow.id,
         workflow_version_id=version.id,
         workspace_id=workflow.workspace_id,
-        owner_user_id=authority_user_id,
+        authority_user_id=authority_user_id,
         initiated_by_user_id=initiated_by_user_id,
         trigger_type=trigger_type,
         trigger_payload_json=_dumps(trigger_payload or {}),
@@ -120,6 +130,7 @@ async def queue_workflow_run(
             "trigger_type": trigger_type,
             "scheduled_for": scheduled_for.isoformat() if scheduled_for else None,
             "workflow_version": workflow.current_version,
+            "workflow_version_id": version.id,
             "authority_user_id": authority_user_id,
         },
     )
@@ -143,17 +154,37 @@ class WorkflowEngine:
         run = await db.get(WorkflowRun, run_id)
         if run is None:
             raise LookupError("Workflow run is unavailable")
-        if run.status in {"completed", "completed_with_errors", "cancelled", "failed", "orphaned"}:
+        if run.status in {
+            "completed",
+            "completed_with_errors",
+            "cancelled",
+            "failed",
+            "orphaned",
+        }:
             return run
 
         workflow = await db.get(WorkflowDefinition, run.workflow_id)
         version = await db.get(WorkflowVersion, run.workflow_version_id)
         if workflow is None or version is None:
-            return await self._fail(db, run, workflow, "workflow_unavailable", "Workflow definition/version is unavailable")
+            return await self._fail(
+                db,
+                run,
+                workflow,
+                "workflow_unavailable",
+                "Workflow definition/version is unavailable",
+            )
         if workflow.status == "archived":
-            return await self._fail(db, run, workflow, "workflow_archived", "Workflow has been archived")
-        if not run.owner_user_id:
-            return await self._fail(db, run, workflow, "owner_unavailable", "Workflow run owner is unavailable")
+            return await self._fail(
+                db, run, workflow, "workflow_archived", "Workflow has been archived"
+            )
+        if not run.authority_user_id:
+            return await self._fail(
+                db,
+                run,
+                workflow,
+                "authority_unavailable",
+                "Workflow run authority user is unavailable",
+            )
 
         try:
             spec = validate_workflow_spec(_loads(version.spec_json, {}))
@@ -174,11 +205,12 @@ class WorkflowEngine:
             event_type="workflow.run.started" if first_start else "workflow.run.resumed",
             actor_type="system",
             actor_id="operly:workflow",
-            owner_user_id=run.owner_user_id,
-            principal_id=f"user:{run.owner_user_id}",
+            owner_user_id=run.authority_user_id,
+            principal_id=f"user:{run.authority_user_id}",
             payload={
                 "workflow_version_id": run.workflow_version_id,
                 "current_step_key": run.current_step_key,
+                "authority_user_id": run.authority_user_id,
             },
         )
         await db.commit()
@@ -225,7 +257,10 @@ class WorkflowEngine:
 
             context_data = _step_context(run, step_rows)
             try:
-                should_run = step.get("when") is None or evaluate_condition(step["when"], context_data)
+                should_run = (
+                    step.get("when") is None
+                    or evaluate_condition(step["when"], context_data)
+                )
             except WorkflowSpecError as error:
                 return await self._fail(db, run, workflow, "condition_invalid", str(error))
 
@@ -252,21 +287,28 @@ class WorkflowEngine:
                     step_run_id=row.id,
                     event_type="workflow.step.skipped",
                     actor_id="operly:workflow",
-                    owner_user_id=run.owner_user_id,
-                    principal_id=f"user:{run.owner_user_id}",
+                    owner_user_id=run.authority_user_id,
+                    principal_id=f"user:{run.authority_user_id}",
                     payload={"step_key": step_key, "reason": "condition_false"},
                 )
                 await db.commit()
                 continue
 
             if step["kind"] == "wait":
-                waiting = await self._wait_step(db, run, workflow, existing, step, index, context_data)
+                try:
+                    waiting = await self._wait_step(
+                        db, run, existing, step, index, context_data
+                    )
+                except WorkflowSpecError as error:
+                    return await self._fail(db, run, workflow, "wait_invalid", str(error))
                 step_rows[step_key] = waiting
                 if waiting.status == "waiting":
                     return run
                 continue
 
-            action = await self._action_step(db, run, workflow, existing, step, index, context_data)
+            action = await self._action_step(
+                db, run, existing, step, index, context_data
+            )
             step_rows[step_key] = action
             if action.status == "waiting_approval":
                 return run
@@ -291,9 +333,11 @@ class WorkflowEngine:
                     "status": row.status,
                     "attempt": row.attempt,
                     "result": _loads(row.result_json, {}),
-                    "error": {"code": row.error_code, "message": row.error_message}
-                    if row.error_code
-                    else None,
+                    "error": (
+                        {"code": row.error_code, "message": row.error_message}
+                        if row.error_code
+                        else None
+                    ),
                 }
                 for key, row in step_rows.items()
             }
@@ -303,10 +347,14 @@ class WorkflowEngine:
             workspace_id=run.workspace_id,
             workflow_id=run.workflow_id,
             workflow_run_id=run.id,
-            event_type="workflow.run.completed_with_errors" if failed_continued else "workflow.run.completed",
+            event_type=(
+                "workflow.run.completed_with_errors"
+                if failed_continued
+                else "workflow.run.completed"
+            ),
             actor_id="operly:workflow",
-            owner_user_id=run.owner_user_id,
-            principal_id=f"user:{run.owner_user_id}",
+            owner_user_id=run.authority_user_id,
+            principal_id=f"user:{run.authority_user_id}",
             payload={
                 "step_count": len(spec["steps"]),
                 "failed_continued_steps": [row.step_key for row in failed_continued],
@@ -319,13 +367,11 @@ class WorkflowEngine:
         self,
         db: AsyncSession,
         run: WorkflowRun,
-        workflow: WorkflowDefinition,
         row: WorkflowStepRun | None,
         step: dict[str, Any],
         index: int,
         context_data: dict[str, Any],
     ) -> WorkflowStepRun:
-        del workflow
         now = datetime.utcnow()
         if row is None:
             row = WorkflowStepRun(
@@ -343,6 +389,10 @@ class WorkflowEngine:
                 row.wait_until = now + timedelta(seconds=int(step["seconds"]))
             else:
                 row.wait_until = _parse_until(render_value(step["until"], context_data))
+                if row.wait_until > now + timedelta(seconds=MAX_WAIT_SECONDS):
+                    raise WorkflowSpecError(
+                        "Wait-until exceeds the maximum 31-day workflow wait"
+                    )
 
         if row.wait_until > now:
             row.status = "waiting"
@@ -359,8 +409,8 @@ class WorkflowEngine:
                 step_run_id=row.id,
                 event_type="workflow.step.waiting",
                 actor_id="operly:workflow",
-                owner_user_id=run.owner_user_id,
-                principal_id=f"user:{run.owner_user_id}",
+                owner_user_id=run.authority_user_id,
+                principal_id=f"user:{run.authority_user_id}",
                 payload={"step_key": row.step_key, "wait_until": row.wait_until.isoformat()},
             )
             await db.commit()
@@ -379,9 +429,64 @@ class WorkflowEngine:
             step_run_id=row.id,
             event_type="workflow.step.completed",
             actor_id="operly:workflow",
-            owner_user_id=run.owner_user_id,
-            principal_id=f"user:{run.owner_user_id}",
+            owner_user_id=run.authority_user_id,
+            principal_id=f"user:{run.authority_user_id}",
             payload={"step_key": row.step_key, "kind": "wait"},
+        )
+        await db.commit()
+        return row
+
+    async def _current_attempt(
+        self,
+        db: AsyncSession,
+        row: WorkflowStepRun,
+    ) -> WorkflowStepAttempt | None:
+        if row.attempt < 1:
+            return None
+        return await db.scalar(
+            select(WorkflowStepAttempt).where(
+                WorkflowStepAttempt.step_run_id == row.id,
+                WorkflowStepAttempt.attempt == row.attempt,
+            )
+        )
+
+    async def _fail_action_before_runtime(
+        self,
+        db: AsyncSession,
+        run: WorkflowRun,
+        row: WorkflowStepRun,
+        attempt: WorkflowStepAttempt,
+        *,
+        code: str,
+        message: str,
+    ) -> WorkflowStepRun:
+        now = datetime.utcnow()
+        row.status = "failed"
+        row.error_code = code
+        row.error_message = message[:1000]
+        row.finished_at = now
+        attempt.status = "failed"
+        attempt.error_code = code
+        attempt.error_message = message[:1000]
+        attempt.finished_at = now
+        await record_workflow_event(
+            db,
+            workspace_id=run.workspace_id,
+            workflow_id=run.workflow_id,
+            workflow_run_id=run.id,
+            step_run_id=row.id,
+            step_attempt_id=attempt.id,
+            event_type="workflow.step.failed",
+            actor_id="operly:workflow",
+            owner_user_id=run.authority_user_id,
+            principal_id=f"user:{run.authority_user_id}" if run.authority_user_id else None,
+            capability_id=row.capability_id,
+            payload={
+                "step_key": row.step_key,
+                "attempt": row.attempt,
+                "request_id": row.request_id,
+                "code": code,
+            },
         )
         await db.commit()
         return row
@@ -390,13 +495,11 @@ class WorkflowEngine:
         self,
         db: AsyncSession,
         run: WorkflowRun,
-        workflow: WorkflowDefinition,
         row: WorkflowStepRun | None,
         step: dict[str, Any],
         index: int,
         context_data: dict[str, Any],
     ) -> WorkflowStepRun:
-        del workflow
         now = datetime.utcnow()
         if row is None:
             row = WorkflowStepRun(
@@ -410,8 +513,42 @@ class WorkflowEngine:
             db.add(row)
             await db.flush()
 
-        approval_id = None
+        approval_id: str | None = None
+        attempt: WorkflowStepAttempt | None = None
+
         if row.status == "waiting_approval" and row.approval_id:
+            attempt = await self._current_attempt(db, row)
+            if attempt is None:
+                # A waiting approval without its immutable attempt row is an integrity
+                # failure. Never reconstruct/replay the invocation from guesses.
+                row.attempt += 1
+                row.request_id = row.request_id or (
+                    f"workflow:{run.id}:{row.step_key}:attempt:{row.attempt}"
+                )
+                attempt = WorkflowStepAttempt(
+                    workflow_run_id=run.id,
+                    step_run_id=row.id,
+                    attempt=row.attempt,
+                    capability_id=str(row.capability_id or step["capability_id"]),
+                    status="failed",
+                    request_id=row.request_id,
+                    arguments_json=row.arguments_json,
+                    error_code="attempt_lineage_missing",
+                    error_message="Workflow approval attempt lineage is unavailable",
+                    started_at=now,
+                    finished_at=now,
+                )
+                db.add(attempt)
+                await db.flush()
+                return await self._fail_action_before_runtime(
+                    db,
+                    run,
+                    row,
+                    attempt,
+                    code="attempt_lineage_missing",
+                    message="Workflow approval attempt lineage is unavailable",
+                )
+
             approval = await db.get(KernelApproval, row.approval_id)
             if approval is None or approval.status == "pending":
                 run.status = "waiting_approval"
@@ -425,6 +562,11 @@ class WorkflowEngine:
                 row.error_code = "approval_rejected"
                 row.error_message = "A human rejected this workflow step"
                 row.finished_at = now
+                attempt.status = "failed"
+                attempt.approval_id = approval.id
+                attempt.error_code = "approval_rejected"
+                attempt.error_message = row.error_message
+                attempt.finished_at = now
                 run.current_step_key = row.step_key
                 await record_workflow_event(
                     db,
@@ -432,29 +574,85 @@ class WorkflowEngine:
                     workflow_id=run.workflow_id,
                     workflow_run_id=run.id,
                     step_run_id=row.id,
+                    step_attempt_id=attempt.id,
                     event_type="workflow.step.failed",
                     actor_type="human",
                     actor_id=approval.decided_by_user_id,
-                    owner_user_id=run.owner_user_id,
-                    principal_id=f"user:{run.owner_user_id}",
+                    owner_user_id=run.authority_user_id,
+                    principal_id=(
+                        f"user:{run.authority_user_id}" if run.authority_user_id else None
+                    ),
                     capability_id=row.capability_id,
                     kernel_run_id=row.kernel_run_id,
                     approval_id=approval.id,
-                    payload={"step_key": row.step_key, "code": "approval_rejected"},
+                    payload={
+                        "step_key": row.step_key,
+                        "attempt": row.attempt,
+                        "request_id": row.request_id,
+                        "code": "approval_rejected",
+                    },
                 )
                 await db.commit()
                 return row
             approval_id = approval.id
+            attempt.status = "running"
+            attempt.approval_id = approval.id
         else:
             row.attempt += 1
             row.request_id = f"workflow:{run.id}:{row.step_key}:attempt:{row.attempt}"
-            row.arguments_json = _dumps(render_value(step.get("arguments") or {}, context_data))
             row.approval_id = None
             row.kernel_run_id = None
             row.error_code = None
             row.error_message = None
+            row.result_json = "{}"
+            row.finished_at = None
+            try:
+                rendered_arguments = render_value(step.get("arguments") or {}, context_data)
+                if not isinstance(rendered_arguments, dict):
+                    raise WorkflowSpecError("Rendered action arguments must be an object")
+                row.arguments_json = _dumps(rendered_arguments)
+            except WorkflowSpecError as error:
+                row.arguments_json = "{}"
+                attempt = WorkflowStepAttempt(
+                    workflow_run_id=run.id,
+                    step_run_id=row.id,
+                    attempt=row.attempt,
+                    capability_id=str(row.capability_id or step["capability_id"]),
+                    status="failed",
+                    request_id=row.request_id,
+                    arguments_json="{}",
+                    error_code="argument_render_failed",
+                    error_message=str(error)[:1000],
+                    started_at=now,
+                    finished_at=now,
+                )
+                db.add(attempt)
+                await db.flush()
+                return await self._fail_action_before_runtime(
+                    db,
+                    run,
+                    row,
+                    attempt,
+                    code="argument_render_failed",
+                    message=str(error),
+                )
 
-        arguments = _loads(row.arguments_json, {})
+            attempt = WorkflowStepAttempt(
+                workflow_run_id=run.id,
+                step_run_id=row.id,
+                attempt=row.attempt,
+                capability_id=str(row.capability_id or step["capability_id"]),
+                status="running",
+                request_id=row.request_id,
+                arguments_json=row.arguments_json,
+                started_at=now,
+            )
+            db.add(attempt)
+            await db.flush()
+
+        assert attempt is not None
+        arguments = _loads(attempt.arguments_json, {})
+        row.arguments_json = attempt.arguments_json
         row.status = "running"
         row.started_at = row.started_at or now
         run.status = "running"
@@ -465,10 +663,17 @@ class WorkflowEngine:
             workflow_id=run.workflow_id,
             workflow_run_id=run.id,
             step_run_id=row.id,
-            event_type="workflow.step.started" if approval_id is None else "workflow.step.approval_resumed",
+            step_attempt_id=attempt.id,
+            event_type=(
+                "workflow.step.started"
+                if approval_id is None
+                else "workflow.step.approval_resumed"
+            ),
             actor_id="operly:workflow",
-            owner_user_id=run.owner_user_id,
-            principal_id=f"user:{run.owner_user_id}",
+            owner_user_id=run.authority_user_id,
+            principal_id=(
+                f"user:{run.authority_user_id}" if run.authority_user_id else None
+            ),
             capability_id=row.capability_id,
             approval_id=approval_id,
             payload={
@@ -480,11 +685,21 @@ class WorkflowEngine:
         )
         await db.commit()
 
+        if not run.authority_user_id:
+            return await self._fail_action_before_runtime(
+                db,
+                run,
+                row,
+                attempt,
+                code="authority_unavailable",
+                message="Workflow authority user is unavailable",
+            )
+
         try:
             authority = await resolve_execution_context(
                 db,
                 workspace_id=run.workspace_id,
-                user_id=run.owner_user_id,
+                user_id=run.authority_user_id,
                 channel="workflow",
                 surface=SurfaceKind.SYSTEM_TASK,
                 conversation_id=f"workflow:{run.id}",
@@ -493,32 +708,23 @@ class WorkflowEngine:
                     "workflow_run_id": run.id,
                     "workflow_step_key": row.step_key,
                     "workflow_step_run_id": row.id,
+                    "workflow_step_attempt_id": attempt.id,
                     "workflow_attempt": row.attempt,
                 },
             )
         except (ExecutionContextError, PermissionError) as error:
             row = await db.get(WorkflowStepRun, row.id)
-            assert row is not None
-            row.status = "failed"
-            row.error_code = "authority_unavailable"
-            row.error_message = str(error)[:1000]
-            row.finished_at = datetime.utcnow()
-            await record_workflow_event(
+            attempt = await db.get(WorkflowStepAttempt, attempt.id)
+            run = await db.get(WorkflowRun, run.id)
+            assert row is not None and attempt is not None and run is not None
+            return await self._fail_action_before_runtime(
                 db,
-                workspace_id=run.workspace_id,
-                workflow_id=run.workflow_id,
-                workflow_run_id=run.id,
-                step_run_id=row.id,
-                event_type="workflow.step.failed",
-                actor_id="operly:workflow",
-                owner_user_id=run.owner_user_id,
-                principal_id=f"user:{run.owner_user_id}",
-                capability_id=row.capability_id,
-                approval_id=approval_id,
-                payload={"step_key": row.step_key, "code": row.error_code},
+                run,
+                row,
+                attempt,
+                code="authority_unavailable",
+                message=str(error),
             )
-            await db.commit()
-            return row
 
         try:
             response = await self._runtime().execute(
@@ -534,12 +740,16 @@ class WorkflowEngine:
             )
         except RuntimeExecutionError as error:
             row = await db.get(WorkflowStepRun, row.id)
+            attempt = await db.get(WorkflowStepAttempt, attempt.id)
             run = await db.get(WorkflowRun, run.id)
-            assert row is not None and run is not None
+            assert row is not None and attempt is not None and run is not None
             row.kernel_run_id = error.run_id
+            attempt.kernel_run_id = error.run_id
             if error.code == "approval_required" and error.approval_id:
                 row.status = "waiting_approval"
                 row.approval_id = error.approval_id
+                attempt.status = "waiting_approval"
+                attempt.approval_id = error.approval_id
                 run.status = "waiting_approval"
                 run.current_step_key = row.step_key
                 run.lease_token = None
@@ -550,10 +760,13 @@ class WorkflowEngine:
                     workflow_id=run.workflow_id,
                     workflow_run_id=run.id,
                     step_run_id=row.id,
+                    step_attempt_id=attempt.id,
                     event_type="workflow.step.waiting_approval",
                     actor_id="operly:workflow",
-                    owner_user_id=run.owner_user_id,
-                    principal_id=f"user:{run.owner_user_id}",
+                    owner_user_id=run.authority_user_id,
+                    principal_id=(
+                        f"user:{run.authority_user_id}" if run.authority_user_id else None
+                    ),
                     capability_id=row.capability_id,
                     kernel_run_id=error.run_id,
                     approval_id=error.approval_id,
@@ -568,43 +781,66 @@ class WorkflowEngine:
                 row.error_code = error.code
                 row.error_message = str(error)[:1000]
                 row.finished_at = datetime.utcnow()
+                attempt.status = "failed"
+                attempt.error_code = error.code
+                attempt.error_message = str(error)[:1000]
+                attempt.finished_at = row.finished_at
                 await record_workflow_event(
                     db,
                     workspace_id=run.workspace_id,
                     workflow_id=run.workflow_id,
                     workflow_run_id=run.id,
                     step_run_id=row.id,
+                    step_attempt_id=attempt.id,
                     event_type="workflow.step.failed",
                     actor_id="operly:workflow",
-                    owner_user_id=run.owner_user_id,
-                    principal_id=f"user:{run.owner_user_id}",
+                    owner_user_id=run.authority_user_id,
+                    principal_id=(
+                        f"user:{run.authority_user_id}" if run.authority_user_id else None
+                    ),
                     capability_id=row.capability_id,
                     kernel_run_id=error.run_id,
                     approval_id=approval_id,
-                    payload={"step_key": row.step_key, "code": error.code},
+                    payload={
+                        "step_key": row.step_key,
+                        "attempt": row.attempt,
+                        "request_id": row.request_id,
+                        "code": error.code,
+                    },
                 )
             await db.commit()
             return row
 
         row = await db.get(WorkflowStepRun, row.id)
+        attempt = await db.get(WorkflowStepAttempt, attempt.id)
         run = await db.get(WorkflowRun, run.id)
-        assert row is not None and run is not None
+        assert row is not None and attempt is not None and run is not None
+        finished = datetime.utcnow()
         row.status = "completed"
         row.kernel_run_id = response.run_id
         row.result_json = _dumps(response.result or {})
         row.error_code = None
         row.error_message = None
-        row.finished_at = datetime.utcnow()
+        row.finished_at = finished
+        attempt.status = "completed"
+        attempt.kernel_run_id = response.run_id
+        attempt.result_json = row.result_json
+        attempt.error_code = None
+        attempt.error_message = None
+        attempt.finished_at = finished
         await record_workflow_event(
             db,
             workspace_id=run.workspace_id,
             workflow_id=run.workflow_id,
             workflow_run_id=run.id,
             step_run_id=row.id,
+            step_attempt_id=attempt.id,
             event_type="workflow.step.completed",
             actor_id="operly:workflow",
-            owner_user_id=run.owner_user_id,
-            principal_id=f"user:{run.owner_user_id}",
+            owner_user_id=run.authority_user_id,
+            principal_id=(
+                f"user:{run.authority_user_id}" if run.authority_user_id else None
+            ),
             capability_id=row.capability_id,
             kernel_run_id=response.run_id,
             approval_id=approval_id,
@@ -640,8 +876,10 @@ class WorkflowEngine:
                 workflow_run_id=run.id,
                 event_type="workflow.run.failed",
                 actor_id="operly:workflow",
-                owner_user_id=run.owner_user_id,
-                principal_id=f"user:{run.owner_user_id}" if run.owner_user_id else None,
+                owner_user_id=run.authority_user_id,
+                principal_id=(
+                    f"user:{run.authority_user_id}" if run.authority_user_id else None
+                ),
                 payload={"code": code, "current_step_key": run.current_step_key},
             )
         await db.commit()
