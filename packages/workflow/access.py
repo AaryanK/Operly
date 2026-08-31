@@ -23,6 +23,17 @@ from packages.workflow.provider import (
 )
 
 
+def _validate_mutation_input(capability_id: str, arguments: dict[str, Any]) -> None:
+    """Enforce normalized invariants JSON Schema cannot express by length alone."""
+
+    if capability_id == "workflow.create":
+        if not str(arguments.get("name") or "").strip():
+            raise ValueError("Workflow name is required")
+    elif capability_id == "workflow.update" and arguments.get("name") is not None:
+        if not str(arguments["name"]).strip():
+            raise ValueError("Workflow name cannot be empty")
+
+
 class WorkflowProvider(BaseWorkflowProvider):
     """Scope delegated Workflow authority to the principal's own definitions/runs.
 
@@ -232,6 +243,8 @@ class WorkflowProvider(BaseWorkflowProvider):
         arguments: dict[str, Any],
         minimum_context: dict[str, Any],
     ) -> CapabilityExecutionResult:
+        _validate_mutation_input(capability.id, arguments)
+
         if context.role == "owner":
             return await super().execute(
                 db,
