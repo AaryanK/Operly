@@ -1,8 +1,9 @@
 """Workspace-owned deterministic tools.
 
 Workspace business modules own their tools; external providers live under
-``packages.workspace_modules.integrations``. Studio deployment and Agent Computer
-interfaces also compose here over the generic Kernel execution/policy substrate.
+``packages.workspace_modules.integrations``. Studio deployment, Agent Computer, and
+the top-level Workflow package compose here over the generic Kernel execution/policy
+substrate without creating parallel execution authority.
 """
 
 from typing import TYPE_CHECKING
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 
 
 def workspace_capabilities() -> tuple["CapabilitySpec", ...]:
+    from packages.workflow import workflow_capabilities
     from packages.workspace_modules.agent_computer.native_tools import computer_native_capabilities
     from packages.workspace_modules.integrations import integration_capabilities
     from packages.workspace_modules.studio import workspace_studio_capabilities
@@ -29,10 +31,12 @@ def workspace_capabilities() -> tuple["CapabilitySpec", ...]:
         *workspace_studio_capabilities(),
         *computer_native_capabilities(),
         *integration_capabilities(),
+        *workflow_capabilities(),
     )
 
 
 def register_workspace_providers(providers: "ProviderRegistry") -> None:
+    from packages.workflow import PROVIDER_ID as WORKFLOW_PROVIDER_ID, WorkflowProvider
     from packages.workspace_modules.agent_computer.native_tools import (
         PROVIDER_ID as AGENT_COMPUTER_PROVIDER_ID,
         AgentComputerProvider,
@@ -51,6 +55,7 @@ def register_workspace_providers(providers: "ProviderRegistry") -> None:
     providers.register(WORKSPACE_OS_PROVIDER_ID, AvailableWorkspaceOSProvider())
     providers.register(STUDIO_PROVIDER_ID, WorkspaceStudioProvider())
     providers.register(AGENT_COMPUTER_PROVIDER_ID, AgentComputerProvider())
+    providers.register(WORKFLOW_PROVIDER_ID, WorkflowProvider())
     register_integration_providers(providers)
 
 

@@ -31,6 +31,7 @@ DEFAULT_ROLE_AUTHORITY: dict[str, set[str]] = {
         "tasks:write", "memory:read", "memory:write", "messages:read",
         "actions:read", "actions:approve", "model:invoke", "files:process", "computer:execute",
         "reminders:write", "discord:read", "discord:write",
+        "workflows:read", "workflows:write", "workflows:run",
         "context:human:read", "context:human:write", "context:tenant:read",
         "context:tenant:write", "context:conversation:read", "context:conversation:write",
         "workspace:read", "workspace:settings:manage", "workspace:members:manage",
