@@ -86,7 +86,7 @@ type IntegrationRuntime = {
     onSuccess?: (value: unknown) => void | Promise<void>,
   ) => Promise<unknown | undefined>;
   approvePending: () => Promise<void>;
-  cancelPending: () => void;
+  cancelPending: () => Promise<void>;
   clearFeedback: () => void;
   startOAuth: (provider: "google" | "canva") => Promise<void>;
   addDiscord: () => void;
@@ -240,29 +240,52 @@ export function IntegrationRuntimeProvider({
 
   async function approvePending() {
     if (!pending) return;
-    setBusy(pending.tool.id);
+    const approval = pending;
+    setBusy(approval.tool.id);
     setError(null);
     try {
       await api(
-        `/workspace-tools/approvals/${encodeURIComponent(pending.approvalId)}/decision`,
+        `/workspace-tools/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
         {
           method: "POST",
           body: JSON.stringify({ approved: true }),
         },
       );
-      const run = await api<ToolRun>(pending.tool.endpoint, {
-        method: pending.tool.method,
+      const run = await api<ToolRun>(approval.tool.endpoint, {
+        method: approval.tool.method,
         body: JSON.stringify({
-          arguments: pending.args,
-          request_id: pending.requestId,
-          approval_id: pending.approvalId,
+          arguments: approval.args,
+          request_id: approval.requestId,
+          approval_id: approval.approvalId,
         }),
       });
-      await pending.onSuccess?.(run.result);
-      setNotice(`${pending.tool.display_name} completed after approval.`);
+      await approval.onSuccess?.(run.result);
+      setNotice(`${approval.tool.display_name} completed after approval.`);
       setPending(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Approved action could not execute");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelPending() {
+    if (!pending) return;
+    const approval = pending;
+    setBusy(approval.tool.id);
+    setError(null);
+    try {
+      await api(
+        `/workspace-tools/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
+        {
+          method: "POST",
+          body: JSON.stringify({ approved: false }),
+        },
+      );
+      setPending(null);
+      setNotice(`${approval.tool.display_name} was cancelled.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not cancel pending action");
     } finally {
       setBusy(null);
     }
@@ -352,7 +375,7 @@ export function IntegrationRuntimeProvider({
     reload,
     invoke,
     approvePending,
-    cancelPending: () => setPending(null),
+    cancelPending,
     clearFeedback: () => {
       setNotice(null);
       setError(null);
@@ -409,8 +432,12 @@ export function IntegrationApprovalDialog() {
           <pre>{JSON.stringify(pending.args, null, 2)}</pre>
         </details>
         <div className="row-actions">
-          <button type="button" onClick={cancelPending}>
-            Cancel
+          <button
+            type="button"
+            disabled={busy === pending.tool.id}
+            onClick={() => void cancelPending()}
+          >
+            Cancel action
           </button>
           <button
             type="button"
@@ -418,7 +445,7 @@ export function IntegrationApprovalDialog() {
             disabled={busy === pending.tool.id}
             onClick={() => void approvePending()}
           >
-            {busy === pending.tool.id ? "Executing…" : "Approve exact action"}
+            {busy === pending.tool.id ? "Working…" : "Approve exact action"}
           </button>
         </div>
       </article>
