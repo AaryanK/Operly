@@ -18,12 +18,15 @@ from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.kernel.runtime import RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
+from packages.workspace_modules.agent_computer.native_tools import computer_native_capabilities
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 router = APIRouter(prefix="/api/agent-computer", tags=["agent-computer"])
 _runtime = build_workspace_runtime()
 
+# These are convenience presets for humans. The Computer itself is general-purpose;
+# agents can use every authorized computer.* and Workspace capability directly.
 ACTION_CAPABILITIES: dict[str, str] = {
     "inspect": "studio.project.inspect",
     "deploy": "studio.solution.deploy",
@@ -34,13 +37,30 @@ ACTION_CAPABILITIES: dict[str, str] = {
 
 class CreateComputerSessionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["inspect", "deploy", "rollback", "domain"]
+    action: Literal["general", "inspect", "deploy", "rollback", "domain"] = "general"
     objective: str = Field(default="", max_length=4000)
     project_id: str | None = Field(default=None, max_length=80)
     solution_id: str | None = Field(default=None, max_length=80)
     deployment_id: str | None = Field(default=None, max_length=80)
     domain: str | None = Field(default=None, max_length=253)
     solution_name: str | None = Field(default=None, max_length=200)
+    runtime_profile: Literal["general", "coding", "data", "browser"] = "general"
+    network_policy: Literal["off", "web", "full"] = "web"
+
+
+class RuntimeStartInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile: Literal["general", "coding", "data", "browser"] | None = None
+    network_policy: Literal["off", "web", "full"] | None = None
+    ttl_seconds: int = Field(default=7200, ge=60, le=21600)
+
+
+class ComputerToolExecuteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    goal: str = Field(default="", max_length=4000)
+    request_id: str | None = Field(default=None, max_length=160)
+    approval_id: str | None = Field(default=None, max_length=80)
 
 
 async def _context(
@@ -67,11 +87,13 @@ async def _context(
 
 
 async def _available_specs(db: AsyncSession, context: ExecutionContext) -> dict[str, CapabilitySpec]:
-    specs = await _runtime.available_capabilities(db, context=context, query="studio", limit=100)
+    specs = await _runtime.available_capabilities(db, context=context, query=None, limit=1000)
     return {spec.id: spec for spec in specs if spec.resource_scope == "workspace"}
 
 
 def _arguments(payload: CreateComputerSessionInput) -> dict[str, Any]:
+    if payload.action == "general":
+        return {}
     if payload.action in {"inspect", "deploy"}:
         if not payload.project_id:
             raise HTTPException(status_code=422, detail="project_id is required for this Agent Computer task")
@@ -147,6 +169,14 @@ async def _session_json(
         "current_request_id": row.current_request_id,
         "current_run_id": row.current_run_id,
         "approval_id": row.approval_id,
+        "runtime": {
+            "session_id": row.runtime_session_id,
+            "state": row.runtime_state,
+            "profile": row.runtime_profile,
+            "network_policy": row.network_policy,
+            "started_at": row.runtime_started_at.isoformat() if row.runtime_started_at else None,
+            "updated_at": row.runtime_updated_at.isoformat() if row.runtime_updated_at else None,
+        },
         "error": row.error,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -188,7 +218,13 @@ async def _append_step(
     payload: dict[str, Any] | None = None,
 ) -> AgentComputerStepRecord:
     sequence = int(
-        (await db.scalar(select(func.max(AgentComputerStepRecord.sequence)).where(AgentComputerStepRecord.session_id == row.id)))
+        (
+            await db.scalar(
+                select(func.max(AgentComputerStepRecord.sequence)).where(
+                    AgentComputerStepRecord.session_id == row.id
+                )
+            )
+        )
         or 0
     ) + 1
     step = AgentComputerStepRecord(
@@ -209,13 +245,56 @@ async def _append_step(
     return step
 
 
-async def _execute_session(
+async def _execute_capability(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    row: AgentComputerSessionRecord,
+    capability_id: str,
+    arguments: dict[str, Any],
+    goal: str,
+    request_id: str | None = None,
+    approval_id: str | None = None,
+) -> dict[str, Any]:
+    specs = await _available_specs(db, context)
+    if capability_id not in specs:
+        raise HTTPException(status_code=403, detail=f"{capability_id} is not currently authorized or available")
+    request_id = request_id or f"agent-computer:{row.id}:{uuid4()}"
+    try:
+        response = await _runtime.execute(
+            db,
+            context=context,
+            request=RuntimeRequest(
+                goal=goal,
+                capability_id=capability_id,
+                arguments=arguments,
+                conversation_id=f"agent-computer:{row.id}",
+                request_id=request_id,
+                approval_id=approval_id,
+            ),
+        )
+    except RuntimeExecutionError as error:
+        detail: dict[str, Any] = {
+            "code": error.code,
+            "message": str(error),
+            "run_id": error.run_id,
+            "request_id": request_id,
+        }
+        if error.approval_id:
+            detail["approval_id"] = error.approval_id
+        raise HTTPException(status_code=error.status_code, detail=detail) from error
+    return {**response.as_dict(), "request_id": request_id}
+
+
+async def _execute_preset(
     db: AsyncSession,
     auth: AuthContext,
     row: AgentComputerSessionRecord,
     *,
     resume: bool,
 ) -> dict[str, Any]:
+    if row.action == "general":
+        raise HTTPException(status_code=409, detail="General Computer sessions use the runtime and native tool endpoints")
     context = await _context(db, auth, session_id=row.id)
     capability_id = ACTION_CAPABILITIES[row.action]
     specs = await _available_specs(db, context)
@@ -334,13 +413,33 @@ async def agent_computer_status(
 ):
     context = await _context(db, auth)
     specs = await _available_specs(db, context)
+    native_contracts = computer_native_capabilities()
+    native_ids = {spec.id for spec in native_contracts}
+    available_native = native_ids & set(specs)
     return {
         "enabled": True,
-        "planner": "deterministic",
+        "role": "agent execution environment",
+        "planner": "external-agent-or-human",
         "ai_enabled": False,
-        "shell_access": False,
-        "browser_credentials": False,
-        "actions": [
+        "runner_configured": "computer.runtime.start" in available_native,
+        "isolation_required": "per-session-container-or-microvm",
+        "direct_operly_secrets": False,
+        "workspace_authority_bypass": False,
+        "native_tool_count": len(native_contracts),
+        "native_tools_available": len(available_native),
+        "native_tools": [
+            {
+                "id": spec.id,
+                "display_name": spec.display_name,
+                "description": spec.description,
+                "available": spec.id in specs,
+                "risk": spec.risk.value,
+                "approval_required": spec.approval_required,
+                "tags": sorted(spec.tags),
+            }
+            for spec in native_contracts
+        ],
+        "presets": [
             {
                 "id": action,
                 "capability_id": capability_id,
@@ -362,7 +461,7 @@ async def agent_computer_catalog(
     specs = await _available_specs(db, context)
     capability_id = "studio.projects.list"
     if capability_id not in specs:
-        raise HTTPException(status_code=403, detail="Studio project catalog is unavailable")
+        return {"projects": []}
     try:
         response = await _runtime.execute(
             db,
@@ -408,11 +507,12 @@ async def create_agent_computer_session(
 ):
     context = await _context(db, auth)
     specs = await _available_specs(db, context)
-    capability_id = ACTION_CAPABILITIES[payload.action]
-    if capability_id not in specs:
+    capability_id = ACTION_CAPABILITIES.get(payload.action)
+    if capability_id and capability_id not in specs:
         raise HTTPException(status_code=403, detail=f"{capability_id} is not currently authorized or available")
     args = _arguments(payload)
     title = {
+        "general": "Agent Computer workspace",
         "inspect": "Inspect Studio project",
         "deploy": "Deploy Studio solution",
         "rollback": "Roll back Studio solution",
@@ -430,6 +530,8 @@ async def create_agent_computer_session(
         solution_id=payload.solution_id,
         arguments_json=json.dumps(args, separators=(",", ":"), sort_keys=True),
         current_capability_id=capability_id,
+        runtime_profile=payload.runtime_profile,
+        network_policy=payload.network_policy,
     )
     db.add(row)
     await db.flush()
@@ -440,7 +542,12 @@ async def create_agent_computer_session(
         status="ready",
         summary=row.objective,
         capability_id=capability_id,
-        payload={"action": payload.action, "arguments": args},
+        payload={
+            "action": payload.action,
+            "arguments": args,
+            "runtime_profile": payload.runtime_profile,
+            "network_policy": payload.network_policy,
+        },
     )
     await db.commit()
     return await _session_json(db, row)
@@ -463,13 +570,38 @@ async def run_agent_computer_session(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _owned_session(db, auth, session_id)
+    if row.action == "general":
+        context = await _context(db, auth, session_id=session_id)
+        try:
+            response = await _execute_capability(
+                db,
+                context=context,
+                row=row,
+                capability_id="computer.runtime.start",
+                arguments={
+                    "computer_session_id": row.id,
+                    "profile": row.runtime_profile,
+                    "network_policy": row.network_policy,
+                    "ttl_seconds": 7200,
+                },
+                goal=row.objective,
+            )
+        except HTTPException as error:
+            row.state = "failed"
+            row.error = str(error.detail)
+            await db.commit()
+            return await _session_json(db, row)
+        row.state = "active"
+        row.result_json = json.dumps(response.get("result") or {}, separators=(",", ":"), sort_keys=True, default=str)
+        await db.commit()
+        return await _session_json(db, row)
     if row.state == "completed":
         return await _session_json(db, row)
     if row.state == "waiting_for_approval":
         raise HTTPException(status_code=409, detail="This Agent Computer session is waiting for approval")
     if row.state == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled Agent Computer sessions cannot run")
-    return await _execute_session(db, auth, row, resume=False)
+    return await _execute_preset(db, auth, row, resume=False)
 
 
 @router.post("/sessions/{session_id}/resume")
@@ -479,9 +611,126 @@ async def resume_agent_computer_session(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _owned_session(db, auth, session_id)
+    if row.action == "general":
+        raise HTTPException(status_code=409, detail="General Computer sessions do not use preset approval resume")
     if row.state != "waiting_for_approval" or not row.approval_id:
         raise HTTPException(status_code=409, detail="Agent Computer session is not waiting for an approval")
-    return await _execute_session(db, auth, row, resume=True)
+    return await _execute_preset(db, auth, row, resume=True)
+
+
+@router.get("/sessions/{session_id}/tools")
+async def list_session_tools(
+    session_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await _owned_session(db, auth, session_id)
+    context = await _context(db, auth, session_id=session_id)
+    specs = await _available_specs(db, context)
+    tools = []
+    for contract in computer_native_capabilities():
+        available = contract.id in specs
+        tools.append(
+            {
+                **contract.public_dict(),
+                "available": available,
+                "endpoint": f"/agent-computer/sessions/{row.id}/tools/{contract.id}/execute",
+                "method": "POST",
+            }
+        )
+    return {"computer_session_id": row.id, "runtime": (await _session_json(db, row, include_steps=False))["runtime"], "tools": tools}
+
+
+@router.post("/sessions/{session_id}/runtime/start")
+async def start_session_runtime(
+    session_id: str,
+    payload: RuntimeStartInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await _owned_session(db, auth, session_id)
+    context = await _context(db, auth, session_id=session_id)
+    arguments = {
+        "computer_session_id": row.id,
+        "profile": payload.profile or row.runtime_profile,
+        "network_policy": payload.network_policy or row.network_policy,
+        "ttl_seconds": payload.ttl_seconds,
+    }
+    response = await _execute_capability(
+        db,
+        context=context,
+        row=row,
+        capability_id="computer.runtime.start",
+        arguments=arguments,
+        goal=f"Start isolated Computer runtime for {row.objective}",
+    )
+    row.state = "active" if row.action == "general" else row.state
+    await db.commit()
+    return {"computer_session": await _session_json(db, row), "execution": response}
+
+
+@router.get("/sessions/{session_id}/runtime")
+async def session_runtime_status(
+    session_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await _owned_session(db, auth, session_id)
+    context = await _context(db, auth, session_id=session_id)
+    response = await _execute_capability(
+        db,
+        context=context,
+        row=row,
+        capability_id="computer.runtime.status",
+        arguments={"computer_session_id": row.id},
+        goal="Inspect Agent Computer runtime status",
+    )
+    return response
+
+
+@router.post("/sessions/{session_id}/runtime/stop")
+async def stop_session_runtime(
+    session_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await _owned_session(db, auth, session_id)
+    context = await _context(db, auth, session_id=session_id)
+    response = await _execute_capability(
+        db,
+        context=context,
+        row=row,
+        capability_id="computer.runtime.stop",
+        arguments={"computer_session_id": row.id},
+        goal="Stop Agent Computer runtime",
+    )
+    return response
+
+
+@router.post("/sessions/{session_id}/tools/{capability_id:path}/execute")
+async def execute_session_tool(
+    session_id: str,
+    capability_id: str,
+    payload: ComputerToolExecuteInput,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await _owned_session(db, auth, session_id)
+    if not capability_id.startswith("computer."):
+        raise HTTPException(status_code=422, detail="Only native computer.* tools are accepted on this endpoint")
+    context = await _context(db, auth, session_id=session_id)
+    arguments = dict(payload.arguments)
+    arguments["computer_session_id"] = row.id
+    return await _execute_capability(
+        db,
+        context=context,
+        row=row,
+        capability_id=capability_id,
+        arguments=arguments,
+        goal=payload.goal or f"Execute {capability_id} in Agent Computer session {row.id}",
+        request_id=payload.request_id,
+        approval_id=payload.approval_id,
+    )
 
 
 @router.post("/sessions/{session_id}/cancel")
@@ -492,7 +741,7 @@ async def cancel_agent_computer_session(
 ):
     row = await _owned_session(db, auth, session_id)
     context = await _context(db, auth, session_id=session_id)
-    if row.state in {"completed", "cancelled"}:
+    if row.state in {"completed", "cancelled"} and not row.runtime_session_id:
         return await _session_json(db, row)
     if row.approval_id:
         try:
@@ -505,6 +754,21 @@ async def cancel_agent_computer_session(
             )
         except ApprovalError:
             pass
+    if row.runtime_session_id:
+        try:
+            await _execute_capability(
+                db,
+                context=context,
+                row=row,
+                capability_id="computer.runtime.stop",
+                arguments={"computer_session_id": row.id},
+                goal="Tear down cancelled Agent Computer runtime",
+            )
+        except HTTPException:
+            # Cancellation remains authoritative even if an already-broken runner
+            # cannot acknowledge teardown. The runtime handle remains visible for
+            # operational reconciliation instead of pretending cleanup succeeded.
+            row.runtime_state = "teardown_unconfirmed"
     row.state = "cancelled"
     row.completed_at = datetime.utcnow()
     await _append_step(
