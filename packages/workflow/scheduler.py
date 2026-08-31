@@ -147,7 +147,11 @@ class WorkflowScheduler:
                 )
                 if owned is None:
                     return
-                await workflow_engine.execute_run(db, run_id)
+                await workflow_engine.execute_run(
+                    db,
+                    run_id,
+                    expected_lease_token=lease_token,
+                )
         except asyncio.CancelledError:
             await self._handle_cancelled_worker(run_id, lease_token)
             raise
