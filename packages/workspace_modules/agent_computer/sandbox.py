@@ -93,9 +93,15 @@ class ComputerRunnerClient:
         if not isinstance(data, dict):
             raise ComputerRunnerError("Operly Sandbox Runner returned an invalid response shape")
 
-        if response.status_code >= 400:
-            message = str(data.get("detail") or data.get("message") or "Sandbox Runner rejected the operation")
-            raise ComputerRunnerError(f"{message} (HTTP {response.status_code})")
+        if response.status_code >= 400 or data.get("ok") is False:
+            message = str(
+                data.get("detail")
+                or data.get("error")
+                or data.get("message")
+                or "Sandbox Runner rejected the operation"
+            )
+            suffix = f" (HTTP {response.status_code})" if response.status_code >= 400 else ""
+            raise ComputerRunnerError(message + suffix)
         return data
 
     async def health(self) -> dict[str, Any]:
@@ -126,6 +132,9 @@ class ComputerRunnerClient:
         ttl_seconds: int,
         network_policy: str,
     ) -> dict[str, Any]:
+        # Legacy callers may still say "full". Agent Computer never joins the
+        # Operly private network; normalize it to public-web sandbox networking.
+        effective_network_policy = "web" if network_policy == "full" else network_policy
         return await self._request(
             "POST",
             "/v1/computer/sessions",
@@ -135,7 +144,7 @@ class ComputerRunnerClient:
                 "principal_id": principal_id,
                 "profile": profile,
                 "ttl_seconds": ttl_seconds,
-                "network_policy": network_policy,
+                "network_policy": effective_network_policy,
             },
         )
 
