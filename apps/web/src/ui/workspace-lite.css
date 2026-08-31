@@ -120,7 +120,14 @@
   gap: 12px;
   color: #aaa2b7;
 }
-.workspace-lite-topbar-actions a:hover { color: #fff; }
+.workspace-lite-topbar-actions a:hover,
+.workspace-lite-topbar-actions a.active { color: #fff; }
+.workspace-lite-topbar-actions a.active {
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(155,114,255,.14);
+  box-shadow: inset 0 0 0 1px rgba(196,167,255,.12);
+}
 
 .workspace-lite-main {
   width: min(1120px, calc(100% - 48px));
@@ -331,6 +338,17 @@
 .workspace-lite-boot strong { letter-spacing: .12em; }
 .workspace-lite-boot span { color: #8f879d; }
 
+.workspace-lite-advanced {
+  min-width: 0;
+  flex: 1;
+  background:
+    radial-gradient(circle at 75% -10%, rgba(109,93,252,.09), transparent 28rem),
+    #0b0f18;
+}
+.workspace-lite-advanced > .workspace-page { min-height: calc(100dvh - 70px); }
+.workspace-lite-advanced .agent-computer-layout { padding: 24px 34px 34px; }
+.workspace-lite-advanced .computer-session-rail .empty-panel { margin: 0; padding: 14px; }
+
 @media (max-width: 760px) {
   .workspace-lite-shell { display: block; padding-bottom: 74px; }
   .workspace-lite-rail {
@@ -359,4 +377,123 @@
   .workspace-lite-main { padding-top: 50px; }
   .workspace-lite-detail-grid { grid-template-columns: 1fr; }
   .workspace-lite-footer { align-items: flex-start; flex-direction: column; }
+}
+
+/* Touch devices can report a desktop-like layout viewport. Keep the workspace
+   genuinely phone-friendly whenever the primary pointer is coarse. */
+@media (pointer: coarse) {
+  .workspace-lite-shell { display: block; padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .workspace-lite-rail {
+    position: fixed;
+    inset: auto 0 0 0;
+    width: 100%;
+    height: calc(70px + env(safe-area-inset-bottom));
+    padding: 9px 12px calc(9px + env(safe-area-inset-bottom));
+    flex-direction: row;
+    border-right: 0;
+    border-top: 1px solid rgba(255,255,255,.09);
+    box-shadow: 0 -12px 34px rgba(0,0,0,.28);
+    backdrop-filter: blur(18px);
+    z-index: 120;
+  }
+  .workspace-lite-divider { width: 1px; height: 32px; flex: 0 0 1px; }
+  .workspace-lite-rail-list { flex: 1; flex-direction: row; overflow-x: auto; overflow-y: hidden; justify-content: flex-start; }
+  .workspace-lite-account { margin: 0 0 0 auto; }
+  .workspace-lite-mark { width: 44px; height: 44px; flex-basis: 44px; }
+  .workspace-lite-mark.active::before { left: 50%; bottom: -10px; width: 24px; height: 3px; transform: translateX(-50%); border-radius: 3px 3px 0 0; }
+
+  .workspace-lite-topbar {
+    min-height: auto;
+    padding: 10px 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .workspace-lite-brand { min-height: 38px; }
+  .workspace-lite-brand span { display: inline; font-size: 13px; }
+  .workspace-lite-topbar-actions {
+    order: 2;
+    flex: 1 1 100%;
+    width: 100%;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 2px 0 3px;
+    scrollbar-width: none;
+  }
+  .workspace-lite-topbar-actions::-webkit-scrollbar { display: none; }
+  .workspace-lite-topbar-actions > a {
+    display: inline-flex;
+    min-height: 34px;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 999px;
+    background: rgba(255,255,255,.035);
+    color: #bdb5ca;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .workspace-lite-topbar-actions > a.active {
+    color: #fff;
+    border-color: rgba(185,156,255,.26);
+    background: rgba(109,93,252,.18);
+  }
+  .workspace-lite-topbar-actions .workspace-lite-button {
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .workspace-lite-main,
+  .workspace-lite-error,
+  .workspace-lite-footer { width: min(100% - 28px, 1120px); }
+  .workspace-lite-main { padding-top: 44px; }
+  .workspace-lite-detail-grid { grid-template-columns: 1fr; }
+
+  .workspace-lite-advanced { overflow-x: clip; }
+  .workspace-lite-advanced > .workspace-page { min-height: 0; padding-bottom: 12px; }
+  .workspace-lite-advanced .surface-header { padding: 18px 16px; }
+  .workspace-lite-advanced .surface-header h1 { font-size: 30px; }
+  .workspace-lite-advanced .surface-header p { font-size: 13px; line-height: 1.5; }
+  .workspace-lite-advanced .page-header { flex-direction: column; align-items: stretch; }
+  .workspace-lite-advanced .page-actions { width: 100%; }
+  .workspace-lite-advanced .page-actions > button,
+  .workspace-lite-advanced .page-actions > a { min-height: 40px; flex: 1 1 auto; }
+  .workspace-lite-advanced .metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; padding: 14px 14px 0; }
+  .workspace-lite-advanced .content-grid,
+  .workspace-lite-advanced .activity-columns,
+  .workspace-lite-advanced .plugin-grid { gap: 12px; padding: 14px; }
+  .workspace-lite-advanced .content-grid.two-column,
+  .workspace-lite-advanced .activity-columns { grid-template-columns: 1fr; }
+  .workspace-lite-advanced .data-card,
+  .workspace-lite-advanced .metric-card { padding: 15px; border-radius: 14px; }
+  .workspace-lite-advanced .inline-form { margin: 14px; padding: 14px; }
+  .workspace-lite-advanced .inline-form input,
+  .workspace-lite-advanced .inline-form select,
+  .workspace-lite-advanced .inline-form textarea { width: 100%; min-width: 0; }
+  .workspace-lite-advanced .data-row { align-items: flex-start; flex-wrap: wrap; }
+  .workspace-lite-advanced .row-actions { width: 100%; }
+  .workspace-lite-advanced .row-actions > button { min-height: 40px; }
+
+  .workspace-lite-advanced .agent-computer-layout { grid-template-columns: 1fr; gap: 14px; padding: 14px; }
+  .workspace-lite-advanced .computer-session-rail,
+  .workspace-lite-advanced .computer-authority-panel { position: static; max-height: none; }
+  .workspace-lite-advanced .computer-screen-shell { order: 1; }
+  .workspace-lite-advanced .computer-session-rail { order: 2; }
+  .workspace-lite-advanced .computer-authority-panel { order: 3; grid-template-columns: 1fr; }
+  .workspace-lite-advanced .computer-authority-panel .card-heading,
+  .workspace-lite-advanced .computer-boundary-note { grid-column: auto; }
+  .workspace-lite-advanced .computer-screen { min-height: 0; padding: 16px; }
+  .workspace-lite-advanced .computer-runtime-options,
+  .workspace-lite-advanced .computer-security-grid,
+  .workspace-lite-advanced .computer-approval-checkpoint dl { grid-template-columns: 1fr; }
+}
+
+@media (pointer: coarse) and (max-width: 520px) {
+  .workspace-lite-topbar-actions > a,
+  .workspace-lite-topbar-actions .workspace-lite-button { font-size: 11px; }
+  .workspace-lite-advanced .metric-grid { grid-template-columns: 1fr; }
+  .workspace-lite-advanced .card-heading { align-items: flex-start; flex-direction: column; }
 }
