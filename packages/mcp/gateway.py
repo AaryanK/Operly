@@ -142,10 +142,9 @@ def agent_description(spec: CapabilitySpec) -> str:
             "Workflow tools manage durable, traceable orchestration. Use them when work must persist, wait, branch, retry safely, or run on a schedule instead of keeping the agent process alive."
         )
 
-    # Reversibility remains available as machine metadata but is intentionally not
-    # presented as behavioral advice. An agent must never assume that calling a
-    # compensating action is safe merely because a provider marks an operation as
-    # reversible; the compensating action has its own live authority/approval checks.
+    # Reversibility is intentionally not presented as agent guidance. An agent must
+    # never assume a compensating action is safe just because a provider marks an
+    # operation reversible; that compensating action has its own authority checks.
     return " ".join(parts)[:1800]
 
 
@@ -169,7 +168,6 @@ def tool_definition(spec: CapabilitySpec) -> dict[str, Any]:
             "operly/providerId": spec.provider_id,
             "operly/risk": spec.risk.value,
             "operly/approvalRequired": spec.approval_required,
-            "operly/reversible": spec.reversible,
             "operly/permissions": list(spec.permissions),
             "operly/tags": sorted(spec.tags),
         },
