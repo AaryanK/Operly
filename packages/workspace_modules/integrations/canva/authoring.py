@@ -20,7 +20,6 @@ BRAND_TEMPLATE_META_READ = "brandtemplate:meta:read"
 BRAND_TEMPLATE_CONTENT_READ = "brandtemplate:content:read"
 
 SCOPE_BY_CAPABILITY: dict[str, frozenset[str]] = {
-    "canva.design.pages.list": frozenset({DESIGN_CONTENT_READ}),
     "canva.design.dataset": frozenset({DESIGN_CONTENT_READ}),
     "canva.brand_templates.list": frozenset({BRAND_TEMPLATE_META_READ}),
     "canva.brand_template.get": frozenset({BRAND_TEMPLATE_META_READ}),
@@ -30,15 +29,18 @@ SCOPE_BY_CAPABILITY: dict[str, frozenset[str]] = {
 }
 
 
-def _object(properties: dict[str, Any], *, required: list[str] | None = None, additional: bool = False) -> dict[str, Any]:
-    return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": additional}
-
-
-def _array(item: dict[str, Any], *, max_items: int | None = None) -> dict[str, Any]:
-    result: dict[str, Any] = {"type": "array", "items": item}
-    if max_items is not None:
-        result["maxItems"] = max_items
-    return result
+def _object(
+    properties: dict[str, Any],
+    *,
+    required: list[str] | None = None,
+    additional: bool = False,
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required or [],
+        "additionalProperties": additional,
+    }
 
 
 def _capability(
@@ -76,23 +78,14 @@ def _capability(
 def workspace_canva_authoring_capabilities() -> tuple[CapabilitySpec, ...]:
     return (
         _capability(
-            "canva.design.pages.list",
-            "List Canva design pages",
-            "Inspect page metadata for a Canva design without mutating the design.",
-            permission="marketing:read",
-            input_schema=_object({
-                "design_id": {"type": "string", "minLength": 1, "maxLength": 200},
-                "offset": {"type": "integer", "minimum": 1, "maximum": 500},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-            }, required=["design_id"]),
-            tags=("design", "pages", "read"),
-        ),
-        _capability(
             "canva.design.dataset",
             "Read Canva design autofill fields",
-            "Read the named text, image, chart, sheet, or other data fields configured for autofill in a design.",
+            "Read the named data fields configured for deterministic autofill in a Canva design.",
             permission="marketing:read",
-            input_schema=_object({"design_id": {"type": "string", "minLength": 1, "maxLength": 200}}, required=["design_id"]),
+            input_schema=_object(
+                {"design_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+                required=["design_id"],
+            ),
             tags=("design", "dataset", "autofill", "read"),
         ),
         _capability(
@@ -100,14 +93,25 @@ def workspace_canva_authoring_capabilities() -> tuple[CapabilitySpec, ...]:
             "List Canva brand templates",
             "List brand templates available to the connected Canva account, optionally limited to autofill-enabled templates.",
             permission="marketing:read",
-            input_schema=_object({
-                "query": {"type": "string", "maxLength": 200},
-                "continuation": {"type": "string", "maxLength": 1000},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "ownership": {"type": "string", "enum": ["any", "owned", "shared"]},
-                "sort_by": {"type": "string", "enum": ["relevance", "modified_descending", "modified_ascending", "title_ascending", "title_descending"]},
-                "dataset": {"type": "string", "enum": ["any", "non_empty"]},
-            }),
+            input_schema=_object(
+                {
+                    "query": {"type": "string", "maxLength": 200},
+                    "continuation": {"type": "string", "maxLength": 1000},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "ownership": {"type": "string", "enum": ["any", "owned", "shared"]},
+                    "sort_by": {
+                        "type": "string",
+                        "enum": [
+                            "relevance",
+                            "modified_descending",
+                            "modified_ascending",
+                            "title_ascending",
+                            "title_descending",
+                        ],
+                    },
+                    "dataset": {"type": "string", "enum": ["any", "non_empty"]},
+                }
+            ),
             tags=("brand-template", "list", "read"),
         ),
         _capability(
@@ -115,7 +119,10 @@ def workspace_canva_authoring_capabilities() -> tuple[CapabilitySpec, ...]:
             "Get Canva brand template",
             "Read metadata and Canva navigation URLs for one brand template.",
             permission="marketing:read",
-            input_schema=_object({"brand_template_id": {"type": "string", "minLength": 1, "maxLength": 200}}, required=["brand_template_id"]),
+            input_schema=_object(
+                {"brand_template_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+                required=["brand_template_id"],
+            ),
             tags=("brand-template", "read"),
         ),
         _capability(
@@ -123,21 +130,30 @@ def workspace_canva_authoring_capabilities() -> tuple[CapabilitySpec, ...]:
             "Read Canva brand-template autofill fields",
             "Read the data-field contract of an autofill-enabled Canva brand template.",
             permission="marketing:read",
-            input_schema=_object({"brand_template_id": {"type": "string", "minLength": 1, "maxLength": 200}}, required=["brand_template_id"]),
+            input_schema=_object(
+                {"brand_template_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+                required=["brand_template_id"],
+            ),
             tags=("brand-template", "dataset", "autofill", "read"),
         ),
         _capability(
             "canva.autofill.create",
             "Autofill Canva design",
-            "Create a new design from an autofill-enabled template/design, or update an autofill-enabled design in place using explicit named data fields.",
+            "Create a design from an autofill-enabled template/design, or update an autofill-enabled design in place using explicit named data fields.",
             permission="marketing:write",
-            input_schema=_object({
-                "type": {"type": "string", "enum": ["create_from_brand_template", "create_from_design", "update_design"]},
-                "brand_template_id": {"type": "string", "maxLength": 200},
-                "design_id": {"type": "string", "maxLength": 200},
-                "title": {"type": "string", "maxLength": 255},
-                "data": _object({}, additional=True),
-            }, required=["type", "data"]),
+            input_schema=_object(
+                {
+                    "type": {
+                        "type": "string",
+                        "enum": ["create_from_brand_template", "create_from_design", "update_design"],
+                    },
+                    "brand_template_id": {"type": "string", "maxLength": 200},
+                    "design_id": {"type": "string", "maxLength": 200},
+                    "title": {"type": "string", "maxLength": 255},
+                    "data": _object({}, additional=True),
+                },
+                required=["type", "data"],
+            ),
             risk=CapabilityRisk.HIGH,
             approval=True,
             reversible=False,
@@ -149,7 +165,10 @@ def workspace_canva_authoring_capabilities() -> tuple[CapabilitySpec, ...]:
             "Get Canva autofill job",
             "Read the state and resulting design metadata for a Canva autofill job.",
             permission="marketing:read",
-            input_schema=_object({"job_id": {"type": "string", "minLength": 1, "maxLength": 200}}, required=["job_id"]),
+            input_schema=_object(
+                {"job_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+                required=["job_id"],
+            ),
             tags=("design", "autofill", "job", "read"),
         ),
     )
@@ -168,7 +187,9 @@ async def _connector(db: AsyncSession, workspace_id: str, capability_id: str):
     for row in rows:
         if required.issubset(connector_scopes(row)):
             return row
-    raise PermissionError("Reconnect Canva and grant the provider scope required by this authoring tool")
+    raise PermissionError(
+        "Reconnect Canva and grant the provider scope required by this authoring tool"
+    )
 
 
 def _id(arguments: dict[str, Any], field: str) -> str:
@@ -178,13 +199,51 @@ def _id(arguments: dict[str, Any], field: str) -> str:
     return value
 
 
+def _validate_table(field_name: str, field_type: str, field: dict[str, Any]) -> dict[str, Any]:
+    payload_key = "chart_data" if field_type == "chart" else "sheet_data"
+    table = field.get(payload_key)
+    if not isinstance(table, dict):
+        raise ValueError(f"Autofill {field_type} field {field_name} requires {payload_key}")
+    rows = table.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError(f"Autofill {field_type} field {field_name} requires rows")
+    if field_type == "chart" and len(rows) > 100:
+        raise ValueError(f"Autofill chart field {field_name} cannot exceed 100 rows")
+    expected_columns: int | None = None
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("cells"), list):
+            raise ValueError(f"Autofill {field_type} field {field_name} contains an invalid row")
+        cells = row["cells"]
+        if field_type == "chart" and len(cells) > 20:
+            raise ValueError(f"Autofill chart field {field_name} cannot exceed 20 columns")
+        if expected_columns is None:
+            expected_columns = len(cells)
+        elif len(cells) != expected_columns:
+            raise ValueError(f"Autofill {field_type} field {field_name} rows must have equal widths")
+    column_configs = table.get("column_configs")
+    if column_configs is not None:
+        if not isinstance(column_configs, list):
+            raise ValueError(f"Autofill {field_type} field {field_name} has invalid column_configs")
+        if expected_columns is not None and len(column_configs) != expected_columns:
+            raise ValueError(
+                f"Autofill {field_type} field {field_name} column_configs must match row width"
+            )
+    return {"type": field_type, payload_key: table}
+
+
 def _validate_autofill_data(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("data must be an object keyed by Canva autofill field name")
+    if not value:
+        raise ValueError("At least one Canva autofill field is required")
     if len(value) > 100:
         raise ValueError("A single Canva autofill request is limited to 100 named fields")
-    if len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 250_000:
+    encoded_size = len(
+        json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    if encoded_size > 250_000:
         raise ValueError("Canva autofill data is too large")
+
     result: dict[str, Any] = {}
     for raw_name, raw_field in value.items():
         name = str(raw_name).strip()
@@ -195,23 +254,34 @@ def _validate_autofill_data(value: Any) -> dict[str, Any]:
         field_type = str(raw_field.get("type") or "").strip()
         if field_type not in {"text", "image", "video", "chart", "sheet"}:
             raise ValueError(f"Autofill field {name} has an unsupported type")
-        field = dict(raw_field)
+
         if field_type == "text":
-            text = str(field.get("text") or "")
-            if len(text) > 50_000:
+            content = str(raw_field.get("text") or "")
+            if len(content) > 50_000:
                 raise ValueError(f"Autofill text field {name} is too long")
-            field = {"type": "text", "text": text}
-        elif field_type in {"image", "video"}:
-            asset_id = str(field.get("asset_id") or "").strip()
+            result[name] = {"type": "text", "text": content}
+            continue
+
+        if field_type in {"image", "video"}:
+            asset_id = str(raw_field.get("asset_id") or "").strip()
             if not asset_id or len(asset_id) > 200:
                 raise ValueError(f"Autofill {field_type} field {name} requires a valid asset_id")
-            field = {"type": field_type, "asset_id": asset_id}
-        result[name] = field
+            result[name] = {"type": field_type, "asset_id": asset_id}
+            continue
+
+        result[name] = _validate_table(name, field_type, raw_field)
+
     return result
 
 
 class AvailableWorkspaceCanvaAuthoringProvider:
-    async def is_available(self, db: AsyncSession, *, context: ExecutionContext, capability: CapabilitySpec) -> bool:
+    async def is_available(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        capability: CapabilitySpec,
+    ) -> bool:
         if not context.workspace_id:
             return False
         required = SCOPE_BY_CAPABILITY.get(capability.id)
@@ -236,34 +306,52 @@ class AvailableWorkspaceCanvaAuthoringProvider:
         token = await access_token(db, connector)
         capability_id = capability.id
 
-        if capability_id == "canva.design.pages.list":
-            design_id = _id(arguments, "design_id")
-            params = {
-                "offset": max(1, min(int(arguments.get("offset") or 1), 500)),
-                "limit": max(1, min(int(arguments.get("limit") or 50), 200)),
-            }
-            body = await request_json("GET", f"/designs/{quote(design_id, safe='')}/pages", token, params=params)
-            return CapabilityExecutionResult(value=body, resource_type="canva_design", resource_id=design_id)
-
         if capability_id == "canva.design.dataset":
             design_id = _id(arguments, "design_id")
-            body = await request_json("GET", f"/designs/{quote(design_id, safe='')}/dataset", token)
-            return CapabilityExecutionResult(value=body, resource_type="canva_design", resource_id=design_id)
+            body = await request_json(
+                "GET", f"/designs/{quote(design_id, safe='')}/dataset", token
+            )
+            return CapabilityExecutionResult(
+                value=body,
+                resource_type="canva_design",
+                resource_id=design_id,
+            )
 
         if capability_id == "canva.brand_templates.list":
-            params = {key: arguments[key] for key in ("query", "continuation", "ownership", "sort_by", "dataset") if arguments.get(key) not in (None, "")}
+            params = {
+                key: arguments[key]
+                for key in ("query", "continuation", "ownership", "sort_by", "dataset")
+                if arguments.get(key) not in (None, "")
+            }
             params["limit"] = max(1, min(int(arguments.get("limit") or 25), 100))
-            return CapabilityExecutionResult(value=await request_json("GET", "/brand-templates", token, params=params), resource_type="canva_brand_template_collection")
+            return CapabilityExecutionResult(
+                value=await request_json("GET", "/brand-templates", token, params=params),
+                resource_type="canva_brand_template_collection",
+            )
 
         if capability_id == "canva.brand_template.get":
             template_id = _id(arguments, "brand_template_id")
-            body = await request_json("GET", f"/brand-templates/{quote(template_id, safe='')}", token)
-            return CapabilityExecutionResult(value=body, resource_type="canva_brand_template", resource_id=template_id)
+            body = await request_json(
+                "GET", f"/brand-templates/{quote(template_id, safe='')}", token
+            )
+            return CapabilityExecutionResult(
+                value=body,
+                resource_type="canva_brand_template",
+                resource_id=template_id,
+            )
 
         if capability_id == "canva.brand_template.dataset":
             template_id = _id(arguments, "brand_template_id")
-            body = await request_json("GET", f"/brand-templates/{quote(template_id, safe='')}/dataset", token)
-            return CapabilityExecutionResult(value=body, resource_type="canva_brand_template", resource_id=template_id)
+            body = await request_json(
+                "GET",
+                f"/brand-templates/{quote(template_id, safe='')}/dataset",
+                token,
+            )
+            return CapabilityExecutionResult(
+                value=body,
+                resource_type="canva_brand_template",
+                resource_id=template_id,
+            )
 
         if capability_id == "canva.autofill.create":
             mode = str(arguments.get("type") or "").strip()
@@ -289,7 +377,13 @@ class AvailableWorkspaceCanvaAuthoringProvider:
 
         if capability_id == "canva.autofill.get":
             job_id = _id(arguments, "job_id")
-            body = await request_json("GET", f"/autofills/{quote(job_id, safe='')}", token)
-            return CapabilityExecutionResult(value=body, resource_type="canva_autofill_job", resource_id=job_id)
+            body = await request_json(
+                "GET", f"/autofills/{quote(job_id, safe='')}", token
+            )
+            return CapabilityExecutionResult(
+                value=body,
+                resource_type="canva_autofill_job",
+                resource_id=job_id,
+            )
 
         raise LookupError(f"Canva authoring capability is not implemented: {capability_id}")
