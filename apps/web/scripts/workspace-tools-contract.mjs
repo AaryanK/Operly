@@ -20,6 +20,9 @@ const assert = (condition, message) => {
 
 const [
   page,
+  activityPage,
+  home,
+  routes,
   router,
   main,
   bootstrap,
@@ -41,6 +44,9 @@ const [
   connectionsManager,
 ] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
+  text("apps/web/src/workspace/ActivityPage.tsx"),
+  text("apps/web/src/workspace/WorkspaceHome.tsx"),
+  text("apps/web/src/app/routes.ts"),
   text("packages/workspace_modules/tools/router.py"),
   text("apps/api/main.py"),
   text("packages/kernel/bootstrap.py"),
@@ -75,16 +81,51 @@ assert(
   "Workspace UI approval resume must stay on workspace-tools API",
 );
 assert(
-  page.includes("{item.method} /api{item.endpoint}"),
-  "Workspace UI must expose the real callable HTTP endpoint",
+  page.includes("api<Capability>(selected.contract_endpoint)"),
+  "Workspace UI must let a human re-check the exact advertised tool contract",
+);
+assert(
+  page.includes("Guided form") && page.includes("buildArguments(selected, fieldValues)"),
+  "Every discovered tool must have a schema-driven guided form, not only raw JSON",
+);
+assert(
+  page.includes("Every currently authorized tool advertised by the Workspace API appears here automatically"),
+  "All Tools must explicitly be the universal frontend coverage surface",
+);
+assert(
+  page.includes("Don’t do it") && page.includes("decideApproval(false)") && page.includes("decideApproval(true)"),
+  "Friendly tool UI must support both approving and denying a gated action",
+);
+assert(
+  page.includes("{selected.method} /api{selected.endpoint}"),
+  "Workspace UI must expose the real callable HTTP endpoint in technical details",
 );
 assert(!page.includes('"/kernel/execute"'), "Workspace UI must not use the generic Kernel execute endpoint");
 assert(!page.includes('"/kernel/capabilities"'), "Workspace UI must not discover tools from the generic Kernel route");
+
+assert(
+  activityPage.includes('"/workspace-tools/approvals?limit=50"') && activityPage.includes("/workspace-tools/approvals/${encodeURIComponent(id)}/decision"),
+  "Activity must expose Workspace tool approval review and decisions",
+);
+assert(
+  activityPage.includes('"/workspace-tools/events?limit=80"'),
+  "Activity must expose Workspace tool event history",
+);
+assert(
+  activityPage.includes("/workspace-tools/runs/${encodeURIComponent(clean)}"),
+  "Activity must expose the Workspace tool run inspector",
+);
+assert(home.includes('section: "capabilities", title: "Use any tool"'), "Workspace Home must make universal tool access obvious");
+assert(routes.includes('{ id: "capabilities", label: "All tools"'), "Workspace navigation must use the plain-language All tools label");
+assert(workspaceShell.includes('extend: "Tools & connections"'), "Workspace navigation group must be understandable without platform jargon");
 
 assert(router.includes('prefix="/api/workspace-tools"'), "Workspace tools need their own authenticated API boundary");
 assert(router.includes('@router.post("/{capability_id}/execute")'), "Every capability ID must resolve to an executable endpoint");
 assert(router.includes('"endpoint": workspace_tool_endpoint(spec.id)'), "Tool discovery must advertise the exact execute endpoint");
 assert(router.includes("await _available_tool(db, context, capability_id)"), "Endpoint execution must preflight current authority/availability");
+assert(router.includes('@router.get("/approvals")'), "Workspace tool approvals must remain an inspectable API surface");
+assert(router.includes('@router.get("/events")'), "Workspace tool events must remain an inspectable API surface");
+assert(router.includes('@router.get("/runs/{run_id}")'), "Workspace tool runs must remain an inspectable API surface");
 
 for (const file of [
   "records.py",
@@ -269,4 +310,4 @@ for (const forbidden of [
 }
 assert(discordBot.includes("AI chat is not enabled yet"), "Discord bot must make the deterministic-only behavior explicit");
 
-console.log("Workspace tools and deterministic integration workbench contracts passed.");
+console.log("Workspace tools, universal human control surface, and deterministic integration workbench contracts passed.");

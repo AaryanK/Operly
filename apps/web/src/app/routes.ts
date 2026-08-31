@@ -35,7 +35,7 @@ export const workspaceSections: Array<{
   { id: "agent-computer", label: "Agent Computer", group: "digital" },
   { id: "connections", label: "Integrations", group: "extend" },
   { id: "plugins", label: "Plugins", group: "extend" },
-  { id: "capabilities", label: "Capabilities", group: "extend" },
+  { id: "capabilities", label: "All tools", group: "extend" },
   { id: "ai-debug", label: "AI Debug", group: "debug" },
   { id: "members", label: "Members & roles", group: "admin" },
   { id: "access", label: "AI & MCP access", group: "admin" },
