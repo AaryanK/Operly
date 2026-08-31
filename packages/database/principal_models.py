@@ -99,3 +99,25 @@ class WorkspaceToolExposure(Base):
         UniqueConstraint("tenant_id", "tool_id", "surface", name="uq_workspace_tool_surface"),
         Index("ix_workspace_tool_exposure", "tenant_id", "surface", "exposed"),
     )
+
+
+class McpAuthorizationCode(Base):
+    """One-time PKCE-bound authorization code for external MCP clients."""
+
+    __tablename__ = "mcp_authorization_codes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    grant_id: Mapped[str] = mapped_column(ForeignKey("client_grants.id", ondelete="CASCADE"), nullable=False, index=True)
+    principal_id: Mapped[str] = mapped_column(ForeignKey("principals.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    code_challenge: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        Index("ix_mcp_authorization_code_grant_expiry", "grant_id", "expires_at"),
+    )
