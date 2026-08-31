@@ -70,6 +70,9 @@ assert(page.includes('"computer.terminal.exec"'), "Frontend must expose terminal
 assert(page.includes("Native tool console"), "Frontend must expose a human-visible native tool console");
 assert(page.includes("/tools/${encodeURIComponent(toolId)}/execute"), "Frontend native tools must invoke the real session-scoped endpoint");
 assert(page.includes("computer_session_id is injected server-side"), "Frontend must not choose another Computer session through arguments");
+assert(page.includes("Railway Sandbox VM"), "Frontend must show the actual per-session isolation boundary");
+assert(page.includes("not joined to Operly's private service network"), "Frontend must explain that the agent VM cannot access Operly private services");
+assert(!page.includes("Full public egress"), "Frontend must not imply a private-network-capable Computer mode");
 assert(page.includes("/workspace-tools/approvals/"), "Business approvals must use the canonical Workspace approval boundary");
 assert(page.includes("/resume"), "Approved Workspace presets must resume the same session");
 
@@ -83,31 +86,15 @@ assert(computerRouter.includes("request_id=request_id"), "Computer must persist 
 assert(computerRouter.includes("approval_id=approval_id"), "Computer resume must use the exact approval ID");
 
 for (const capability of [
-  "computer.runtime.start",
-  "computer.runtime.status",
-  "computer.runtime.stop",
-  "computer.terminal.exec",
-  "computer.python.exec",
-  "computer.files.list",
-  "computer.files.read",
-  "computer.files.write",
-  "computer.files.search",
-  "computer.process.list",
-  "computer.process.kill",
-  "computer.git.status",
-  "computer.git.diff",
-  "computer.git.exec",
-  "computer.web.fetch",
-  "computer.web.download",
-  "computer.browser.open",
-  "computer.browser.navigate",
-  "computer.browser.snapshot",
-  "computer.browser.click",
-  "computer.browser.type",
-  "computer.browser.press",
-  "computer.browser.evaluate",
-  "computer.browser.screenshot",
-  "computer.browser.close",
+  "computer.runtime.start", "computer.runtime.status", "computer.runtime.stop",
+  "computer.terminal.exec", "computer.python.exec",
+  "computer.files.list", "computer.files.read", "computer.files.write", "computer.files.search",
+  "computer.process.list", "computer.process.kill",
+  "computer.git.status", "computer.git.diff", "computer.git.exec",
+  "computer.web.fetch", "computer.web.download",
+  "computer.browser.open", "computer.browser.navigate", "computer.browser.snapshot",
+  "computer.browser.click", "computer.browser.type", "computer.browser.press",
+  "computer.browser.evaluate", "computer.browser.screenshot", "computer.browser.close",
 ]) assert(nativeTools.includes(`"${capability}"`), `Agent Computer native tool surface is missing ${capability}`);
 assert(nativeTools.includes('permissions=("computer:execute",)'), "Every native Computer capability must require computer:execute");
 assert(nativeTools.includes("ComputerRunnerClient"), "Computer provider must cross the runner boundary");
@@ -130,24 +117,14 @@ assert(railwayRunner.includes("OPERLY_RUNNER_TOKEN"), "Runner-side authenticatio
 assert(railwayRunner.includes("RAILWAY_ENVIRONMENT_ID"), "Runner must allocate sandboxes in its Railway environment");
 
 for (const primitive of [
-  "def terminal_exec",
-  "def python_exec",
-  "def files_read",
-  "def files_write",
-  "def process_list",
-  "def git_tool",
-  "def web_fetch",
-  "def browser_tool",
+  "def terminal_exec", "def python_exec", "def files_read", "def files_write",
+  "def process_list", "def git_tool", "def web_fetch", "def browser_tool",
 ]) assert(railwayComputer.includes(primitive), `Railway sandbox helper is missing ${primitive}`);
 assert(railwayComputer.includes("private/link-local network targets are blocked"), "Explicit web/browser helpers must reject private network targets");
 
 for (const capability of [
-  "studio.projects.list",
-  "studio.project.inspect",
-  "studio.solution.status",
-  "studio.solution.deploy",
-  "studio.solution.rollback",
-  "studio.solution.domain.request",
+  "studio.projects.list", "studio.project.inspect", "studio.solution.status",
+  "studio.solution.deploy", "studio.solution.rollback", "studio.solution.domain.request",
 ]) assert(studioProvider.includes(`"${capability}"`), `Studio provider is missing ${capability}`);
 assert(studioProvider.includes("approval=True"), "Studio mutation capabilities must remain approval gated");
 assert(studioProvider.includes('permission="solution:write"'), "Studio deployment mutations must require solution:write");
