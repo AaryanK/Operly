@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
@@ -18,19 +18,21 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
-    from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+    from playwright.async_api import async_playwright
 except Exception:  # pragma: no cover - browser is optional outside the runner image
-    Browser = BrowserContext = Page = Playwright = Any  # type: ignore[misc,assignment]
     async_playwright = None
 
 
 ENVIRONMENT = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).strip().lower()
-DEV_ENABLED = os.getenv("OPERLY_AGENT_COMPUTER_DEV_RUNNER", "").strip().lower() in {"1", "true", "yes", "on"}
+DEV_ENABLED = os.getenv("OPERLY_AGENT_COMPUTER_DEV_RUNNER", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 RUNNER_TOKEN = os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_TOKEN", "").strip()
 ROOT = Path(os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_ROOT", "./.agent-computer-runtime")).resolve()
 MAX_STDIO = 2_000_000
 MAX_FILE_BYTES = 5_000_000
 MAX_DOWNLOAD_BYTES = 50_000_000
+MAX_REDIRECTS = 5
 
 
 @dataclass
@@ -80,7 +82,7 @@ class ToolInput(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Operly Agent Computer Reference Runner", version="1.0.0")
+app = FastAPI(title="Operly Agent Computer Reference Runner", version="1.1.0")
 
 
 def _assert_safe_mode() -> None:
@@ -90,7 +92,9 @@ def _assert_safe_mode() -> None:
             "Use the same /v1 protocol behind a per-session container or microVM backend."
         )
     if not DEV_ENABLED:
-        raise RuntimeError("Set OPERLY_AGENT_COMPUTER_DEV_RUNNER=1 to run the reference Computer runner")
+        raise RuntimeError(
+            "Set OPERLY_AGENT_COMPUTER_DEV_RUNNER=1 to run the reference Computer runner"
+        )
     if not RUNNER_TOKEN:
         raise RuntimeError("OPERLY_AGENT_COMPUTER_RUNNER_TOKEN is required")
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -147,7 +151,11 @@ def _public_url(raw: str) -> str:
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
         raise HTTPException(status_code=422, detail="Local/private network targets are blocked")
     try:
-        addresses = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(
+            hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
     except socket.gaierror as error:
         raise HTTPException(status_code=422, detail="URL hostname could not be resolved") from error
     for item in addresses:
@@ -166,7 +174,55 @@ def _public_url(raw: str) -> str:
 
 def _network_allowed(row: RuntimeSession) -> None:
     if row.network_policy == "off":
-        raise HTTPException(status_code=403, detail="Network access is disabled for this Computer session")
+        raise HTTPException(
+            status_code=403,
+            detail="Network access is disabled for this Computer session",
+        )
+
+
+async def _public_request(
+    row: RuntimeSession,
+    *,
+    method: str,
+    url: str,
+    timeout_seconds: float,
+) -> httpx.Response:
+    """Fetch while validating every redirect destination, not only the first URL."""
+    _network_allowed(row)
+    current = _public_url(url)
+    request_method = method.upper()
+    async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            response = await client.request(
+                request_method,
+                current,
+                headers={"User-Agent": "Operly-Agent-Computer/1"},
+            )
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                return response
+            location = response.headers.get("location")
+            if not location:
+                return response
+            if redirect_count >= MAX_REDIRECTS:
+                raise HTTPException(status_code=508, detail="Too many web redirects")
+            current = _public_url(urljoin(str(response.url), location))
+            if response.status_code == 303 and request_method != "HEAD":
+                request_method = "GET"
+    raise HTTPException(status_code=508, detail="Too many web redirects")
+
+
+def _browser_request_allowed(row: RuntimeSession, raw: str) -> bool:
+    parsed = urlparse(raw)
+    if parsed.scheme in {"about", "data", "blob"}:
+        return True
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    try:
+        _network_allowed(row)
+        _public_url(raw)
+    except HTTPException:
+        return False
+    return True
 
 
 async def _run(
@@ -189,10 +245,12 @@ async def _run(
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "OPERLY_COMPUTER_SESSION_ID": row.id,
+        "OPERLY_COMPUTER_NETWORK_POLICY": row.network_policy,
     }
     (row.root / ".tmp").mkdir(exist_ok=True)
     for key, value in (env or {}).items():
-        if key.startswith("OPERLY_") or key.upper().endswith(("TOKEN", "SECRET", "PASSWORD", "KEY")):
+        upper = str(key).upper()
+        if str(key).startswith("OPERLY_") or upper.endswith(("TOKEN", "SECRET", "PASSWORD", "KEY")):
             continue
         clean_env[str(key)[:120]] = str(value)[:8000]
 
@@ -201,14 +259,17 @@ async def _run(
         log_path = row.root / ".processes" / f"{process_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("wb")
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=workdir,
-            env=clean_env,
-            stdout=log_handle,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=workdir,
+                env=clean_env,
+                stdout=log_handle,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        finally:
+            log_handle.close()
         row.processes[process_id] = ProcessState(
             id=process_id,
             process=process,
@@ -254,6 +315,7 @@ async def _run(
 
 
 async def _browser_open(row: RuntimeSession, args: dict[str, Any]) -> dict[str, Any]:
+    _network_allowed(row)
     if async_playwright is None:
         raise HTTPException(status_code=503, detail="Playwright is not installed in this Computer runner")
     if row.page is not None:
@@ -263,8 +325,21 @@ async def _browser_open(row: RuntimeSession, args: dict[str, Any]) -> dict[str, 
     width = max(320, min(int(args.get("viewport_width") or 1440), 2560))
     height = max(320, min(int(args.get("viewport_height") or 900), 2000))
     row.context = await row.browser.new_context(viewport={"width": width, "height": height})
+
+    async def guard(route: Any, request: Any) -> None:
+        if _browser_request_allowed(row, request.url):
+            await route.continue_()
+        else:
+            await route.abort("blockedbyclient")
+
+    await row.context.route("**/*", guard)
     row.page = await row.context.new_page()
-    return {"state": "open", "viewport": {"width": width, "height": height}, "url": row.page.url}
+    return {
+        "state": "open",
+        "viewport": {"width": width, "height": height},
+        "url": row.page.url,
+        "private_network_blocked": True,
+    }
 
 
 async def _browser_close(row: RuntimeSession) -> dict[str, Any]:
@@ -330,7 +405,13 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
             raise HTTPException(status_code=404, detail="Path not found")
         limit = max(1, min(int(args.get("max_entries") or 500), 5000))
         recursive = bool(args.get("recursive"))
-        paths = target.rglob("*") if recursive and target.is_dir() else target.iterdir() if target.is_dir() else [target]
+        paths = (
+            target.rglob("*")
+            if recursive and target.is_dir()
+            else target.iterdir()
+            if target.is_dir()
+            else [target]
+        )
         items = []
         for path in paths:
             if len(items) >= limit:
@@ -339,12 +420,14 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
                 stat = path.stat()
             except OSError:
                 continue
-            items.append({
-                "path": _relative(row, path),
-                "type": "directory" if path.is_dir() else "file",
-                "size_bytes": stat.st_size if path.is_file() else None,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
+            items.append(
+                {
+                    "path": _relative(row, path),
+                    "type": "directory" if path.is_dir() else "file",
+                    "size_bytes": stat.st_size if path.is_file() else None,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
         return {"path": _relative(row, target), "items": items, "truncated": len(items) >= limit}
 
     if tool_id == "files.read":
@@ -354,7 +437,12 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
         maximum = max(1, min(int(args.get("max_bytes") or MAX_FILE_BYTES), MAX_FILE_BYTES))
         raw = target.read_bytes()
         content, truncated = _bounded(raw, maximum)
-        return {"path": _relative(row, target), "content": content, "size_bytes": len(raw), "truncated": truncated}
+        return {
+            "path": _relative(row, target),
+            "content": content,
+            "size_bytes": len(raw),
+            "truncated": truncated,
+        }
 
     if tool_id == "files.write":
         target = _safe_path(row, args.get("path"))
@@ -362,8 +450,7 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
         if len(content) > MAX_FILE_BYTES:
             raise HTTPException(status_code=413, detail="File write exceeds runner limit")
         target.parent.mkdir(parents=True, exist_ok=True)
-        mode = "ab" if bool(args.get("append")) else "wb"
-        with target.open(mode) as handle:
+        with target.open("ab" if bool(args.get("append")) else "wb") as handle:
             handle.write(content)
         return {"path": _relative(row, target), "size_bytes": target.stat().st_size}
 
@@ -393,7 +480,11 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
             raise HTTPException(status_code=404, detail="Source path not found")
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.replace(destination)
-        return {"source": _relative(row, source), "destination": _relative(row, destination), "moved": True}
+        return {
+            "source": _relative(row, source),
+            "destination": _relative(row, destination),
+            "moved": True,
+        }
 
     if tool_id == "files.search":
         target = _safe_path(row, args.get("path"))
@@ -409,43 +500,53 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
                 continue
             if query.lower() in path.name.lower():
                 matches.append({"path": _relative(row, path), "kind": "filename"})
-                if len(matches) >= limit:
-                    break
             try:
                 if path.stat().st_size > 2_000_000:
                     continue
-                text = path.read_text("utf-8", errors="replace")
+                body = path.read_text("utf-8", errors="replace")
             except OSError:
                 continue
-            for number, line in enumerate(text.splitlines(), 1):
+            for number, line in enumerate(body.splitlines(), 1):
                 if query.lower() in line.lower():
-                    matches.append({"path": _relative(row, path), "kind": "content", "line": number, "text": line[:1000]})
+                    matches.append(
+                        {
+                            "path": _relative(row, path),
+                            "kind": "content",
+                            "line": number,
+                            "text": line[:1000],
+                        }
+                    )
                     if len(matches) >= limit:
                         break
-        return {"query": query, "matches": matches, "truncated": len(matches) >= limit}
+        return {"query": query, "matches": matches[:limit], "truncated": len(matches) >= limit}
 
     if tool_id == "process.list":
-        items = []
-        for process_id, item in list(row.processes.items()):
-            returncode = item.process.returncode
-            items.append({
-                "process_id": process_id,
-                "pid": item.process.pid,
-                "command": item.command,
-                "cwd": item.cwd,
-                "log_path": item.log_path,
-                "state": "running" if returncode is None else "exited",
-                "exit_code": returncode,
-                "started_at": item.started_at.isoformat(),
-            })
-        return {"processes": items}
+        return {
+            "processes": [
+                {
+                    "process_id": process_id,
+                    "pid": item.process.pid,
+                    "command": item.command,
+                    "cwd": item.cwd,
+                    "log_path": item.log_path,
+                    "state": "running" if item.process.returncode is None else "exited",
+                    "exit_code": item.process.returncode,
+                    "started_at": item.started_at.isoformat(),
+                }
+                for process_id, item in row.processes.items()
+            ]
+        }
 
     if tool_id == "process.kill":
         process_id = str(args.get("process_id") or "")
         item = row.processes.get(process_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Background process not found")
-        sig = {"TERM": signal.SIGTERM, "KILL": signal.SIGKILL, "INT": signal.SIGINT}.get(str(args.get("signal") or "TERM"), signal.SIGTERM)
+        sig = {
+            "TERM": signal.SIGTERM,
+            "KILL": signal.SIGKILL,
+            "INT": signal.SIGINT,
+        }.get(str(args.get("signal") or "TERM"), signal.SIGTERM)
         if item.process.returncode is None:
             try:
                 os.killpg(item.process.pid, sig)
@@ -468,11 +569,14 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
             if not git_args:
                 raise HTTPException(status_code=422, detail="git args are required")
             allowed = {
-                "status", "diff", "log", "show", "branch", "checkout", "switch", "restore",
-                "add", "commit", "init", "clone", "fetch", "pull", "rev-parse", "ls-files",
+                "status", "diff", "log", "show", "branch", "checkout", "switch",
+                "restore", "add", "commit", "init", "clone", "fetch", "pull",
+                "rev-parse", "ls-files",
             }
             if git_args[0] not in allowed:
                 raise HTTPException(status_code=403, detail=f"git subcommand is not enabled: {git_args[0]}")
+            if git_args[0] in {"clone", "fetch", "pull"}:
+                _network_allowed(row)
         return await _run(
             row,
             argv=["git", *git_args],
@@ -482,12 +586,14 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
         )
 
     if tool_id == "web.fetch":
-        _network_allowed(row)
-        url = _public_url(str(args.get("url") or ""))
         maximum = max(1, min(int(args.get("max_bytes") or 2_000_000), 5_000_000))
         method = str(args.get("method") or "GET")
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            response = await client.request(method, url, headers={"User-Agent": "Operly-Agent-Computer/1"})
+        response = await _public_request(
+            row,
+            method=method,
+            url=str(args.get("url") or ""),
+            timeout_seconds=30,
+        )
         raw = response.content
         content, truncated = _bounded(raw, maximum)
         return {
@@ -500,22 +606,27 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
         }
 
     if tool_id == "web.download":
-        _network_allowed(row)
-        url = _public_url(str(args.get("url") or ""))
         destination = _safe_path(row, args.get("destination"))
         maximum = max(1, min(int(args.get("max_bytes") or MAX_DOWNLOAD_BYTES), MAX_DOWNLOAD_BYTES))
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            response = await client.get(url, headers={"User-Agent": "Operly-Agent-Computer/1"})
-            response.raise_for_status()
-            raw = response.content
+        response = await _public_request(
+            row,
+            method="GET",
+            url=str(args.get("url") or ""),
+            timeout_seconds=60,
+        )
+        response.raise_for_status()
+        raw = response.content
         if len(raw) > maximum:
             raise HTTPException(status_code=413, detail="Download exceeds Computer runner limit")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(raw)
-        return {"url": str(response.url), "path": _relative(row, destination), "size_bytes": len(raw)}
+        return {
+            "url": str(response.url),
+            "path": _relative(row, destination),
+            "size_bytes": len(raw),
+        }
 
     if tool_id == "browser.open":
-        _network_allowed(row)
         return await _browser_open(row, args)
 
     if tool_id == "browser.close":
@@ -526,8 +637,16 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
         page = await _page(row)
         url = _public_url(str(args.get("url") or ""))
         timeout_ms = max(1000, min(int(args.get("timeout_seconds") or 60), 900)) * 1000
-        response = await page.goto(url, wait_until=str(args.get("wait_until") or "domcontentloaded"), timeout=timeout_ms)
-        return {"url": page.url, "title": await page.title(), "status_code": response.status if response else None}
+        response = await page.goto(
+            url,
+            wait_until=str(args.get("wait_until") or "domcontentloaded"),
+            timeout=timeout_ms,
+        )
+        return {
+            "url": page.url,
+            "title": await page.title(),
+            "status_code": response.status if response else None,
+        }
 
     if tool_id == "browser.snapshot":
         page = await _page(row)
@@ -543,8 +662,9 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
               return {title:document.title,url:location.href,text:clean(document.body?.innerText || ''),interactive:items};
             }"""
         )
-        data["text"] = str(data.get("text") or "")[:maximum]
-        data["truncated"] = len(str(data.get("text") or "")) >= maximum
+        original = str(data.get("text") or "")
+        data["text"] = original[:maximum]
+        data["truncated"] = len(original) > maximum
         return data
 
     if tool_id == "browser.click":
@@ -556,7 +676,10 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
     if tool_id == "browser.type":
         page = await _page(row)
         locator = _locator(page, str(args.get("selector") or ""))
-        await locator.fill(str(args.get("text") or ""), timeout=max(1, min(int(args.get("timeout_seconds") or 30), 900)) * 1000)
+        await locator.fill(
+            str(args.get("text") or ""),
+            timeout=max(1, min(int(args.get("timeout_seconds") or 30), 900)) * 1000,
+        )
         if bool(args.get("press_enter")):
             await locator.press("Enter")
         return {"url": page.url, "typed": True}
@@ -572,8 +695,10 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
 
     if tool_id == "browser.evaluate":
         page = await _page(row)
-        result = await page.evaluate(str(args.get("expression") or ""))
-        return {"url": page.url, "value": result}
+        return {
+            "url": page.url,
+            "value": await page.evaluate(str(args.get("expression") or "")),
+        }
 
     if tool_id == "browser.screenshot":
         page = await _page(row)
@@ -582,7 +707,11 @@ async def _tool(row: RuntimeSession, tool_id: str, args: dict[str, Any]) -> dict
             target = target.with_suffix(".png")
         target.parent.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(target), full_page=bool(args.get("full_page", True)))
-        return {"url": page.url, "path": _relative(row, target), "size_bytes": target.stat().st_size}
+        return {
+            "url": page.url,
+            "path": _relative(row, target),
+            "size_bytes": target.stat().st_size,
+        }
 
     raise HTTPException(status_code=404, detail=f"Unknown Computer tool: {tool_id}")
 
@@ -605,9 +734,16 @@ async def health() -> dict[str, Any]:
         "environment": ENVIRONMENT,
         "production_safe": False,
         "isolation": "separate-development-service",
+        "network_policy_enforcement": "tool-level-reference-only",
+        "production_requires_os_egress_controls": True,
         "python": shutil.which("python3") is not None,
+        "pip": shutil.which("pip") is not None or shutil.which("pip3") is not None,
         "bash": shutil.which("bash") is not None,
+        "node": shutil.which("node") is not None,
+        "npm": shutil.which("npm") is not None,
         "git": shutil.which("git") is not None,
+        "ripgrep": shutil.which("rg") is not None,
+        "jq": shutil.which("jq") is not None,
         "browser": async_playwright is not None,
         "tools": TOOL_IDS,
     }
@@ -678,7 +814,10 @@ async def stop_session(session_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "state": "stopped"}
 
 
-@app.post("/v1/sessions/{session_id}/tools/{tool_id:path}", dependencies=[Depends(authorize)])
+@app.post(
+    "/v1/sessions/{session_id}/tools/{tool_id:path}",
+    dependencies=[Depends(authorize)],
+)
 async def execute_tool(session_id: str, tool_id: str, payload: ToolInput) -> dict[str, Any]:
     row = _session(session_id)
     return {**(await _tool(row, tool_id, payload.arguments)), "runtime_state": row.state}
