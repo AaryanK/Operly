@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -11,22 +15,17 @@ class ComputerRunnerError(RuntimeError):
 
 
 class ComputerRunnerClient:
-    """Client for the isolated Agent Computer runtime service.
+    """Control-plane client for the existing Operly Sandbox Runner.
 
-    The Operly API never executes user/agent shell commands itself. All native
-    computer operations cross this explicit runner boundary. A production runner
-    is expected to isolate every session in its own container/microVM and enforce
-    the requested network/resource policy.
-
-    Agent Computer intentionally has its own endpoint/token instead of silently
-    reusing the generated-software runner. A backend may implement both protocols,
-    but that is an explicit deployment decision rather than an environment-variable
-    fallback between unrelated protocols.
+    The Operly API never executes agent shell/Python/browser code locally. Native
+    Computer operations cross the already-deployed Sandbox Runner boundary, which
+    allocates one Railway Sandbox VM per Computer session. The API stores only the
+    opaque Railway sandbox ID; connector/provider secrets never enter the sandbox.
     """
 
     def __init__(self) -> None:
-        self.base_url = os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_URL", "").strip().rstrip("/")
-        self.token = os.getenv("OPERLY_AGENT_COMPUTER_RUNNER_TOKEN", "").strip()
+        self.base_url = os.getenv("OPERLY_SANDBOX_RUNNER_URL", "").strip().rstrip("/")
+        self.token = os.getenv("OPERLY_SANDBOX_RUNNER_TOKEN", "").strip()
         self.timeout_seconds = max(
             5.0,
             min(float(os.getenv("OPERLY_AGENT_COMPUTER_TIMEOUT_SECONDS", "120")), 900.0),
@@ -36,12 +35,15 @@ class ComputerRunnerClient:
     def configured(self) -> bool:
         return bool(self.base_url and self.token)
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-            "User-Agent": "operly-agent-computer/1",
-        }
+    def _signature(self, method: str, path: str, raw: bytes) -> str:
+        canonical = method.upper().encode("utf-8") + b"\n" + path.encode("utf-8") + b"\n" + raw
+        return hmac.new(self.token.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+    def _verify_response(self, response: httpx.Response) -> None:
+        supplied = response.headers.get("x-operly-signature", "").strip()
+        expected = hmac.new(self.token.encode("utf-8"), response.content, hashlib.sha256).hexdigest()
+        if not supplied or not hmac.compare_digest(supplied, expected):
+            raise ComputerRunnerError("Operly Sandbox Runner returned an invalid response signature")
 
     async def _request(
         self,
@@ -53,39 +55,66 @@ class ComputerRunnerClient:
     ) -> dict[str, Any]:
         if not self.configured:
             raise ComputerRunnerError(
-                "Agent Computer runner is not configured. Set "
-                "OPERLY_AGENT_COMPUTER_RUNNER_URL and OPERLY_AGENT_COMPUTER_RUNNER_TOKEN."
+                "Operly Sandbox Runner is not configured. Set "
+                "OPERLY_SANDBOX_RUNNER_URL and OPERLY_SANDBOX_RUNNER_TOKEN."
             )
-        timeout = max(1.0, min(timeout_seconds or self.timeout_seconds, 900.0))
+
+        raw = b"" if payload is None else json.dumps(
+            payload,
+            separators=(",", ":"),
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "X-Operly-Signature": self._signature(method, path, raw),
+            "User-Agent": "operly-agent-computer/2",
+        }
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        timeout = max(1.0, min(timeout_seconds or self.timeout_seconds, 930.0))
+
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 response = await client.request(
                     method,
                     f"{self.base_url}{path}",
-                    headers=self._headers(),
-                    json=payload,
+                    headers=headers,
+                    content=raw,
                 )
         except httpx.HTTPError as error:
-            raise ComputerRunnerError("Agent Computer runner is unavailable") from error
-        if response.status_code >= 400:
-            message = "Agent Computer runner rejected the operation"
-            try:
-                body = response.json()
-                if isinstance(body, dict):
-                    message = str(body.get("detail") or body.get("message") or message)
-            except ValueError:
-                pass
-            raise ComputerRunnerError(f"{message} (HTTP {response.status_code})")
+            raise ComputerRunnerError("Operly Sandbox Runner is unavailable") from error
+
+        self._verify_response(response)
         try:
             data = response.json()
         except ValueError as error:
-            raise ComputerRunnerError("Agent Computer runner returned invalid JSON") from error
+            raise ComputerRunnerError("Operly Sandbox Runner returned invalid JSON") from error
         if not isinstance(data, dict):
-            raise ComputerRunnerError("Agent Computer runner returned an invalid response shape")
+            raise ComputerRunnerError("Operly Sandbox Runner returned an invalid response shape")
+
+        if response.status_code >= 400:
+            message = str(data.get("detail") or data.get("message") or "Sandbox Runner rejected the operation")
+            raise ComputerRunnerError(f"{message} (HTTP {response.status_code})")
         return data
 
     async def health(self) -> dict[str, Any]:
-        return await self._request("GET", "/v1/health", timeout_seconds=10)
+        if not self.base_url:
+            raise ComputerRunnerError("OPERLY_SANDBOX_RUNNER_URL is not configured")
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                response = await client.get(f"{self.base_url}/health")
+        except httpx.HTTPError as error:
+            raise ComputerRunnerError("Operly Sandbox Runner is unavailable") from error
+        if response.status_code >= 400:
+            raise ComputerRunnerError(f"Operly Sandbox Runner health check failed (HTTP {response.status_code})")
+        try:
+            data = response.json()
+        except ValueError as error:
+            raise ComputerRunnerError("Operly Sandbox Runner returned invalid health JSON") from error
+        if not isinstance(data, dict):
+            raise ComputerRunnerError("Operly Sandbox Runner returned an invalid health response")
+        return data
 
     async def start(
         self,
@@ -99,7 +128,7 @@ class ComputerRunnerClient:
     ) -> dict[str, Any]:
         return await self._request(
             "POST",
-            "/v1/sessions",
+            "/v1/computer/sessions",
             payload={
                 "client_session_id": computer_session_id,
                 "workspace_id": workspace_id,
@@ -111,10 +140,12 @@ class ComputerRunnerClient:
         )
 
     async def status(self, runtime_session_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/v1/sessions/{runtime_session_id}")
+        runtime_id = quote(str(runtime_session_id), safe="")
+        return await self._request("GET", f"/v1/computer/sessions/{runtime_id}")
 
     async def stop(self, runtime_session_id: str) -> dict[str, Any]:
-        return await self._request("DELETE", f"/v1/sessions/{runtime_session_id}")
+        runtime_id = quote(str(runtime_session_id), safe="")
+        return await self._request("DELETE", f"/v1/computer/sessions/{runtime_id}")
 
     async def tool(
         self,
@@ -124,9 +155,11 @@ class ComputerRunnerClient:
         *,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        runtime_id = quote(str(runtime_session_id), safe="")
+        tool = quote(str(tool_id), safe="._-")
         return await self._request(
             "POST",
-            f"/v1/sessions/{runtime_session_id}/tools/{tool_id}",
+            f"/v1/computer/sessions/{runtime_id}/tools/{tool}",
             payload={"arguments": arguments},
             timeout_seconds=timeout_seconds,
         )
