@@ -5,6 +5,7 @@ workflow runs, while action steps are delegated to the normal Workspace Kernel
 runtime with freshly resolved Workspace authority.
 """
 
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 from packages.workflow.models import WorkflowDefinition, WorkflowRun
-from packages.workflow.provider import PROVIDER_ID, WorkflowProvider as _WorkflowProvider, workflow_capabilities
+from packages.workflow.provider import PROVIDER_ID, WorkflowProvider as _WorkflowProvider, workflow_capabilities as _workflow_capabilities
 from packages.workflow.scheduler import workflow_scheduler
+
+
+def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
+    # The universal React tool surface already understands the operations tag, so
+    # Workflow gets a sensible human-facing home without a second execution API.
+    return tuple(
+        replace(spec, tags=frozenset((*spec.tags, "operations")))
+        for spec in _workflow_capabilities()
+    )
 
 
 class WorkflowProvider(_WorkflowProvider):
