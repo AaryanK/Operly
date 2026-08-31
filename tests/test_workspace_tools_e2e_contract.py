@@ -10,18 +10,15 @@ class WorkspaceToolsE2EContractTests(unittest.TestCase):
     def test_workspace_owned_tools_live_in_workspace_modules_package(self):
         root = Path(__file__).resolve().parents[1]
         for legacy in (
-            "workspace_os_provider.py",
-            "workspace_control_provider.py",
-            "workspace_business_provider.py",
-            "workspace_google_provider.py",
-            "provider_availability.py",
+            "workspace_os_provider.py", "workspace_control_provider.py",
+            "workspace_business_provider.py", "workspace_google_provider.py", "provider_availability.py",
         ):
             self.assertFalse((root / "packages" / "kernel" / legacy).exists(), legacy)
-        for current in (
-            "records.py", "controls.py", "business.py", "google.py", "availability.py",
-            "system.py", "runtime.py", "router.py",
-        ):
+        for current in ("records.py", "controls.py", "business.py", "availability.py", "system.py", "runtime.py", "router.py"):
             self.assertTrue((root / "packages" / "workspace_modules" / "tools" / current).exists(), current)
+        self.assertFalse((root / "packages" / "workspace_modules" / "tools" / "google.py").exists())
+        for integration in ("google", "canva", "discord"):
+            self.assertTrue((root / "packages" / "workspace_modules" / "integrations" / integration).is_dir(), integration)
         self.assertFalse((root / "apps" / "api" / "workspace_tools_router.py").exists())
 
     def test_generic_builtins_do_not_own_workspace_business_tools(self):
@@ -38,14 +35,15 @@ class WorkspaceToolsE2EContractTests(unittest.TestCase):
         self.assertEqual(len(endpoints), len(set(endpoints)))
         self.assertTrue(all(endpoint.startswith("/workspace-tools/") for endpoint in endpoints))
         self.assertTrue(all(endpoint.endswith("/execute") for endpoint in endpoints))
-        self.assertGreater(len(endpoints), 100)
+        self.assertGreater(len(endpoints), 120)
 
-    def test_workspace_system_tools_are_owned_by_workspace_package(self):
+    def test_workspace_system_and_integration_tools_share_one_surface(self):
         ids = {spec.id for spec in workspace_capabilities()}
-        self.assertIn("workspace.describe", ids)
-        self.assertIn("workspace.modules.list", ids)
-        self.assertIn("workspace.search", ids)
-        self.assertIn("google.gmail.search", ids)
+        for capability_id in (
+            "workspace.describe", "workspace.modules.list", "workspace.search",
+            "google.gmail.search", "canva.designs.list", "discord.channels.list", "discord.bot.status",
+        ):
+            self.assertIn(capability_id, ids)
 
 
 if __name__ == "__main__":
