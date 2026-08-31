@@ -17,6 +17,10 @@ function routeWorkspaceId(pathname: string): string | null {
   try { return decodeURIComponent(raw); } catch { return raw; }
 }
 
+function workspaceControlPath(workspaceId: string, section: string): string {
+  return `/channels/${encodeURIComponent(workspaceId)}/${section}`;
+}
+
 export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,7 +87,21 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
       <button className="workspace-lite-mark workspace-lite-account" onClick={() => go("/account")}>A</button>
     </nav>
     <div className="workspace-lite-content">
-      <header className="workspace-lite-topbar"><a className="workspace-lite-brand" href="/account"><OperlyMark /><span>OPERLY</span></a><div className="workspace-lite-topbar-actions"><a href="/account">Workspaces</a><button className="workspace-lite-button" onClick={() => void load()}>Refresh</button><button className="workspace-lite-button" onClick={() => void logout()}>Sign out</button></div></header>
+      <header className="workspace-lite-topbar">
+        <a className="workspace-lite-brand" href="/account"><OperlyMark /><span>OPERLY</span></a>
+        <div className="workspace-lite-topbar-actions">
+          {selected && selected.current && <>
+            <a href={workspaceControlPath(selected.id, "workflows")}>Workflows</a>
+            <a href={workspaceControlPath(selected.id, "activity")}>Activity</a>
+            <a href={workspaceControlPath(selected.id, "agent-computer")}>Computer</a>
+            <a href={workspaceControlPath(selected.id, "connections")}>Integrations</a>
+            <a href={workspaceControlPath(selected.id, "capabilities")}>All tools</a>
+          </>}
+          <a href="/account">Workspaces</a>
+          <button className="workspace-lite-button" onClick={() => void load()}>Refresh</button>
+          <button className="workspace-lite-button" onClick={() => void logout()}>Sign out</button>
+        </div>
+      </header>
       {error && <div className="workspace-lite-error">{error}</div>}
       {accountView && <main className="workspace-lite-main"><section className="workspace-lite-heading"><span className="workspace-lite-kicker">YOUR OPERLY</span><h1>Workspaces</h1><p>Select a workspace to continue.</p></section><div className="workspace-lite-grid">{workspaces.map((workspace) => <button className="workspace-lite-card" key={workspace.id} disabled={busy} onClick={() => void switchWorkspace(workspace.id)}><span className="workspace-lite-card-icon workspace-lite-initials">{workspace.name.trim().slice(0, 2).toUpperCase()}</span><span><strong>{workspace.name}</strong><small>{workspace.role}{workspace.current ? " · current session" : ""}</small></span></button>)}</div></main>}
       {personalView && <main className="workspace-lite-main workspace-lite-space-view"><section className="workspace-lite-space-hero"><span className="workspace-lite-kicker">PERSONAL</span><h1>Your private Operly</h1><p>Personal account scope. Workspace business data remains isolated.</p></section></main>}
