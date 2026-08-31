@@ -1,27 +1,29 @@
 from __future__ import annotations
 
 from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
+from packages.kernel.provider_availability import (
+    AvailableWorkspaceBusinessProvider,
+    AvailableWorkspaceControlProvider,
+    AvailableWorkspaceGoogleProvider,
+    AvailableWorkspaceOSProvider,
+)
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
 from packages.kernel.runtime import OperlyKernelRuntime
 from packages.kernel.workspace_business_provider import (
     PROVIDER_ID as WORKSPACE_BUSINESS_PROVIDER_ID,
-    WorkspaceBusinessProvider,
     workspace_business_capabilities,
 )
 from packages.kernel.workspace_control_provider import (
     PROVIDER_ID as WORKSPACE_CONTROL_PROVIDER_ID,
-    WorkspaceControlProvider,
     workspace_control_capabilities,
 )
 from packages.kernel.workspace_google_provider import (
     PROVIDER_ID as WORKSPACE_GOOGLE_PROVIDER_ID,
-    WorkspaceGoogleProvider,
     workspace_google_capabilities,
 )
 from packages.kernel.workspace_os_provider import (
     PROVIDER_ID as WORKSPACE_OS_PROVIDER_ID,
-    WorkspaceOSProvider,
     workspace_record_capabilities,
 )
 
@@ -210,8 +212,8 @@ def build_kernel_runtime() -> OperlyKernelRuntime:
     )
     providers = ProviderRegistry()
     providers.register("operly.native", NativeOperlyProvider())
-    providers.register(WORKSPACE_CONTROL_PROVIDER_ID, WorkspaceControlProvider())
-    providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, WorkspaceBusinessProvider())
-    providers.register(WORKSPACE_GOOGLE_PROVIDER_ID, WorkspaceGoogleProvider())
-    providers.register(WORKSPACE_OS_PROVIDER_ID, WorkspaceOSProvider())
+    providers.register(WORKSPACE_CONTROL_PROVIDER_ID, AvailableWorkspaceControlProvider())
+    providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, AvailableWorkspaceBusinessProvider())
+    providers.register(WORKSPACE_GOOGLE_PROVIDER_ID, AvailableWorkspaceGoogleProvider())
+    providers.register(WORKSPACE_OS_PROVIDER_ID, AvailableWorkspaceOSProvider())
     return OperlyKernelRuntime(registry=registry, providers=providers)
