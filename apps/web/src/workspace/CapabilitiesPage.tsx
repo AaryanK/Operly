@@ -21,13 +21,16 @@ type Capability = {
   aliases: string[];
   emits: string[];
   tags: string[];
+  method: "POST";
+  endpoint: string;
+  contract_endpoint: string;
 };
 
 type CapabilityResponse = {
   scope_kind: string;
   workspace_id: string;
   workspace_mode: string;
-  capabilities: Capability[];
+  tools: Capability[];
 };
 
 type RunResult = {
@@ -84,11 +87,11 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
     setLoading(true);
     setError(null);
     try {
-      const next = await api<CapabilityResponse>("/kernel/capabilities");
+      const next = await api<CapabilityResponse>("/workspace-tools");
       setData(next);
-      setSelectedId((current) => current && next.capabilities.some((item) => item.id === current) ? current : next.capabilities[0]?.id || null);
+      setSelectedId((current) => current && next.tools.some((item) => item.id === current) ? current : next.tools[0]?.id || null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load deterministic capabilities");
+      setError(caught instanceof Error ? caught.message : "Could not load deterministic workspace tools");
     } finally {
       setLoading(false);
     }
@@ -98,14 +101,14 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
 
   const capabilities = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (data?.capabilities || []).filter((item) => {
+    return (data?.tools || []).filter((item) => {
       if (risk !== "all" && item.risk !== risk) return false;
       if (!needle) return true;
-      return `${item.id} ${item.display_name} ${item.description} ${item.provider_id} ${item.tags.join(" ")} ${item.permissions.join(" ")}`.toLowerCase().includes(needle);
+      return `${item.id} ${item.display_name} ${item.description} ${item.provider_id} ${item.endpoint} ${item.tags.join(" ")} ${item.permissions.join(" ")}`.toLowerCase().includes(needle);
     });
   }, [data, query, risk]);
 
-  const selected = data?.capabilities.find((item) => item.id === selectedId) || null;
+  const selected = data?.tools.find((item) => item.id === selectedId) || null;
 
   function select(capability: Capability) {
     setSelectedId(capability.id);
@@ -126,10 +129,9 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Arguments must be a JSON object");
       const nextRequestId = requestId || stableRequestId(selected.id);
       setRequestId(nextRequestId);
-      const result = await api<RunResult>("/kernel/execute", {
-        method: "POST",
+      const result = await api<RunResult>(selected.endpoint, {
+        method: selected.method,
         body: JSON.stringify({
-          capability_id: selected.id,
           arguments: parsed,
           request_id: nextRequestId,
           approval_id: existingApprovalId || undefined,
@@ -142,9 +144,9 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
         const details = caught.details && typeof caught.details === "object" ? caught.details as Record<string, unknown> : {};
         const id = typeof details.approval_id === "string" ? details.approval_id : null;
         setApprovalId(id);
-        setRunError(id ? "This exact invocation requires human approval before it can execute." : caught.message);
+        setRunError(id ? "This exact workspace-tool invocation requires human approval before it can execute." : caught.message);
       } else {
-        setRunError(caught instanceof Error ? caught.message : "Capability execution failed");
+        setRunError(caught instanceof Error ? caught.message : "Workspace tool execution failed");
       }
     } finally {
       setBusy(false);
@@ -156,7 +158,7 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
     setBusy(true);
     setRunError(null);
     try {
-      await api(`/kernel/approvals/${encodeURIComponent(approvalId)}/decision`, {
+      await api(`/workspace-tools/approvals/${encodeURIComponent(approvalId)}/decision`, {
         method: "POST",
         body: JSON.stringify({ approved: true }),
       });
@@ -170,44 +172,45 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
   return <main className="workspace-page">
     <header className="surface-header page-header">
       <div>
-        <span className="eyebrow">Deterministic infrastructure</span>
+        <span className="eyebrow">Workspace modules · deterministic tools</span>
         <h1>Capabilities</h1>
-        <p>Everything shown here is a real, permission-scoped Operly operation. The Workspace UI, workflows, APIs, and future AI agents can share this same execution boundary.</p>
+        <p>Every tool shown here is owned by the Workspace OS package and has a real HTTP endpoint. This page calls that same endpoint end-to-end; future workflows, SDKs and AI agents can use the identical boundary.</p>
       </div>
       <div className="page-actions"><button type="button" onClick={reload}>Refresh</button></div>
     </header>
 
-    {loading && <div className="loading-panel">Resolving effective workspace capabilities…</div>}
+    {loading && <div className="loading-panel">Resolving authorized and currently available workspace tools…</div>}
     {error && <div className="inline-error page-error">{error}</div>}
 
     {data && <>
       <section className="metric-grid">
-        <article className="metric-card"><span>Effective tools</span><strong>{data.capabilities.length}</strong><small>Allowed for your current role</small></article>
-        <article className="metric-card"><span>Approval gated</span><strong>{data.capabilities.filter((item) => item.approval_required).length}</strong><small>Require an explicit human decision</small></article>
-        <article className="metric-card"><span>Providers</span><strong>{new Set(data.capabilities.map((item) => item.provider_id)).size}</strong><small>Behind one Kernel contract</small></article>
+        <article className="metric-card"><span>Available tools</span><strong>{data.tools.length}</strong><small>Authorized + provider available</small></article>
+        <article className="metric-card"><span>Approval gated</span><strong>{data.tools.filter((item) => item.approval_required).length}</strong><small>Require an explicit human decision</small></article>
+        <article className="metric-card"><span>Providers</span><strong>{new Set(data.tools.map((item) => item.provider_id)).size}</strong><small>Owned behind Workspace modules</small></article>
         <article className="metric-card"><span>Workspace mode</span><strong>{titleCase(data.workspace_mode || "full")}</strong><small>Authority is resolved server-side</small></article>
       </section>
 
       <section className="content-grid two-column">
         <article className="data-card">
-          <div className="card-heading"><div><span className="eyebrow">Registry</span><h2>Available capabilities</h2></div><span>{capabilities.length}</span></div>
+          <div className="card-heading"><div><span className="eyebrow">Workspace tool registry</span><h2>Available tools</h2></div><span>{capabilities.length}</span></div>
           <div className="inline-form">
-            <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="CRM, inventory, permissions…" /></label>
+            <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="CRM, inventory, Gmail, permissions…" /></label>
             <label>Risk<select value={risk} onChange={(event) => setRisk(event.target.value)}><option value="all">All</option><option value="read_only">Read only</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           </div>
           <div className="row-list">
             {capabilities.map((item) => <button type="button" className={`data-row stacked ${selectedId === item.id ? "active" : ""}`} key={item.id} onClick={() => select(item)}>
-              <div><strong>{item.display_name}</strong><small>{item.id}</small><small>{item.provider_id} · {titleCase(item.risk)}{item.approval_required ? " · approval" : ""}</small></div>
+              <div><strong>{item.display_name}</strong><small>{item.id}</small><small>{item.method} /api{item.endpoint}</small><small>{item.provider_id} · {titleCase(item.risk)}{item.approval_required ? " · approval" : ""}</small></div>
             </button>)}
-            {!capabilities.length && <div className="empty-panel">No capabilities match this filter.</div>}
+            {!capabilities.length && <div className="empty-panel">No workspace tools match this filter.</div>}
           </div>
         </article>
 
         <article className="data-card">
           {selected ? <>
-            <div className="card-heading"><div><span className="eyebrow">Executable contract</span><h2>{selected.display_name}</h2></div><span className={`status-chip status-${selected.risk.replaceAll("_", "-")}`}>{titleCase(selected.risk)}</span></div>
+            <div className="card-heading"><div><span className="eyebrow">E2E executable endpoint</span><h2>{selected.display_name}</h2></div><span className={`status-chip status-${selected.risk.replaceAll("_", "-")}`}>{titleCase(selected.risk)}</span></div>
             <p>{selected.description}</p>
             <div className="approval-substance-grid">
+              <span><small>Endpoint</small><strong>{selected.method} /api{selected.endpoint}</strong></span>
               <span><small>Provider</small><strong>{selected.provider_id}</strong></span>
               <span><small>Permission</small><strong>{selected.permissions.join(", ") || "None"}</strong></span>
               <span><small>Resource scope</small><strong>{selected.resource_scope}</strong></span>
@@ -217,12 +220,12 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
             <details><summary>Output contract</summary><code>{JSON.stringify(selected.output_schema, null, 2)}</code></details>
             <label className="capability-arguments">Arguments JSON<textarea rows={10} value={argumentsText} onChange={(event) => { setArgumentsText(event.target.value); setRun(null); setRunError(null); setApprovalId(null); setRequestId(null); }} /></label>
             <div className="row-actions">
-              <button type="button" className="primary-button" disabled={busy} onClick={() => execute()}>{busy ? "Executing…" : selected.approval_required ? "Request execution" : "Execute deterministically"}</button>
+              <button type="button" className="primary-button" disabled={busy} onClick={() => execute()}>{busy ? "Executing…" : selected.approval_required ? "Request execution" : "Execute E2E"}</button>
               {approvalId && <button type="button" disabled={busy} onClick={approveAndExecute}>Approve exact invocation & execute</button>}
             </div>
             {runError && <div className="inline-error page-error">{runError}{approvalId && <small> Approval: {approvalId}</small>}</div>}
-            {run && <div className="approval-substance"><strong>Completed</strong><small>Run {run.run_id}</small><details open><summary>Validated result</summary><code>{JSON.stringify(run.result, null, 2)}</code></details><details><summary>Kernel trace</summary><code>{JSON.stringify(run.trace, null, 2)}</code></details></div>}
-          </> : <div className="empty-panel">Select a capability to inspect its deterministic contract.</div>}
+            {run && <div className="approval-substance"><strong>Completed through {selected.endpoint}</strong><small>Run {run.run_id}</small><details open><summary>Validated result</summary><code>{JSON.stringify(run.result, null, 2)}</code></details><details><summary>Execution trace</summary><code>{JSON.stringify(run.trace, null, 2)}</code></details></div>}
+          </> : <div className="empty-panel">Select a workspace tool to inspect and execute its endpoint.</div>}
         </article>
       </section>
     </>}

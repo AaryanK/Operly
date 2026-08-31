@@ -1,31 +1,10 @@
 from __future__ import annotations
 
 from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
-from packages.kernel.provider_availability import (
-    AvailableWorkspaceBusinessProvider,
-    AvailableWorkspaceControlProvider,
-    AvailableWorkspaceGoogleProvider,
-    AvailableWorkspaceOSProvider,
-)
 from packages.kernel.providers import NativeOperlyProvider, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
 from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
-from packages.kernel.workspace_business_provider import (
-    PROVIDER_ID as WORKSPACE_BUSINESS_PROVIDER_ID,
-    workspace_business_capabilities,
-)
-from packages.kernel.workspace_control_provider import (
-    PROVIDER_ID as WORKSPACE_CONTROL_PROVIDER_ID,
-    workspace_control_capabilities,
-)
-from packages.kernel.workspace_google_provider import (
-    PROVIDER_ID as WORKSPACE_GOOGLE_PROVIDER_ID,
-    workspace_google_capabilities,
-)
-from packages.kernel.workspace_os_provider import (
-    PROVIDER_ID as WORKSPACE_OS_PROVIDER_ID,
-    workspace_record_capabilities,
-)
+from packages.workspace_modules.tools import register_workspace_providers, workspace_capabilities
 
 
 def _object(properties: dict, *, required: list[str] | None = None) -> dict:
@@ -38,6 +17,12 @@ def _object(properties: dict, *, required: list[str] | None = None) -> dict:
 
 
 def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
+    """Platform/personal primitives only.
+
+    Workspace-owned tools are composed from ``packages.workspace_modules.tools``.
+    Keeping them out of this module prevents the generic execution substrate from
+    becoming a second Workspace OS package.
+    """
     task = _object(
         {
             "id": {"type": "string"},
@@ -53,7 +38,7 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
             id="system.runtime.status",
             version="1.0.0",
             display_name="Runtime status",
-            description="Inspect the deterministic Operly kernel state for this authorized scope.",
+            description="Inspect the deterministic Operly execution substrate for this authorized scope.",
             provider_id="operly.native",
             scopes=frozenset({"personal", "workspace"}),
             input_schema=_object({}),
@@ -74,91 +59,34 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
                 ],
             ),
             permissions=("workspace:read",),
-            aliases=("runtime status", "kernel status", "system status"),
+            aliases=("runtime status", "system status"),
             tags=frozenset({"system", "diagnostics"}),
-        ),
-        CapabilitySpec(
-            id="workspace.describe",
-            version="1.0.0",
-            display_name="Describe workspace",
-            description="Return the minimum trusted workspace identity, role, mode, and timezone.",
-            provider_id="operly.native",
-            scopes=frozenset({"workspace"}),
-            input_schema=_object({}),
-            output_schema=_object(
-                {
-                    "id": {"type": "string"},
-                    "name": {"type": "string"},
-                    "timezone": {"type": "string"},
-                    "role": {"type": "string"},
-                    "mode": {"type": "string"},
-                    "minimum_context": {"type": "object"},
-                },
-                required=["id", "name", "timezone", "role", "mode", "minimum_context"],
-            ),
-            permissions=("workspace:read",),
-            aliases=("workspace info", "workspace details", "describe workspace"),
-            tags=frozenset({"workspace", "identity"}),
-        ),
-        CapabilitySpec(
-            id="workspace.modules.list",
-            version="1.0.0",
-            display_name="List workspace modules",
-            description="List workspace modules visible to the current role and their activation state.",
-            provider_id="operly.native",
-            scopes=frozenset({"workspace"}),
-            input_schema=_object({}),
-            output_schema=_object(
-                {
-                    "modules": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "key": {"type": "string"},
-                                "name": {"type": "string"},
-                                "category": {"type": "string"},
-                                "enabled": {"type": "boolean"},
-                                "state": {"type": "string"},
-                            },
-                            "required": ["key", "name", "category", "enabled", "state"],
-                            "additionalProperties": False,
-                        },
-                    }
-                },
-                required=["modules"],
-            ),
-            permissions=("workspace:read",),
-            aliases=("list modules", "workspace apps", "workspace capabilities"),
-            tags=frozenset({"workspace", "modules"}),
         ),
         CapabilitySpec(
             id="tasks.list",
             version="1.0.0",
-            display_name="List tasks",
-            description="List tasks only inside the currently authorized personal or workspace scope.",
+            display_name="List personal tasks",
+            description="List tasks owned by the authenticated Personal scope.",
             provider_id="operly.native",
-            scopes=frozenset({"personal", "workspace"}),
+            scopes=frozenset({"personal"}),
             input_schema=_object(
                 {
                     "status": {"type": "string", "maxLength": 30},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 }
             ),
-            output_schema=_object(
-                {"tasks": {"type": "array", "items": task}}, required=["tasks"]
-            ),
+            output_schema=_object({"tasks": {"type": "array", "items": task}}, required=["tasks"]),
             permissions=("tasks:read",),
-            aliases=("show tasks", "list tasks", "my tasks", "workspace tasks"),
-            tags=frozenset({"tasks", "work"}),
+            aliases=("show tasks", "list tasks", "my tasks"),
+            tags=frozenset({"tasks", "personal", "work"}),
         ),
         CapabilitySpec(
             id="tasks.create",
             version="1.0.0",
-            display_name="Create task",
-            description="Create a task inside the currently authorized personal or workspace scope.",
+            display_name="Create personal task",
+            description="Create a task owned by the authenticated Personal scope.",
             provider_id="operly.native",
-            scopes=frozenset({"personal", "workspace"}),
+            scopes=frozenset({"personal"}),
             input_schema=_object(
                 {
                     "title": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -173,15 +101,15 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
             reversible=True,
             aliases=("create task", "add task", "new task"),
             emits=("task.created",),
-            tags=frozenset({"tasks", "write"}),
+            tags=frozenset({"tasks", "personal", "write"}),
         ),
         CapabilitySpec(
             id="tasks.update_status",
             version="1.0.0",
-            display_name="Update task status",
-            description="Update status for a task only if it belongs to the authorized scope.",
+            display_name="Update personal task status",
+            description="Update a task only when it belongs to the authenticated Personal scope.",
             provider_id="operly.native",
-            scopes=frozenset({"personal", "workspace"}),
+            scopes=frozenset({"personal"}),
             input_schema=_object(
                 {
                     "task_id": {"type": "string", "minLength": 1, "maxLength": 80},
@@ -195,25 +123,14 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
             reversible=True,
             aliases=("complete task", "update task", "change task status"),
             emits=("task.updated",),
-            tags=frozenset({"tasks", "write"}),
+            tags=frozenset({"tasks", "personal", "write"}),
         ),
     )
 
 
 def build_kernel_runtime() -> AvailabilityAwareKernelRuntime:
-    registry = CapabilityRegistry(
-        (
-            *builtin_capabilities(),
-            *workspace_control_capabilities(),
-            *workspace_business_capabilities(),
-            *workspace_google_capabilities(),
-            *workspace_record_capabilities(),
-        )
-    )
+    registry = CapabilityRegistry((*builtin_capabilities(), *workspace_capabilities()))
     providers = ProviderRegistry()
     providers.register("operly.native", NativeOperlyProvider())
-    providers.register(WORKSPACE_CONTROL_PROVIDER_ID, AvailableWorkspaceControlProvider())
-    providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, AvailableWorkspaceBusinessProvider())
-    providers.register(WORKSPACE_GOOGLE_PROVIDER_ID, AvailableWorkspaceGoogleProvider())
-    providers.register(WORKSPACE_OS_PROVIDER_ID, AvailableWorkspaceOSProvider())
+    register_workspace_providers(providers)
     return AvailabilityAwareKernelRuntime(registry=registry, providers=providers)

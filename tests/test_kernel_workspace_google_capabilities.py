@@ -1,7 +1,7 @@
 import unittest
 
 from packages.kernel.contracts import CapabilityRisk
-from packages.kernel.workspace_google_provider import PROVIDER_ID, workspace_google_capabilities
+from packages.workspace_modules.tools.google import PROVIDER_ID, workspace_google_capabilities
 
 
 class WorkspaceGoogleCapabilityTests(unittest.TestCase):

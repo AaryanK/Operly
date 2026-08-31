@@ -8,13 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.dependencies import (
-    AccountAuthContext,
-    AuthContext,
-    get_account_auth_context,
-    get_auth_context,
-    get_db,
-)
+from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.database.kernel_models import KernelApproval, KernelEventRecord, KernelRun, KernelRunStep
 from packages.kernel import RuntimeExecutionError, build_kernel_runtime
 from packages.kernel.approvals import ApprovalError, approval_json, decide_approval
@@ -23,7 +17,8 @@ from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
 
-router = APIRouter(prefix="/api/kernel", tags=["kernel"])
+
+router = APIRouter(prefix="/api/kernel", tags=["kernel-personal"])
 _runtime = build_kernel_runtime()
 
 
@@ -40,25 +35,6 @@ class ApprovalDecisionInput(BaseModel):
     approved: bool
 
 
-async def _workspace_context(
-    db: AsyncSession,
-    auth: AuthContext,
-    conversation_id: str | None = None,
-) -> ExecutionContext:
-    return await resolve_ingress_context(
-        db,
-        TrustedIngress(
-            scope_kind=ScopeKind.WORKSPACE,
-            user_id=auth.user.id,
-            workspace_id=auth.tenant.id,
-            channel="web",
-            surface=SurfaceKind.WORKSPACE_PRIVATE,
-            conversation_id=conversation_id,
-            metadata={"ingress": "operly_web_kernel"},
-        ),
-    )
-
-
 async def _personal_context(
     db: AsyncSession,
     account: AccountAuthContext,
@@ -73,23 +49,9 @@ async def _personal_context(
             channel="web",
             surface=SurfaceKind.PERSONAL_PRIVATE,
             conversation_id=conversation_id,
-            metadata={"ingress": "operly_web_kernel"},
+            metadata={"ingress": "operly_personal_kernel"},
         ),
     )
-
-
-async def _capabilities(
-    db: AsyncSession,
-    context: ExecutionContext,
-    query: str | None,
-) -> list[dict[str, Any]]:
-    specs = await _runtime.available_capabilities(
-        db,
-        context=context,
-        query=query,
-        limit=50 if query else 500,
-    )
-    return [spec.public_dict() for spec in specs]
 
 
 def _runtime_request(payload: KernelExecuteInput) -> RuntimeRequest:
@@ -114,57 +76,6 @@ async def _execute(db: AsyncSession, context: ExecutionContext, payload: KernelE
     return response.as_dict()
 
 
-@router.get("/capabilities")
-async def workspace_capabilities(
-    query: str | None = Query(default=None, max_length=200),
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    context = await _workspace_context(db, auth)
-    capabilities = await _capabilities(db, context, query)
-    return {
-        "scope_kind": context.scope_kind.value,
-        "workspace_id": context.workspace_id,
-        "workspace_mode": context.workspace_mode,
-        "capabilities": capabilities,
-    }
-
-
-@router.post("/execute")
-async def workspace_execute(
-    payload: KernelExecuteInput,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    context = await _workspace_context(db, auth, payload.conversation_id)
-    return await _execute(db, context, payload)
-
-
-@router.get("/personal/capabilities")
-async def personal_capabilities(
-    query: str | None = Query(default=None, max_length=200),
-    account: AccountAuthContext = Depends(get_account_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    context = await _personal_context(db, account)
-    capabilities = await _capabilities(db, context, query)
-    return {
-        "scope_kind": context.scope_kind.value,
-        "user_id": context.user_id,
-        "capabilities": capabilities,
-    }
-
-
-@router.post("/personal/execute")
-async def personal_execute(
-    payload: KernelExecuteInput,
-    account: AccountAuthContext = Depends(get_account_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    context = await _personal_context(db, account, payload.conversation_id)
-    return await _execute(db, context, payload)
-
-
 def _json(value: str) -> Any:
     try:
         return json.loads(value or "{}")
@@ -183,7 +94,6 @@ async def _run_payload(db: AsyncSession, run: KernelRun) -> dict[str, Any]:
     return {
         "id": run.id,
         "scope_kind": run.scope_kind,
-        "workspace_id": run.workspace_id,
         "owner_user_id": run.owner_user_id,
         "principal_id": run.principal_id,
         "channel": run.channel,
@@ -209,86 +119,29 @@ async def _run_payload(db: AsyncSession, run: KernelRun) -> dict[str, Any]:
     }
 
 
-def _approval_event(
-    db: AsyncSession,
-    *,
-    context: ExecutionContext,
-    approval: KernelApproval,
-    actor_user_id: str,
-) -> None:
-    db.add(
-        KernelEventRecord(
-            event_type=f"approval.{approval.status}",
-            scope_kind=context.scope_kind.value,
-            workspace_id=context.workspace_id,
-            owner_user_id=context.user_id if context.is_personal else None,
-            principal_id=context.principal_id,
-            actor_type="human",
-            actor_id=actor_user_id,
-            initiator_principal_id=approval.requested_by_principal_id,
-            executor_principal_id=f"user:{actor_user_id}",
-            capability_id=approval.capability_id,
-            resource_type="approval",
-            resource_id=approval.id,
-            payload_json=json.dumps(
-                {"approval_id": approval.id, "status": approval.status},
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-        )
-    )
-
-
-@router.get("/approvals")
-async def workspace_approvals(
-    status: str | None = Query(default=None, max_length=30),
-    limit: int = Query(default=50, ge=1, le=200),
-    auth: AuthContext = Depends(get_auth_context),
+@router.get("/personal/capabilities")
+async def personal_capabilities(
+    query: str | None = Query(default=None, max_length=200),
+    account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    context = await _workspace_context(db, auth)
-    if not context.can("actions:read") and not context.can("actions:approve"):
-        raise HTTPException(status_code=403, detail="Approval access denied")
-    filters = [
-        KernelApproval.scope_kind == "workspace",
-        KernelApproval.workspace_id == auth.tenant.id,
-    ]
-    if status:
-        filters.append(KernelApproval.status == status)
-    rows = (
-        await db.scalars(
-            select(KernelApproval)
-            .where(*filters)
-            .order_by(KernelApproval.created_at.desc())
-            .limit(limit)
-        )
-    ).all()
-    return {"approvals": [approval_json(row, include_arguments=True) for row in rows]}
+    context = await _personal_context(db, account)
+    specs = await _runtime.available_capabilities(db, context=context, query=query, limit=50)
+    return {
+        "scope_kind": "personal",
+        "user_id": account.user.id,
+        "capabilities": [spec.public_dict() for spec in specs if "personal" in spec.scopes],
+    }
 
 
-@router.post("/approvals/{approval_id}/decision")
-async def workspace_approval_decision(
-    approval_id: str,
-    payload: ApprovalDecisionInput,
-    auth: AuthContext = Depends(get_auth_context),
+@router.post("/personal/execute")
+async def personal_execute(
+    payload: KernelExecuteInput,
+    account: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    context = await _workspace_context(db, auth)
-    if not context.can("actions:approve"):
-        raise HTTPException(status_code=403, detail="Approval permission denied")
-    try:
-        row = await decide_approval(
-            db,
-            context=context,
-            approval_id=approval_id,
-            approved=payload.approved,
-            decided_by_user_id=auth.user.id,
-        )
-    except ApprovalError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    _approval_event(db, context=context, approval=row, actor_user_id=auth.user.id)
-    await db.commit()
-    return approval_json(row, include_arguments=True)
+    context = await _personal_context(db, account, payload.conversation_id)
+    return await _execute(db, context, payload)
 
 
 @router.get("/personal/approvals")
@@ -306,10 +159,7 @@ async def personal_approvals(
         filters.append(KernelApproval.status == status)
     rows = (
         await db.scalars(
-            select(KernelApproval)
-            .where(*filters)
-            .order_by(KernelApproval.created_at.desc())
-            .limit(limit)
+            select(KernelApproval).where(*filters).order_by(KernelApproval.created_at.desc()).limit(limit)
         )
     ).all()
     return {"approvals": [approval_json(row, include_arguments=True) for row in rows]}
@@ -333,69 +183,29 @@ async def personal_approval_decision(
         )
     except ApprovalError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    _approval_event(db, context=context, approval=row, actor_user_id=account.user.id)
-    await db.commit()
-    return approval_json(row, include_arguments=True)
-
-
-@router.get("/events")
-async def workspace_events(
-    event_type: str | None = Query(default=None, max_length=160),
-    limit: int = Query(default=50, ge=1, le=200),
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    context = await _workspace_context(db, auth)
-    if not context.can("actions:read"):
-        raise HTTPException(status_code=403, detail="Event audit access denied")
-    filters = [KernelEventRecord.workspace_id == auth.tenant.id]
-    if event_type:
-        filters.append(KernelEventRecord.event_type == event_type)
-    rows = (
-        await db.scalars(
-            select(KernelEventRecord)
-            .where(*filters)
-            .order_by(KernelEventRecord.created_at.desc())
-            .limit(limit)
-        )
-    ).all()
-    return {
-        "events": [
-            {
-                "id": row.id,
-                "event_type": row.event_type,
-                "principal_id": row.principal_id,
-                "actor_type": row.actor_type,
-                "actor_id": row.actor_id,
-                "initiator_principal_id": row.initiator_principal_id,
-                "executor_principal_id": row.executor_principal_id,
-                "capability_id": row.capability_id,
-                "resource_type": row.resource_type,
-                "resource_id": row.resource_id,
-                "payload": _json(row.payload_json),
-                "created_at": row.created_at.isoformat(),
-            }
-            for row in rows
-        ]
-    }
-
-
-@router.get("/runs/{run_id}")
-async def workspace_run(
-    run_id: str,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    run = await db.scalar(
-        select(KernelRun).where(
-            KernelRun.id == run_id,
-            KernelRun.scope_kind == "workspace",
-            KernelRun.workspace_id == auth.tenant.id,
+    db.add(
+        KernelEventRecord(
+            event_type=f"approval.{row.status}",
+            scope_kind="personal",
+            workspace_id=None,
+            owner_user_id=account.user.id,
+            principal_id=context.principal_id,
+            actor_type="human",
+            actor_id=account.user.id,
+            initiator_principal_id=row.requested_by_principal_id,
+            executor_principal_id=f"user:{account.user.id}",
+            capability_id=row.capability_id,
+            resource_type="approval",
+            resource_id=row.id,
+            payload_json=json.dumps(
+                {"approval_id": row.id, "status": row.status},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
         )
     )
-    if run is None:
-        raise HTTPException(status_code=404, detail="Runtime run not found")
-    return await _run_payload(db, run)
+    await db.commit()
+    return approval_json(row, include_arguments=True)
 
 
 @router.get("/personal/runs/{run_id}")

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:contracts": "node scripts/frontend-contract.mjs",
+    "test:contracts": "node scripts/frontend-contract.mjs && node scripts/workspace-tools-contract.mjs",
+    "test:workspace-tools": "node scripts/workspace-tools-contract.mjs",
     "test:bundle": "node scripts/bundle-contract.mjs"
   },
   "dependencies": {

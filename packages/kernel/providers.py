@@ -7,11 +7,9 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.database.models import Task, Tenant
-from packages.database.workspace_module_models import WorkspaceModule
+from packages.database.models import Task
 from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
-from packages.workspace_modules.catalog import MODULE_CATALOG
 
 
 class CapabilityProvider(Protocol):
@@ -67,11 +65,11 @@ Handler = Callable[
 
 
 class NativeOperlyProvider:
+    """Platform/personal primitives only; Workspace business tools live in workspace_modules."""
+
     def __init__(self) -> None:
         self._handlers: dict[str, Handler] = {
             "system.runtime.status": self._runtime_status,
-            "workspace.describe": self._workspace_describe,
-            "workspace.modules.list": self._workspace_modules,
             "tasks.list": self._tasks_list,
             "tasks.create": self._tasks_create,
             "tasks.update_status": self._tasks_update_status,
@@ -120,81 +118,13 @@ class NativeOperlyProvider:
             event_payload={"scope_kind": context.scope_kind.value},
         )
 
-    async def _workspace_describe(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-        minimum_context: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        del arguments
-        if not context.workspace_id:
-            raise PermissionError("Workspace capability requires workspace authority")
-        workspace = await db.get(Tenant, context.workspace_id)
-        if workspace is None:
-            raise LookupError("Workspace is unavailable")
-        return CapabilityExecutionResult(
-            value={
-                "id": workspace.id,
-                "name": workspace.name,
-                "timezone": workspace.timezone,
-                "role": context.role,
-                "mode": context.workspace_mode,
-                "minimum_context": minimum_context,
-            },
-            resource_type="workspace",
-            resource_id=workspace.id,
-        )
-
-    async def _workspace_modules(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-        minimum_context: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        del arguments, minimum_context
-        if not context.workspace_id:
-            raise PermissionError("Workspace capability requires workspace authority")
-        rows = (
-            await db.scalars(
-                select(WorkspaceModule).where(WorkspaceModule.tenant_id == context.workspace_id)
-            )
-        ).all()
-        persisted = {row.module_key: row for row in rows}
-        modules: list[dict[str, Any]] = []
-        for key, manifest in MODULE_CATALOG.items():
-            required = str(manifest.get("required_permission") or "workspace:read")
-            if not context.can(required):
-                continue
-            row = persisted.get(key)
-            enabled = row.enabled if row is not None else bool(manifest.get("default_enabled", False))
-            modules.append(
-                {
-                    "key": key,
-                    "name": str(manifest.get("name") or key),
-                    "category": str(manifest.get("category") or "other"),
-                    "enabled": enabled,
-                    "state": row.state if row is not None else ("active" if enabled else "disabled"),
-                }
-            )
-        return CapabilityExecutionResult(
-            value={"modules": modules},
-            resource_type="workspace",
-            resource_id=context.workspace_id,
-        )
-
     def _task_filter(self, context: ExecutionContext):
-        if context.is_personal:
-            if not context.user_id:
-                raise PermissionError("Personal task access requires a user")
-            return (
-                Task.tenant_id.is_(None),
-                Task.owner_user_id == context.user_id,
-            )
-        if not context.workspace_id:
-            raise PermissionError("Workspace task access requires workspace authority")
-        return (Task.tenant_id == context.workspace_id,)
+        if not context.is_personal or not context.user_id:
+            raise PermissionError("Native task operations are Personal-scope only")
+        return (
+            Task.tenant_id.is_(None),
+            Task.owner_user_id == context.user_id,
+        )
 
     def _task_json(self, task: Task) -> dict[str, Any]:
         return {
@@ -236,6 +166,7 @@ class NativeOperlyProvider:
         minimum_context: dict[str, Any],
     ) -> CapabilityExecutionResult:
         del minimum_context
+        self._task_filter(context)
         title = str(arguments["title"]).strip()
         if not title:
             raise ValueError("Task title is required")
@@ -249,8 +180,8 @@ class NativeOperlyProvider:
             except ValueError as error:
                 raise ValueError("due_at must be an ISO-8601 datetime") from error
         task = Task(
-            tenant_id=context.workspace_id if context.is_workspace else None,
-            owner_user_id=context.user_id if context.is_personal else None,
+            tenant_id=None,
+            owner_user_id=context.user_id,
             title=title,
             status=str(arguments.get("status") or "open"),
             due_at=due_at,
@@ -275,7 +206,7 @@ class NativeOperlyProvider:
         task_id = str(arguments["task_id"]).strip()
         task = await db.scalar(select(Task).where(Task.id == task_id, *self._task_filter(context)))
         if task is None:
-            raise LookupError("Task not found in the authorized scope")
+            raise LookupError("Task not found in the authorized Personal scope")
         task.status = str(arguments["status"])
         await db.flush()
         return CapabilityExecutionResult(

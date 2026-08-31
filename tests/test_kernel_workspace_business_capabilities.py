@@ -1,7 +1,7 @@
 import unittest
 
 from packages.kernel.contracts import CapabilityRisk
-from packages.kernel.workspace_business_provider import PROVIDER_ID, workspace_business_capabilities
+from packages.workspace_modules.tools.business import PROVIDER_ID, workspace_business_capabilities
 
 
 class WorkspaceBusinessCapabilityTests(unittest.TestCase):
