@@ -6,6 +6,7 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "apps/api/main.py"
+      - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
       - "apps/web/src/app/App.tsx"
@@ -17,6 +18,7 @@ on:
       - "packages/database/schema.py"
       - "packages/security/permissions.py"
       - "packages/workflow/**"
+      - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_workflow_package.py"
   push:
@@ -26,6 +28,7 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "apps/api/main.py"
+      - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
       - "apps/web/src/app/App.tsx"
@@ -37,6 +40,7 @@ on:
       - "packages/database/schema.py"
       - "packages/security/permissions.py"
       - "packages/workflow/**"
+      - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_workflow_package.py"
 
@@ -96,3 +100,36 @@ jobs:
       - name: Build frontend
         working-directory: apps/web
         run: npm run build
+
+  agent-computer-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Agent Computer client
+        run: python -m py_compile packages/workspace_modules/agent_computer/sandbox.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned Railway SDK
+        working-directory: apps/sandbox_runner
+        run: npm install --ignore-scripts --no-package-lock
+
+      - name: Validate Sandbox Runner syntax
+        working-directory: apps/sandbox_runner
+        run: npm test
+
+      - name: Verify Railway template prewarm API
+        working-directory: apps/sandbox_runner
+        run: node --input-type=module -e 'import { Sandbox } from "railway"; const template = Sandbox.template(); if (typeof template.build !== "function") throw new Error("Pinned Railway SDK does not expose SandboxTemplate.build");'
