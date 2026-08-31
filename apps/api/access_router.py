@@ -29,7 +29,7 @@ SUPPORTED_EXTERNAL_CLIENTS = {
 }
 
 _SCOPE_CAPABILITY = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*(?:\.\*)?$")
-_SCOPE_PERMISSION = re.compile(r"^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$")
+_SCOPE_PERMISSION = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)+$")
 
 
 class ClientGrantInput(BaseModel):
