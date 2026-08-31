@@ -82,7 +82,9 @@ async def _available_tools(
         query=query,
         limit=500 if not query else 50,
     )
-    return tuple(spec for spec in specs if "workspace" in spec.scopes)
+    # Workspace API exposes only Workspace-owned resources. Global/personal substrate
+    # capabilities can share the same runtime without leaking into this UI/tool surface.
+    return tuple(spec for spec in specs if spec.resource_scope == "workspace")
 
 
 async def _available_tool(
