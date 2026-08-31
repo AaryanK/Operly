@@ -22,8 +22,10 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
 from packages.workspace_modules.integrations.router import router as workspace_integrations_router
+from packages.workspace_modules.studio.router import public_router as studio_public_router
 from packages.workspace_modules.tools.router import router as workspace_tools_router
 
 load_dotenv(override=False)
@@ -104,10 +106,10 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.5.2-deterministic-integrations", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.5.3-agent-computer", lifespan=lifespan)
 
-# Models/agents remain offline. Integration packages resolve workspace authority,
-# provider scopes and live provider resource permissions before deterministic execution.
+# Models/agents remain offline. Human and deterministic interfaces resolve Workspace
+# authority and execute through the same governed capability runtime.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -143,7 +145,9 @@ app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
+app.include_router(agent_computer_router)
 app.include_router(kernel_router)
+app.include_router(studio_public_router)
 
 
 @app.get("/api/health")
@@ -157,6 +161,8 @@ async def health():
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "agent_computer_enabled": True,
+        "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot_configured": discord["configured"],
         "discord_bot_running": discord["task_running"],
         "human_workflows_enabled": True,
@@ -168,21 +174,23 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "deterministic-workspace-integrations",
+        "state": "deterministic-agent-computer",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "agent_computer_enabled": True,
+        "agent_computer_planner": "deterministic",
+        "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
         "discord_bot": discord_bot_lifecycle.status(),
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Google, Canva and Discord are deterministic Workspace integration packages. "
-            "They resolve workspace authority plus provider-side scope/resource permissions "
-            "before execution. The Discord bot is transport and deterministic commands only; "
-            "AI remains offline."
+            "Agent Computer is a governed deterministic interface over Workspace tools. "
+            "Studio deployment supports verified static or prebuilt bundles and pauses on the "
+            "normal Workspace approval boundary. AI planning remains offline."
         ),
     }
 
