@@ -15,6 +15,12 @@ from packages.kernel.contracts import (
     RuntimeResponse,
     RuntimeStage,
 )
+from packages.kernel.idempotency import (
+    IdempotencyConflict,
+    IdempotencyInProgress,
+    complete_request,
+    reserve_request,
+)
 from packages.kernel.policy import CapabilityPolicyEngine
 from packages.kernel.providers import ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry, CapabilityRegistryError
@@ -114,7 +120,18 @@ class OperlyKernelRuntime:
         capability: CapabilitySpec | None = None
         decision = AuthorizationDecision.DENY
         execution_result = None
+        idempotency_claim = None
         try:
+            reservation = await reserve_request(
+                db,
+                context=context,
+                request=request,
+                run_id=audit.run_id,
+            )
+            if reservation.replay is not None:
+                return reservation.replay
+            idempotency_claim = reservation.claim
+
             goal = str(request.goal or "").strip()
             if not goal and not request.capability_id:
                 raise ValueError("A goal or capability_id is required")
@@ -231,6 +248,15 @@ class OperlyKernelRuntime:
             )
             audit.step(13, RuntimeStage.RESPOND.value, "done", {"done": True})
 
+            response = RuntimeResponse(
+                run_id=audit.run_id,
+                status="completed",
+                capability_id=capability.id,
+                decision=decision,
+                result=dict(execution_result.value),
+                done=True,
+                trace=audit.public_trace(),
+            )
             await persist_audit(
                 db,
                 buffer=audit,
@@ -242,16 +268,9 @@ class OperlyKernelRuntime:
                 resource_type=execution_result.resource_type,
                 resource_id=execution_result.resource_id,
             )
+            await complete_request(db, claim=idempotency_claim, response=response)
             await db.commit()
-            return RuntimeResponse(
-                run_id=audit.run_id,
-                status="completed",
-                capability_id=capability.id,
-                decision=decision,
-                result=dict(execution_result.value),
-                done=True,
-                trace=audit.public_trace(),
-            )
+            return response
         except RuntimeExecutionError as error:
             await db.rollback()
             if not audit.steps or audit.steps[-1]["name"] != RuntimeStage.RESPOND.value:
@@ -266,6 +285,36 @@ class OperlyKernelRuntime:
                 error=str(error),
             )
             raise
+        except IdempotencyConflict as error:
+            await db.rollback()
+            audit.step(13, RuntimeStage.RESPOND.value, "blocked", {"code": "idempotency_conflict"})
+            await self._persist_failure(
+                db,
+                audit=audit,
+                context=context,
+                request=request,
+                capability=capability,
+                code="idempotency_conflict",
+                error=str(error),
+            )
+            raise RuntimeExecutionError(
+                str(error), run_id=audit.run_id, code="idempotency_conflict", status_code=409
+            ) from error
+        except IdempotencyInProgress as error:
+            await db.rollback()
+            audit.step(13, RuntimeStage.RESPOND.value, "blocked", {"code": "request_in_progress"})
+            await self._persist_failure(
+                db,
+                audit=audit,
+                context=context,
+                request=request,
+                capability=capability,
+                code="request_in_progress",
+                error=str(error),
+            )
+            raise RuntimeExecutionError(
+                str(error), run_id=audit.run_id, code="request_in_progress", status_code=409
+            ) from error
         except (CapabilityRegistryError, SchemaValidationError, ValueError) as error:
             await db.rollback()
             audit.step(13, RuntimeStage.RESPOND.value, "failed", {"code": "invalid_request"})
