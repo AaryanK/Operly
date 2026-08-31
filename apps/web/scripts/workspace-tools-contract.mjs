@@ -9,13 +9,17 @@ const text = (path) => readFile(resolve(repoRoot, path), "utf8");
 const exists = async (path) => { try { await access(resolve(repoRoot, path)); return true; } catch { return false; } };
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [page, router, main, bootstrap, workspaceRuntime, nativeProvider] = await Promise.all([
+const [page, router, main, bootstrap, workspaceRuntime, nativeProvider, integrations, discordBot, discordLifecycle, connections] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("packages/workspace_modules/tools/router.py"),
   text("apps/api/main.py"),
   text("packages/kernel/bootstrap.py"),
   text("packages/workspace_modules/tools/runtime.py"),
   text("packages/kernel/providers.py"),
+  text("packages/workspace_modules/integrations/__init__.py"),
+  text("packages/workspace_modules/integrations/discord/bot.py"),
+  text("packages/workspace_modules/integrations/discord/lifecycle.py"),
+  text("packages/workspace_modules/integrations/router.py"),
 ]);
 
 assert(page.includes('api<CapabilityResponse>("/workspace-tools")'), "Workspace UI must discover tools through /workspace-tools");
@@ -29,12 +33,18 @@ assert(router.includes('prefix="/api/workspace-tools"'), "Workspace tools need t
 assert(router.includes('@router.post("/{capability_id}/execute")'), "Every capability ID must resolve to an executable endpoint");
 assert(router.includes('"endpoint": workspace_tool_endpoint(spec.id)'), "Tool discovery must advertise the exact execute endpoint");
 assert(router.includes("await _available_tool(db, context, capability_id)"), "Endpoint execution must preflight current authority/availability");
-assert(main.includes("from packages.workspace_modules.tools.router import router as workspace_tools_router"), "FastAPI must import Workspace tool routing from workspace_modules");
-assert(main.includes("app.include_router(workspace_tools_router)"), "FastAPI must mount the Workspace tools API");
 
-for (const file of ["records.py", "controls.py", "business.py", "google.py", "availability.py", "system.py", "runtime.py", "router.py", "__init__.py"]) {
+for (const file of ["records.py", "controls.py", "business.py", "availability.py", "system.py", "runtime.py", "router.py", "__init__.py"]) {
   assert(await exists(`packages/workspace_modules/tools/${file}`), `Workspace tool package is missing ${file}`);
 }
+assert(!(await exists("packages/workspace_modules/tools/google.py")), "Google must live in the integrations package, not generic Workspace tools");
+
+for (const provider of ["google", "canva", "discord"]) {
+  assert(await exists(`packages/workspace_modules/integrations/${provider}/__init__.py`), `${provider} integration package is missing`);
+  assert(await exists(`packages/workspace_modules/integrations/${provider}/provider.py`), `${provider} deterministic provider is missing`);
+  assert(await exists(`packages/workspace_modules/integrations/${provider}/permissions.py`), `${provider} permission resolver is missing`);
+}
+
 for (const legacy of ["workspace_os_provider.py", "workspace_control_provider.py", "workspace_business_provider.py", "workspace_google_provider.py", "provider_availability.py"]) {
   assert(!(await exists(`packages/kernel/${legacy}`)), `Workspace-owned code leaked back into packages/kernel/${legacy}`);
 }
@@ -46,4 +56,18 @@ assert(workspaceRuntime.includes("register_workspace_providers(runtime.providers
 assert(!nativeProvider.includes("_workspace_describe"), "Generic native provider must not implement Workspace domain operations");
 assert(!nativeProvider.includes("_workspace_modules"), "Generic native provider must not implement Workspace module operations");
 
-console.log("Workspace tools frontend-to-endpoint contracts passed.");
+assert(integrations.includes("workspace_google_capabilities"), "Google capabilities must be composed by Workspace integrations");
+assert(integrations.includes("workspace_canva_capabilities"), "Canva capabilities must be composed by Workspace integrations");
+assert(integrations.includes("workspace_discord_capabilities"), "Discord capabilities must be composed by Workspace integrations");
+assert(connections.includes('prefix="/api/connectors"'), "Workspace integration package must own connector management endpoints");
+assert(main.includes("workspace_integrations_router"), "FastAPI must mount Workspace-owned connection management");
+assert(main.includes("await discord_bot_lifecycle.start()"), "Application lifespan must start the deterministic Discord bot");
+assert(main.includes("await discord_bot_lifecycle.stop()"), "Application lifespan must stop the deterministic Discord bot");
+
+for (const forbidden of ["AgentRuntime", "ChannelService.handle", "model_runtime", "secure_runtime", "packages.agents"]) {
+  assert(!discordBot.includes(forbidden), `Deterministic Discord bot leaked AI runtime dependency: ${forbidden}`);
+  assert(!discordLifecycle.includes(forbidden), `Discord lifecycle leaked AI runtime dependency: ${forbidden}`);
+}
+assert(discordBot.includes("AI chat is not enabled yet"), "Discord bot must make the deterministic-only behavior explicit");
+
+console.log("Workspace tools and deterministic integration contracts passed.");
