@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import or_, select
-from sqlalchemy.exc import IntegrityError
 
 from packages.database.db import session_scope
 from packages.database.kernel_models import KernelApproval
@@ -18,7 +17,7 @@ from packages.workflow.tracing import record_workflow_event
 
 
 class WorkflowScheduler:
-    """Small durable dispatcher; execution state remains in PostgreSQL, not this task."""
+    """Durable DB-leased dispatcher; workflow truth never lives in this process."""
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -26,7 +25,10 @@ class WorkflowScheduler:
         self._last_error: str | None = None
         self._last_tick_at: datetime | None = None
         self._poll_seconds = max(1.0, float(os.getenv("OPERLY_WORKFLOW_POLL_SECONDS", "2")))
-        self._lease_seconds = max(30, int(os.getenv("OPERLY_WORKFLOW_LEASE_SECONDS", "120")))
+        # A live action keeps this lease while its provider call is in flight.  We do
+        # not automatically replay an expired running action because its external
+        # side effect may have committed immediately before a process failure.
+        self._lease_seconds = max(300, int(os.getenv("OPERLY_WORKFLOW_LEASE_SECONDS", "3600")))
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -72,6 +74,7 @@ class WorkflowScheduler:
     async def tick(self) -> None:
         self._last_tick_at = datetime.utcnow()
         await self._release_decided_approvals_and_waits()
+        await self._mark_orphaned_running_runs()
         await self._enqueue_due_schedules()
         run_ids = await self._claim_runs(limit=8)
         for run_id in run_ids:
@@ -110,6 +113,43 @@ class WorkflowScheduler:
                     approval = await db.get(KernelApproval, step.approval_id)
                     if approval is not None and approval.status != "pending":
                         run.status = "queued"
+
+    async def _mark_orphaned_running_runs(self) -> None:
+        """Fail closed when execution ownership is lost; never guess that a write did not happen."""
+        now = datetime.utcnow()
+        async with session_scope() as db:
+            rows = (
+                await db.scalars(
+                    select(WorkflowRun)
+                    .where(
+                        WorkflowRun.status == "running",
+                        WorkflowRun.lease_until.is_not(None),
+                        WorkflowRun.lease_until < now,
+                    )
+                    .limit(50)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+            for run in rows:
+                workflow = await db.get(WorkflowDefinition, run.workflow_id)
+                run.status = "orphaned"
+                run.error_code = "execution_outcome_uncertain"
+                run.error_message = "The worker lease expired during an in-flight step; Operly will not replay it automatically."
+                run.finished_at = now
+                run.lease_token = None
+                run.lease_until = None
+                if workflow is not None:
+                    await record_workflow_event(
+                        db,
+                        workspace_id=run.workspace_id,
+                        workflow_id=run.workflow_id,
+                        workflow_run_id=run.id,
+                        event_type="workflow.run.orphaned",
+                        actor_id="operly:scheduler",
+                        owner_user_id=run.owner_user_id,
+                        principal_id=f"user:{run.owner_user_id}" if run.owner_user_id else None,
+                        payload={"code": "execution_outcome_uncertain", "current_step_key": run.current_step_key},
+                    )
 
     async def _enqueue_due_schedules(self) -> None:
         now = datetime.utcnow()
@@ -150,7 +190,8 @@ class WorkflowScheduler:
                 schedule.lease_token = None
                 schedule.lease_until = None
                 dedupe_key = f"schedule:{schedule.id}:{scheduled_for.isoformat()}"
-                try:
+                existing = await db.scalar(select(WorkflowRun.id).where(WorkflowRun.dedupe_key == dedupe_key))
+                if existing is None:
                     await queue_workflow_run(
                         db,
                         workflow=workflow,
@@ -160,10 +201,6 @@ class WorkflowScheduler:
                         dedupe_key=dedupe_key,
                         scheduled_for=scheduled_for,
                     )
-                except IntegrityError:
-                    # Unique dedupe_key means another scheduler already enqueued this occurrence.
-                    await db.rollback()
-                    break
                 await record_workflow_event(
                     db,
                     workspace_id=workflow.workspace_id,
@@ -172,7 +209,7 @@ class WorkflowScheduler:
                     actor_id="operly:scheduler",
                     owner_user_id=workflow.owner_user_id,
                     principal_id=f"user:{workflow.owner_user_id}" if workflow.owner_user_id else None,
-                    payload={"schedule_id": schedule.id, "scheduled_for": scheduled_for.isoformat(), "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None},
+                    payload={"schedule_id": schedule.id, "scheduled_for": scheduled_for.isoformat(), "deduplicated": existing is not None, "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None},
                 )
 
     async def _claim_runs(self, *, limit: int) -> list[str]:
@@ -183,7 +220,7 @@ class WorkflowScheduler:
                 await db.scalars(
                     select(WorkflowRun)
                     .where(
-                        WorkflowRun.status.in_(["queued", "running"]),
+                        WorkflowRun.status == "queued",
                         or_(WorkflowRun.lease_until.is_(None), WorkflowRun.lease_until < now),
                     )
                     .order_by(WorkflowRun.created_at)
@@ -193,7 +230,6 @@ class WorkflowScheduler:
             ).all()
             ids: list[str] = []
             for run in rows:
-                run.status = "running"
                 run.lease_token = token
                 run.lease_until = now + timedelta(seconds=self._lease_seconds)
                 ids.append(run.id)
@@ -202,7 +238,7 @@ class WorkflowScheduler:
     async def _mark_dispatch_failure(self, run_id: str, error: Exception) -> None:
         async with session_scope() as db:
             run = await db.get(WorkflowRun, run_id)
-            if run is None or run.status in {"completed", "cancelled", "failed", "waiting", "waiting_approval"}:
+            if run is None or run.status in {"completed", "cancelled", "failed", "orphaned", "waiting", "waiting_approval"}:
                 return
             workflow = await db.get(WorkflowDefinition, run.workflow_id)
             run.status = "failed"
