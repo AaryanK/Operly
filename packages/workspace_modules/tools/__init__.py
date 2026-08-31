@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 def workspace_capabilities() -> tuple["CapabilitySpec", ...]:
+    from packages.workspace_modules.agent_computer.native_tools import computer_native_capabilities
     from packages.workspace_modules.integrations import integration_capabilities
     from packages.workspace_modules.studio import workspace_studio_capabilities
     from packages.workspace_modules.tools.business import workspace_business_capabilities
@@ -26,11 +27,16 @@ def workspace_capabilities() -> tuple["CapabilitySpec", ...]:
         *workspace_business_capabilities(),
         *workspace_record_capabilities(),
         *workspace_studio_capabilities(),
+        *computer_native_capabilities(),
         *integration_capabilities(),
     )
 
 
 def register_workspace_providers(providers: "ProviderRegistry") -> None:
+    from packages.workspace_modules.agent_computer.native_tools import (
+        PROVIDER_ID as AGENT_COMPUTER_PROVIDER_ID,
+        AgentComputerProvider,
+    )
     from packages.workspace_modules.integrations import register_integration_providers
     from packages.workspace_modules.studio import PROVIDER_ID as STUDIO_PROVIDER_ID, WorkspaceStudioProvider
     from packages.workspace_modules.tools.availability import AvailableWorkspaceBusinessProvider, AvailableWorkspaceControlProvider, AvailableWorkspaceOSProvider
@@ -44,6 +50,7 @@ def register_workspace_providers(providers: "ProviderRegistry") -> None:
     providers.register(WORKSPACE_BUSINESS_PROVIDER_ID, AvailableWorkspaceBusinessProvider())
     providers.register(WORKSPACE_OS_PROVIDER_ID, AvailableWorkspaceOSProvider())
     providers.register(STUDIO_PROVIDER_ID, WorkspaceStudioProvider())
+    providers.register(AGENT_COMPUTER_PROVIDER_ID, AgentComputerProvider())
     register_integration_providers(providers)
 
 
