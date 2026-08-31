@@ -35,6 +35,38 @@ class KernelRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class KernelRequestClaim(Base):
+    """Scoped idempotency reservation for externally retryable Kernel requests.
+
+    This is runtime state, not audit state. It may retain the normalized response so an
+    authenticated caller retrying the exact same request can receive the original
+    result without executing the business side effect again.
+    """
+
+    __tablename__ = "kernel_request_claims"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    idempotency_key: Mapped[str] = mapped_column(String(400), nullable=False, unique=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    scope_kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    principal_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    capability_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True
+    )
+
+
 class KernelRunStep(Base):
     __tablename__ = "kernel_run_steps"
 
