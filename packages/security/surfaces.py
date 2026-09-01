@@ -1,6 +1,5 @@
 """Trusted surface/audience policy shared by capabilities and context retrieval."""
 from __future__ import annotations
-
 from enum import StrEnum
 from typing import Mapping, Any
 
@@ -21,6 +20,8 @@ class SurfaceKind(StrEnum):
     DISCORD_GUILD = "discord_guild"
     SYSTEM_TASK = "system_task"
     MCP_CLIENT = "mcp_client"
+    PLUGIN_RUNTIME = "plugin_runtime"
+    SOLUTION_RUNTIME = "solution_runtime"
 
     @classmethod
     def coerce(cls, value: object) -> "SurfaceKind":
@@ -67,7 +68,6 @@ def surface_from_legacy_metadata(
     its connector-provided DM/guild bit. For web, only an explicit direct +
     non-shared pair is accepted as the legacy personal surface.
     """
-
     data = metadata or {}
     explicit = SurfaceKind.coerce(data.get("_surface_kind"))
     if explicit is not SurfaceKind.UNKNOWN:
@@ -89,10 +89,9 @@ def capability_surface_allowed(capability_id: str, surface: SurfaceKind | str) -
 
     This is a visibility/privacy gate only. Workspace permissions, connector scopes,
     approvals, and the canonical firewall remain independently authoritative.
-    MCP deliberately does not inherit personal/private visibility merely because its
-    authenticated principal is a human Workspace member.
+    MCP and hosted workload surfaces deliberately do not inherit personal/private
+    visibility merely because their delegated principal is a human Workspace member.
     """
-
     kind = SurfaceKind.coerce(surface)
     capability = str(capability_id or "").strip().lower()
 

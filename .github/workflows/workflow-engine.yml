@@ -6,7 +6,11 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "alembic/versions/0052_mcp_agent_gateway.py"
+      - "alembic/versions/0053_digital_business_infrastructure.py"
+      - "alembic/versions/0054_digital_runtime_support.py"
+      - "alembic/versions/0055_platform_job_idempotency_scope.py"
       - "apps/api/access_router.py"
+      - "apps/api/artifact_router.py"
       - "apps/api/main.py"
       - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
@@ -19,15 +23,26 @@ on:
       - "apps/web/src/workspace/WorkflowPage.tsx"
       - "apps/web/src/workspace/WorkspaceHome.tsx"
       - "apps/web/src/workspace/WorkspaceShell.tsx"
+      - "packages/artifacts/**"
+      - "packages/database/capability_binding_models.py"
+      - "packages/database/digital_event_models.py"
+      - "packages/database/digital_job_models.py"
+      - "packages/database/digital_usage_models.py"
+      - "packages/database/plugin_credential_models.py"
+      - "packages/database/plugin_platform_models.py"
+      - "packages/database/plugin_storage_models.py"
       - "packages/database/principal_models.py"
       - "packages/database/schema.py"
       - "packages/mcp/**"
+      - "packages/plugins/**"
       - "packages/security/permissions.py"
       - "packages/security/surfaces.py"
       - "packages/workflow/**"
       - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_mcp_gateway.py"
+      - "tests/test_plugin_platform.py"
+      - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
   push:
     branches:
@@ -36,7 +51,11 @@ on:
       - ".github/workflows/workflow-engine.yml"
       - "alembic/versions/0051_workflow_engine.py"
       - "alembic/versions/0052_mcp_agent_gateway.py"
+      - "alembic/versions/0053_digital_business_infrastructure.py"
+      - "alembic/versions/0054_digital_runtime_support.py"
+      - "alembic/versions/0055_platform_job_idempotency_scope.py"
       - "apps/api/access_router.py"
+      - "apps/api/artifact_router.py"
       - "apps/api/main.py"
       - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
@@ -49,15 +68,26 @@ on:
       - "apps/web/src/workspace/WorkflowPage.tsx"
       - "apps/web/src/workspace/WorkspaceHome.tsx"
       - "apps/web/src/workspace/WorkspaceShell.tsx"
+      - "packages/artifacts/**"
+      - "packages/database/capability_binding_models.py"
+      - "packages/database/digital_event_models.py"
+      - "packages/database/digital_job_models.py"
+      - "packages/database/digital_usage_models.py"
+      - "packages/database/plugin_credential_models.py"
+      - "packages/database/plugin_platform_models.py"
+      - "packages/database/plugin_storage_models.py"
       - "packages/database/principal_models.py"
       - "packages/database/schema.py"
       - "packages/mcp/**"
+      - "packages/plugins/**"
       - "packages/security/permissions.py"
       - "packages/security/surfaces.py"
       - "packages/workflow/**"
       - "packages/workspace_modules/agent_computer/sandbox.py"
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_mcp_gateway.py"
+      - "tests/test_plugin_platform.py"
+      - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
 
 permissions:
@@ -117,6 +147,56 @@ jobs:
       - name: Run MCP agent capability tests
         run: python -m unittest discover -s tests -p "test_mcp_gateway.py" -v
 
+  plugin-platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install plugin platform contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "SQLAlchemy>=2.0,<3" "aiosqlite>=0.20,<1" "alembic>=1.14,<2" "fastapi>=0.115,<1" "python-multipart>=0.0.12,<1" "cryptography>=50,<51" "httpx>=0.27,<1"
+
+      - name: Compile digital infrastructure
+        run: |
+          python -m compileall -q packages/plugins packages/artifacts
+          python -m py_compile packages/plugins/builds.py packages/plugins/deliveries.py packages/plugins/worker.py
+          python -m py_compile packages/plugins/egress_router.py packages/plugins/event_router.py packages/plugins/gateway_router.py packages/plugins/webhook_router.py
+          python -m py_compile packages/database/plugin_platform_models.py packages/database/plugin_storage_models.py
+          python -m py_compile packages/database/plugin_credential_models.py packages/database/capability_binding_models.py
+          python -m py_compile packages/database/digital_event_models.py packages/database/digital_job_models.py packages/database/digital_usage_models.py
+          python -m py_compile alembic/versions/0053_digital_business_infrastructure.py alembic/versions/0054_digital_runtime_support.py alembic/versions/0055_platform_job_idempotency_scope.py
+          python -m py_compile apps/api/artifact_router.py apps/api/main.py
+
+      - name: Import runtime infrastructure boundaries
+        run: |
+          python - <<'PY'
+          import packages.plugins.builds
+          import packages.plugins.deliveries
+          import packages.plugins.egress_router
+          import packages.plugins.event_router
+          import packages.plugins.worker
+          print("plugin runtime infrastructure imports succeeded")
+          PY
+
+      - name: Apply full schema to a clean database
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./plugin-platform-ci.db
+        run: alembic upgrade head
+
+      - name: Run plugin platform contract tests
+        run: |
+          python -m unittest discover -s tests -p "test_plugin_platform.py" -v
+          python -m unittest discover -s tests -p "test_plugin_sandbox_reconciler.py" -v
+
   workflow-frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -126,7 +206,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -161,7 +241,7 @@ jobs:
         run: python -m py_compile packages/workspace_modules/agent_computer/sandbox.py
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
 

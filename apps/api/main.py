@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
+from apps.api.artifact_router import router as artifact_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
@@ -24,6 +25,15 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.plugins.egress_router import router as runtime_egress_router
+from packages.plugins.event_router import router as plugin_event_router
+from packages.plugins.gateway_router import router as capability_gateway_router
+from packages.plugins.router import router as plugin_platform_router
+from packages.plugins.runtime_router import router as plugin_runtime_management_router
+from packages.plugins.webhook_router import (
+    management_router as plugin_webhook_management_router,
+    public_router as plugin_webhook_public_router,
+)
 from packages.workflow import workflow_scheduler
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
@@ -111,7 +121,7 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.7.0-mcp", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.8.0-digital-infra", lifespan=lifespan)
 
 # Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
 # agent all resolve current authority and execute through the same governed runtime.
@@ -149,6 +159,8 @@ app.add_middleware(
         "MCP-Protocol-Version",
         "Mcp-Method",
         "Mcp-Name",
+        "X-Operly-Webhook-Signature",
+        "X-Operly-Event-Id",
     ],
     expose_headers=["MCP-Protocol-Version", "WWW-Authenticate"],
 )
@@ -158,6 +170,14 @@ app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
+app.include_router(artifact_router)
+app.include_router(plugin_platform_router)
+app.include_router(plugin_runtime_management_router)
+app.include_router(plugin_event_router)
+app.include_router(plugin_webhook_management_router)
+app.include_router(plugin_webhook_public_router)
+app.include_router(capability_gateway_router)
+app.include_router(runtime_egress_router)
 app.include_router(agent_computer_router)
 app.include_router(access_router)
 app.include_router(mcp_router)
@@ -176,6 +196,16 @@ async def health():
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "artifact_store_enabled": True,
+        "plugin_platform_enabled": True,
+        "plugin_manifest_schema": "operly.plugin/v1",
+        "capability_gateway_enabled": True,
+        "runtime_egress_broker_enabled": True,
+        "plugin_runtime_reconciliation_enabled": True,
+        "digital_webhook_ingress_enabled": True,
+        "digital_event_delivery_enabled": True,
+        "isolated_plugin_validation_enabled": True,
+        "untrusted_plugin_execution_in_control_plane": False,
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
@@ -194,12 +224,22 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "deterministic-workflows-and-mcp",
+        "state": "digital-business-infrastructure",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "artifact_store_enabled": True,
+        "plugin_platform_enabled": True,
+        "plugin_manifest_schema": "operly.plugin/v1",
+        "plugin_runtime_policy": "isolated-workload-only",
+        "capability_gateway": "short-lived-runtime-identity-plus-live-workspace-authority",
+        "runtime_egress_broker": "grant-scoped-credential-injection",
+        "plugin_runtime_reconciliation": "queued-health-verified-no-direct-health-override",
+        "digital_webhook_ingress_enabled": True,
+        "digital_event_delivery_enabled": True,
+        "isolated_plugin_validation_enabled": True,
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
@@ -213,9 +253,9 @@ async def rebuild_status():
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Workflow and MCP are deterministic orchestration/presentation layers over the same governed Workspace tools. "
-            "MCP client grants only narrow current Workspace authority; provider checks and human approvals remain authoritative. "
-            "The future Operly AI planner can consume this same MCP gateway without receiving a second execution path."
+            "Operly is establishing the digital business substrate before any AI runtime: immutable plugin packages, "
+            "Workspace installations, trusted runtime profiles, isolated validation, reconciled runtime health, namespaced plugin storage, short-lived runtime identities, "
+            "capability bindings, credential-safe egress, durable events/webhooks, artifacts and resource budgets remain subordinate to Kernel authority."
         ),
     }
 

@@ -295,7 +295,7 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIn("WorkflowRun.authority_user_id == context.user_id", access)
         self.assertIn("from packages.workflow.access import WorkflowProvider", package)
         self.assertNotIn("class WorkflowProvider", package)
-        self.assertIn('ALEMBIC_HEAD = "0052_mcp_agent_gateway"', schema)
+        self.assertIn('ALEMBIC_HEAD = "0055_platform_job_idempotency_scope"', schema)
 
     def test_workflow_does_not_import_external_provider_executors(self):
         root = Path(__file__).resolve().parents[1]
