@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.digital_job_models import DigitalPlatformJobRecord
@@ -73,11 +73,14 @@ class DigitalPlatformJobService:
             await db.scalars(
                 select(DigitalPlatformJobRecord)
                 .where(
-                    DigitalPlatformJobRecord.state.in_(["queued", "retry"]),
                     DigitalPlatformJobRecord.available_at <= now,
                     or_(
-                        DigitalPlatformJobRecord.lease_expires_at.is_(None),
-                        DigitalPlatformJobRecord.lease_expires_at < now,
+                        DigitalPlatformJobRecord.state.in_(["queued", "retry"]),
+                        and_(
+                            DigitalPlatformJobRecord.state == "running",
+                            DigitalPlatformJobRecord.lease_expires_at.is_not(None),
+                            DigitalPlatformJobRecord.lease_expires_at < now,
+                        ),
                     ),
                 )
                 .order_by(
@@ -143,6 +146,7 @@ class DigitalPlatformJobService:
         worker_id: str,
         error: str,
         retry_after_seconds: int = 60,
+        permanent: bool = False,
     ) -> None:
         row = await db.get(DigitalPlatformJobRecord, job_id)
         if row is None or row.state != "running" or row.locked_by != worker_id:
@@ -150,7 +154,7 @@ class DigitalPlatformJobService:
         row.last_error = str(error or "")[:8000]
         row.locked_by = None
         row.lease_expires_at = None
-        if row.attempt >= row.max_attempts:
+        if permanent or row.attempt >= row.max_attempts:
             row.state = "failed"
             row.completed_at = datetime.utcnow()
         else:
