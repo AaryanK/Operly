@@ -18,6 +18,7 @@ from packages.database.db import SessionFactory, init_db
 from packages.database.digital_event_models import DigitalEventDeliveryRecord
 from packages.database.digital_job_models import DigitalPlatformJobRecord
 from packages.database.plugin_platform_models import (
+    DigitalEventOutboxRecord,
     DigitalEventSubscriptionRecord,
     PluginPackageRecord,
     PluginVersionRecord,
@@ -250,13 +251,7 @@ class PlatformWorker:
 
     async def _fanout_event(self, event_id: str) -> None:
         async with SessionFactory() as db:
-            event = await db.get(
-                __import__(
-                    "packages.database.plugin_platform_models",
-                    fromlist=["DigitalEventOutboxRecord"],
-                ).DigitalEventOutboxRecord,
-                event_id,
-            )
+            event = await db.get(DigitalEventOutboxRecord, event_id)
             if event is None or event.status != "leased" or event.locked_by != self.worker_id:
                 return
             try:
@@ -297,13 +292,7 @@ class PlatformWorker:
                 await db.commit()
             except Exception as error:
                 await db.rollback()
-                event = await db.get(
-                    __import__(
-                        "packages.database.plugin_platform_models",
-                        fromlist=["DigitalEventOutboxRecord"],
-                    ).DigitalEventOutboxRecord,
-                    event_id,
-                )
+                event = await db.get(DigitalEventOutboxRecord, event_id)
                 if event is None or event.status != "leased" or event.locked_by != self.worker_id:
                     return
                 await digital_events.fail(
