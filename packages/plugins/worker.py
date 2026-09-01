@@ -29,6 +29,10 @@ from packages.plugins.deliveries import EventDeliveryError, digital_event_delive
 from packages.plugins.events import digital_events
 from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
+from packages.plugins.runtime_reconciler import (
+    RuntimeReconciliationError,
+    plugin_runtime_reconciler,
+)
 
 
 class PermanentPlatformJobError(RuntimeError):
@@ -259,9 +263,41 @@ async def isolated_validate_plugin_job(
     return report
 
 
+async def reconcile_plugin_runtime_job(
+    db: AsyncSession,
+    job: DigitalPlatformJobRecord,
+) -> dict[str, Any]:
+    if not job.tenant_id or job.subject_kind != "plugin_installation":
+        raise PermanentPlatformJobError(
+            "plugin.runtime.reconcile requires a Workspace plugin_installation subject"
+        )
+    payload = _object(job.payload_json)
+    endpoint = str(payload.get("endpoint") or "").strip() or None
+    try:
+        result = await plugin_runtime_reconciler.reconcile(
+            db,
+            tenant_id=job.tenant_id,
+            installation_id=job.subject_id,
+            endpoint=endpoint,
+        )
+    except RuntimeReconciliationError as error:
+        if error.permanent:
+            raise PermanentPlatformJobError(str(error)) from error
+        raise
+    return {
+        "runtime_instance_id": result.runtime_instance_id,
+        "state": result.state,
+        "health_state": result.health_state,
+        "provider": result.provider,
+        "endpoint": result.endpoint,
+        "evidence": result.evidence,
+    }
+
+
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "plugin.validate": validate_plugin_job,
     "plugin.isolated_validate": isolated_validate_plugin_job,
+    "plugin.runtime.reconcile": reconcile_plugin_runtime_job,
 }
 
 
