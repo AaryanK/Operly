@@ -258,8 +258,9 @@ class PluginPlatformContractTests(unittest.TestCase):
             root / "packages" / "workspace_modules" / "tools" / "runtime.py"
         ).read_text(encoding="utf-8")
         self.assertIn("installed_plugin_capability_source", runtime_source)
-        self.assertIn("PluginRuntimeProvider", runtime_source)
-        self.assertIn("runtime.providers.register(PLUGIN_RUNTIME_PROVIDER_ID", runtime_source)
+        self.assertIn("PLUGIN_RUNTIME_PROVIDER_ID", runtime_source)
+        self.assertIn("runtime.providers.register(", runtime_source)
+        self.assertIn("SandboxJobPluginRuntimeProvider", runtime_source)
         self.assertNotIn("acme.invoice.get", runtime_source)
 
     def test_platform_worker_owns_runtime_reconciliation(self):
