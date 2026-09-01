@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -37,11 +37,11 @@ def _window_start(now: datetime, window_seconds: int) -> datetime:
 
 
 class ResourceBudgetService:
-    """Race-safe quota seam for plugin/runtime/workflow digital resources.
+    """Race-safe multi-window quota seam for digital workloads.
 
-    A configured hard limit denies the increment before execution. Every successful
-    increment is also appended to a ledger so later accounting does not depend on the
-    mutable aggregate bucket alone.
+    Every enabled budget for the metric is enforced (for example hourly and daily).
+    First-use bucket races are isolated inside a SAVEPOINT, never by rolling back the
+    caller's transaction. Successful consumption appends one immutable ledger entry.
     """
 
     async def configure(
@@ -89,6 +89,55 @@ class ResourceBudgetService:
         await db.flush()
         return row
 
+    async def _locked_bucket(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: str,
+        subject_kind: str,
+        subject_id: str,
+        metric: str,
+        window_start: datetime,
+        window_seconds: int,
+    ) -> DigitalUsageBucketRecord:
+        filters = (
+            DigitalUsageBucketRecord.tenant_id == tenant_id,
+            DigitalUsageBucketRecord.subject_kind == subject_kind,
+            DigitalUsageBucketRecord.subject_id == subject_id,
+            DigitalUsageBucketRecord.metric == metric,
+            DigitalUsageBucketRecord.window_start == window_start,
+            DigitalUsageBucketRecord.window_seconds == window_seconds,
+        )
+        bucket = await db.scalar(
+            select(DigitalUsageBucketRecord).where(*filters).with_for_update()
+        )
+        if bucket is not None:
+            return bucket
+
+        candidate = DigitalUsageBucketRecord(
+            tenant_id=tenant_id,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            metric=metric,
+            window_start=window_start,
+            window_seconds=window_seconds,
+            quantity=0,
+        )
+        try:
+            # A concurrent worker may create this same unique bucket. Isolate that
+            # expected collision to a SAVEPOINT so the caller's transaction survives.
+            async with db.begin_nested():
+                db.add(candidate)
+                await db.flush()
+            return candidate
+        except IntegrityError:
+            bucket = await db.scalar(
+                select(DigitalUsageBucketRecord).where(*filters).with_for_update()
+            )
+            if bucket is None:
+                raise RuntimeError("Could not establish a resource usage bucket")
+            return bucket
+
     async def consume(
         self,
         db: AsyncSession,
@@ -106,73 +155,55 @@ class ResourceBudgetService:
         if quantity <= 0:
             raise ValueError("usage quantity must be positive")
         now = now or datetime.utcnow()
-        budget = await db.scalar(
-            select(DigitalResourceBudgetRecord)
-            .where(
-                DigitalResourceBudgetRecord.tenant_id == tenant_id,
-                DigitalResourceBudgetRecord.subject_kind == subject_kind,
-                DigitalResourceBudgetRecord.subject_id == subject_id,
-                DigitalResourceBudgetRecord.metric == metric,
-                DigitalResourceBudgetRecord.enabled.is_(True),
-            )
-            .order_by(DigitalResourceBudgetRecord.window_seconds.asc())
-            .limit(1)
-            .with_for_update()
-        )
-        window_seconds = budget.window_seconds if budget else 3600
-        window_start = _window_start(now, window_seconds)
 
-        bucket = await db.scalar(
-            select(DigitalUsageBucketRecord)
-            .where(
-                DigitalUsageBucketRecord.tenant_id == tenant_id,
-                DigitalUsageBucketRecord.subject_kind == subject_kind,
-                DigitalUsageBucketRecord.subject_id == subject_id,
-                DigitalUsageBucketRecord.metric == metric,
-                DigitalUsageBucketRecord.window_start == window_start,
-                DigitalUsageBucketRecord.window_seconds == window_seconds,
-            )
-            .with_for_update()
+        budgets = list(
+            (
+                await db.scalars(
+                    select(DigitalResourceBudgetRecord)
+                    .where(
+                        DigitalResourceBudgetRecord.tenant_id == tenant_id,
+                        DigitalResourceBudgetRecord.subject_kind == subject_kind,
+                        DigitalResourceBudgetRecord.subject_id == subject_id,
+                        DigitalResourceBudgetRecord.metric == metric,
+                        DigitalResourceBudgetRecord.enabled.is_(True),
+                    )
+                    .order_by(DigitalResourceBudgetRecord.window_seconds.asc())
+                    .with_for_update()
+                )
+            ).all()
         )
-        if bucket is None:
-            bucket = DigitalUsageBucketRecord(
+
+        # Meter even unbudgeted resources in a canonical hourly window so usage and
+        # cost visibility exist before an operator configures explicit limits.
+        windows: list[tuple[DigitalResourceBudgetRecord | None, int]] = (
+            [(budget, int(budget.window_seconds)) for budget in budgets]
+            if budgets
+            else [(None, 3600)]
+        )
+        resolved: list[
+            tuple[DigitalResourceBudgetRecord | None, DigitalUsageBucketRecord, datetime, int, int]
+        ] = []
+        for budget, window_seconds in windows:
+            start = _window_start(now, window_seconds)
+            bucket = await self._locked_bucket(
+                db,
                 tenant_id=tenant_id,
                 subject_kind=subject_kind,
                 subject_id=subject_id,
                 metric=metric,
-                window_start=window_start,
+                window_start=start,
                 window_seconds=window_seconds,
-                quantity=0,
             )
-            db.add(bucket)
-            try:
-                await db.flush()
-            except IntegrityError:
-                # Concurrent first-use of the same window. Roll back the failed nested
-                # insert only and then lock the winner's bucket.
-                await db.rollback()
-                bucket = await db.scalar(
-                    select(DigitalUsageBucketRecord)
-                    .where(
-                        DigitalUsageBucketRecord.tenant_id == tenant_id,
-                        DigitalUsageBucketRecord.subject_kind == subject_kind,
-                        DigitalUsageBucketRecord.subject_id == subject_id,
-                        DigitalUsageBucketRecord.metric == metric,
-                        DigitalUsageBucketRecord.window_start == window_start,
-                        DigitalUsageBucketRecord.window_seconds == window_seconds,
-                    )
-                    .with_for_update()
+            projected = int(bucket.quantity) + quantity
+            if budget is not None and projected > int(budget.hard_limit):
+                raise ResourceBudgetExceeded(
+                    f"{metric} budget exceeded for {subject_kind}:{subject_id}; "
+                    f"{projected}>{budget.hard_limit} in {window_seconds}s"
                 )
-                if bucket is None:
-                    raise RuntimeError("Could not establish a resource usage bucket")
+            resolved.append((budget, bucket, start, window_seconds, projected))
 
-        projected = int(bucket.quantity) + quantity
-        if budget and projected > int(budget.hard_limit):
-            raise ResourceBudgetExceeded(
-                f"{metric} budget exceeded for {subject_kind}:{subject_id}; "
-                f"{projected}>{budget.hard_limit} in {window_seconds}s"
-            )
-        bucket.quantity = projected
+        for _, bucket, _, _, projected in resolved:
+            bucket.quantity = projected
         db.add(
             DigitalUsageLedgerRecord(
                 tenant_id=tenant_id,
@@ -186,19 +217,22 @@ class ResourceBudgetService:
             )
         )
         await db.flush()
+
+        budget, _, start, window_seconds, projected = resolved[0]
+        soft_limit = (
+            int(budget.soft_limit)
+            if budget is not None and budget.soft_limit is not None
+            else None
+        )
         return BudgetConsumption(
             metric=metric,
             quantity=quantity,
             used=projected,
-            hard_limit=int(budget.hard_limit) if budget else None,
-            soft_limit=int(budget.soft_limit) if budget and budget.soft_limit is not None else None,
-            window_start=window_start,
+            hard_limit=int(budget.hard_limit) if budget is not None else None,
+            soft_limit=soft_limit,
+            window_start=start,
             window_seconds=window_seconds,
-            soft_limit_exceeded=bool(
-                budget
-                and budget.soft_limit is not None
-                and projected > int(budget.soft_limit)
-            ),
+            soft_limit_exceeded=bool(soft_limit is not None and projected > soft_limit),
         )
 
 
