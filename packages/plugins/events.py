@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.plugin_platform_models import DigitalEventOutboxRecord
@@ -14,7 +14,8 @@ class DigitalEventService:
     """Durable event outbox for plugins, Workflows and future hosted Solutions.
 
     Delivery workers lease rows; callers do not execute webhook/plugin side effects in
-    the API transaction that produced the event.
+    the API transaction that produced the event. Expired leases are reclaimable after
+    worker crashes or deployments.
     """
 
     async def emit(
@@ -59,11 +60,14 @@ class DigitalEventService:
             await db.scalars(
                 select(DigitalEventOutboxRecord)
                 .where(
-                    DigitalEventOutboxRecord.status.in_(["pending", "retry"]),
                     DigitalEventOutboxRecord.available_at <= now,
                     or_(
-                        DigitalEventOutboxRecord.lease_expires_at.is_(None),
-                        DigitalEventOutboxRecord.lease_expires_at < now,
+                        DigitalEventOutboxRecord.status.in_(["pending", "retry"]),
+                        and_(
+                            DigitalEventOutboxRecord.status == "leased",
+                            DigitalEventOutboxRecord.lease_expires_at.is_not(None),
+                            DigitalEventOutboxRecord.lease_expires_at < now,
+                        ),
                     ),
                 )
                 .order_by(DigitalEventOutboxRecord.available_at, DigitalEventOutboxRecord.created_at)
