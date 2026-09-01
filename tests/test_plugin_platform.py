@@ -30,10 +30,8 @@ from packages.plugins.egress_router import _safe_headers
 from packages.plugins.event_router import _validate_target_url
 from packages.plugins.jobs import DigitalPlatformJobService
 from packages.plugins.runtime_profiles import default_runtime_profiles
-from packages.plugins.runtime_provider import PROVIDER_ID as PLUGIN_RUNTIME_PROVIDER_ID
 from packages.plugins.runtime_provider import validate_remote_base_url
 from packages.plugins.worker import DEFAULT_HANDLERS, _event_matches
-from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 class PluginPlatformContractTests(unittest.TestCase):
@@ -167,17 +165,14 @@ class PluginPlatformContractTests(unittest.TestCase):
         self.assertIn("lease_expires_at", DigitalEventOutboxRecord.__table__.columns)
         self.assertIn("hard_limit", DigitalResourceBudgetRecord.__table__.columns)
         self.assertIn("namespace_id", PluginKVRecord.__table__.columns)
-
         self.assertIn("authority_user_id", CapabilityBindingRecord.__table__.columns)
         self.assertIn("secret_reference", PluginCredentialBindingRecord.__table__.columns)
         self.assertNotIn("secret", PluginCredentialBindingRecord.__table__.columns)
         self.assertIn("host", PluginEgressGrantRecord.__table__.columns)
-
         self.assertIn("endpoint_key_hash", DigitalWebhookEndpointRecord.__table__.columns)
         self.assertNotIn("endpoint_key", DigitalWebhookEndpointRecord.__table__.columns)
         self.assertIn("dedupe_key", DigitalWebhookReceiptRecord.__table__.columns)
         self.assertIn("subscription_id", DigitalEventDeliveryRecord.__table__.columns)
-
         self.assertIn("idempotency_scope", DigitalPlatformJobRecord.__table__.columns)
         self.assertIn("lease_expires_at", DigitalPlatformJobRecord.__table__.columns)
         self.assertIn("window_start", DigitalUsageBucketRecord.__table__.columns)
@@ -257,15 +252,15 @@ class PluginPlatformContractTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=invalid):
                 _validate_target_url(invalid)
 
-    def test_workspace_runtime_has_one_plugin_provider_but_no_static_plugin_specs(self):
-        runtime = build_workspace_runtime()
-        provider = runtime.providers.get(PLUGIN_RUNTIME_PROVIDER_ID)
-        self.assertIsNotNone(provider)
-        self.assertNotIn(
-            "acme.invoice.get",
-            {spec.id for spec in runtime.registry.all()},
-            "plugin contracts must be loaded from active Workspace installation state",
-        )
+    def test_workspace_runtime_composition_is_dynamic_without_loading_connectors(self):
+        root = Path(__file__).resolve().parents[1]
+        runtime_source = (
+            root / "packages" / "workspace_modules" / "tools" / "runtime.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("installed_plugin_capability_source", runtime_source)
+        self.assertIn("PluginRuntimeProvider", runtime_source)
+        self.assertIn("runtime.providers.register(PLUGIN_RUNTIME_PROVIDER_ID", runtime_source)
+        self.assertNotIn("acme.invoice.get", runtime_source)
 
     def test_platform_worker_owns_runtime_reconciliation(self):
         self.assertIn("plugin.validate", DEFAULT_HANDLERS)
