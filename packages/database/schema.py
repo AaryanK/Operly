@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0053_digital_business_infrastructure"
+ALEMBIC_HEAD = "0054_digital_runtime_support"
 
 
 def import_all_models() -> None:
@@ -29,6 +29,11 @@ def import_all_models() -> None:
     from packages.database import software_project_models  # noqa: F401
     from packages.database import plugin_platform_models  # noqa: F401
     from packages.database import plugin_storage_models  # noqa: F401
+    from packages.database import plugin_credential_models  # noqa: F401
+    from packages.database import capability_binding_models  # noqa: F401
+    from packages.database import digital_event_models  # noqa: F401
+    from packages.database import digital_job_models  # noqa: F401
+    from packages.database import digital_usage_models  # noqa: F401
     from packages.database import scope_models  # noqa: F401
     from packages.database import model_trace_models  # noqa: F401
     from packages.database import kernel_models  # noqa: F401
