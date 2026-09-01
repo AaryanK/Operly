@@ -24,6 +24,7 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.plugins.router import router as plugin_platform_router
 from packages.workflow import workflow_scheduler
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
@@ -111,7 +112,7 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.7.0-mcp", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.8.0-digital-infra", lifespan=lifespan)
 
 # Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
 # agent all resolve current authority and execute through the same governed runtime.
@@ -158,6 +159,7 @@ app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
+app.include_router(plugin_platform_router)
 app.include_router(agent_computer_router)
 app.include_router(access_router)
 app.include_router(mcp_router)
@@ -176,6 +178,9 @@ async def health():
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "plugin_platform_enabled": True,
+        "plugin_manifest_schema": "operly.plugin/v1",
+        "untrusted_plugin_execution_in_control_plane": False,
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
@@ -194,12 +199,15 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "deterministic-workflows-and-mcp",
+        "state": "digital-business-infrastructure",
         "deterministic_core": True,
         "account_access": True,
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "plugin_platform_enabled": True,
+        "plugin_manifest_schema": "operly.plugin/v1",
+        "plugin_runtime_policy": "isolated-workload-only",
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
@@ -213,9 +221,9 @@ async def rebuild_status():
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Workflow and MCP are deterministic orchestration/presentation layers over the same governed Workspace tools. "
-            "MCP client grants only narrow current Workspace authority; provider checks and human approvals remain authoritative. "
-            "The future Operly AI planner can consume this same MCP gateway without receiving a second execution path."
+            "Operly is establishing the digital business substrate before any AI runtime: immutable plugin packages, "
+            "Workspace installations, trusted runtime profiles, namespaced plugin storage, runtime identities, service bindings, "
+            "durable events and resource budgets all remain subordinate to the canonical Kernel authority."
         ),
     }
 
