@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
+from apps.api.artifact_router import router as artifact_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
@@ -24,7 +25,12 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.plugins.gateway_router import router as capability_gateway_router
 from packages.plugins.router import router as plugin_platform_router
+from packages.plugins.webhook_router import (
+    management_router as plugin_webhook_management_router,
+    public_router as plugin_webhook_public_router,
+)
 from packages.workflow import workflow_scheduler
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
@@ -150,6 +156,8 @@ app.add_middleware(
         "MCP-Protocol-Version",
         "Mcp-Method",
         "Mcp-Name",
+        "X-Operly-Webhook-Signature",
+        "X-Operly-Event-Id",
     ],
     expose_headers=["MCP-Protocol-Version", "WWW-Authenticate"],
 )
@@ -159,7 +167,11 @@ app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
+app.include_router(artifact_router)
 app.include_router(plugin_platform_router)
+app.include_router(plugin_webhook_management_router)
+app.include_router(plugin_webhook_public_router)
+app.include_router(capability_gateway_router)
 app.include_router(agent_computer_router)
 app.include_router(access_router)
 app.include_router(mcp_router)
@@ -178,8 +190,11 @@ async def health():
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "artifact_store_enabled": True,
         "plugin_platform_enabled": True,
         "plugin_manifest_schema": "operly.plugin/v1",
+        "capability_gateway_enabled": True,
+        "digital_webhook_ingress_enabled": True,
         "untrusted_plugin_execution_in_control_plane": False,
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
@@ -205,9 +220,12 @@ async def rebuild_status():
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
+        "artifact_store_enabled": True,
         "plugin_platform_enabled": True,
         "plugin_manifest_schema": "operly.plugin/v1",
         "plugin_runtime_policy": "isolated-workload-only",
+        "capability_gateway": "short-lived-runtime-identity-plus-live-workspace-authority",
+        "digital_webhook_ingress_enabled": True,
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
@@ -222,8 +240,8 @@ async def rebuild_status():
         "ai_runtime_enabled": False,
         "message": (
             "Operly is establishing the digital business substrate before any AI runtime: immutable plugin packages, "
-            "Workspace installations, trusted runtime profiles, namespaced plugin storage, runtime identities, service bindings, "
-            "durable events and resource budgets all remain subordinate to the canonical Kernel authority."
+            "Workspace installations, trusted runtime profiles, namespaced plugin storage, short-lived runtime identities, "
+            "capability bindings, durable events/webhooks, artifacts and resource budgets remain subordinate to Kernel authority."
         ),
     }
 
