@@ -22,6 +22,10 @@ class DigitalPlatformJobRecord(Base):
     tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # SQL UNIQUE treats NULLs as distinct, so global/platform jobs cannot use nullable
+    # tenant_id as their idempotency namespace. This explicit non-null scope gives both
+    # Workspace and platform-global jobs deterministic duplicate suppression.
+    idempotency_scope: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     job_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     subject_kind: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     subject_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
@@ -45,7 +49,11 @@ class DigitalPlatformJobRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "idempotency_key", name="uq_digital_platform_job_idempotency"),
+        UniqueConstraint(
+            "idempotency_scope",
+            "idempotency_key",
+            name="uq_digital_platform_job_idempotency",
+        ),
         Index(
             "ix_digital_platform_job_dispatch",
             "state",
