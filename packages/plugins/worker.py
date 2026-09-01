@@ -25,6 +25,7 @@ from packages.database.plugin_platform_models import (
 )
 from packages.plugins.builds import IsolatedPluginValidationError, sandbox_plugin_validator
 from packages.plugins.contracts import PluginExecutionMode, PluginManifest
+from packages.plugins.deliveries import EventDeliveryError, digital_event_deliveries
 from packages.plugins.events import digital_events
 from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
@@ -53,6 +54,14 @@ def _event_matches(pattern: str, event_type: str) -> bool:
         prefix = clean[:-1]
         return event_type.startswith(prefix)
     return clean == event_type
+
+
+def _object(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 async def _plugin_version_context(
@@ -145,14 +154,10 @@ async def validate_plugin_job(
         "control_plane_execution": False,
     }
     if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
-        # There is no uploaded executable to run. Activation still requires a healthy
-        # runtime/remote adapter instance, so metadata validation alone grants no use.
         version.validation_status = "passed"
         report["isolated_build_required"] = False
         report["supply_chain_state"] = "not_applicable_remote_http"
     else:
-        # Metadata/artifact identity is valid, but executable code has intentionally not
-        # been imported or run by this Worker. A separate Sandbox Runner job owns that.
         version.validation_status = "awaiting_isolated_build"
         report["isolated_build_required"] = True
         report["supply_chain_state"] = "queued_for_isolated_build_and_scan"
@@ -190,11 +195,8 @@ async def isolated_validate_plugin_job(
     if manifest.runtime is None:
         raise PermanentPlatformJobError("Workspace plugin runtime requirement is missing")
     if version.validation_status == "passed":
-        try:
-            existing = json.loads(version.validation_report_json or "{}")
-        except json.JSONDecodeError:
-            existing = {}
-        return existing if isinstance(existing, dict) else {"already_validated": True}
+        existing = _object(version.validation_report_json)
+        return existing or {"already_validated": True}
     if version.validation_status not in {"awaiting_isolated_build", "pending"}:
         raise PermanentPlatformJobError(
             f"Plugin version cannot enter isolated validation from {version.validation_status}"
@@ -216,12 +218,7 @@ async def isolated_validate_plugin_job(
     except IsolatedPluginValidationError as error:
         if not error.permanent:
             raise
-        try:
-            report = json.loads(version.validation_report_json or "{}")
-        except json.JSONDecodeError:
-            report = {}
-        if not isinstance(report, dict):
-            report = {}
+        report = _object(version.validation_report_json)
         report.update(
             {
                 "isolated_validation": "failed",
@@ -236,12 +233,7 @@ async def isolated_validate_plugin_job(
         await db.flush()
         raise PermanentPlatformJobError(str(error)) from error
 
-    try:
-        report = json.loads(version.validation_report_json or "{}")
-    except json.JSONDecodeError:
-        report = {}
-    if not isinstance(report, dict):
-        report = {}
+    report = _object(version.validation_report_json)
     report.update(
         {
             "isolated_validation": "passed",
@@ -346,8 +338,6 @@ class PlatformWorker:
                 await db.commit()
             except Exception as error:
                 await db.rollback()
-                # The lease row itself was committed before handler execution, so after
-                # handler rollback reload it and schedule a bounded retry.
                 job = await db.get(DigitalPlatformJobRecord, job_id)
                 if job is None or job.state != "running" or job.locked_by != self.worker_id:
                     return
@@ -412,8 +402,6 @@ class PlatformWorker:
                             )
                         )
                 await db.flush()
-                # "delivered" at the outbox level means durable fanout completed. Each
-                # target has its own delivery state and retry/dead-letter lifecycle.
                 await digital_events.complete(
                     db, event_id=event.id, worker_id=self.worker_id
                 )
@@ -431,6 +419,75 @@ class PlatformWorker:
                 )
                 await db.commit()
 
+    async def _lease_deliveries(self) -> list[str]:
+        async with SessionFactory() as db:
+            rows = await digital_event_deliveries.lease_batch(
+                db,
+                worker_id=self.worker_id,
+                limit=self.batch_size * 2,
+                lease_seconds=self.lease_seconds,
+            )
+            ids = [row.id for row in rows]
+            await db.commit()
+            return ids
+
+    async def _process_delivery(self, delivery_id: str) -> None:
+        async with SessionFactory() as db:
+            delivery = await db.get(DigitalEventDeliveryRecord, delivery_id)
+            if (
+                delivery is None
+                or delivery.status != "delivering"
+                or delivery.locked_by != self.worker_id
+            ):
+                return
+            subscription = await db.get(
+                DigitalEventSubscriptionRecord, delivery.subscription_id
+            )
+            policy = _object(subscription.delivery_policy_json) if subscription else {}
+            max_attempts = max(1, min(int(policy.get("max_attempts", 8)), 50))
+            try:
+                evidence = await digital_event_deliveries.deliver(
+                    db, delivery=delivery
+                )
+                await digital_event_deliveries.complete(
+                    db,
+                    delivery_id=delivery.id,
+                    worker_id=self.worker_id,
+                    evidence=evidence,
+                )
+                await db.commit()
+            except EventDeliveryError as error:
+                retry_after = min(30 * (2 ** max(0, delivery.attempts - 1)), 3600)
+                await digital_event_deliveries.fail(
+                    db,
+                    delivery_id=delivery.id,
+                    worker_id=self.worker_id,
+                    error=str(error),
+                    retry_after_seconds=retry_after,
+                    max_attempts=max_attempts,
+                    permanent=error.permanent,
+                )
+                await db.commit()
+            except Exception as error:
+                await db.rollback()
+                delivery = await db.get(DigitalEventDeliveryRecord, delivery_id)
+                if (
+                    delivery is None
+                    or delivery.status != "delivering"
+                    or delivery.locked_by != self.worker_id
+                ):
+                    return
+                retry_after = min(30 * (2 ** max(0, delivery.attempts - 1)), 3600)
+                await digital_event_deliveries.fail(
+                    db,
+                    delivery_id=delivery.id,
+                    worker_id=self.worker_id,
+                    error=f"{type(error).__name__}: {str(error)[:2000]}",
+                    retry_after_seconds=retry_after,
+                    max_attempts=max_attempts,
+                )
+                await db.commit()
+
     async def run_once(self) -> int:
         job_ids = await self._lease_jobs()
         for job_id in job_ids:
@@ -438,7 +495,10 @@ class PlatformWorker:
         event_ids = await self._lease_events()
         for event_id in event_ids:
             await self._fanout_event(event_id)
-        return len(job_ids) + len(event_ids)
+        delivery_ids = await self._lease_deliveries()
+        for delivery_id in delivery_ids:
+            await self._process_delivery(delivery_id)
+        return len(job_ids) + len(event_ids) + len(delivery_ids)
 
     async def run_forever(self) -> None:
         await init_db()
