@@ -42,6 +42,7 @@ on:
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_mcp_gateway.py"
       - "tests/test_plugin_platform.py"
+      - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
   push:
     branches:
@@ -86,6 +87,7 @@ on:
       - "packages/workspace_modules/tools/__init__.py"
       - "tests/test_mcp_gateway.py"
       - "tests/test_plugin_platform.py"
+      - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
 
 permissions:
@@ -191,7 +193,9 @@ jobs:
         run: alembic upgrade head
 
       - name: Run plugin platform contract tests
-        run: python -m unittest discover -s tests -p "test_plugin_platform.py" -v
+        run: |
+          python -m unittest discover -s tests -p "test_plugin_platform.py" -v
+          python -m unittest discover -s tests -p "test_plugin_sandbox_reconciler.py" -v
 
   workflow-frontend:
     runs-on: ubuntu-latest
