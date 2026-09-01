@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.artifacts import ArtifactService
 from packages.database.plugin_platform_models import (
     DigitalEventOutboxRecord,
     PluginInstallationRecord,
@@ -21,6 +22,10 @@ from packages.plugins.runtime_provider import (
     PluginRuntimeTransportError,
     assert_public_runtime_host,
     validate_remote_base_url,
+)
+from packages.workspace_modules.agent_computer.sandbox import (
+    ComputerRunnerClient,
+    ComputerRunnerError,
 )
 
 
@@ -36,12 +41,23 @@ class RuntimeReconciliationResult:
     state: str
     health_state: str
     provider: str
-    endpoint: str
+    endpoint: str | None
     evidence: dict[str, Any]
+
+
+def _object(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 class PluginRuntimeReconciler:
     """Trusted control-plane reconciliation for concrete plugin runtime transports."""
+
+    def __init__(self, runner: ComputerRunnerClient | None = None) -> None:
+        self.runner = runner or ComputerRunnerClient()
 
     async def _context(
         self,
@@ -78,7 +94,7 @@ class PluginRuntimeReconciler:
             ) from error
         return installation, version, manifest
 
-    async def _instance(
+    async def _remote_instance(
         self,
         db: AsyncSession,
         *,
@@ -115,8 +131,12 @@ class PluginRuntimeReconciler:
             db.add(instance)
             await db.flush()
         else:
-            instance.runtime_profile = manifest.runtime.profile if manifest.runtime else instance.runtime_profile
-            instance.runtime_kind = manifest.runtime.kind if manifest.runtime else instance.runtime_kind
+            instance.runtime_profile = (
+                manifest.runtime.profile if manifest.runtime else instance.runtime_profile
+            )
+            instance.runtime_kind = (
+                manifest.runtime.kind if manifest.runtime else instance.runtime_kind
+            )
             instance.provider_reference = provider_reference
             instance.endpoint_reference = endpoint
             instance.state = "provisioning"
@@ -162,7 +182,7 @@ class PluginRuntimeReconciler:
         except PluginRuntimeTransportError as error:
             raise RuntimeReconciliationError(str(error)) from error
 
-        instance = await self._instance(
+        instance = await self._remote_instance(
             db,
             installation=installation,
             version=version,
@@ -211,7 +231,9 @@ class PluginRuntimeReconciler:
                 sort_keys=True,
             )
             await db.flush()
-            raise RuntimeReconciliationError("Remote runtime health check timed out") from error
+            raise RuntimeReconciliationError(
+                "Remote runtime health check timed out"
+            ) from error
         except httpx.HTTPError as error:
             instance.state = "failed"
             instance.health_state = "unhealthy"
@@ -225,7 +247,9 @@ class PluginRuntimeReconciler:
                 sort_keys=True,
             )
             await db.flush()
-            raise RuntimeReconciliationError("Remote runtime health check failed") from error
+            raise RuntimeReconciliationError(
+                "Remote runtime health check failed"
+            ) from error
 
         evidence = {
             "checked_at": checked_at.isoformat(),
@@ -280,6 +304,156 @@ class PluginRuntimeReconciler:
             evidence=evidence,
         )
 
+    async def reconcile_sandbox_job(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: str,
+        installation_id: str,
+    ) -> RuntimeReconciliationResult:
+        installation, version, manifest = await self._context(
+            db, tenant_id=tenant_id, installation_id=installation_id
+        )
+        if manifest.execution_mode is not PluginExecutionMode.SANDBOX_JOB:
+            raise RuntimeReconciliationError(
+                "This runtime reconciler only handles sandbox_job installations",
+                permanent=True,
+            )
+        if manifest.runtime is None or manifest.runtime.kind != "job":
+            raise RuntimeReconciliationError(
+                "sandbox_job plugin runtime contract is invalid", permanent=True
+            )
+        if (
+            manifest.runtime.network.mode != "off"
+            or manifest.runtime.network.allowed_hosts
+        ):
+            raise RuntimeReconciliationError(
+                "sandbox_job runtime must remain network-off", permanent=True
+            )
+        if manifest.credentials:
+            raise RuntimeReconciliationError(
+                "sandbox_job runtime cannot receive credentials while network-off",
+                permanent=True,
+            )
+        if manifest.requested_bindings:
+            raise RuntimeReconciliationError(
+                "sandbox_job runtime cannot receive capability bindings until a filtered callback channel exists",
+                permanent=True,
+            )
+
+        report = _object(version.validation_report_json)
+        artifact_id = str(report.get("validated_artifact_id") or "").strip()
+        artifact_digest = str(report.get("validated_artifact_digest") or "").strip().lower()
+        if not artifact_id or not artifact_digest:
+            raise RuntimeReconciliationError(
+                "sandbox_job validation did not produce a promoted immutable artifact",
+                permanent=True,
+            )
+
+        artifact = await ArtifactService(db).assert_workspace_artifact(
+            tenant_id=tenant_id,
+            artifact_id=artifact_id,
+        )
+        if artifact.sha256.lower() != artifact_digest:
+            raise RuntimeReconciliationError(
+                "sandbox_job promoted artifact digest no longer matches validation evidence",
+                permanent=True,
+            )
+
+        try:
+            runner_health = await self.runner.health()
+        except ComputerRunnerError as error:
+            raise RuntimeReconciliationError(
+                "Operly Sandbox Runner is unavailable for sandbox_job execution"
+            ) from error
+
+        checked_at = datetime.utcnow()
+        instance = await db.scalar(
+            select(PluginRuntimeInstanceRecord)
+            .where(
+                PluginRuntimeInstanceRecord.tenant_id == tenant_id,
+                PluginRuntimeInstanceRecord.installation_id == installation.id,
+                PluginRuntimeInstanceRecord.version_id == version.id,
+                PluginRuntimeInstanceRecord.provider == "railway-sandbox-job",
+            )
+            .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
+        )
+        if instance is None:
+            instance = PluginRuntimeInstanceRecord(
+                tenant_id=tenant_id,
+                installation_id=installation.id,
+                version_id=version.id,
+                runtime_profile=manifest.runtime.profile,
+                runtime_kind=manifest.runtime.kind,
+                state="ready",
+                provider="railway-sandbox-job",
+                provider_reference="ephemeral-per-invocation",
+                endpoint_reference=None,
+                artifact_id=artifact.id,
+                health_state="healthy",
+                health_evidence_json="{}",
+                last_heartbeat_at=checked_at,
+            )
+            db.add(instance)
+            await db.flush()
+        else:
+            instance.runtime_profile = manifest.runtime.profile
+            instance.runtime_kind = manifest.runtime.kind
+            instance.state = "ready"
+            instance.provider_reference = "ephemeral-per-invocation"
+            instance.endpoint_reference = None
+            instance.artifact_id = artifact.id
+            instance.health_state = "healthy"
+            instance.last_heartbeat_at = checked_at
+            instance.updated_at = checked_at
+
+        evidence = {
+            "checked_at": checked_at.isoformat(),
+            "execution_model": "fresh_railway_sandbox_per_invocation",
+            "network_policy": "off",
+            "validated_artifact_id": artifact.id,
+            "validated_artifact_digest": artifact.sha256,
+            "source_artifact_id": report.get("source_artifact_id"),
+            "build_logs_artifact_id": report.get("build_logs_artifact_id"),
+            "runtime_profile": manifest.runtime.profile,
+            "runner_ok": bool(runner_health.get("ok", True)),
+            "runner_service": runner_health.get("service"),
+            "control_plane_execution": False,
+        }
+        instance.health_evidence_json = json.dumps(
+            evidence, separators=(",", ":"), sort_keys=True
+        )
+        db.add(
+            DigitalEventOutboxRecord(
+                tenant_id=tenant_id,
+                event_type="plugin.runtime.healthy",
+                source_kind="plugin_runtime_instance",
+                source_id=instance.id,
+                subject_type="plugin_installation",
+                subject_id=installation.id,
+                payload_json=json.dumps(
+                    {
+                        "installation_id": installation.id,
+                        "runtime_instance_id": instance.id,
+                        "provider": "railway-sandbox-job",
+                        "health_state": "healthy",
+                        "artifact_id": artifact.id,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
+        )
+        await db.flush()
+        return RuntimeReconciliationResult(
+            runtime_instance_id=instance.id,
+            state=instance.state,
+            health_state=instance.health_state,
+            provider="railway-sandbox-job",
+            endpoint=None,
+            evidence=evidence,
+        )
+
     async def reconcile(
         self,
         db: AsyncSession,
@@ -314,6 +488,12 @@ class PluginRuntimeReconciler:
                 tenant_id=tenant_id,
                 installation_id=installation_id,
                 endpoint=endpoint,
+            )
+        if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
+            return await self.reconcile_sandbox_job(
+                db,
+                tenant_id=tenant_id,
+                installation_id=installation_id,
             )
         raise RuntimeReconciliationError(
             f"Hosted runtime adapter for {manifest.execution_mode.value} is not implemented yet",
