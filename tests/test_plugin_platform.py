@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from packages.database.capability_binding_models import CapabilityBindingRecord
 from packages.database.db import Base
@@ -25,9 +26,14 @@ from packages.database.plugin_storage_models import PluginKVRecord
 from packages.database.schema import ALEMBIC_HEAD, import_all_models
 from packages.kernel.contracts import CapabilityRisk
 from packages.plugins.contracts import PluginContractError, PluginManifest
+from packages.plugins.egress_router import _safe_headers
+from packages.plugins.event_router import _validate_target_url
 from packages.plugins.jobs import DigitalPlatformJobService
 from packages.plugins.runtime_profiles import default_runtime_profiles
-from packages.plugins.worker import _event_matches
+from packages.plugins.runtime_provider import PROVIDER_ID as PLUGIN_RUNTIME_PROVIDER_ID
+from packages.plugins.runtime_provider import validate_remote_base_url
+from packages.plugins.worker import DEFAULT_HANDLERS, _event_matches
+from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 class PluginPlatformContractTests(unittest.TestCase):
@@ -91,6 +97,7 @@ class PluginPlatformContractTests(unittest.TestCase):
                     "schema": {"type": "object"},
                 }
             ],
+            "consumes_events": ["workspace.customer.*"],
             "requested_bindings": [
                 {
                     "semantic_name": "customer_email_send",
@@ -113,6 +120,7 @@ class PluginPlatformContractTests(unittest.TestCase):
         self.assertEqual(manifest.runtime.network.allowed_hosts, ("api.acme.example",))
         self.assertEqual(manifest.credentials[0].name, "acme_api")
         self.assertEqual(manifest.credentials[0].allowed_hosts, ("api.acme.example",))
+        self.assertEqual(manifest.consumes_events, ("workspace.customer.*",))
 
     def test_non_native_plugin_requires_trusted_runtime_profile(self):
         payload = self.manifest()
@@ -213,6 +221,68 @@ class PluginPlatformContractTests(unittest.TestCase):
         self.assertTrue(_event_matches("plugin.installed", "plugin.installed"))
         self.assertFalse(_event_matches("plugin.*", "workflow.started"))
         self.assertFalse(_event_matches("plugin.installed", "plugin.disabled"))
+
+    def test_remote_runtime_endpoint_is_https_and_not_local(self):
+        endpoint, host, port = validate_remote_base_url("https://api.acme.example")
+        self.assertEqual(endpoint, "https://api.acme.example")
+        self.assertEqual(host, "api.acme.example")
+        self.assertEqual(port, 443)
+        for invalid in (
+            "http://api.acme.example",
+            "https://localhost",
+            "https://service.internal",
+            "https://user:pass@api.acme.example",
+            "https://api.acme.example?token=nope",
+        ):
+            with self.assertRaises(ValueError, msg=invalid):
+                validate_remote_base_url(invalid)
+
+    def test_runtime_egress_runtime_cannot_supply_credentials_or_transport_headers(self):
+        self.assertEqual(_safe_headers({"Accept": "application/json"}), {"Accept": "application/json"})
+        for name in ("Authorization", "Cookie", "Host", "Content-Length", "X-Operly-Token"):
+            with self.assertRaises(PermissionError, msg=name):
+                _safe_headers({name: "attacker-value"})
+
+    def test_event_delivery_target_management_rejects_local_or_plain_http(self):
+        self.assertEqual(
+            _validate_target_url("https://hooks.example.com/operly"),
+            "https://hooks.example.com/operly",
+        )
+        for invalid in (
+            "http://hooks.example.com/operly",
+            "https://localhost/hook",
+            "https://worker.internal/hook",
+            "https://user:password@hooks.example.com/hook",
+        ):
+            with self.assertRaises(ValueError, msg=invalid):
+                _validate_target_url(invalid)
+
+    def test_workspace_runtime_has_one_plugin_provider_but_no_static_plugin_specs(self):
+        runtime = build_workspace_runtime()
+        provider = runtime.providers.get(PLUGIN_RUNTIME_PROVIDER_ID)
+        self.assertIsNotNone(provider)
+        self.assertNotIn(
+            "acme.invoice.get",
+            {spec.id for spec in runtime.registry.all()},
+            "plugin contracts must be loaded from active Workspace installation state",
+        )
+
+    def test_platform_worker_owns_runtime_reconciliation(self):
+        self.assertIn("plugin.validate", DEFAULT_HANDLERS)
+        self.assertIn("plugin.isolated_validate", DEFAULT_HANDLERS)
+        self.assertIn("plugin.runtime.reconcile", DEFAULT_HANDLERS)
+
+    def test_api_mounts_runtime_and_broker_transports(self):
+        root = Path(__file__).resolve().parents[1]
+        main = (root / "apps" / "api" / "main.py").read_text(encoding="utf-8")
+        workspace_runtime = (
+            root / "packages" / "workspace_modules" / "tools" / "runtime.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("plugin_runtime_management_router", main)
+        self.assertIn("runtime_egress_router", main)
+        self.assertIn("plugin_event_router", main)
+        self.assertIn("installed_plugin_capability_source", workspace_runtime)
+        self.assertIn("PluginRuntimeProvider", workspace_runtime)
 
 
 if __name__ == "__main__":
