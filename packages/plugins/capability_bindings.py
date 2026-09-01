@@ -27,8 +27,8 @@ class CapabilityBindingService:
         argument_constraints: Mapping[str, Any] | None = None,
         rate_policy: Mapping[str, Any] | None = None,
     ) -> CapabilityBindingRecord:
-        if not context.is_workspace or not context.workspace_id:
-            raise PermissionError("Capability bindings require Workspace authority")
+        if not context.is_workspace or not context.workspace_id or not context.user_id:
+            raise PermissionError("Capability bindings require an authenticated Workspace member")
         if capability.resource_scope != "workspace" or "workspace" not in capability.scopes:
             raise PermissionError("Only Workspace capabilities may be bound to Workspace workloads")
         missing = [permission for permission in capability.permissions if not context.can(permission)]
@@ -60,11 +60,16 @@ class CapabilityBindingService:
             semantic_name=clean_semantic,
             capability_id=capability.id,
             capability_version=capability.version,
-            configuration_json=json.dumps(dict(configuration or {}), separators=(",", ":"), sort_keys=True),
+            authority_user_id=context.user_id,
+            configuration_json=json.dumps(
+                dict(configuration or {}), separators=(",", ":"), sort_keys=True
+            ),
             argument_constraints_json=json.dumps(
                 dict(argument_constraints or {}), separators=(",", ":"), sort_keys=True
             ),
-            rate_policy_json=json.dumps(dict(rate_policy or {}), separators=(",", ":"), sort_keys=True),
+            rate_policy_json=json.dumps(
+                dict(rate_policy or {}), separators=(",", ":"), sort_keys=True
+            ),
             status="active",
             enabled=True,
             created_by=context.user_id,
