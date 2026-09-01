@@ -14,12 +14,13 @@ PLUGIN_RUNTIME_PROVIDER_ID = "operly.plugin_runtime"
 
 
 class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
-    """Canonical Workspace runtime plus active installable plugin contracts.
+    """Canonical Workspace runtime with request-local plugin composition.
 
-    Plugin contracts are loaded from durable installation state into this request-local
-    Kernel registry. They do not get a second authorization path: registry visibility,
-    current Workspace permissions, approvals, idempotency, audit and provider execution
-    remain the same Kernel stages as native Workspace capabilities.
+    The object itself carries the stable built-in Workspace registry so synchronous
+    callers may inspect native contracts. Every discovery or execution call composes a
+    fresh runtime view, then loads only the active plugin contracts for that Workspace.
+    This prevents a process-wide runtime from retaining another tenant's plugin version
+    while preserving one Kernel policy/provider/approval/audit path for all tools.
     """
 
     async def _load_active_plugins(
@@ -47,8 +48,18 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
                 )
             if current.version != spec.version:
                 raise RuntimeError(
-                    f"Installed plugin capability version changed during one runtime view: {spec.id}"
+                    f"Duplicate active plugin capability has conflicting versions: {spec.id}"
                 )
+
+    async def _request_runtime(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+    ) -> "WorkspaceRuntime":
+        runtime = _compose_workspace_runtime()
+        await runtime._load_active_plugins(db, context=context)
+        return runtime
 
     async def available_capabilities(
         self,
@@ -58,8 +69,9 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
         query: str | None = None,
         limit: int = 50,
     ):
-        await self._load_active_plugins(db, context=context)
-        return await super().available_capabilities(
+        runtime = await self._request_runtime(db, context=context)
+        return await AvailabilityAwareKernelRuntime.available_capabilities(
+            runtime,
             db,
             context=context,
             query=query,
@@ -73,18 +85,17 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
         context: ExecutionContext,
         request: RuntimeRequest,
     ) -> RuntimeResponse:
-        await self._load_active_plugins(db, context=context)
-        return await super().execute(db, context=context, request=request)
+        runtime = await self._request_runtime(db, context=context)
+        return await AvailabilityAwareKernelRuntime.execute(
+            runtime,
+            db,
+            context=context,
+            request=request,
+        )
 
 
-def build_workspace_runtime() -> WorkspaceRuntime:
-    """Compose the shared governed substrate with Workspace-owned tools.
-
-    The generic Kernel package does not import Workspace modules. Workspace owns this
-    composition root so its business/provider surface can evolve without turning the
-    execution substrate into a second Workspace package. Concrete plugin transport
-    dependencies are imported only when this composition root is actually built.
-    """
+def _compose_workspace_runtime() -> WorkspaceRuntime:
+    """Build one isolated runtime view containing native Workspace providers."""
     from packages.plugins.runtime_provider import PluginRuntimeProvider
 
     base = build_kernel_runtime()
@@ -100,3 +111,12 @@ def build_workspace_runtime() -> WorkspaceRuntime:
     register_workspace_providers(runtime.providers)
     runtime.providers.register(PLUGIN_RUNTIME_PROVIDER_ID, PluginRuntimeProvider())
     return runtime
+
+
+def build_workspace_runtime() -> WorkspaceRuntime:
+    """Return the stable Workspace runtime facade.
+
+    Concrete provider dependencies are imported only when composition is actually
+    requested. Dynamic plugin contracts are never retained across requests/tenants.
+    """
+    return _compose_workspace_runtime()
