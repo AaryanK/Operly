@@ -23,6 +23,7 @@ from packages.database.plugin_platform_models import (
     PluginPackageRecord,
     PluginVersionRecord,
 )
+from packages.plugins.builds import IsolatedPluginValidationError, sandbox_plugin_validator
 from packages.plugins.contracts import PluginExecutionMode, PluginManifest
 from packages.plugins.events import digital_events
 from packages.plugins.jobs import digital_platform_jobs
@@ -54,19 +55,20 @@ def _event_matches(pattern: str, event_type: str) -> bool:
     return clean == event_type
 
 
-async def validate_plugin_job(
+async def _plugin_version_context(
     db: AsyncSession,
     job: DigitalPlatformJobRecord,
-) -> dict[str, Any]:
+) -> tuple[PluginVersionRecord, PluginPackageRecord, PluginManifest]:
     if not job.tenant_id or job.subject_kind != "plugin_version":
-        raise PermanentPlatformJobError("plugin.validate requires a Workspace plugin_version subject")
+        raise PermanentPlatformJobError(
+            f"{job.job_type} requires a Workspace plugin_version subject"
+        )
     version = await db.get(PluginVersionRecord, job.subject_id)
     if version is None:
         raise PermanentPlatformJobError("Plugin version no longer exists")
     package = await db.get(PluginPackageRecord, version.package_id)
     if package is None or package.owner_tenant_id != job.tenant_id:
         raise PermanentPlatformJobError("Plugin package is unavailable to this Workspace")
-
     try:
         raw_manifest = json.loads(version.manifest_json)
         if not isinstance(raw_manifest, dict):
@@ -74,8 +76,18 @@ async def validate_plugin_job(
         manifest = PluginManifest.from_dict(raw_manifest)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         version.validation_status = "failed"
-        version.validation_report_json = _json({"manifest_valid": False, "error": str(error)[:2000]})
+        version.validation_report_json = _json(
+            {"manifest_valid": False, "error": str(error)[:2000]}
+        )
         raise PermanentPlatformJobError("Stored plugin manifest is invalid") from error
+    return version, package, manifest
+
+
+async def validate_plugin_job(
+    db: AsyncSession,
+    job: DigitalPlatformJobRecord,
+) -> dict[str, Any]:
+    version, _, manifest = await _plugin_version_context(db, job)
 
     calculated_digest = _manifest_digest(manifest.to_dict())
     if calculated_digest != version.manifest_digest:
@@ -83,13 +95,17 @@ async def validate_plugin_job(
         version.validation_report_json = _json(
             {"manifest_valid": True, "manifest_digest_valid": False}
         )
-        raise PermanentPlatformJobError("Plugin manifest digest does not match immutable version identity")
+        raise PermanentPlatformJobError(
+            "Plugin manifest digest does not match immutable version identity"
+        )
     if manifest.runtime is None:
         raise PermanentPlatformJobError("Workspace plugin runtime requirement is missing")
 
     profile = default_runtime_profiles().get(manifest.runtime.profile)
     if profile.kind != manifest.runtime.kind:
-        raise PermanentPlatformJobError("Plugin runtime kind does not match trusted runtime profile")
+        raise PermanentPlatformJobError(
+            "Plugin runtime kind does not match trusted runtime profile"
+        )
 
     artifact_report: dict[str, Any] = {
         "package_artifact_id": version.package_artifact_id,
@@ -105,7 +121,9 @@ async def validate_plugin_job(
         )
         artifact_report["package_sha256"] = artifact.sha256
         if version.source_digest and version.source_digest.lower() != artifact.sha256.lower():
-            raise PermanentPlatformJobError("Declared source digest does not match package artifact")
+            raise PermanentPlatformJobError(
+                "Declared source digest does not match package artifact"
+            )
     elif manifest.execution_mode is not PluginExecutionMode.REMOTE_HTTP:
         raise PermanentPlatformJobError("Executable plugin package artifact is missing")
 
@@ -134,11 +152,116 @@ async def validate_plugin_job(
         report["supply_chain_state"] = "not_applicable_remote_http"
     else:
         # Metadata/artifact identity is valid, but executable code has intentionally not
-        # been imported or run by this Worker. The isolated build/scan adapter promotes
-        # this same exact artifact later and is the only stage allowed to mark it passed.
+        # been imported or run by this Worker. A separate Sandbox Runner job owns that.
         version.validation_status = "awaiting_isolated_build"
         report["isolated_build_required"] = True
-        report["supply_chain_state"] = "awaiting_isolated_build_and_scan"
+        report["supply_chain_state"] = "queued_for_isolated_build_and_scan"
+        isolated_job = await digital_platform_jobs.enqueue(
+            db,
+            tenant_id=job.tenant_id,
+            job_type="plugin.isolated_validate",
+            subject_kind="plugin_version",
+            subject_id=version.id,
+            idempotency_key=f"plugin.isolated_validate:{version.id}:{version.manifest_digest}",
+            payload={
+                "manifest_digest": version.manifest_digest,
+                "source_artifact_id": version.package_artifact_id,
+                "runtime_profile": profile.id,
+            },
+            priority=60,
+            max_attempts=5,
+            created_by=version.created_by,
+        )
+        report["isolated_validation_job_id"] = isolated_job.id
+    version.validation_report_json = _json(report)
+    await db.flush()
+    return report
+
+
+async def isolated_validate_plugin_job(
+    db: AsyncSession,
+    job: DigitalPlatformJobRecord,
+) -> dict[str, Any]:
+    version, _, manifest = await _plugin_version_context(db, job)
+    if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
+        raise PermanentPlatformJobError(
+            "Remote HTTP plugins do not have an isolated executable package"
+        )
+    if manifest.runtime is None:
+        raise PermanentPlatformJobError("Workspace plugin runtime requirement is missing")
+    if version.validation_status == "passed":
+        try:
+            existing = json.loads(version.validation_report_json or "{}")
+        except json.JSONDecodeError:
+            existing = {}
+        return existing if isinstance(existing, dict) else {"already_validated": True}
+    if version.validation_status not in {"awaiting_isolated_build", "pending"}:
+        raise PermanentPlatformJobError(
+            f"Plugin version cannot enter isolated validation from {version.validation_status}"
+        )
+
+    profile = default_runtime_profiles().get(manifest.runtime.profile)
+    if profile.kind != manifest.runtime.kind:
+        raise PermanentPlatformJobError(
+            "Plugin runtime kind does not match trusted runtime profile"
+        )
+    try:
+        isolated = await sandbox_plugin_validator.validate(
+            db,
+            tenant_id=str(job.tenant_id),
+            version=version,
+            manifest=manifest,
+            profile=profile,
+        )
+    except IsolatedPluginValidationError as error:
+        if not error.permanent:
+            raise
+        try:
+            report = json.loads(version.validation_report_json or "{}")
+        except json.JSONDecodeError:
+            report = {}
+        if not isinstance(report, dict):
+            report = {}
+        report.update(
+            {
+                "isolated_validation": "failed",
+                "supply_chain_state": "failed",
+                "error": str(error)[:2000],
+                "failed_at": datetime.utcnow().isoformat(),
+                "control_plane_execution": False,
+            }
+        )
+        version.validation_status = "failed"
+        version.validation_report_json = _json(report)
+        await db.flush()
+        raise PermanentPlatformJobError(str(error)) from error
+
+    try:
+        report = json.loads(version.validation_report_json or "{}")
+    except json.JSONDecodeError:
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
+    report.update(
+        {
+            "isolated_validation": "passed",
+            "supply_chain_state": "validated_in_isolated_sandbox",
+            "validated_artifact_id": isolated.validated_artifact_id,
+            "validated_artifact_digest": isolated.validated_artifact_digest,
+            "build_logs_artifact_id": isolated.build_logs_artifact_id,
+            "source_artifact_id": isolated.source_artifact_id,
+            "source_digest": isolated.source_digest,
+            "runtime_profile": isolated.runtime_profile,
+            "file_count": isolated.file_count,
+            "unpacked_bytes": isolated.unpacked_bytes,
+            "build_commands_run": isolated.build_commands_run,
+            "build_network_policy": isolated.build_network_policy,
+            "isolated_evidence": isolated.evidence,
+            "isolated_validated_at": datetime.utcnow().isoformat(),
+            "control_plane_execution": False,
+        }
+    )
+    version.validation_status = "passed"
     version.validation_report_json = _json(report)
     await db.flush()
     return report
@@ -146,6 +269,7 @@ async def validate_plugin_job(
 
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "plugin.validate": validate_plugin_job,
+    "plugin.isolated_validate": isolated_validate_plugin_job,
 }
 
 
@@ -266,7 +390,9 @@ class PlatformWorker:
                     ).all()
                 )
                 matched = [
-                    item for item in subscriptions if _event_matches(item.event_pattern, event.event_type)
+                    item
+                    for item in subscriptions
+                    if _event_matches(item.event_pattern, event.event_type)
                 ]
                 for subscription in matched:
                     existing = await db.scalar(
@@ -288,7 +414,9 @@ class PlatformWorker:
                 await db.flush()
                 # "delivered" at the outbox level means durable fanout completed. Each
                 # target has its own delivery state and retry/dead-letter lifecycle.
-                await digital_events.complete(db, event_id=event.id, worker_id=self.worker_id)
+                await digital_events.complete(
+                    db, event_id=event.id, worker_id=self.worker_id
+                )
                 await db.commit()
             except Exception as error:
                 await db.rollback()
