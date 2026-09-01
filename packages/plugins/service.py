@@ -12,10 +12,12 @@ from packages.database.plugin_platform_models import (
     DigitalEventOutboxRecord,
     PluginInstallationRecord,
     PluginPackageRecord,
+    PluginRuntimeInstanceRecord,
     PluginStorageNamespaceRecord,
     PluginVersionRecord,
 )
-from packages.plugins.contracts import PluginLifecycleState, PluginManifest
+from packages.plugins.contracts import PluginExecutionMode, PluginLifecycleState, PluginManifest
+from packages.plugins.runtime_profiles import default_runtime_profiles
 
 
 class PluginPlatformError(RuntimeError):
@@ -34,9 +36,25 @@ class PluginPlatformService:
     """Durable package/version/install lifecycle without executing untrusted code.
 
     Publishing and installation only establish metadata, policy and storage identity.
-    A runtime adapter must later validate/build/start the plugin before an installation
-    can become ACTIVE and before its capabilities are composed into the live Kernel.
+    A trusted validator/runtime controller must validate/build/start non-native source
+    before an installation can become ACTIVE. Capability execution remains Kernel-owned.
     """
+
+    async def _package_for_version(
+        self,
+        db: AsyncSession,
+        *,
+        version: PluginVersionRecord,
+    ) -> PluginPackageRecord:
+        package = await db.get(PluginPackageRecord, version.package_id)
+        if package is None:
+            raise LookupError("Plugin package not found")
+        return package
+
+    @staticmethod
+    def _assert_workspace_may_use(package: PluginPackageRecord, tenant_id: str) -> None:
+        if package.visibility == "private" and package.owner_tenant_id != tenant_id:
+            raise PermissionError("Private plugin belongs to another Workspace")
 
     async def publish_workspace_version(
         self,
@@ -50,6 +68,17 @@ class PluginPlatformService:
         source_digest: str | None = None,
     ) -> tuple[PluginPackageRecord, PluginVersionRecord, PluginManifest]:
         manifest = PluginManifest.from_dict(manifest_payload)
+        if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
+            raise PluginPlatformError(
+                "Workspace-published plugins cannot request platform_native execution; "
+                "native providers ship with trusted Operly code"
+            )
+        if manifest.runtime is None:
+            raise PluginPlatformError("Workspace plugins require an isolated or remote runtime")
+        # Merely naming a runtime in a manifest never creates mechanics. It must exist
+        # in Operly's trusted registry before the package can enter validation.
+        default_runtime_profiles().get(manifest.runtime.profile)
+
         namespace = f"workspace:{tenant_id}"
         package = await db.scalar(
             select(PluginPackageRecord).where(
@@ -93,16 +122,95 @@ class PluginPlatformService:
             source_digest=source_digest,
             trust_level="workspace_generated",
             validation_status="pending",
-            validation_report_json=_json({
-                "manifest_valid": True,
-                "runtime_validation_pending": manifest.execution_mode.value != "platform_native",
-                "supply_chain_scan_pending": bool(package_artifact_id),
-            }),
+            validation_report_json=_json(
+                {
+                    "manifest_valid": True,
+                    "runtime_profile": manifest.runtime.profile,
+                    "runtime_validation_pending": True,
+                    "supply_chain_scan_pending": bool(package_artifact_id),
+                }
+            ),
             created_by=user_id,
         )
         db.add(version)
         await db.flush()
         return package, version, manifest
+
+    async def record_validation(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: str,
+        version_id: str,
+        passed: bool,
+        report: Mapping[str, Any],
+    ) -> PluginVersionRecord:
+        """Trusted validator seam; does not build or execute source itself."""
+        version = await db.get(PluginVersionRecord, version_id)
+        if version is None:
+            raise LookupError("Plugin version not found")
+        package = await self._package_for_version(db, version=version)
+        self._assert_workspace_may_use(package, tenant_id)
+        version.validation_status = "passed" if passed else "failed"
+        version.validation_report_json = _json(dict(report))
+        await db.flush()
+        return version
+
+    async def record_runtime_instance(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: str,
+        installation_id: str,
+        runtime_profile: str,
+        runtime_kind: str,
+        state: str,
+        health_state: str,
+        provider: str | None = None,
+        provider_reference: str | None = None,
+        endpoint_reference: str | None = None,
+        artifact_id: str | None = None,
+    ) -> PluginRuntimeInstanceRecord:
+        """Trusted runtime-controller seam for isolated/remote plugin instances."""
+        installation = await db.scalar(
+            select(PluginInstallationRecord).where(
+                PluginInstallationRecord.id == installation_id,
+                PluginInstallationRecord.tenant_id == tenant_id,
+            )
+        )
+        if installation is None:
+            raise LookupError("Plugin installation not found")
+        version = await db.get(PluginVersionRecord, installation.version_id)
+        if version is None:
+            raise LookupError("Plugin version not found")
+        manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        if manifest.runtime is None:
+            raise PluginPlatformError("Plugin version does not declare a runtime")
+        if runtime_profile != manifest.runtime.profile or runtime_kind != manifest.runtime.kind:
+            raise PluginPlatformError("Runtime instance does not match the validated plugin manifest")
+        default_runtime_profiles().get(runtime_profile)
+        if state not in {"provisioning", "ready", "running", "stopped", "failed", "expired"}:
+            raise PluginPlatformError("Runtime instance state is invalid")
+        if health_state not in {"unknown", "warming", "healthy", "degraded", "unhealthy"}:
+            raise PluginPlatformError("Runtime health state is invalid")
+        row = PluginRuntimeInstanceRecord(
+            tenant_id=tenant_id,
+            installation_id=installation.id,
+            version_id=version.id,
+            runtime_profile=runtime_profile,
+            runtime_kind=runtime_kind,
+            state=state,
+            provider=provider,
+            provider_reference=provider_reference,
+            endpoint_reference=endpoint_reference,
+            artifact_id=artifact_id,
+            health_state=health_state,
+            health_evidence_json="{}",
+            last_heartbeat_at=datetime.utcnow() if state in {"ready", "running"} else None,
+        )
+        db.add(row)
+        await db.flush()
+        return row
 
     async def install_version(
         self,
@@ -117,11 +225,8 @@ class PluginPlatformService:
         version = await db.get(PluginVersionRecord, version_id)
         if version is None:
             raise LookupError("Plugin version not found")
-        package = await db.get(PluginPackageRecord, version.package_id)
-        if package is None:
-            raise LookupError("Plugin package not found")
-        if package.visibility == "private" and package.owner_tenant_id != tenant_id:
-            raise PermissionError("Private plugin belongs to another Workspace")
+        package = await self._package_for_version(db, version=version)
+        self._assert_workspace_may_use(package, tenant_id)
 
         manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
         requested = set(manifest.permissions)
@@ -146,10 +251,12 @@ class PluginPlatformService:
             enabled=False,
             configuration_json=_json(dict(configuration or {})),
             granted_permissions_json=_json(sorted(granted)),
-            approved_network_json=_json({
-                "mode": manifest.runtime.network.mode if manifest.runtime else "off",
-                "allowed_hosts": list(manifest.runtime.network.allowed_hosts) if manifest.runtime else [],
-            }),
+            approved_network_json=_json(
+                {
+                    "mode": manifest.runtime.network.mode if manifest.runtime else "off",
+                    "allowed_hosts": list(manifest.runtime.network.allowed_hosts) if manifest.runtime else [],
+                }
+            ),
             installed_by=user_id,
         )
         db.add(installation)
@@ -181,6 +288,32 @@ class PluginPlatformService:
         await db.flush()
         return installation
 
+    async def _assert_activation_ready(
+        self,
+        db: AsyncSession,
+        *,
+        installation: PluginInstallationRecord,
+    ) -> None:
+        version = await db.get(PluginVersionRecord, installation.version_id)
+        if version is None or version.validation_status != "passed":
+            raise PluginPlatformError("Plugin cannot activate until package validation passes")
+        manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
+            raise PluginPlatformError("Workspace installations cannot activate as platform_native")
+        instance = await db.scalar(
+            select(PluginRuntimeInstanceRecord)
+            .where(
+                PluginRuntimeInstanceRecord.tenant_id == installation.tenant_id,
+                PluginRuntimeInstanceRecord.installation_id == installation.id,
+                PluginRuntimeInstanceRecord.version_id == version.id,
+                PluginRuntimeInstanceRecord.state.in_(["ready", "running"]),
+                PluginRuntimeInstanceRecord.health_state == "healthy",
+            )
+            .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
+        )
+        if instance is None:
+            raise PluginPlatformError("Plugin cannot activate until a healthy validated runtime is ready")
+
     async def set_installation_state(
         self,
         db: AsyncSession,
@@ -199,11 +332,21 @@ class PluginPlatformService:
         )
         if row is None:
             raise LookupError("Plugin installation not found")
-        if status is PluginLifecycleState.ACTIVE and enabled is False:
-            raise PluginPlatformError("An active plugin cannot be explicitly disabled")
+        wants_enabled = row.enabled if enabled is None else bool(enabled)
+        if status is PluginLifecycleState.ACTIVE or wants_enabled:
+            if status is not PluginLifecycleState.ACTIVE:
+                raise PluginPlatformError("Enabled plugins must be in active lifecycle state")
+            await self._assert_activation_ready(db, installation=row)
+            wants_enabled = True
+        if status in {
+            PluginLifecycleState.DISABLED,
+            PluginLifecycleState.FAILED,
+            PluginLifecycleState.UNINSTALLING,
+            PluginLifecycleState.UNINSTALLED,
+        }:
+            wants_enabled = False
         row.status = status.value
-        if enabled is not None:
-            row.enabled = bool(enabled)
+        row.enabled = wants_enabled
         if configuration is not None:
             row.configuration_json = _json(dict(configuration))
         row.updated_at = datetime.utcnow()
@@ -263,7 +406,11 @@ class PluginPlatformService:
                     "events_produced": [item.name for item in manifest.produces_events],
                     "events_consumed": list(manifest.consumes_events),
                     "requested_bindings": [
-                        {"semantic_name": item.semantic_name, "capability_query": item.capability_query, "required": item.required}
+                        {
+                            "semantic_name": item.semantic_name,
+                            "capability_query": item.capability_query,
+                            "required": item.required,
+                        }
                         for item in manifest.requested_bindings
                     ],
                 }
