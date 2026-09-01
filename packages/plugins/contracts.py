@@ -70,7 +70,7 @@ class NetworkPolicy:
             raise PluginContractError("allowed_hosts requires egress network mode")
         for host in self.allowed_hosts:
             normalized = str(host or "").strip().lower()
-            if not normalized or "/" in normalized or "://" in normalized:
+            if not normalized or "/" in normalized or "://" in normalized or " " in normalized:
                 raise PluginContractError("allowed_hosts entries must be hostnames, not URLs")
 
 
@@ -112,6 +112,30 @@ class StorageRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class CredentialRequest:
+    """A declared credential handle; raw secret values never appear in a manifest."""
+
+    name: str
+    credential_type: str
+    required: bool = True
+    scopes: tuple[str, ...] = ()
+    allowed_hosts: tuple[str, ...] = ()
+    description: str = ""
+
+    def validate(self) -> None:
+        if not _ID_RE.fullmatch(self.name):
+            raise PluginContractError("credential name must be a normalized ID")
+        if self.credential_type not in {"api_key", "bearer", "basic", "oauth2", "custom"}:
+            raise PluginContractError("unsupported credential_type")
+        for host in self.allowed_hosts:
+            normalized = str(host or "").strip().lower()
+            if not normalized or "/" in normalized or "://" in normalized or " " in normalized:
+                raise PluginContractError("credential allowed_hosts entries must be hostnames")
+        if len(self.scopes) > 100:
+            raise PluginContractError("credential request has too many scopes")
+
+
+@dataclass(frozen=True, slots=True)
 class EventDeclaration:
     name: str
     description: str = ""
@@ -120,6 +144,8 @@ class EventDeclaration:
     def validate(self) -> None:
         if not _ID_RE.fullmatch(self.name):
             raise PluginContractError("event name must be a normalized ID")
+        if self.schema.get("type") != "object":
+            raise PluginContractError("event schema must be an object schema")
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,11 +202,16 @@ class PluginCapability:
         if self.output_schema.get("type") != "object":
             raise PluginContractError(f"capability {self.id} output_schema must be an object schema")
 
-    def to_kernel_spec(self, *, provider_id: str = "operly.plugin_runtime") -> CapabilitySpec:
+    def to_kernel_spec(
+        self,
+        *,
+        version: str,
+        provider_id: str = "operly.plugin_runtime",
+    ) -> CapabilitySpec:
         self.validate()
         return CapabilitySpec(
             id=self.id,
-            version="1.0.0",
+            version=version,
             display_name=self.display_name,
             description=self.description,
             provider_id=provider_id,
@@ -208,9 +239,12 @@ class PluginManifest:
     execution_mode: PluginExecutionMode
     capabilities: tuple[PluginCapability, ...] = ()
     permissions: tuple[str, ...] = ()
-    configuration_schema: Mapping[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}, "additionalProperties": False})
+    configuration_schema: Mapping[str, Any] = field(
+        default_factory=lambda: {"type": "object", "properties": {}, "additionalProperties": False}
+    )
     runtime: RuntimeRequirement | None = None
     storage: tuple[StorageRequest, ...] = ()
+    credentials: tuple[CredentialRequest, ...] = ()
     produces_events: tuple[EventDeclaration, ...] = ()
     consumes_events: tuple[str, ...] = ()
     requested_bindings: tuple[BindingRequest, ...] = ()
@@ -232,9 +266,13 @@ class PluginManifest:
             raise PluginContractError("plugin capability IDs must be unique")
         if len({item.name for item in self.storage}) != len(self.storage):
             raise PluginContractError("plugin storage names must be unique")
+        if len({item.name for item in self.credentials}) != len(self.credentials):
+            raise PluginContractError("plugin credential request names must be unique")
         for item in self.capabilities:
             item.validate()
         for item in self.storage:
+            item.validate()
+        for item in self.credentials:
             item.validate()
         for item in self.produces_events:
             item.validate()
@@ -244,6 +282,12 @@ class PluginManifest:
             item.validate()
         if self.runtime:
             self.runtime.validate()
+            runtime_hosts = set(self.runtime.network.allowed_hosts)
+            for credential in self.credentials:
+                if credential.allowed_hosts and not set(credential.allowed_hosts).issubset(runtime_hosts):
+                    raise PluginContractError(
+                        f"credential {credential.name} cannot authorize hosts outside the runtime egress allowlist"
+                    )
         if self.execution_mode is PluginExecutionMode.PLATFORM_NATIVE and self.runtime is not None:
             raise PluginContractError("platform_native plugins do not declare an untrusted runtime")
         if self.execution_mode is not PluginExecutionMode.PLATFORM_NATIVE and self.runtime is None:
@@ -251,7 +295,7 @@ class PluginManifest:
 
     def capability_specs(self) -> tuple[CapabilitySpec, ...]:
         self.validate()
-        return tuple(item.to_kernel_spec() for item in self.capabilities)
+        return tuple(item.to_kernel_spec(version=self.version) for item in self.capabilities)
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -264,11 +308,19 @@ class PluginManifest:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "PluginManifest":
+        if not isinstance(raw, Mapping):
+            raise PluginContractError("plugin manifest must be an object")
+
         def tuple_of(key: str) -> tuple[Any, ...]:
             value = raw.get(key) or []
             if not isinstance(value, list):
                 raise PluginContractError(f"{key} must be an array")
             return tuple(value)
+
+        def object_item(value: Any, *, label: str) -> Mapping[str, Any]:
+            if not isinstance(value, Mapping):
+                raise PluginContractError(f"{label} entries must be objects")
+            return value
 
         capabilities = tuple(
             PluginCapability(
@@ -285,7 +337,7 @@ class PluginManifest:
                 emits=tuple(str(v) for v in item.get("emits") or []),
                 tags=frozenset(str(v) for v in item.get("tags") or []),
             )
-            for item in tuple_of("capabilities")
+            for item in (object_item(v, label="capabilities") for v in tuple_of("capabilities"))
         )
         runtime_raw = raw.get("runtime")
         runtime = None
@@ -294,6 +346,10 @@ class PluginManifest:
                 raise PluginContractError("runtime must be an object")
             network_raw = runtime_raw.get("network") or {}
             resources_raw = runtime_raw.get("resources") or {}
+            if not isinstance(network_raw, Mapping):
+                raise PluginContractError("runtime.network must be an object")
+            if not isinstance(resources_raw, Mapping):
+                raise PluginContractError("runtime.resources must be an object")
             runtime = RuntimeRequirement(
                 profile=str(runtime_raw.get("profile") or ""),
                 kind=str(runtime_raw.get("kind") or ""),
@@ -320,13 +376,56 @@ class PluginManifest:
             execution_mode=PluginExecutionMode(str(raw.get("execution_mode") or "")),
             capabilities=capabilities,
             permissions=tuple(str(v) for v in raw.get("permissions") or []),
-            configuration_schema=dict(raw.get("configuration_schema") or {"type": "object", "properties": {}, "additionalProperties": False}),
+            configuration_schema=dict(
+                raw.get("configuration_schema")
+                or {"type": "object", "properties": {}, "additionalProperties": False}
+            ),
             runtime=runtime,
-            storage=tuple(StorageRequest(name=str(v["name"]), kind=str(v.get("kind") or "kv"), quota_bytes=int(v.get("quota_bytes") or 10 * 1024 * 1024)) for v in tuple_of("storage")),
-            produces_events=tuple(EventDeclaration(name=str(v["name"]), description=str(v.get("description") or ""), schema=dict(v.get("schema") or {"type": "object"})) for v in tuple_of("produces_events")),
+            storage=tuple(
+                StorageRequest(
+                    name=str(v["name"]),
+                    kind=str(v.get("kind") or "kv"),
+                    quota_bytes=int(v.get("quota_bytes") or 10 * 1024 * 1024),
+                )
+                for v in (object_item(v, label="storage") for v in tuple_of("storage"))
+            ),
+            credentials=tuple(
+                CredentialRequest(
+                    name=str(v["name"]),
+                    credential_type=str(v.get("credential_type") or "custom"),
+                    required=bool(v.get("required", True)),
+                    scopes=tuple(str(scope) for scope in v.get("scopes") or []),
+                    allowed_hosts=tuple(str(host) for host in v.get("allowed_hosts") or []),
+                    description=str(v.get("description") or ""),
+                )
+                for v in (object_item(v, label="credentials") for v in tuple_of("credentials"))
+            ),
+            produces_events=tuple(
+                EventDeclaration(
+                    name=str(v["name"]),
+                    description=str(v.get("description") or ""),
+                    schema=dict(v.get("schema") or {"type": "object"}),
+                )
+                for v in (object_item(v, label="produces_events") for v in tuple_of("produces_events"))
+            ),
             consumes_events=tuple(str(v) for v in raw.get("consumes_events") or []),
-            requested_bindings=tuple(BindingRequest(semantic_name=str(v["semantic_name"]), capability_query=str(v["capability_query"]), required=bool(v.get("required", True))) for v in tuple_of("requested_bindings")),
-            ui=tuple(UIContribution(contribution_type=str(v["contribution_type"]), id=str(v["id"]), title=str(v["title"]), configuration=dict(v.get("configuration") or {})) for v in tuple_of("ui")),
+            requested_bindings=tuple(
+                BindingRequest(
+                    semantic_name=str(v["semantic_name"]),
+                    capability_query=str(v["capability_query"]),
+                    required=bool(v.get("required", True)),
+                )
+                for v in (object_item(v, label="requested_bindings") for v in tuple_of("requested_bindings"))
+            ),
+            ui=tuple(
+                UIContribution(
+                    contribution_type=str(v["contribution_type"]),
+                    id=str(v["id"]),
+                    title=str(v["title"]),
+                    configuration=dict(v.get("configuration") or {}),
+                )
+                for v in (object_item(v, label="ui") for v in tuple_of("ui"))
+            ),
             metadata=dict(raw.get("metadata") or {}),
         )
         manifest.validate()
