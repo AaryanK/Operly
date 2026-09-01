@@ -18,6 +18,7 @@ from packages.database.plugin_platform_models import (
     PluginVersionRecord,
 )
 from packages.plugins.contracts import PluginExecutionMode, PluginLifecycleState, PluginManifest
+from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
 
 
@@ -151,6 +152,25 @@ class PluginPlatformService:
         )
         db.add(version)
         await db.flush()
+        await digital_platform_jobs.enqueue(
+            db,
+            tenant_id=tenant_id,
+            job_type="plugin.validate",
+            subject_kind="plugin_version",
+            subject_id=version.id,
+            idempotency_key=f"plugin.validate:{version.id}:{version.manifest_digest}",
+            payload={
+                "version_id": version.id,
+                "package_id": package.id,
+                "manifest_digest": version.manifest_digest,
+                "package_artifact_id": package_artifact_id,
+                "sbom_artifact_id": sbom_artifact_id,
+                "runtime_profile": manifest.runtime.profile,
+                "execution_mode": manifest.execution_mode.value,
+            },
+            priority=50,
+            created_by=user_id,
+        )
         return package, version, manifest
 
     async def record_validation(
