@@ -96,7 +96,7 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
 
 def _compose_workspace_runtime() -> WorkspaceRuntime:
     """Build one isolated runtime view containing native Workspace providers."""
-    from packages.plugins.runtime_provider import PluginRuntimeProvider
+    from packages.plugins.sandbox_job_runtime import SandboxJobPluginRuntimeProvider
 
     base = build_kernel_runtime()
     runtime = WorkspaceRuntime(
@@ -109,7 +109,10 @@ def _compose_workspace_runtime() -> WorkspaceRuntime:
     for spec in workspace_capabilities():
         runtime.registry.register(spec)
     register_workspace_providers(runtime.providers)
-    runtime.providers.register(PLUGIN_RUNTIME_PROVIDER_ID, PluginRuntimeProvider())
+    runtime.providers.register(
+        PLUGIN_RUNTIME_PROVIDER_ID,
+        SandboxJobPluginRuntimeProvider(),
+    )
     return runtime
 
 
