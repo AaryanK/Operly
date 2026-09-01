@@ -6,10 +6,11 @@ from packages.kernel.bootstrap import build_kernel_runtime
 from packages.kernel.contracts import RuntimeRequest, RuntimeResponse
 from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
 from packages.plugins.capability_source import installed_plugin_capability_source
-from packages.plugins.runtime_provider import PROVIDER_ID as PLUGIN_RUNTIME_PROVIDER_ID
-from packages.plugins.runtime_provider import PluginRuntimeProvider
 from packages.security.execution_context import ExecutionContext
 from packages.workspace_modules.tools import register_workspace_providers, workspace_capabilities
+
+
+PLUGIN_RUNTIME_PROVIDER_ID = "operly.plugin_runtime"
 
 
 class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
@@ -81,8 +82,11 @@ def build_workspace_runtime() -> WorkspaceRuntime:
 
     The generic Kernel package does not import Workspace modules. Workspace owns this
     composition root so its business/provider surface can evolve without turning the
-    execution substrate into a second Workspace package.
+    execution substrate into a second Workspace package. Concrete plugin transport
+    dependencies are imported only when this composition root is actually built.
     """
+    from packages.plugins.runtime_provider import PluginRuntimeProvider
+
     base = build_kernel_runtime()
     runtime = WorkspaceRuntime(
         registry=base.registry,
