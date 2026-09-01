@@ -8,6 +8,7 @@ on:
       - "alembic/versions/0052_mcp_agent_gateway.py"
       - "alembic/versions/0053_digital_business_infrastructure.py"
       - "alembic/versions/0054_digital_runtime_support.py"
+      - "alembic/versions/0055_platform_job_idempotency_scope.py"
       - "apps/api/access_router.py"
       - "apps/api/artifact_router.py"
       - "apps/api/main.py"
@@ -51,6 +52,7 @@ on:
       - "alembic/versions/0052_mcp_agent_gateway.py"
       - "alembic/versions/0053_digital_business_infrastructure.py"
       - "alembic/versions/0054_digital_runtime_support.py"
+      - "alembic/versions/0055_platform_job_idempotency_scope.py"
       - "apps/api/access_router.py"
       - "apps/api/artifact_router.py"
       - "apps/api/main.py"
@@ -167,7 +169,7 @@ jobs:
           python -m py_compile packages/database/plugin_platform_models.py packages/database/plugin_storage_models.py
           python -m py_compile packages/database/plugin_credential_models.py packages/database/capability_binding_models.py
           python -m py_compile packages/database/digital_event_models.py packages/database/digital_job_models.py packages/database/digital_usage_models.py
-          python -m py_compile alembic/versions/0053_digital_business_infrastructure.py alembic/versions/0054_digital_runtime_support.py
+          python -m py_compile alembic/versions/0053_digital_business_infrastructure.py alembic/versions/0054_digital_runtime_support.py alembic/versions/0055_platform_job_idempotency_scope.py
           python -m py_compile apps/api/artifact_router.py apps/api/main.py
 
       - name: Apply full schema to a clean database
@@ -187,7 +189,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -222,7 +224,7 @@ jobs:
         run: python -m py_compile packages/workspace_modules/agent_computer/sandbox.py
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
 
