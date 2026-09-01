@@ -29,6 +29,7 @@ from packages.plugins.egress_router import router as runtime_egress_router
 from packages.plugins.event_router import router as plugin_event_router
 from packages.plugins.gateway_router import router as capability_gateway_router
 from packages.plugins.router import router as plugin_platform_router
+from packages.plugins.runtime_router import router as plugin_runtime_management_router
 from packages.plugins.webhook_router import (
     management_router as plugin_webhook_management_router,
     public_router as plugin_webhook_public_router,
@@ -171,6 +172,7 @@ app.include_router(workspace_integrations_router)
 app.include_router(workspace_tools_router)
 app.include_router(artifact_router)
 app.include_router(plugin_platform_router)
+app.include_router(plugin_runtime_management_router)
 app.include_router(plugin_event_router)
 app.include_router(plugin_webhook_management_router)
 app.include_router(plugin_webhook_public_router)
@@ -199,6 +201,7 @@ async def health():
         "plugin_manifest_schema": "operly.plugin/v1",
         "capability_gateway_enabled": True,
         "runtime_egress_broker_enabled": True,
+        "plugin_runtime_reconciliation_enabled": True,
         "digital_webhook_ingress_enabled": True,
         "digital_event_delivery_enabled": True,
         "isolated_plugin_validation_enabled": True,
@@ -233,6 +236,7 @@ async def rebuild_status():
         "plugin_runtime_policy": "isolated-workload-only",
         "capability_gateway": "short-lived-runtime-identity-plus-live-workspace-authority",
         "runtime_egress_broker": "grant-scoped-credential-injection",
+        "plugin_runtime_reconciliation": "queued-health-verified-no-direct-health-override",
         "digital_webhook_ingress_enabled": True,
         "digital_event_delivery_enabled": True,
         "isolated_plugin_validation_enabled": True,
@@ -250,7 +254,7 @@ async def rebuild_status():
         "ai_runtime_enabled": False,
         "message": (
             "Operly is establishing the digital business substrate before any AI runtime: immutable plugin packages, "
-            "Workspace installations, trusted runtime profiles, isolated validation, namespaced plugin storage, short-lived runtime identities, "
+            "Workspace installations, trusted runtime profiles, isolated validation, reconciled runtime health, namespaced plugin storage, short-lived runtime identities, "
             "capability bindings, credential-safe egress, durable events/webhooks, artifacts and resource budgets remain subordinate to Kernel authority."
         ),
     }
