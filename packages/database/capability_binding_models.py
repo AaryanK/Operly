@@ -16,10 +16,11 @@ def uid() -> str:
 class CapabilityBindingRecord(Base):
     """Universal delegated handle from a digital workload to one Operly capability.
 
-    The binding is deliberately subject-based instead of project-only so generated
-    Solutions, plugin installations, workers and other future workloads can share the
-    same gateway contract. It contains capability identity and narrowing constraints,
-    never provider credentials.
+    The binding is subject-based instead of project-only so generated Solutions,
+    plugin installations, workers and future workloads share one gateway contract.
+    ``authority_user_id`` identifies the human whose *current* Workspace authority is
+    re-resolved on every invocation. The binding never freezes role permissions and
+    never contains provider credentials.
     """
 
     __tablename__ = "capability_bindings"
@@ -33,6 +34,9 @@ class CapabilityBindingRecord(Base):
     semantic_name: Mapped[str] = mapped_column(String(160), nullable=False)
     capability_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     capability_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    authority_user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     configuration_json: Mapped[str] = mapped_column(Text, default="{}")
     argument_constraints_json: Mapped[str] = mapped_column(Text, default="{}")
     rate_policy_json: Mapped[str] = mapped_column(Text, default="{}")
