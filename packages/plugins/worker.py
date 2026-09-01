@@ -1,0 +1,344 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import socket
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from packages.artifacts import ArtifactService
+from packages.database.db import SessionFactory, init_db
+from packages.database.digital_event_models import DigitalEventDeliveryRecord
+from packages.database.digital_job_models import DigitalPlatformJobRecord
+from packages.database.plugin_platform_models import (
+    DigitalEventSubscriptionRecord,
+    PluginPackageRecord,
+    PluginVersionRecord,
+)
+from packages.plugins.contracts import PluginExecutionMode, PluginManifest
+from packages.plugins.events import digital_events
+from packages.plugins.jobs import digital_platform_jobs
+from packages.plugins.runtime_profiles import default_runtime_profiles
+
+
+class PermanentPlatformJobError(RuntimeError):
+    """A deterministic job failure that retrying cannot repair."""
+
+
+JobHandler = Callable[[AsyncSession, DigitalPlatformJobRecord], Awaitable[dict[str, Any]]]
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def _manifest_digest(manifest: dict[str, Any]) -> str:
+    return hashlib.sha256(_json(manifest).encode("utf-8")).hexdigest()
+
+
+def _event_matches(pattern: str, event_type: str) -> bool:
+    clean = str(pattern or "").strip()
+    if clean == "*":
+        return True
+    if clean.endswith(".*"):
+        prefix = clean[:-1]
+        return event_type.startswith(prefix)
+    return clean == event_type
+
+
+async def validate_plugin_job(
+    db: AsyncSession,
+    job: DigitalPlatformJobRecord,
+) -> dict[str, Any]:
+    if not job.tenant_id or job.subject_kind != "plugin_version":
+        raise PermanentPlatformJobError("plugin.validate requires a Workspace plugin_version subject")
+    version = await db.get(PluginVersionRecord, job.subject_id)
+    if version is None:
+        raise PermanentPlatformJobError("Plugin version no longer exists")
+    package = await db.get(PluginPackageRecord, version.package_id)
+    if package is None or package.owner_tenant_id != job.tenant_id:
+        raise PermanentPlatformJobError("Plugin package is unavailable to this Workspace")
+
+    try:
+        raw_manifest = json.loads(version.manifest_json)
+        if not isinstance(raw_manifest, dict):
+            raise ValueError("manifest is not an object")
+        manifest = PluginManifest.from_dict(raw_manifest)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        version.validation_status = "failed"
+        version.validation_report_json = _json({"manifest_valid": False, "error": str(error)[:2000]})
+        raise PermanentPlatformJobError("Stored plugin manifest is invalid") from error
+
+    calculated_digest = _manifest_digest(manifest.to_dict())
+    if calculated_digest != version.manifest_digest:
+        version.validation_status = "failed"
+        version.validation_report_json = _json(
+            {"manifest_valid": True, "manifest_digest_valid": False}
+        )
+        raise PermanentPlatformJobError("Plugin manifest digest does not match immutable version identity")
+    if manifest.runtime is None:
+        raise PermanentPlatformJobError("Workspace plugin runtime requirement is missing")
+
+    profile = default_runtime_profiles().get(manifest.runtime.profile)
+    if profile.kind != manifest.runtime.kind:
+        raise PermanentPlatformJobError("Plugin runtime kind does not match trusted runtime profile")
+
+    artifact_report: dict[str, Any] = {
+        "package_artifact_id": version.package_artifact_id,
+        "sbom_artifact_id": version.sbom_artifact_id,
+        "package_sha256": None,
+        "sbom_sha256": None,
+    }
+    artifacts = ArtifactService(db)
+    if version.package_artifact_id:
+        artifact = await artifacts.assert_workspace_artifact(
+            tenant_id=job.tenant_id,
+            artifact_id=version.package_artifact_id,
+        )
+        artifact_report["package_sha256"] = artifact.sha256
+        if version.source_digest and version.source_digest.lower() != artifact.sha256.lower():
+            raise PermanentPlatformJobError("Declared source digest does not match package artifact")
+    elif manifest.execution_mode is not PluginExecutionMode.REMOTE_HTTP:
+        raise PermanentPlatformJobError("Executable plugin package artifact is missing")
+
+    if version.sbom_artifact_id:
+        sbom = await artifacts.assert_workspace_artifact(
+            tenant_id=job.tenant_id,
+            artifact_id=version.sbom_artifact_id,
+        )
+        artifact_report["sbom_sha256"] = sbom.sha256
+
+    report: dict[str, Any] = {
+        "manifest_valid": True,
+        "manifest_digest_valid": True,
+        "runtime_profile": profile.id,
+        "runtime_kind": profile.kind,
+        "execution_mode": manifest.execution_mode.value,
+        "artifact_identity": artifact_report,
+        "validated_at": datetime.utcnow().isoformat(),
+        "control_plane_execution": False,
+    }
+    if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
+        # There is no uploaded executable to run. Activation still requires a healthy
+        # runtime/remote adapter instance, so metadata validation alone grants no use.
+        version.validation_status = "passed"
+        report["isolated_build_required"] = False
+        report["supply_chain_state"] = "not_applicable_remote_http"
+    else:
+        # Metadata/artifact identity is valid, but executable code has intentionally not
+        # been imported or run by this Worker. The isolated build/scan adapter promotes
+        # this same exact artifact later and is the only stage allowed to mark it passed.
+        version.validation_status = "awaiting_isolated_build"
+        report["isolated_build_required"] = True
+        report["supply_chain_state"] = "awaiting_isolated_build_and_scan"
+    version.validation_report_json = _json(report)
+    await db.flush()
+    return report
+
+
+DEFAULT_HANDLERS: dict[str, JobHandler] = {
+    "plugin.validate": validate_plugin_job,
+}
+
+
+class PlatformWorker:
+    """One durable infrastructure dispatcher for Operly digital workloads.
+
+    Handlers orchestrate trusted control-plane state. Untrusted plugin/build code must
+    cross a runtime-controller/Sandbox Runner boundary; handlers must never import it.
+    """
+
+    def __init__(self) -> None:
+        self.worker_id = (
+            f"operly-platform:{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        )
+        self.poll_seconds = max(
+            0.25,
+            min(float(os.getenv("OPERLY_PLATFORM_WORKER_POLL_SECONDS", "2")), 60.0),
+        )
+        self.lease_seconds = max(
+            30,
+            min(int(os.getenv("OPERLY_PLATFORM_WORKER_LEASE_SECONDS", "180")), 900),
+        )
+        self.batch_size = max(
+            1,
+            min(int(os.getenv("OPERLY_PLATFORM_WORKER_BATCH_SIZE", "10")), 100),
+        )
+        self.handlers = dict(DEFAULT_HANDLERS)
+
+    async def _lease_jobs(self) -> list[str]:
+        async with SessionFactory() as db:
+            rows = await digital_platform_jobs.lease_batch(
+                db,
+                worker_id=self.worker_id,
+                limit=self.batch_size,
+                lease_seconds=self.lease_seconds,
+            )
+            ids = [row.id for row in rows]
+            await db.commit()
+            return ids
+
+    async def _process_job(self, job_id: str) -> None:
+        async with SessionFactory() as db:
+            job = await db.get(DigitalPlatformJobRecord, job_id)
+            if job is None or job.state != "running" or job.locked_by != self.worker_id:
+                return
+            handler = self.handlers.get(job.job_type)
+            if handler is None:
+                await digital_platform_jobs.fail(
+                    db,
+                    job_id=job.id,
+                    worker_id=self.worker_id,
+                    error=f"No trusted platform handler registered for {job.job_type}",
+                    permanent=True,
+                )
+                await db.commit()
+                return
+            try:
+                result = await handler(db, job)
+                await digital_platform_jobs.complete(
+                    db,
+                    job_id=job.id,
+                    worker_id=self.worker_id,
+                    result=result,
+                )
+                await db.commit()
+            except PermanentPlatformJobError as error:
+                await digital_platform_jobs.fail(
+                    db,
+                    job_id=job.id,
+                    worker_id=self.worker_id,
+                    error=str(error),
+                    permanent=True,
+                )
+                await db.commit()
+            except Exception as error:
+                await db.rollback()
+                # The lease row itself was committed before handler execution, so after
+                # handler rollback reload it and schedule a bounded retry.
+                job = await db.get(DigitalPlatformJobRecord, job_id)
+                if job is None or job.state != "running" or job.locked_by != self.worker_id:
+                    return
+                retry = min(30 * (2 ** max(0, job.attempt - 1)), 3600)
+                await digital_platform_jobs.fail(
+                    db,
+                    job_id=job.id,
+                    worker_id=self.worker_id,
+                    error=f"{type(error).__name__}: {str(error)[:4000]}",
+                    retry_after_seconds=retry,
+                )
+                await db.commit()
+
+    async def _lease_events(self) -> list[str]:
+        async with SessionFactory() as db:
+            rows = await digital_events.lease_batch(
+                db,
+                worker_id=self.worker_id,
+                limit=self.batch_size * 2,
+                lease_seconds=self.lease_seconds,
+            )
+            ids = [row.id for row in rows]
+            await db.commit()
+            return ids
+
+    async def _fanout_event(self, event_id: str) -> None:
+        async with SessionFactory() as db:
+            event = await db.get(
+                __import__(
+                    "packages.database.plugin_platform_models",
+                    fromlist=["DigitalEventOutboxRecord"],
+                ).DigitalEventOutboxRecord,
+                event_id,
+            )
+            if event is None or event.status != "leased" or event.locked_by != self.worker_id:
+                return
+            try:
+                subscriptions = list(
+                    (
+                        await db.scalars(
+                            select(DigitalEventSubscriptionRecord).where(
+                                DigitalEventSubscriptionRecord.tenant_id == event.tenant_id,
+                                DigitalEventSubscriptionRecord.enabled.is_(True),
+                            )
+                        )
+                    ).all()
+                )
+                matched = [
+                    item for item in subscriptions if _event_matches(item.event_pattern, event.event_type)
+                ]
+                for subscription in matched:
+                    existing = await db.scalar(
+                        select(DigitalEventDeliveryRecord).where(
+                            DigitalEventDeliveryRecord.event_id == event.id,
+                            DigitalEventDeliveryRecord.subscription_id == subscription.id,
+                        )
+                    )
+                    if existing is None:
+                        db.add(
+                            DigitalEventDeliveryRecord(
+                                tenant_id=event.tenant_id,
+                                event_id=event.id,
+                                subscription_id=subscription.id,
+                                status="pending",
+                                attempts=0,
+                            )
+                        )
+                await db.flush()
+                # "delivered" at the outbox level means durable fanout completed. Each
+                # target has its own delivery state and retry/dead-letter lifecycle.
+                await digital_events.complete(db, event_id=event.id, worker_id=self.worker_id)
+                await db.commit()
+            except Exception as error:
+                await db.rollback()
+                event = await db.get(
+                    __import__(
+                        "packages.database.plugin_platform_models",
+                        fromlist=["DigitalEventOutboxRecord"],
+                    ).DigitalEventOutboxRecord,
+                    event_id,
+                )
+                if event is None or event.status != "leased" or event.locked_by != self.worker_id:
+                    return
+                await digital_events.fail(
+                    db,
+                    event_id=event.id,
+                    worker_id=self.worker_id,
+                    error=f"{type(error).__name__}: {str(error)[:2000]}",
+                )
+                await db.commit()
+
+    async def run_once(self) -> int:
+        job_ids = await self._lease_jobs()
+        for job_id in job_ids:
+            await self._process_job(job_id)
+        event_ids = await self._lease_events()
+        for event_id in event_ids:
+            await self._fanout_event(event_id)
+        return len(job_ids) + len(event_ids)
+
+    async def run_forever(self) -> None:
+        await init_db()
+        print(f"Operly Platform Worker started as {self.worker_id}")
+        while True:
+            processed = await self.run_once()
+            if processed == 0:
+                await asyncio.sleep(self.poll_seconds)
+
+
+async def main() -> None:
+    enabled = os.getenv("OPERLY_PLATFORM_WORKER_ENABLED", "true").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        print("Operly Platform Worker is disabled")
+        return
+    await PlatformWorker().run_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
