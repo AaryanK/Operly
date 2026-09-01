@@ -13,6 +13,10 @@ from packages.database.digital_job_models import DigitalPlatformJobRecord
 class DigitalPlatformJobService:
     """Durable lease-based queue intended for the one Operly infrastructure Worker."""
 
+    @staticmethod
+    def _scope(tenant_id: str | None) -> str:
+        return f"workspace:{tenant_id}" if tenant_id else "platform"
+
     async def enqueue(
         self,
         db: AsyncSession,
@@ -31,9 +35,10 @@ class DigitalPlatformJobService:
         clean_key = str(idempotency_key or "").strip()
         if not clean_key:
             raise ValueError("Platform job idempotency_key is required")
+        scope = self._scope(tenant_id)
         existing = await db.scalar(
             select(DigitalPlatformJobRecord).where(
-                DigitalPlatformJobRecord.tenant_id == tenant_id,
+                DigitalPlatformJobRecord.idempotency_scope == scope,
                 DigitalPlatformJobRecord.idempotency_key == clean_key,
             )
         )
@@ -41,6 +46,7 @@ class DigitalPlatformJobService:
             return existing
         row = DigitalPlatformJobRecord(
             tenant_id=tenant_id,
+            idempotency_scope=scope,
             job_type=str(job_type or "").strip()[:100],
             subject_kind=str(subject_kind or "").strip()[:60],
             subject_id=str(subject_id or "").strip()[:160],
