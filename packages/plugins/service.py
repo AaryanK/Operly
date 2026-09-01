@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.artifacts import ArtifactService
 from packages.database.plugin_platform_models import (
     DigitalEventOutboxRecord,
     PluginInstallationRecord,
@@ -78,6 +79,22 @@ class PluginPlatformService:
         # Merely naming a runtime in a manifest never creates mechanics. It must exist
         # in Operly's trusted registry before the package can enter validation.
         default_runtime_profiles().get(manifest.runtime.profile)
+
+        if manifest.execution_mode is not PluginExecutionMode.REMOTE_HTTP and not package_artifact_id:
+            raise PluginPlatformError(
+                "Executable plugin workloads require an immutable Workspace package artifact"
+            )
+        artifacts = ArtifactService(db)
+        if package_artifact_id:
+            await artifacts.assert_workspace_artifact(
+                tenant_id=tenant_id,
+                artifact_id=package_artifact_id,
+            )
+        if sbom_artifact_id:
+            await artifacts.assert_workspace_artifact(
+                tenant_id=tenant_id,
+                artifact_id=sbom_artifact_id,
+            )
 
         namespace = f"workspace:{tenant_id}"
         package = await db.scalar(
@@ -193,6 +210,11 @@ class PluginPlatformService:
             raise PluginPlatformError("Runtime instance state is invalid")
         if health_state not in {"unknown", "warming", "healthy", "degraded", "unhealthy"}:
             raise PluginPlatformError("Runtime health state is invalid")
+        if artifact_id:
+            await ArtifactService(db).assert_workspace_artifact(
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+            )
         row = PluginRuntimeInstanceRecord(
             tenant_id=tenant_id,
             installation_id=installation.id,
@@ -402,6 +424,17 @@ class PluginPlatformService:
                     "storage": [
                         {"name": item.name, "kind": item.kind, "quota_bytes": item.quota_bytes}
                         for item in manifest.storage
+                    ],
+                    "credentials": [
+                        {
+                            "name": item.name,
+                            "credential_type": item.credential_type,
+                            "required": item.required,
+                            "scopes": list(item.scopes),
+                            "allowed_hosts": list(item.allowed_hosts),
+                            "description": item.description,
+                        }
+                        for item in manifest.credentials
                     ],
                     "events_produced": [item.name for item in manifest.produces_events],
                     "events_consumed": list(manifest.consumes_events),
