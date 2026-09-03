@@ -1,3 +1,4 @@
+// Retired disposable smoke app; Railway start command now exits immediately.
 import http from "node:http";
 import crypto from "node:crypto";
 
