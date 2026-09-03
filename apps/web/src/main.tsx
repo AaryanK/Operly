@@ -6,6 +6,7 @@ import "./ui/tokens.css";
 import "./ui/minimal.css";
 import "./ui/app.css";
 import "./ui/theme.css";
+import "./ui/brand.css";
 import "./ui/workspace-lite.css";
 import "./ui/workspace-os.css";
 import "./ui/workspace-human.css";
