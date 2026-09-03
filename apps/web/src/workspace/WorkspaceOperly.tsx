@@ -20,6 +20,11 @@ function artifactSize(value?: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
+function initialPrompt() {
+  try { return (new URLSearchParams(window.location.search).get("prompt") || "").slice(0, 4000); }
+  catch { return ""; }
+}
+
 function ArtifactCards({ artifacts }: { artifacts?: Artifact[] }) {
   if (!artifacts?.length) return null;
   return <div className="chat-artifacts" aria-label="Generated files">
@@ -39,7 +44,7 @@ export function WorkspaceOperly({ workspace }: Props) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialPrompt);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
