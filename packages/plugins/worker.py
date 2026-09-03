@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import socket
-import traceback
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
@@ -302,20 +301,6 @@ DEFAULT_HANDLERS: dict[str, JobHandler] = {
 }
 
 
-async def _run_hosting_e2e_once() -> None:
-    try:
-        from packages.plugins.hosting_e2e import main as hosting_e2e_main
-
-        print("PLUGIN_HOSTING_E2E_WORKER_TRIGGER_START", flush=True)
-        await hosting_e2e_main()
-    except Exception as error:
-        print(
-            f"PLUGIN_HOSTING_E2E_WORKER_TRIGGER_FAILED {type(error).__name__}: {error}",
-            flush=True,
-        )
-        traceback.print_exc()
-
-
 class PlatformWorker:
     """One durable infrastructure dispatcher for Operly digital workloads.
 
@@ -553,10 +538,7 @@ class PlatformWorker:
 
     async def run_forever(self) -> None:
         await init_db()
-        print(f"Operly Platform Worker started as {self.worker_id}", flush=True)
-        e2e_enabled = os.getenv("OPERLY_PLUGIN_HOSTING_E2E", "").strip().lower()
-        if e2e_enabled in {"1", "true", "yes", "on"}:
-            asyncio.create_task(_run_hosting_e2e_once())
+        print(f"Operly Platform Worker started as {self.worker_id}")
         while True:
             processed = await self.run_once()
             if processed == 0:
