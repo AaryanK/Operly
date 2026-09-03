@@ -74,6 +74,9 @@ print(json.dumps({'files': count, 'unpacked_bytes': total, 'entrypoint': 'operly
 '''
 
 
+_TERMINAL_EXEC_NOT_READY = "tcp-proxy exec WebSocket connection failed. (HTTP 400)"
+
+
 def _execution_concurrency_limit() -> int:
     """Bound simultaneous fresh Sandbox VMs created by one API process.
 
@@ -148,6 +151,43 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
             raise PermissionError(
                 "sandbox_job plugins cannot request Workspace capability bindings until a filtered callback channel is available"
             )
+
+    async def _terminal_exec_with_readiness_retry(
+        self,
+        runtime_id: str,
+        *,
+        max_runtime: int,
+    ) -> dict[str, Any]:
+        """Retry only Railway's signed tcp-proxy exec-readiness race.
+
+        At this point the sandbox already exists and Operly has successfully
+        imported, extracted, and written the invocation artifact. Railway can
+        briefly return a signed HTTP 400 while the sandbox's exec WebSocket proxy
+        finishes becoming ready. Reusing the same sandbox is safe here because a
+        failed WebSocket connection means the terminal command was not submitted.
+        No other 400, timeout, transport failure, or plugin error is retried.
+        """
+
+        arguments = {
+            "command": "python3 operly_runtime.py < ../.operly/invocation.json",
+            "cwd": "src",
+            "timeout_seconds": max_runtime,
+            "background": False,
+        }
+        timeout_seconds = min(max_runtime + 45, 930)
+        for attempt in range(1, 5):
+            try:
+                return await self.runner.tool(
+                    runtime_id,
+                    "terminal.exec",
+                    arguments,
+                    timeout_seconds=timeout_seconds,
+                )
+            except ComputerRunnerError as error:
+                if str(error) != _TERMINAL_EXEC_NOT_READY or attempt >= 4:
+                    raise
+                await asyncio.sleep(0.75 * attempt)
+        raise ComputerRunnerError("Sandbox terminal exec readiness retries exhausted")
 
     async def _execute_sandbox_job(
         self,
@@ -238,16 +278,9 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
                     "append": False,
                 },
             )
-            packet = await self.runner.tool(
+            packet = await self._terminal_exec_with_readiness_retry(
                 runtime_id,
-                "terminal.exec",
-                {
-                    "command": "python3 operly_runtime.py < ../.operly/invocation.json",
-                    "cwd": "src",
-                    "timeout_seconds": max_runtime,
-                    "background": False,
-                },
-                timeout_seconds=min(max_runtime + 45, 930),
+                max_runtime=max_runtime,
             )
             if packet.get("timed_out"):
                 raise PluginRuntimeTransportError("sandbox_job execution timed out")
