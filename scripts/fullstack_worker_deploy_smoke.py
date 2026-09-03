@@ -5,12 +5,13 @@ import hmac
 import json
 import os
 import time
-import urllib.error
 import urllib.request
 
 BROKER_URL = os.getenv("OPERLY_HOSTED_BROKER_URL", "").strip().rstrip("/")
 BROKER_TOKEN = os.getenv("OPERLY_HOSTED_BROKER_TOKEN", "").strip()
 BRANCH = os.getenv("OPERLY_FULLSTACK_SMOKE_BRANCH", "test/fullstack-worker-deploy").strip()
+SERVICE_ID = os.getenv("OPERLY_HOSTED_SMOKE_SERVICE_ID", "").strip()
+EXPECTED_URL = os.getenv("OPERLY_HOSTED_SMOKE_URL", "").strip().rstrip("/")
 
 
 def signed_request(path: str, payload: dict) -> dict:
@@ -21,11 +22,7 @@ def signed_request(path: str, payload: dict) -> dict:
         BROKER_URL + path,
         data=raw,
         method="POST",
-        headers={
-            "Authorization": "Bearer " + BROKER_TOKEN,
-            "X-Operly-Signature": signature,
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": "Bearer " + BROKER_TOKEN, "X-Operly-Signature": signature, "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=60) as response:
         body = response.read()
@@ -58,29 +55,24 @@ def wait_public(url: str, timeout: float = 360) -> None:
                 print("PUBLIC_HEALTH", json.dumps(health, sort_keys=True), flush=True)
                 return
         except Exception as exc:
-            now = type(exc).__name__ + ":" + str(exc)[:120]
-            if now != last:
-                print("PUBLIC_WAIT", now, flush=True)
-                last = now
+            state = type(exc).__name__ + ":" + str(exc)[:120]
+            if state != last:
+                print("PUBLIC_WAIT", state, flush=True)
+                last = state
         time.sleep(5)
     raise TimeoutError("deployed full-stack service did not become publicly healthy")
 
 
 def main() -> None:
-    if not BROKER_URL or not BROKER_TOKEN:
-        raise SystemExit("Worker hosted broker configuration is missing")
-    payload = {
-        "name": "Operly Worker Fullstack Smoke",
-        "repo": "AaryanK/Operly",
-        "branch": BRANCH,
-        "root_directory": "/smoke/fullstack_app",
-        "start_command": "npm start",
-        "healthcheck_path": "/health",
-    }
-    print("WORKER_HOSTED_DEPLOY_REQUEST", json.dumps({k: v for k, v in payload.items() if k != "name"}, sort_keys=True), flush=True)
+    if not all([BROKER_URL, BROKER_TOKEN, SERVICE_ID, EXPECTED_URL]):
+        raise SystemExit("Worker hosted deployment configuration is missing")
+    payload = {"service_id": SERVICE_ID, "branch": BRANCH}
+    print("WORKER_HOSTED_DEPLOY_REQUEST", json.dumps(payload, sort_keys=True), flush=True)
     result = signed_request("/v1/hosted/deploy", payload)
     print("WORKER_HOSTED_DEPLOY_ACCEPTED", json.dumps(result, sort_keys=True), flush=True)
     url = str(result["url"]).rstrip("/")
+    if url != EXPECTED_URL:
+        raise RuntimeError("broker returned an unexpected hosted URL")
     wait_public(url)
     info = get_json(url + "/api/info")
     before = get_json(url + "/api/items")
