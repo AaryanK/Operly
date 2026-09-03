@@ -7,9 +7,14 @@ const AUTH_FLOW_KEY = "operly:minimal-auth-flow";
 const INVITE_FLOW_KEY = "operly:workspace-invite";
 
 type AuthFlow = { email?: string; challenge_id?: string };
+type AuthBootstrap = { google_client_id?: string | null; google_nonce?: string | null };
 type Workspace = { id: string; name: string; role: string; current: boolean };
 type InviteInfo = { invitation_id: string; workspace_id: string; workspace_name: string; role: string; targeted: boolean; expires_at: string; status: string };
 type InviteAccept = { ok: boolean; workspace_id: string; workspace_name: string; role: string; next: string };
+
+declare global {
+  interface Window { google?: any; }
+}
 
 function readFlow(): AuthFlow {
   try { return JSON.parse(sessionStorage.getItem(AUTH_FLOW_KEY) || "{}"); } catch { return {}; }
@@ -31,7 +36,7 @@ async function acceptPendingInvite(): Promise<string | null> {
   sessionStorage.removeItem(INVITE_FLOW_KEY);
   return result.next;
 }
-async function bootstrapAuth() { await api("/auth/bootstrap"); }
+async function bootstrapAuth<T = unknown>() { return api<T>("/auth/bootstrap"); }
 function errorMessage(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }
 
 function Brand() {
@@ -46,6 +51,70 @@ function AuthPage({ children }: { children: ReactNode }) {
 function PasswordField({ name, label, autoComplete }: { name: string; label: string; autoComplete: string }) {
   const [visible, setVisible] = useState(false);
   return <label className="minimal-field"><span>{label}</span><div className="minimal-password-wrap"><input name={name} type={visible ? "text" : "password"} autoComplete={autoComplete} minLength={12} required /><button type="button" onClick={() => setVisible((value) => !value)}>{visible ? "Hide" : "Show"}</button></div></label>;
+}
+
+function GoogleSignIn({ busy, setBusy, setError }: { busy: boolean; setBusy: (value: boolean) => void; setError: (value: string) => void }) {
+  const [bootstrap, setBootstrap] = useState<AuthBootstrap | null>(null);
+
+  useEffect(() => {
+    bootstrapAuth<AuthBootstrap>().then(setBootstrap).catch(() => setBootstrap({}));
+  }, []);
+
+  useEffect(() => {
+    if (!bootstrap?.google_client_id) return;
+    let cancelled = false;
+    const render = () => {
+      if (cancelled || !window.google?.accounts?.id) return;
+      const target = document.getElementById("minimal-google-auth");
+      if (!target) return;
+      window.google.accounts.id.initialize({
+        client_id: bootstrap.google_client_id,
+        nonce: bootstrap.google_nonce,
+        auto_select: false,
+        cancel_on_tap_outside: true,
+        callback: async (result: any) => {
+          const credential = String(result?.credential || "");
+          if (!credential) return;
+          setBusy(true); setError("");
+          try {
+            await api("/auth/google", { method: "POST", body: JSON.stringify({ credential }) });
+            const next = await acceptPendingInvite();
+            go(next || "/account");
+          } catch (caught) {
+            setError(errorMessage(caught, "Google sign-in failed"));
+            setBusy(false);
+          }
+        },
+      });
+      target.replaceChildren();
+      window.google.accounts.id.renderButton(target, {
+        theme: "outline",
+        size: "large",
+        text: "continue_with",
+        shape: "rectangular",
+        width: Math.max(260, Math.min(420, Math.floor(target.clientWidth || 420))),
+      });
+    };
+
+    if (window.google?.accounts?.id) render();
+    else {
+      const src = "https://accounts.google.com/gsi/client";
+      const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
+      if (existing) existing.addEventListener("load", render, { once: true });
+      else {
+        const script = document.createElement("script");
+        script.src = src;
+        script.async = true;
+        script.defer = true;
+        script.addEventListener("load", render, { once: true });
+        document.head.appendChild(script);
+      }
+    }
+    return () => { cancelled = true; };
+  }, [bootstrap?.google_client_id, bootstrap?.google_nonce, setBusy, setError]);
+
+  if (!bootstrap?.google_client_id) return null;
+  return <><div id="minimal-google-auth" style={{ width: "100%", minHeight: 44, display: "grid", placeItems: "center", opacity: busy ? 0.65 : 1, pointerEvents: busy ? "none" : "auto" }} /><div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px 0", color: "#8f879d", fontSize: 12 }}><span style={{ height: 1, background: "rgba(255,255,255,0.1)", flex: 1 }} /><span>or continue with email</span><span style={{ height: 1, background: "rgba(255,255,255,0.1)", flex: 1 }} /></div></>;
 }
 
 function Landing() {
@@ -90,7 +159,7 @@ function Login() {
       setError(errorMessage(caught, "Sign in failed"));
     } finally { setBusy(false); }
   };
-  return <AuthPage><form className="minimal-card" onSubmit={submit}><span className="minimal-kicker">SIGN IN</span><h1>Welcome back</h1><p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Operly account."}</p><label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label><PasswordField name="password" label="Password" autoComplete="current-password" />{error && <div className="minimal-error">{error}</div>}<button className="minimal-button minimal-button-primary minimal-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button><div className="minimal-card-links"><a href="/forgot-password">Forgot password?</a><span>New here? <a href={pendingInvite() ? `/signup#invite=${encodeURIComponent(pendingInvite())}` : "/signup"}>Create an account</a></span></div></form></AuthPage>;
+  return <AuthPage><form className="minimal-card" onSubmit={submit}><span className="minimal-kicker">SIGN IN</span><h1>Welcome back</h1><p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Operly account."}</p><GoogleSignIn busy={busy} setBusy={setBusy} setError={setError} /><label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label><PasswordField name="password" label="Password" autoComplete="current-password" />{error && <div className="minimal-error">{error}</div>}<button className="minimal-button minimal-button-primary minimal-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button><div className="minimal-card-links"><a href="/forgot-password">Forgot password?</a><span>New here? <a href={pendingInvite() ? `/signup#invite=${encodeURIComponent(pendingInvite())}` : "/signup"}>Create an account</a></span></div></form></AuthPage>;
 }
 
 function Signup() {
@@ -106,7 +175,7 @@ function Signup() {
       writeFlow({ email: result.email, challenge_id: result.challenge_id }); go("/verify-email");
     } catch (caught) { setError(errorMessage(caught, "Account creation failed")); } finally { setBusy(false); }
   };
-  return <AuthPage><form className="minimal-card" onSubmit={submit}><span className="minimal-kicker">CREATE ACCOUNT</span><h1>{pendingInvite() ? "Create your account & join" : "Join Operly"}</h1><p>{pendingInvite() ? "Your workspace invitation will be accepted after email verification." : "Create an Operly account to start or join workspaces."}</p><label className="minimal-field"><span>Name</span><input name="name" autoComplete="name" maxLength={200} required /></label><label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="email" required /></label><PasswordField name="password" label="Password" autoComplete="new-password" /><PasswordField name="confirm" label="Confirm password" autoComplete="new-password" />{error && <div className="minimal-error">{error}</div>}<button className="minimal-button minimal-button-primary minimal-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}</button><div className="minimal-card-links"><span>Already have an account? <a href={pendingInvite() ? `/login#invite=${encodeURIComponent(pendingInvite())}` : "/login"}>Sign in</a></span></div></form></AuthPage>;
+  return <AuthPage><form className="minimal-card" onSubmit={submit}><span className="minimal-kicker">CREATE ACCOUNT</span><h1>{pendingInvite() ? "Create your account & join" : "Join Operly"}</h1><p>{pendingInvite() ? "Your workspace invitation will be accepted after email verification." : "Create an Operly account to start or join workspaces."}</p><GoogleSignIn busy={busy} setBusy={setBusy} setError={setError} /><label className="minimal-field"><span>Name</span><input name="name" autoComplete="name" maxLength={200} required /></label><label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="email" required /></label><PasswordField name="password" label="Password" autoComplete="new-password" /><PasswordField name="confirm" label="Confirm password" autoComplete="new-password" />{error && <div className="minimal-error">{error}</div>}<button className="minimal-button minimal-button-primary minimal-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}</button><div className="minimal-card-links"><span>Already have an account? <a href={pendingInvite() ? `/login#invite=${encodeURIComponent(pendingInvite())}` : "/login"}>Sign in</a></span></div></form></AuthPage>;
 }
 
 function VerifyEmail() {
