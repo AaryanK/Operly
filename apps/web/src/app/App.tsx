@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { LegalPage } from "../legal/LegalPage";
 import { MinimalApp } from "../minimal/MinimalApp";
+import { PluginLabPage } from "../public/PluginLabPage";
 import { WorkspaceSafeApp } from "../workspace-lite/WorkspaceSafeApp";
 
 function currentPath() {
@@ -19,6 +20,7 @@ export function App() {
 
   if (pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (pathname === "/terms") return <LegalPage kind="terms" />;
+  if (pathname.startsWith("/plugin-lab/")) return <PluginLabPage pathname={pathname} />;
   if (
     pathname === "/account"
     || pathname === "/personal"
