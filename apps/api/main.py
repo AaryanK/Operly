@@ -28,6 +28,7 @@ from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 from packages.plugins.egress_router import router as runtime_egress_router
 from packages.plugins.event_router import router as plugin_event_router
 from packages.plugins.gateway_router import router as capability_gateway_router
+from packages.plugins.hosted_public_router import public_router as plugin_hosted_public_router
 from packages.plugins.router import router as plugin_platform_router
 from packages.plugins.runtime_router import router as plugin_runtime_management_router
 from packages.plugins.webhook_router import (
@@ -173,6 +174,7 @@ app.include_router(workspace_tools_router)
 app.include_router(artifact_router)
 app.include_router(plugin_platform_router)
 app.include_router(plugin_runtime_management_router)
+app.include_router(plugin_hosted_public_router)
 app.include_router(plugin_event_router)
 app.include_router(plugin_webhook_management_router)
 app.include_router(plugin_webhook_public_router)
@@ -202,6 +204,7 @@ async def health():
         "capability_gateway_enabled": True,
         "runtime_egress_broker_enabled": True,
         "plugin_runtime_reconciliation_enabled": True,
+        "workspace_plugin_hosting_enabled": True,
         "digital_webhook_ingress_enabled": True,
         "digital_event_delivery_enabled": True,
         "isolated_plugin_validation_enabled": True,
@@ -237,6 +240,7 @@ async def rebuild_status():
         "capability_gateway": "short-lived-runtime-identity-plus-live-workspace-authority",
         "runtime_egress_broker": "grant-scoped-credential-injection",
         "plugin_runtime_reconciliation": "queued-health-verified-no-direct-health-override",
+        "workspace_plugin_hosting": "validated-artifact-over-operly-workspace-url",
         "digital_webhook_ingress_enabled": True,
         "digital_event_delivery_enabled": True,
         "isolated_plugin_validation_enabled": True,
