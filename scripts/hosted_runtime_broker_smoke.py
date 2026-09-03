@@ -28,7 +28,12 @@ def gql(query: str, variables: dict) -> dict:
         GRAPHQL,
         data=raw,
         method="POST",
-        headers={"Content-Type": "application/json", "Project-Access-Token": RAILWAY_TOKEN},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Project-Access-Token": RAILWAY_TOKEN,
+            "User-Agent": "Operly-Hosted-Runtime-Broker/1.0 (+https://operly.app)",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
@@ -63,7 +68,7 @@ def deploy(payload: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OperlyHostedBrokerSmoke/2"
+    server_version = "OperlyHostedBrokerSmoke/3"
 
     def log_message(self, fmt: str, *args) -> None:
         print("broker", fmt % args, flush=True)
