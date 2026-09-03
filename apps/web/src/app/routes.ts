@@ -30,7 +30,7 @@ export const workspaceSections: Array<{
   { id: "operly", label: "Operly", group: "workspace" },
   { id: "crm", label: "Customers & sales", group: "business" },
   { id: "operations", label: "Operations", group: "business" },
-  { id: "workflows", label: "Automations", group: "business" },
+  { id: "workflows", label: "Workflows", group: "business" },
   { id: "activity", label: "Activity", group: "business" },
   { id: "presence", label: "Website & presence", group: "digital" },
   { id: "solutions", label: "Apps & sites", group: "digital" },
