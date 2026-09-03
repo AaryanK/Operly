@@ -102,10 +102,11 @@ function GoogleButton({ id, onCredential }: { id: string; onCredential: (credent
       });
       target.replaceChildren();
       window.google.accounts.id.renderButton(target, {
-        theme: "outline",
+        theme: "filled_black",
         size: "large",
         text: "continue_with",
         shape: "rectangular",
+        logo_alignment: "left",
         width,
       });
     };
@@ -128,24 +129,24 @@ function GoogleButton({ id, onCredential }: { id: string; onCredential: (credent
   }, [bootstrap?.google_client_id, bootstrap?.google_nonce, id]);
 
   if (!bootstrap?.google_client_id) return null;
-  return <div id={id} style={{ width: "100%", display: "flex", justifyContent: "center", marginBottom: 12 }} />;
+  return <div id={id} className="operly-google-provider" />;
 }
 
 function DiscordButton() {
   if (pendingInvite()) return null;
   return (
-    <a
-      className="minimal-button minimal-full"
-      href="/api/identities/discord/sign-in"
-      style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, textDecoration: "none" }}
-    >
+    <a className="operly-discord-provider" href="/api/identities/discord/sign-in">
       Continue with Discord
     </a>
   );
 }
 
 function Divider() {
-  return <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 20px", color: "#8f879d", fontSize: 12 }}><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /><span>or continue with email</span><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /></div>;
+  return <div className="operly-auth-divider">or continue with email</div>;
+}
+
+function ProviderStack({ googleId, google }: { googleId: string; google: (credential: string) => Promise<void> }) {
+  return <div className="operly-provider-stack"><GoogleButton id={googleId} onCredential={google} /><DiscordButton /></div>;
 }
 
 function Login() {
@@ -190,8 +191,7 @@ function Login() {
         <span className="minimal-kicker">SIGN IN</span>
         <h1>Welcome back</h1>
         <p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Personal Operly or any workspace you belong to."}</p>
-        <GoogleButton id="google-login-current" onCredential={google} />
-        <DiscordButton />
+        <ProviderStack googleId="google-login-current" google={google} />
         <Divider />
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label>
         <PasswordField name="password" label="Password" autoComplete="current-password" />
@@ -245,8 +245,7 @@ function Signup() {
         <span className="minimal-kicker">CREATE ACCOUNT</span>
         <h1>{pendingInvite() ? "Create your account & join" : "Create your Personal Operly"}</h1>
         <p>{pendingInvite() ? "Your workspace invitation will be accepted after authentication." : "Start with a private Personal Operly, then create or join workspaces whenever you need them."}</p>
-        <GoogleButton id="google-signup-current" onCredential={google} />
-        <DiscordButton />
+        <ProviderStack googleId="google-signup-current" google={google} />
         <Divider />
         <label className="minimal-field"><span>Name</span><input name="name" autoComplete="name" maxLength={200} required /></label>
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="email" required /></label>
