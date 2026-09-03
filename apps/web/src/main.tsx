@@ -4,6 +4,8 @@ import ReactDOM from "react-dom/client";
 import { App } from "./app/App";
 import "./ui/tokens.css";
 import "./ui/minimal.css";
+import "./ui/public.css";
+import "./ui/react-public-admin-palette.css";
 import "./ui/app.css";
 import "./ui/theme.css";
 import "./ui/workspace-lite.css";
