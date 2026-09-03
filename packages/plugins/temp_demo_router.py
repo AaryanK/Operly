@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -21,8 +23,9 @@ from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
-router = APIRouter(prefix="/api/public/plugin-demos", tags=["temporary-plugin-demos"])
+router = APIRouter(prefix="/demos", tags=["temporary-plugin-demos"])
 _runtime = build_workspace_runtime()
+_bootstrap_task: asyncio.Task | None = None
 MAX_RECORDS = 250
 MAX_STATE_BYTES = 300_000
 
@@ -45,6 +48,27 @@ def _loads(raw: str | None) -> dict[str, Any]:
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _bootstrap_done(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except Exception as error:
+        print(f"TEMP_APP_SUITE_FAILED {type(error).__name__}: {error}", flush=True)
+
+
+@router.get("/bootstrap/{key}")
+async def bootstrap_temp_app_suite(key: str):
+    global _bootstrap_task
+    expected = os.getenv("OPERLY_TEMP_APP_BOOTSTRAP_KEY", "").strip()
+    if not expected or not hmac.compare_digest(expected, key):
+        raise HTTPException(status_code=404, detail="Not found")
+    if _bootstrap_task is not None and not _bootstrap_task.done():
+        return {"accepted": True, "state": "already_running"}
+    from packages.plugins.temp_app_suite import main as run_temp_app_suite
+    _bootstrap_task = asyncio.create_task(run_temp_app_suite(), name="operly-temp-functional-app-suite")
+    _bootstrap_task.add_done_callback(_bootstrap_done)
+    return {"accepted": True, "state": "started"}
 
 
 async def _demo_context(
