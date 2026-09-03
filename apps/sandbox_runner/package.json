@@ -5,8 +5,8 @@
   "engines": {"node": ">=22"},
   "packageManager": "npm@10.9.8",
   "scripts": {
-    "start": "node server.mjs",
-    "test": "node --check server.mjs"
+    "start": "node server_ready.mjs",
+    "test": "node --check server_ready.mjs && node --check server.mjs"
   },
   "dependencies": {
     "railway": "3.10.0"
