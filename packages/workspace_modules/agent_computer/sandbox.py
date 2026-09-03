@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -148,19 +149,34 @@ class ComputerRunnerClient:
         # Legacy callers may still say "full". Agent Computer never joins the
         # Operly private network; normalize it to public-web sandbox networking.
         effective_network_policy = "web" if network_policy == "full" else network_policy
-        return await self._request(
-            "POST",
-            "/v1/computer/sessions",
-            payload={
-                "client_session_id": computer_session_id,
-                "workspace_id": workspace_id,
-                "principal_id": principal_id,
-                "profile": profile,
-                "ttl_seconds": ttl_seconds,
-                "network_policy": effective_network_policy,
-            },
-            timeout_seconds=self.start_timeout_seconds,
-        )
+        payload = {
+            "client_session_id": computer_session_id,
+            "workspace_id": workspace_id,
+            "principal_id": principal_id,
+            "profile": profile,
+            "ttl_seconds": ttl_seconds,
+            "network_policy": effective_network_policy,
+        }
+        # Retry only explicit, signed transient HTTP failures from the Runner.
+        # Do not retry transport timeouts/unreachable errors because the first
+        # request may have created a sandbox before its response was lost.
+        for attempt in range(1, 4):
+            try:
+                return await self._request(
+                    "POST",
+                    "/v1/computer/sessions",
+                    payload=payload,
+                    timeout_seconds=self.start_timeout_seconds,
+                )
+            except ComputerRunnerError as error:
+                message = str(error)
+                retryable = any(
+                    f"(HTTP {status})" in message for status in (429, 502, 503, 504)
+                )
+                if not retryable or attempt >= 3:
+                    raise
+                await asyncio.sleep(float(attempt))
+        raise ComputerRunnerError("Operly Sandbox Runner provisioning retries exhausted")
 
     async def status(self, runtime_session_id: str) -> dict[str, Any]:
         runtime_id = quote(str(runtime_session_id), safe="")
