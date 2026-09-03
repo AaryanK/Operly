@@ -23,7 +23,7 @@ from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
-router = APIRouter(prefix="/demos", tags=["temporary-plugin-demos"])
+router = APIRouter(prefix="/api/public/plugin-demos", tags=["temporary-plugin-demos"])
 _runtime = build_workspace_runtime()
 _bootstrap_task: asyncio.Task | None = None
 MAX_RECORDS = 250
