@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
+import os
 from datetime import datetime
 from typing import Any
 
@@ -72,6 +74,25 @@ print(json.dumps({'files': count, 'unpacked_bytes': total, 'entrypoint': 'operly
 '''
 
 
+def _execution_concurrency_limit() -> int:
+    """Bound simultaneous fresh Sandbox VMs created by one API process.
+
+    Sandbox jobs are intentionally ephemeral. A large request burst can otherwise
+    ask the shared Sandbox Runner / Railway tcp-proxy to establish many fresh
+    sessions and exec WebSockets at the same instant. The admission gate keeps
+    requests concurrent at the Operly boundary while applying backpressure before
+    provisioning. It is configurable for future capacity tuning without changing
+    plugin contracts.
+    """
+
+    raw = os.getenv("OPERLY_SANDBOX_JOB_MAX_CONCURRENCY", "4").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 4
+    return max(1, min(value, 32))
+
+
 class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
     """Plugin provider that adds safe, network-off ephemeral sandbox jobs.
 
@@ -84,6 +105,7 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
     def __init__(self, runner: ComputerRunnerClient | None = None) -> None:
         super().__init__()
         self.runner = runner or ComputerRunnerClient()
+        self._execution_gate = asyncio.Semaphore(_execution_concurrency_limit())
 
     async def is_available(
         self,
@@ -289,13 +311,14 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
             require_fresh=False,
         )
         if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
-            return await self._execute_sandbox_job(
-                db,
-                context=context,
-                capability=capability,
-                arguments=arguments,
-                minimum_context=minimum_context,
-            )
+            async with self._execution_gate:
+                return await self._execute_sandbox_job(
+                    db,
+                    context=context,
+                    capability=capability,
+                    arguments=arguments,
+                    minimum_context=minimum_context,
+                )
         return await super().execute(
             db,
             context=context,
