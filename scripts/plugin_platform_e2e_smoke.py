@@ -163,7 +163,7 @@ async def main() -> None:
         async with SessionFactory() as db:
             context = ExecutionContext(
                 workspace_id=tenant_id, user_id=user_id, membership_id="e2e-owner", role="owner", permissions=frozenset(),
-                channel="operly", surface=SurfaceKind.WEB, scope_kind=ScopeKind.WORKSPACE,
+                channel="operly", surface=SurfaceKind.WORKSPACE_SHARED, scope_kind=ScopeKind.WORKSPACE,
                 focus_workspace_id=tenant_id, principal_id=f"user:{user_id}", workspace_mode="full",
             )
             runtime = build_workspace_runtime()
