@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { navigate } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
 import { OperlyMark } from "../ui/OperlyMark";
@@ -115,9 +115,20 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   };
 
   const logout = async () => {
+    if (busy) return;
     setBusy(true);
-    try { await api("/auth/logout", { method: "POST" }); go("/"); }
-    catch { setBusy(false); }
+    setError("");
+    try {
+      await api("/auth/logout", { method: "POST" });
+      go("/login");
+    } catch (caught) {
+      if (caught instanceof ApiError && (caught.status === 401 || caught.status === 409)) {
+        go("/login");
+        return;
+      }
+      setError(caught instanceof Error ? `Could not sign out: ${caught.message}` : "Could not sign out. Please try again.");
+      setBusy(false);
+    }
   };
 
   if (loading) return <div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening your spaces…</span></div>;
@@ -146,7 +157,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
           </>}
           <a href="/account">Workspaces</a>
           <button className="workspace-lite-button" onClick={() => void load()}>Refresh</button>
-          <button className="workspace-lite-button" onClick={() => void logout()}>Sign out</button>
+          <button className="workspace-lite-button" onClick={() => void logout()} disabled={busy}>{busy ? "Working…" : "Sign out"}</button>
         </div>
       </header>
       {error && <div className="workspace-lite-error">{error}</div>}
