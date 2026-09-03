@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Any
@@ -22,6 +23,9 @@ from packages.workspace_modules.agent_computer.sandbox import (
     ComputerRunnerClient,
     ComputerRunnerError,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 _EXTRACT_VALIDATED_ZIP = r'''
@@ -74,7 +78,7 @@ print(json.dumps({'files': count, 'unpacked_bytes': total, 'entrypoint': 'operly
 '''
 
 
-_TERMINAL_EXEC_NOT_READY = "tcp-proxy exec WebSocket connection failed. (HTTP 400)"
+_TCP_PROXY_EXEC_NOT_READY = "tcp-proxy exec WebSocket connection failed. (HTTP 400)"
 
 
 def _execution_concurrency_limit() -> int:
@@ -152,42 +156,52 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
                 "sandbox_job plugins cannot request Workspace capability bindings until a filtered callback channel is available"
             )
 
-    async def _terminal_exec_with_readiness_retry(
+    async def _tool_with_exec_proxy_readiness_retry(
         self,
         runtime_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
         *,
-        max_runtime: int,
+        timeout_seconds: int | float | None = None,
     ) -> dict[str, Any]:
-        """Retry only Railway's signed tcp-proxy exec-readiness race.
+        """Retry only the pre-submission Railway exec-proxy readiness race.
 
-        At this point the sandbox already exists and Operly has successfully
-        imported, extracted, and written the invocation artifact. Railway can
-        briefly return a signed HTTP 400 while the sandbox's exec WebSocket proxy
-        finishes becoming ready. Reusing the same sandbox is safe here because a
-        failed WebSocket connection means the terminal command was not submitted.
-        No other 400, timeout, transport failure, or plugin error is retried.
+        Sandbox Runner tools such as python.exec, files.write and terminal.exec can
+        all rely on Railway's tcp-proxy exec WebSocket. Under concurrent fresh-VM
+        load, Railway can briefly return one exact signed HTTP 400 before that
+        WebSocket endpoint is ready. The error is emitted while opening the
+        connection, before the tool payload is submitted, so retrying on the same
+        sandbox cannot duplicate plugin execution.
+
+        No other 400, timeout, network error, non-zero command result or plugin
+        failure is retried. This intentionally stays inside the controlled
+        sandbox-job provider instead of changing Agent Computer semantics globally.
         """
 
-        arguments = {
-            "command": "python3 operly_runtime.py < ../.operly/invocation.json",
-            "cwd": "src",
-            "timeout_seconds": max_runtime,
-            "background": False,
-        }
-        timeout_seconds = min(max_runtime + 45, 930)
-        for attempt in range(1, 5):
+        kwargs: dict[str, Any] = {}
+        if timeout_seconds is not None:
+            kwargs["timeout_seconds"] = timeout_seconds
+        for attempt in range(1, 7):
             try:
                 return await self.runner.tool(
                     runtime_id,
-                    "terminal.exec",
+                    tool_name,
                     arguments,
-                    timeout_seconds=timeout_seconds,
+                    **kwargs,
                 )
             except ComputerRunnerError as error:
-                if str(error) != _TERMINAL_EXEC_NOT_READY or attempt >= 4:
+                if str(error) != _TCP_PROXY_EXEC_NOT_READY or attempt >= 6:
                     raise
-                await asyncio.sleep(0.75 * attempt)
-        raise ComputerRunnerError("Sandbox terminal exec readiness retries exhausted")
+                delay = 0.75 * attempt
+                logger.warning(
+                    "Sandbox exec proxy not ready; retrying tool=%s runtime=%s attempt=%s delay=%.2fs",
+                    tool_name,
+                    runtime_id,
+                    attempt,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise ComputerRunnerError("Sandbox exec-proxy readiness retries exhausted")
 
     async def _execute_sandbox_job(
         self,
@@ -248,7 +262,7 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
             runtime_id = str(started.get("session_id") or started.get("id") or "").strip()
             if not runtime_id:
                 raise PluginRuntimeTransportError("Sandbox Runner returned no runtime ID")
-            imported = await self.runner.tool(
+            imported = await self._tool_with_exec_proxy_readiness_retry(
                 runtime_id,
                 "artifact.import",
                 {
@@ -259,7 +273,7 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
             )
             if str(imported.get("sha256") or "").lower() != artifact.sha256.lower():
                 raise PluginRuntimeTransportError("Sandbox imported a different validated artifact")
-            extracted = await self.runner.tool(
+            extracted = await self._tool_with_exec_proxy_readiness_retry(
                 runtime_id,
                 "python.exec",
                 {"code": _EXTRACT_VALIDATED_ZIP, "cwd": ".", "timeout_seconds": 120},
@@ -269,7 +283,7 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
                     "sandbox_job validated artifact extraction failed: "
                     + str(extracted.get("stderr") or extracted.get("stdout") or "unknown error")[:2000]
                 )
-            await self.runner.tool(
+            await self._tool_with_exec_proxy_readiness_retry(
                 runtime_id,
                 "files.write",
                 {
@@ -278,9 +292,16 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
                     "append": False,
                 },
             )
-            packet = await self._terminal_exec_with_readiness_retry(
+            packet = await self._tool_with_exec_proxy_readiness_retry(
                 runtime_id,
-                max_runtime=max_runtime,
+                "terminal.exec",
+                {
+                    "command": "python3 operly_runtime.py < ../.operly/invocation.json",
+                    "cwd": "src",
+                    "timeout_seconds": max_runtime,
+                    "background": False,
+                },
+                timeout_seconds=min(max_runtime + 45, 930),
             )
             if packet.get("timed_out"):
                 raise PluginRuntimeTransportError("sandbox_job execution timed out")
