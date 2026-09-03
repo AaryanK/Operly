@@ -41,7 +41,11 @@ async function acceptPendingInvite() {
 }
 async function finishAuthentication() {
   const next = await acceptPendingInvite();
-  go(next || "/account");
+  go(next || "/channels/@me");
+}
+
+function discordError() {
+  return new URLSearchParams(window.location.search).get("discord_error") || "";
 }
 
 function Brand() {
@@ -124,16 +128,29 @@ function GoogleButton({ id, onCredential }: { id: string; onCredential: (credent
   }, [bootstrap?.google_client_id, bootstrap?.google_nonce, id]);
 
   if (!bootstrap?.google_client_id) return null;
-  return <div id={id} style={{ width: "100%", display: "flex", justifyContent: "center", marginBottom: 18 }} />;
+  return <div id={id} style={{ width: "100%", display: "flex", justifyContent: "center", marginBottom: 12 }} />;
+}
+
+function DiscordButton() {
+  if (pendingInvite()) return null;
+  return (
+    <a
+      className="minimal-button minimal-full"
+      href="/api/identities/discord/sign-in"
+      style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, textDecoration: "none" }}
+    >
+      Continue with Discord
+    </a>
+  );
 }
 
 function Divider() {
-  return <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "2px 0 20px", color: "#8f879d", fontSize: 12 }}><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /><span>or continue with email</span><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /></div>;
+  return <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 20px", color: "#8f879d", fontSize: 12 }}><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /><span>or continue with email</span><span style={{ height: 1, background: "rgba(255,255,255,.09)", flex: 1 }} /></div>;
 }
 
 function Login() {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => discordError());
   useEffect(() => { captureInvite(); }, []);
 
   const google = async (credential: string) => {
@@ -172,8 +189,9 @@ function Login() {
       <form className="minimal-card" onSubmit={submit}>
         <span className="minimal-kicker">SIGN IN</span>
         <h1>Welcome back</h1>
-        <p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Operly account."}</p>
+        <p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Personal Operly or any workspace you belong to."}</p>
         <GoogleButton id="google-login-current" onCredential={google} />
+        <DiscordButton />
         <Divider />
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label>
         <PasswordField name="password" label="Password" autoComplete="current-password" />
@@ -187,7 +205,7 @@ function Login() {
 
 function Signup() {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => discordError());
   useEffect(() => { captureInvite(); }, []);
 
   const google = async (credential: string) => {
@@ -225,9 +243,10 @@ function Signup() {
     <AuthShell>
       <form className="minimal-card" onSubmit={submit}>
         <span className="minimal-kicker">CREATE ACCOUNT</span>
-        <h1>{pendingInvite() ? "Create your account & join" : "Join Operly"}</h1>
-        <p>{pendingInvite() ? "Your workspace invitation will be accepted after authentication." : "Create an Operly account to start or join workspaces."}</p>
+        <h1>{pendingInvite() ? "Create your account & join" : "Create your Personal Operly"}</h1>
+        <p>{pendingInvite() ? "Your workspace invitation will be accepted after authentication." : "Start with a private Personal Operly, then create or join workspaces whenever you need them."}</p>
         <GoogleButton id="google-signup-current" onCredential={google} />
+        <DiscordButton />
         <Divider />
         <label className="minimal-field"><span>Name</span><input name="name" autoComplete="name" maxLength={200} required /></label>
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="email" required /></label>
