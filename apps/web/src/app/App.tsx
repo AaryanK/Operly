@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { LegalPage } from "../legal/LegalPage";
 import { MinimalApp } from "../minimal/MinimalApp";
 import { PluginLabPage } from "../public/PluginLabPage";
+import { PublicApp } from "../public/PublicApp";
 import { TempAppLabPage } from "../public/TempAppLabPage";
 import { WorkspaceSafeApp } from "../workspace-lite/WorkspaceSafeApp";
 
@@ -19,6 +20,7 @@ export function App() {
     return () => window.removeEventListener("popstate", sync);
   }, []);
 
+  if (pathname === "/") return <PublicApp pathname={pathname} />;
   if (pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (pathname === "/terms") return <LegalPage kind="terms" />;
   if (pathname.startsWith("/plugin-lab/")) return <PluginLabPage pathname={pathname} />;
