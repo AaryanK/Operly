@@ -17,6 +17,7 @@ const TOOL_RE = /^[a-z][a-z0-9_.-]{1,120}$/;
 const PYTHON = "/opt/operly-py/bin/python";
 const WORKSPACE = "/workspace/work";
 const REQUESTS = "/workspace/.operly/requests";
+const EXEC_PROXY_NOT_READY = "tcp-proxy exec WebSocket connection failed.";
 
 const TOOL_IDS = Object.freeze([
   "terminal.exec", "python.exec",
@@ -173,9 +174,27 @@ async function connect(runtimeId) {
   return box;
 }
 
+function isExecProxyNotReady(error) {
+  return String(error?.message || error) === EXEC_PROXY_NOT_READY;
+}
+
+async function bootstrapOperation(label, operation) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isExecProxyNotReady(error) || attempt >= 5) throw error;
+      const delayMs = 400 * attempt;
+      console.warn(`Agent Computer bootstrap ${label} waiting for exec proxy (attempt ${attempt}/5, ${delayMs}ms)`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error(`Agent Computer bootstrap ${label} retries exhausted`);
+}
+
 async function writeHelper(box) {
-  await box.files.write("/opt/operly-computer-tool.py", TOOL_HELPER, { mode: 0o555 });
-  await box.exec("mkdir -p /workspace/work /workspace/.operly/requests /workspace/.operly/processes && chown -R operly:operly /workspace", { timeoutSec: 20 });
+  await bootstrapOperation("write-helper", () => box.files.write("/opt/operly-computer-tool.py", TOOL_HELPER, { mode: 0o555 }));
+  await bootstrapOperation("prepare-workspace", () => box.exec("mkdir -p /workspace/work /workspace/.operly/requests /workspace/.operly/processes && chown -R operly:operly /workspace", { timeoutSec: 20 }));
 }
 
 async function harden(box, networkPolicy) {
@@ -190,7 +209,7 @@ async function harden(box, networkPolicy) {
     );
   }
   for (const rule of rules) {
-    try { await box.exec(rule, { timeoutSec: 10 }); } catch {}
+    try { await bootstrapOperation("network-harden", () => box.exec(rule, { timeoutSec: 10 })); } catch {}
   }
 }
 
@@ -221,8 +240,8 @@ async function createSession(payload) {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + request.ttlSeconds * 1000).toISOString(),
     }));
-    await box.files.write("/workspace/.operly/session.json", meta, { mode: 0o600 });
-    await box.exec("chown operly:operly /workspace/.operly/session.json /opt/operly-computer-tool.py", { timeoutSec: 10 });
+    await bootstrapOperation("write-session-meta", () => box.files.write("/workspace/.operly/session.json", meta, { mode: 0o600 }));
+    await bootstrapOperation("chown-session-meta", () => box.exec("chown operly:operly /workspace/.operly/session.json /opt/operly-computer-tool.py", { timeoutSec: 10 }));
     await harden(box, request.networkPolicy);
     console.log(`Agent Computer session ${String(box.id || "").slice(0, 24)} ready in ${Date.now() - started}ms`);
     return {
