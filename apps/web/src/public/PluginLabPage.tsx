@@ -57,7 +57,7 @@ export function PluginLabPage({ pathname }: { pathname: string }) {
           <div><div style={{ fontWeight: 700, fontSize: 15 }}>{selected.name}</div><div style={{ color: "#7f8796", fontSize: 12, marginTop: 3 }}>{selected.id} · Workspace plugin UI</div></div>
           {src && <a href={src} target="_blank" rel="noreferrer" style={{ color: "#d8dce5", border: "1px solid #303642", borderRadius: 8, padding: "7px 10px", fontSize: 12, textDecoration: "none", background: "#141820" }}>Open standalone ↗</a>}
         </div>
-        {workspaceId ? <iframe key={src} title={`${selected.name} plugin interface`} src={src} style={{ width: "100%", flex: 1, minHeight: "calc(100vh - 123px)", border: 0, background: "#0d0a14" }} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" />
+        {workspaceId ? <iframe key={src} title={`${selected.name} plugin interface`} src={src} style={{ width: "100%", flex: 1, minHeight: "calc(100vh - 123px)", border: 0, background: "#0d0a14" }} sandbox="allow-scripts allow-forms" />
           : <div style={{ padding: 40, color: "#98a0ae" }}>A Workspace ID is required in the Plugin Lab URL.</div>}
       </main>
     </div>
