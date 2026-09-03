@@ -13,7 +13,6 @@ from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
 from apps.api.artifact_router import router as artifact_router
-from apps.api.channel_identity_router import router as identity_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
@@ -170,7 +169,6 @@ app.add_middleware(
 )
 
 app.include_router(session_router)
-app.include_router(identity_router)
 app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
