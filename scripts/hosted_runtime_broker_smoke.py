@@ -11,8 +11,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.getenv("PORT", "3000"))
 BROKER_TOKEN = os.getenv("OPERLY_HOSTED_BROKER_TOKEN", "").strip()
 RAILWAY_TOKEN = os.getenv("RAILWAY_TOKEN", "").strip()
-PROJECT_ID = os.getenv("RAILWAY_PROJECT_ID", "").strip()
 ENVIRONMENT_ID = os.getenv("RAILWAY_ENVIRONMENT_ID", "").strip()
+ALLOWED_SERVICE_ID = os.getenv("OPERLY_HOSTED_SMOKE_SERVICE_ID", "").strip()
+ALLOWED_URL = os.getenv("OPERLY_HOSTED_SMOKE_URL", "").strip().rstrip("/")
 GRAPHQL = "https://backboard.railway.com/graphql/v2"
 
 
@@ -29,74 +30,40 @@ def gql(query: str, variables: dict) -> dict:
         method="POST",
         headers={"Content-Type": "application/json", "Project-Access-Token": RAILWAY_TOKEN},
     )
-    with urllib.request.urlopen(request, timeout=45) as response:
-        payload = json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            payload = json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:2000]
+        raise RuntimeError(f"Railway API HTTP {error.code}: {detail}") from error
     if payload.get("errors"):
         raise RuntimeError("Railway API: " + json.dumps(payload["errors"])[:2000])
     return payload.get("data") or {}
 
 
-def delete_service(service_id: str) -> None:
-    try:
-        gql("mutation serviceDelete($id:String!){serviceDelete(id:$id)}", {"id": service_id})
-    except Exception:
-        pass
-
-
 def deploy(payload: dict) -> dict:
-    repo = str(payload.get("repo") or "").strip()
+    service_id = str(payload.get("service_id") or "").strip()
     branch = str(payload.get("branch") or "").strip()
-    root = str(payload.get("root_directory") or "").strip()
-    name = str(payload.get("name") or "").strip()
-    start = str(payload.get("start_command") or "npm start").strip()
-    health = str(payload.get("healthcheck_path") or "/health").strip()
-    if repo != "AaryanK/Operly" or not branch.startswith("test/"):
-        raise ValueError("smoke broker only accepts AaryanK/Operly test branches")
-    if not root.startswith("/smoke/") or not name.startswith("Operly "):
-        raise ValueError("smoke deployment scope rejected")
-    if not health.startswith("/"):
-        raise ValueError("healthcheck path is invalid")
-
-    service_id = ""
-    try:
-        created = gql(
-            "mutation serviceCreate($input:ServiceCreateInput!){serviceCreate(input:$input){id name}}",
-            {"input": {"projectId": PROJECT_ID, "name": name}},
-        )
-        service_id = created["serviceCreate"]["id"]
-        gql(
-            "mutation serviceConnect($id:String!,$input:ServiceConnectInput!){serviceConnect(id:$id,input:$input){id}}",
-            {"id": service_id, "input": {"repo": repo, "branch": branch}},
-        )
-        gql(
-            "mutation serviceInstanceUpdate($serviceId:String!,$environmentId:String!,$input:ServiceInstanceUpdateInput!){serviceInstanceUpdate(serviceId:$serviceId,environmentId:$environmentId,input:$input)}",
-            {"serviceId": service_id, "environmentId": ENVIRONMENT_ID, "input": {"rootDirectory": root, "startCommand": start, "healthcheckPath": health, "restartPolicyType": "ON_FAILURE", "restartPolicyMaxRetries": 3}},
-        )
-        deployed = gql(
-            "mutation serviceInstanceDeployV2($serviceId:String!,$environmentId:String!){serviceInstanceDeployV2(serviceId:$serviceId,environmentId:$environmentId)}",
-            {"serviceId": service_id, "environmentId": ENVIRONMENT_ID},
-        )
-        domain = gql(
-            "mutation serviceDomainCreate($input:ServiceDomainCreateInput!){serviceDomainCreate(input:$input){id domain}}",
-            {"input": {"serviceId": service_id, "environmentId": ENVIRONMENT_ID}},
-        )["serviceDomainCreate"]
-        return {
-            "ok": True,
-            "provider": "railway",
-            "service_id": service_id,
-            "deployment_id": deployed["serviceInstanceDeployV2"],
-            "domain_id": domain["id"],
-            "domain": domain["domain"],
-            "url": "https://" + domain["domain"],
-        }
-    except Exception:
-        if service_id:
-            delete_service(service_id)
-        raise
+    if service_id != ALLOWED_SERVICE_ID or not service_id:
+        raise ValueError("hosted deployment target is outside the smoke allowlist")
+    if branch != "test/fullstack-worker-deploy":
+        raise ValueError("hosted deployment branch is outside the smoke allowlist")
+    deployed = gql(
+        "mutation serviceInstanceDeployV2($serviceId:String!,$environmentId:String!){serviceInstanceDeployV2(serviceId:$serviceId,environmentId:$environmentId)}",
+        {"serviceId": service_id, "environmentId": ENVIRONMENT_ID},
+    )
+    return {
+        "ok": True,
+        "provider": "railway",
+        "service_id": service_id,
+        "deployment_id": deployed["serviceInstanceDeployV2"],
+        "url": ALLOWED_URL,
+        "authority": "environment_scoped_project_token",
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OperlyHostedBrokerSmoke/1"
+    server_version = "OperlyHostedBrokerSmoke/2"
 
     def log_message(self, fmt: str, *args) -> None:
         print("broker", fmt % args, flush=True)
@@ -114,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            return self.send_payload(200, {"ok": True, "service": "operly-hosted-runtime-broker-smoke"}, signed=False)
+            return self.send_payload(200, {"ok": True, "service": "operly-hosted-runtime-broker-smoke", "mode": "preprovisioned-slot"}, signed=False)
         return self.send_payload(404, {"detail": "not found"}, signed=False)
 
     def do_POST(self) -> None:
@@ -138,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    if not all([BROKER_TOKEN, RAILWAY_TOKEN, PROJECT_ID, ENVIRONMENT_ID]):
+    if not all([BROKER_TOKEN, RAILWAY_TOKEN, ENVIRONMENT_ID, ALLOWED_SERVICE_ID, ALLOWED_URL]):
         raise SystemExit("broker configuration is incomplete")
     print(f"Operly hosted runtime broker smoke listening on :{PORT}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
