@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# One-shot cleanup: this branch/service is disposable and deletes itself last.
 import json
 import os
 import urllib.request
