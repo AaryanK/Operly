@@ -34,10 +34,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         solution_preview=path.startswith("/api/solutions/") and path.endswith("/preview")
         source_preview=path.startswith("/api/studio/projects/") and "/source/preview" in path
         generated_preview=path.startswith("/api/custom-software/previews/")
+        hosted_plugin=path.startswith("/api/public/plugins/")
         studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or source_preview or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview")) or generated_preview or path.startswith("/api/coding-harness/sources/") or solution_preview
-        response.headers["X-Frame-Options"]="SAMEORIGIN" if studio_preview else "DENY"
+        response.headers["X-Frame-Options"]="SAMEORIGIN" if (studio_preview or hosted_plugin) else "DENY"
 
-        if source_preview:
+        if hosted_plugin:
+            # Workspace plugin UI is untrusted authored content. It may be framed by
+            # Operly, but CSP sandbox deliberately gives it an opaque origin even when
+            # opened standalone so it cannot inherit Operly cookies/local storage or
+            # call authenticated Workspace APIs directly. A governed UI bridge can be
+            # added later without weakening this default boundary.
+            response.headers["Content-Security-Policy"]="sandbox allow-scripts allow-forms; default-src 'none'; img-src 'self' data: https:; font-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; frame-src 'none'; frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests"
+        elif source_preview:
             # Model-authored source is rendered only inside Studio's sandboxed iframe.
             # It may render and run local progressive-enhancement JS, but it cannot
             # connect back to Operly APIs or embed privileged same-origin resources.

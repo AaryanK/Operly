@@ -268,7 +268,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_DIST = WEB_ROOT / "dist"
 KNOWN_REACT_ROUTES = {
     "", "login", "signup", "join", "verify-email", "forgot-password", "reset-password",
-    "onboarding", "account", "personal", "app", "privacy", "terms",
+    "onboarding", "account", "personal", "app", "privacy", "terms", "plugin-lab",
 }
 
 
@@ -288,6 +288,6 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/"):
+    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/") or route.startswith("plugin-lab/"):
         return react_shell()
     return react_shell(status_code=404)
