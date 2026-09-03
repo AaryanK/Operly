@@ -31,6 +31,7 @@ from packages.plugins.gateway_router import router as capability_gateway_router
 from packages.plugins.hosted_public_router import public_router as plugin_hosted_public_router
 from packages.plugins.router import router as plugin_platform_router
 from packages.plugins.runtime_router import router as plugin_runtime_management_router
+from packages.plugins.temp_demo_router import router as plugin_temp_demo_router
 from packages.plugins.webhook_router import (
     management_router as plugin_webhook_management_router,
     public_router as plugin_webhook_public_router,
@@ -157,6 +158,7 @@ app.add_middleware(
         "Content-Type",
         "Authorization",
         "X-CSRF-Token",
+        "X-Operly-Demo-Token",
         "MCP-Protocol-Version",
         "Mcp-Method",
         "Mcp-Name",
@@ -175,6 +177,7 @@ app.include_router(artifact_router)
 app.include_router(plugin_platform_router)
 app.include_router(plugin_runtime_management_router)
 app.include_router(plugin_hosted_public_router)
+app.include_router(plugin_temp_demo_router)
 app.include_router(plugin_event_router)
 app.include_router(plugin_webhook_management_router)
 app.include_router(plugin_webhook_public_router)
@@ -268,7 +271,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_DIST = WEB_ROOT / "dist"
 KNOWN_REACT_ROUTES = {
     "", "login", "signup", "join", "verify-email", "forgot-password", "reset-password",
-    "onboarding", "account", "personal", "app", "privacy", "terms", "plugin-lab",
+    "onboarding", "account", "personal", "app", "privacy", "terms", "plugin-lab", "temp-app-lab",
 }
 
 
@@ -288,6 +291,12 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/") or route.startswith("plugin-lab/"):
+    if (
+        route in KNOWN_REACT_ROUTES
+        or route == "channels"
+        or route.startswith("channels/")
+        or route.startswith("plugin-lab/")
+        or route.startswith("temp-app-lab/")
+    ):
         return react_shell()
     return react_shell(status_code=404)
