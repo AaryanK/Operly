@@ -4,8 +4,6 @@ import ReactDOM from "react-dom/client";
 import { App } from "./app/App";
 import "./ui/tokens.css";
 import "./ui/minimal.css";
-import "./ui/public.css";
-import "./ui/react-public-admin-palette.css";
 import "./ui/app.css";
 import "./ui/theme.css";
 import "./ui/workspace-lite.css";
@@ -15,6 +13,8 @@ import "./ui/integration-workbench.css";
 import "./ui/agent-computer.css";
 import "./ui/mobile.css";
 import "./ui/surface-polish.css";
+import "./ui/public.css";
+import "./ui/react-public-admin-palette.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
