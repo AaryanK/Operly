@@ -57,10 +57,16 @@ jobs:
             apps/api/auth_cookies.py \
             apps/api/main.py \
             apps/api/public_safety.py \
+            apps/api/request_safety.py \
             apps/api/security_headers.py \
             apps/api/mcp_router.py \
+            packages/kernel/approvals.py \
+            packages/kernel/idempotency.py \
             packages/mcp/oauth.py \
+            packages/plugins/deliveries.py \
             packages/plugins/egress_router.py \
+            packages/security/pinned_https.py \
+            packages/workspace_modules/agent_computer/sandbox.py \
             packages/workspace_modules/tools/__init__.py \
             tests/test_security_hardening.py
       - name: Run exploit regressions
