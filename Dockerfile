@@ -13,6 +13,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# Install dependencies as root, then permanently drop privilege for application
+# startup/runtime. UID/GID are stable so deployment volumes can grant only the
+# specific write access Operly needs instead of making the control plane root.
+RUN groupadd --gid 10001 operly \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin operly
+
 # requirements.txt declares reviewed compatibility ranges; production installs the
 # exact audited graph so a rebuild cannot silently pick a newly published release.
 COPY requirements.txt requirements.lock ./
@@ -26,7 +32,10 @@ COPY --from=web-build /web/dist /app/apps/web/dist
 # into the canonical React bundle.
 RUN python apps/web/scripts/optimize_logo.py \
     apps/web/public/operly-logo.png \
-    apps/web/dist/operly-logo.png
+    apps/web/dist/operly-logo.png \
+    && chown -R operly:operly /app
+
+USER 10001:10001
 
 EXPOSE 8000
 
