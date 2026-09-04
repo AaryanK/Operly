@@ -39,6 +39,41 @@ class RuntimeStage(StrEnum):
 RUNTIME_STAGE_ORDER: tuple[RuntimeStage, ...] = tuple(RuntimeStage)
 
 
+# Agent Computer risk is a contract invariant, not merely a runtime-composition
+# decoration. Keeping the invariant here means every consumer of CapabilitySpec
+# (status/catalog APIs included) observes the same security metadata that the Kernel
+# enforces. The workspace composition layer may still redundantly harden these IDs;
+# the result is intentionally idempotent.
+_COMPUTER_ARBITRARY_EXECUTION = frozenset(
+    {
+        "computer.terminal.exec",
+        "computer.python.exec",
+        "computer.git.exec",
+        "computer.browser.evaluate",
+    }
+)
+_COMPUTER_MUTATIONS = frozenset(
+    {
+        "computer.runtime.start",
+        "computer.runtime.stop",
+        "computer.files.write",
+        "computer.files.mkdir",
+        "computer.files.remove",
+        "computer.files.move",
+        "computer.process.kill",
+        "computer.web.download",
+        "computer.browser.open",
+        "computer.browser.navigate",
+        "computer.browser.click",
+        "computer.browser.type",
+        "computer.browser.press",
+        "computer.browser.close",
+        "computer.artifact.import",
+        "computer.artifact.export",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilitySpec:
     id: str
@@ -57,6 +92,17 @@ class CapabilitySpec:
     aliases: tuple[str, ...] = ()
     emits: tuple[str, ...] = ()
     tags: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        # Never permit a raw/diagnostic representation to advertise less risk than
+        # the canonical Kernel contract for general-purpose computer execution.
+        if self.id in _COMPUTER_ARBITRARY_EXECUTION:
+            object.__setattr__(self, "risk", CapabilityRisk.HIGH)
+            object.__setattr__(self, "approval_required", True)
+            object.__setattr__(self, "reversible", False)
+        elif self.id in _COMPUTER_MUTATIONS:
+            object.__setattr__(self, "risk", CapabilityRisk.MEDIUM)
+            object.__setattr__(self, "reversible", False)
 
     def public_dict(self) -> dict[str, Any]:
         return {
