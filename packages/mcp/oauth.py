@@ -13,7 +13,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.database.principal_models import McpAuthorizationCode
+from packages.database.principal_models import ClientGrant, McpAuthorizationCode
 
 
 AUTHORIZATION_CODE_TTL_SECONDS = 600
@@ -25,10 +25,29 @@ class McpOAuthError(ValueError):
     pass
 
 
+def _production() -> bool:
+    return os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {
+        "production",
+        "prod",
+    }
+
+
 def _secret() -> str:
-    value = (
+    # MCP tokens get their own signing domain in production. MCP_OAUTH_SECRET is
+    # retained as the documented compatibility name; OPERLY_MCP_TOKEN_SECRET is
+    # the canonical explicit name going forward.
+    dedicated = (
         os.getenv("OPERLY_MCP_TOKEN_SECRET", "").strip()
-        or os.getenv("AUTH_TOKEN_PEPPER", "").strip()
+        or os.getenv("MCP_OAUTH_SECRET", "").strip()
+    )
+    if dedicated:
+        if len(dedicated.encode("utf-8")) < 32:
+            raise McpOAuthError("MCP token signing secret must contain at least 32 bytes")
+        return dedicated
+    if _production():
+        raise McpOAuthError("A dedicated MCP token signing secret is required in production")
+    value = (
+        os.getenv("AUTH_TOKEN_PEPPER", "").strip()
         or os.getenv("SESSION_SECRET", "").strip()
     )
     if not value:
@@ -73,6 +92,54 @@ def issue_refresh_token(payload: dict[str, Any]) -> str:
 
 def decode_refresh_token(token: str) -> dict[str, Any]:
     return _decode_token("refresh", token, REFRESH_TOKEN_TTL_SECONDS)
+
+
+def grant_refresh_generation(grant: ClientGrant) -> str:
+    stamp = grant.updated_at or grant.created_at
+    return stamp.isoformat(timespec="microseconds")
+
+
+async def consume_refresh_token(
+    db: AsyncSession,
+    token: str,
+    *,
+    client_id: str,
+    resource: str,
+) -> tuple[dict[str, Any], ClientGrant]:
+    """Atomically redeem and rotate one refresh-token generation.
+
+    The ClientGrant row is the durable refresh-token family record, avoiding a new
+    token table/migration while still providing one-time redemption across replicas.
+    Any replay after successful rotation observes a different generation and fails.
+    """
+
+    payload = decode_refresh_token(token)
+    if payload.get("client_id") != client_id or payload.get("resource") != resource:
+        raise McpOAuthError("Refresh token client or resource mismatch")
+    grant_id = str(payload.get("grant_id") or "")
+    grant = await db.scalar(
+        select(ClientGrant)
+        .where(ClientGrant.id == grant_id, ClientGrant.client_id == client_id)
+        .with_for_update()
+    )
+    now = datetime.utcnow()
+    if grant is None or grant.status != "active" or grant.tenant_id is None:
+        raise McpOAuthError("MCP grant is no longer active")
+    if grant.expires_at is not None and grant.expires_at <= now:
+        raise McpOAuthError("MCP grant has expired")
+    if grant.principal_id != payload.get("principal_id") or grant.tenant_id != payload.get("tenant_id"):
+        raise McpOAuthError("MCP refresh token identity mismatch")
+
+    supplied_generation = str(payload.get("refresh_generation") or "")
+    current_generation = grant_refresh_generation(grant)
+    if not supplied_generation or not hmac.compare_digest(supplied_generation, current_generation):
+        raise McpOAuthError("MCP refresh token was already used or superseded")
+
+    # Rotate before issuing the replacement token. The row lock makes two
+    # concurrent redeemers serialize; only the first can match this generation.
+    grant.updated_at = now
+    await db.flush()
+    return payload, grant
 
 
 def pkce_s256(code_verifier: str) -> str:
