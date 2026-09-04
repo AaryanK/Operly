@@ -141,12 +141,21 @@ def _stable_mcp_request_id(payload: dict) -> str | None:
             "MCP tools/call params must be an object",
         )
     name = str(params.get("name") or "").strip()
-    # JSON-RPC identifiers are transport-controlled and may be arbitrarily long,
-    # while Kernel approval/request IDs are deliberately bounded database fields.
-    # Hash the exact typed RPC identity plus tool name: retries remain deterministic,
-    # string/number IDs do not collide, and the result always fits the durable schema.
+
+    # Preserve the pre-existing readable transport identity for ordinary numeric
+    # JSON-RPC IDs when it fits the durable schema. This keeps compatible clients and
+    # regressions stable without conflating a numeric 42 with the string "42".
+    if isinstance(rpc_id, (int, float)) and not isinstance(rpc_id, bool):
+        readable = f"mcp-rpc:{name}:{rpc_id}"
+        if len(readable.encode("utf-8")) <= MAX_RUNTIME_REQUEST_ID_BYTES:
+            return readable
+
+    # String or oversized transport IDs are typed and hashed. The type tag prevents
+    # cross-type identity collisions, while hashing guarantees the result fits the
+    # approval/request-id columns even for arbitrarily long JSON-RPC identifiers.
     rpc_identity = json.dumps(rpc_id, separators=(",", ":"), ensure_ascii=False)
-    digest = hashlib.sha256(f"{name}\0{rpc_identity}".encode("utf-8")).hexdigest()
+    typed_identity = f"{type(rpc_id).__name__}:{rpc_identity}"
+    digest = hashlib.sha256(f"{name}\0{typed_identity}".encode("utf-8")).hexdigest()
     return f"mcp-rpc:{digest}"
 
 
