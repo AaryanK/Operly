@@ -9,6 +9,7 @@ from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 from packages.workflow.models import (
     WorkflowDefinition,
+    WorkflowEventTrigger,
     WorkflowRun,
     WorkflowSchedule,
     WorkflowTraceEvent,
@@ -24,8 +25,6 @@ from packages.workflow.provider import (
 
 
 def _validate_mutation_input(capability_id: str, arguments: dict[str, Any]) -> None:
-    """Enforce normalized invariants JSON Schema cannot express by length alone."""
-
     if capability_id == "workflow.create":
         if not str(arguments.get("name") or "").strip():
             raise ValueError("Workflow name is required")
@@ -35,12 +34,12 @@ def _validate_mutation_input(capability_id: str, arguments: dict[str, Any]) -> N
 
 
 class WorkflowProvider(BaseWorkflowProvider):
-    """Scope delegated Workflow authority to the principal's own definitions/runs.
+    """Scope delegated Workspace workflow authority to the principal's own resources.
 
-    Workspace owners are administrative root. A future agent/custom role may be
-    explicitly granted workflow permissions, but that grant cannot inspect or execute
-    another principal's workflow and thereby borrow stronger Workspace/connector
-    authority or private attempt data.
+    Personal is already an owner-root namespace and goes directly through the universal
+    provider. Workspace owners remain administrative root. A future custom Workspace
+    role with workflow permissions cannot inspect or execute another principal's
+    workflow and thereby borrow stronger connector authority.
     """
 
     async def _owned_workflow(
@@ -52,6 +51,7 @@ class WorkflowProvider(BaseWorkflowProvider):
         row = await db.scalar(
             select(WorkflowDefinition).where(
                 WorkflowDefinition.id == workflow_id,
+                WorkflowDefinition.scope_kind == "workspace",
                 WorkflowDefinition.workspace_id == context.workspace_id,
                 WorkflowDefinition.owner_user_id == context.user_id,
             )
@@ -69,6 +69,7 @@ class WorkflowProvider(BaseWorkflowProvider):
         row = await db.scalar(
             select(WorkflowRun).where(
                 WorkflowRun.id == run_id,
+                WorkflowRun.scope_kind == "workspace",
                 WorkflowRun.workspace_id == context.workspace_id,
                 WorkflowRun.authority_user_id == context.user_id,
             )
@@ -85,6 +86,7 @@ class WorkflowProvider(BaseWorkflowProvider):
     ) -> CapabilityExecutionResult:
         limit = max(1, min(int(arguments.get("limit") or 100), 200))
         statement = select(WorkflowDefinition).where(
+            WorkflowDefinition.scope_kind == "workspace",
             WorkflowDefinition.workspace_id == context.workspace_id,
             WorkflowDefinition.owner_user_id == context.user_id,
         )
@@ -136,6 +138,7 @@ class WorkflowProvider(BaseWorkflowProvider):
                 select(WorkflowRun)
                 .where(
                     WorkflowRun.workflow_id == workflow.id,
+                    WorkflowRun.scope_kind == "workspace",
                     WorkflowRun.authority_user_id == context.user_id,
                 )
                 .order_by(WorkflowRun.created_at.desc())
@@ -160,13 +163,12 @@ class WorkflowProvider(BaseWorkflowProvider):
     ) -> CapabilityExecutionResult:
         limit = max(1, min(int(arguments.get("limit") or 100), 200))
         statement = select(WorkflowRun).where(
+            WorkflowRun.scope_kind == "workspace",
             WorkflowRun.workspace_id == context.workspace_id,
             WorkflowRun.authority_user_id == context.user_id,
         )
         if arguments.get("workflow_id"):
-            workflow = await self._owned_workflow(
-                db, context, str(arguments["workflow_id"])
-            )
+            workflow = await self._owned_workflow(db, context, str(arguments["workflow_id"]))
             statement = statement.where(WorkflowRun.workflow_id == workflow.id)
         if arguments.get("status"):
             statement = statement.where(WorkflowRun.status == str(arguments["status"]))
@@ -183,14 +185,17 @@ class WorkflowProvider(BaseWorkflowProvider):
     ) -> CapabilityExecutionResult:
         limit = max(1, min(int(arguments.get("limit") or 200), 500))
         owned_ids = select(WorkflowDefinition.id).where(
+            WorkflowDefinition.scope_kind == "workspace",
             WorkflowDefinition.workspace_id == context.workspace_id,
             WorkflowDefinition.owner_user_id == context.user_id,
         )
         owned_run_ids = select(WorkflowRun.id).where(
+            WorkflowRun.scope_kind == "workspace",
             WorkflowRun.workspace_id == context.workspace_id,
             WorkflowRun.authority_user_id == context.user_id,
         )
         statement = select(WorkflowTraceEvent).where(
+            WorkflowTraceEvent.scope_kind == "workspace",
             WorkflowTraceEvent.workspace_id == context.workspace_id,
             WorkflowTraceEvent.workflow_id.in_(owned_ids),
         )
@@ -199,9 +204,7 @@ class WorkflowProvider(BaseWorkflowProvider):
             | (WorkflowTraceEvent.workflow_run_id.in_(owned_run_ids))
         )
         if arguments.get("workflow_id"):
-            workflow = await self._owned_workflow(
-                db, context, str(arguments["workflow_id"])
-            )
+            workflow = await self._owned_workflow(db, context, str(arguments["workflow_id"]))
             statement = statement.where(WorkflowTraceEvent.workflow_id == workflow.id)
         if arguments.get("run_id"):
             run = await self._owned_run(db, context, str(arguments["run_id"]))
@@ -245,6 +248,15 @@ class WorkflowProvider(BaseWorkflowProvider):
     ) -> CapabilityExecutionResult:
         _validate_mutation_input(capability.id, arguments)
 
+        if context.is_personal:
+            return await super().execute(
+                db,
+                context=context,
+                capability=capability,
+                arguments=arguments,
+                minimum_context=minimum_context,
+            )
+
         if context.role == "owner":
             return await super().execute(
                 db,
@@ -272,6 +284,8 @@ class WorkflowProvider(BaseWorkflowProvider):
             "workflow.enable",
             "workflow.disable",
             "workflow.archive",
+            "workflow.trigger.list",
+            "workflow.trigger.create",
             "workflow.run.start",
         }
         run_scoped = {
@@ -280,15 +294,15 @@ class WorkflowProvider(BaseWorkflowProvider):
             "workflow.run.retry",
         }
         if capability.id in workflow_scoped:
-            await self._owned_workflow(
-                db, context, str(arguments.get("workflow_id") or "")
-            )
+            await self._owned_workflow(db, context, str(arguments.get("workflow_id") or ""))
         elif capability.id in run_scoped:
             await self._owned_run(db, context, str(arguments.get("run_id") or ""))
+        elif capability.id == "workflow.trigger.delete":
+            trigger = await db.get(WorkflowEventTrigger, str(arguments.get("trigger_id") or ""))
+            if trigger is None:
+                raise LookupError("Workflow trigger is unavailable")
+            await self._owned_workflow(db, context, trigger.workflow_id)
 
-        # workflow.create, schedule.preview and runtime.status do not target another
-        # principal's existing resource; their normal capability permission remains
-        # the complete authorization boundary for delegated roles.
         return await super().execute(
             db,
             context=context,
