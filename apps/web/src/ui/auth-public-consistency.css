@@ -40,41 +40,44 @@
 }
 
 .operly-provider-stack {
+  width: min(100%, 360px);
   display: grid;
   gap: 10px;
-  margin: 2px 0 2px;
+  margin: 2px auto 2px;
 }
 
 .operly-google-provider {
   width: 100%;
-  min-height: 46px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 12px;
-  background: rgba(255,255,255,.025);
+  border-radius: 4px;
+  background: transparent;
 }
 
 .operly-google-provider > div,
 .operly-google-provider iframe {
+  width: 100% !important;
   max-width: 100% !important;
 }
 
 .operly-discord-provider {
   width: 100%;
-  min-height: 46px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   padding: 0 16px;
-  border: 1px solid rgba(199,184,255,.15);
-  border-radius: 12px;
-  color: #f5f1ff !important;
-  background: linear-gradient(180deg, rgba(88,101,242,.24), rgba(88,101,242,.13));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
-  font-weight: 760;
+  border: 1px solid #747775;
+  border-radius: 4px;
+  color: #e8eaed !important;
+  background: #131314;
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 500;
   text-decoration: none;
   transition: background .18s ease, border-color .18s ease, transform .18s ease;
 }
@@ -90,8 +93,8 @@
 }
 
 .operly-discord-provider:hover {
-  background: linear-gradient(180deg, rgba(88,101,242,.32), rgba(88,101,242,.18));
-  border-color: rgba(173,160,255,.28);
+  background: #1f1f20;
+  border-color: #8c8e8b;
   transform: translateY(-1px);
 }
 
@@ -114,4 +117,6 @@
 @media (max-width: 520px) {
   .landing-page .primary-button,
   .landing-page .secondary-button { white-space: nowrap; }
+
+  .operly-provider-stack { width: 100%; }
 }
