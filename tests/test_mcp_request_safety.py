@@ -4,6 +4,7 @@ import unittest
 from apps.api.request_safety import (
     MAX_RUNTIME_REQUEST_ID_BYTES,
     McpRequestSafetyError,
+    _body_guarded,
     _prepare_mcp_body,
 )
 
@@ -22,6 +23,14 @@ class McpRequestSafetyTests(unittest.TestCase):
             "method": "tools/call",
             "params": params,
         }
+
+    def test_api_body_guard_is_method_independent(self):
+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+            with self.subTest(method=method):
+                self.assertTrue(_body_guarded("/api/kernel/workspace/execute", method))
+        self.assertTrue(_body_guarded("/mcp", "GET"))
+        self.assertTrue(_body_guarded("/oauth/token", "OPTIONS"))
+        self.assertFalse(_body_guarded("/health", "POST"))
 
     def test_same_jsonrpc_tool_call_gets_same_bounded_request_id(self):
         raw = json.dumps(self._tool_call()).encode("utf-8")
