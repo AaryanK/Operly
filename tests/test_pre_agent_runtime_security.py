@@ -14,7 +14,7 @@ from packages.kernel.approvals import (
     claim_approved_invocation,
 )
 from packages.kernel.contracts import CapabilityRisk, RuntimeRequest
-from packages.kernel.idempotency import reserve_request
+from packages.kernel.idempotency import _idempotency_key, reserve_request
 from packages.workspace_modules.agent_computer.router import _governed_native_contracts
 from packages.workspace_modules.studio.router import _enforce_content_origin
 
@@ -145,6 +145,45 @@ class PreAgentRuntimeSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(db.commits, 1)
         claim_mock.assert_awaited_once()
         self.assertEqual(claim_mock.await_args.kwargs["request_id"], "request-1")
+
+    async def test_mcp_retry_key_is_namespaced_by_authenticated_client_and_grant(self):
+        base = dict(
+            is_personal=False,
+            workspace_id="workspace-1",
+            user_id="user-1",
+            principal_id="principal-1",
+            scope_kind=SimpleNamespace(value="workspace"),
+        )
+        first = SimpleNamespace(
+            **base,
+            metadata={
+                "ingress": "operly_mcp",
+                "mcp_client_id": "chatgpt",
+                "mcp_grant_id": "grant-a",
+            },
+        )
+        same_grant = SimpleNamespace(
+            **base,
+            metadata={
+                "ingress": "operly_mcp",
+                "mcp_client_id": "chatgpt",
+                "mcp_grant_id": "grant-a",
+            },
+        )
+        other_grant = SimpleNamespace(
+            **base,
+            metadata={
+                "ingress": "operly_mcp",
+                "mcp_client_id": "chatgpt",
+                "mcp_grant_id": "grant-b",
+            },
+        )
+
+        retry_id = "mcp-rpc:workflow.run.start:42"
+        first_key = _idempotency_key(first, retry_id)
+        self.assertEqual(first_key, _idempotency_key(same_grant, retry_id))
+        self.assertNotEqual(first_key, _idempotency_key(other_grant, retry_id))
+        self.assertIn(":mcp:", first_key)
 
     async def test_studio_bytes_never_serve_from_authenticated_origin_in_production(self):
         with patch.dict(
