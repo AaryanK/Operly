@@ -7,15 +7,19 @@ from packages.personal_modules.google_provider import (
     PersonalGoogleProvider,
     personal_google_capabilities,
 )
+from packages.workflow import (
+    PROVIDER_ID as WORKFLOW_PROVIDER_ID,
+    WorkflowProvider,
+    personal_workflow_capabilities,
+)
 
 
 class PersonalRuntime(AvailabilityAwareKernelRuntime):
     """Canonical account-owned capability runtime.
 
-    This is deliberately parallel to WorkspaceRuntime: the registry is searchable,
-    provider availability is checked before a tool is exposed, and execution remains
-    behind the same Kernel policy / approval / idempotency / audit boundary. Personal
-    authority never receives a synthetic Workspace ID.
+    The registry is searchable, provider availability is checked before exposure, and
+    execution remains behind the same Kernel policy / approval / idempotency / audit
+    boundary. Personal authority never receives a synthetic Workspace ID.
     """
 
 
@@ -30,5 +34,8 @@ def build_personal_runtime() -> PersonalRuntime:
     )
     for spec in personal_google_capabilities():
         runtime.registry.register(spec)
+    for spec in personal_workflow_capabilities():
+        runtime.registry.register(spec)
     runtime.providers.register(PERSONAL_GOOGLE_PROVIDER_ID, PersonalGoogleProvider())
+    runtime.providers.register(WORKFLOW_PROVIDER_ID, WorkflowProvider())
     return runtime
