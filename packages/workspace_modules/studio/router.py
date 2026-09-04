@@ -14,6 +14,7 @@ from packages.database.product_models import SolutionDeployment
 
 
 public_router = APIRouter(tags=["published-studio"])
+MAX_PUBLISHED_FILES = 20_000
 
 # Published/model-authored software is untrusted content. Even on the dedicated
 # content origin, keep an opaque-origin CSP as defense in depth so generated scripts
@@ -52,7 +53,7 @@ def _safe_relative_path(raw: str) -> str:
     path = PurePosixPath(value)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise HTTPException(status_code=404, detail="Published Studio file not found")
-    return str(path)
+    return path.as_posix()
 
 
 def _sites_root() -> Path:
@@ -60,6 +61,51 @@ def _sites_root() -> Path:
     if not configured:
         raise HTTPException(status_code=503, detail="Operly Hosting storage is unavailable")
     return (Path(configured).expanduser().resolve() / "studio-sites").resolve()
+
+
+def _artifact_files(artifact: Path) -> dict[str, Path]:
+    """Enumerate trusted deployed files without joining request data into a path.
+
+    The request path is used only as a lookup key into this manifest. Filesystem paths
+    are derived exclusively from the already-confined deployment directory, which
+    prevents traversal/symlink escapes and removes the user-controlled path-expression
+    sink flagged by CodeQL.
+    """
+
+    files: dict[str, Path] = {}
+    for directory, dirnames, filenames in os.walk(artifact, followlinks=False):
+        directory_path = Path(directory)
+        # Never descend through directory symlinks, even when they point back inside.
+        dirnames[:] = [
+            name for name in dirnames if not (directory_path / name).is_symlink()
+        ]
+        for name in filenames:
+            source = directory_path / name
+            try:
+                resolved = source.resolve(strict=True)
+            except (FileNotFoundError, OSError):
+                continue
+            if artifact not in resolved.parents or not resolved.is_file():
+                continue
+            relative = resolved.relative_to(artifact).as_posix()
+            files[relative] = resolved
+            if len(files) > MAX_PUBLISHED_FILES:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Published Studio artifact exceeds file-count policy",
+                )
+    return files
+
+
+def _published_candidate(artifact: Path, request_path: str) -> Path:
+    relative = _safe_relative_path(request_path)
+    files = _artifact_files(artifact)
+    candidate = files.get(relative)
+    if candidate is None and not PurePosixPath(relative).suffix:
+        candidate = files.get("index.html")
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Published Studio file not found")
+    return candidate
 
 
 def _enforce_content_origin(request: Request):
@@ -117,15 +163,7 @@ async def published_studio_solution(
     if root not in artifact.parents or not artifact.is_dir():
         raise HTTPException(status_code=503, detail="Published Studio artifact is unavailable")
 
-    relative = _safe_relative_path(path)
-    candidate = (artifact / relative).resolve()
-    if artifact not in candidate.parents:
-        raise HTTPException(status_code=404, detail="Published Studio file not found")
-    if not candidate.is_file() and not PurePosixPath(relative).suffix:
-        candidate = artifact / "index.html"
-    if not candidate.is_file():
-        raise HTTPException(status_code=404, detail="Published Studio file not found")
-
+    candidate = _published_candidate(artifact, path)
     media_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
     headers = {
         "X-Content-Type-Options": "nosniff",
