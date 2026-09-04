@@ -12,6 +12,7 @@ from packages.security.execution_context import ExecutionContext
 from packages.workflow.engine import queue_workflow_run
 from packages.workflow.models import (
     WorkflowDefinition,
+    WorkflowEventTrigger,
     WorkflowRun,
     WorkflowSchedule,
     WorkflowStepAttempt,
@@ -19,8 +20,14 @@ from packages.workflow.models import (
     WorkflowTraceEvent,
     WorkflowVersion,
 )
-from packages.workflow.spec import next_schedule_time, validate_schedule, validate_workflow_spec
+from packages.workflow.spec import (
+    next_schedule_time,
+    validate_condition,
+    validate_schedule,
+    validate_workflow_spec,
+)
 from packages.workflow.tracing import record_workflow_event
+from packages.workflow.triggers import normalize_event_pattern
 
 
 PROVIDER_ID = "operly.workflow"
@@ -54,7 +61,7 @@ def _capability(
 ) -> CapabilitySpec:
     return CapabilitySpec(
         id=capability_id,
-        version="1.0.0",
+        version="1.1.0",
         display_name=name,
         description=description,
         provider_id=PROVIDER_ID,
@@ -107,11 +114,13 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
     )
     workflow_id = {"type": "string", "minLength": 1, "maxLength": 80}
     run_id = {"type": "string", "minLength": 1, "maxLength": 80}
+    trigger_id = {"type": "string", "minLength": 1, "maxLength": 80}
+    condition_schema = _object({}, additional=True)
     return (
         _capability(
             "workflow.list",
             "List workflows",
-            "List durable workflows in this workspace, including schedule and current version.",
+            "List durable workflows in the current authority scope.",
             permission="workflows:read",
             input_schema=_object(
                 {
@@ -123,7 +132,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.get",
             "Read workflow",
-            "Read one workflow, current immutable definition snapshot, schedule, and recent runs.",
+            "Read one workflow, immutable definition snapshot, schedule, event triggers, and recent runs.",
             permission="workflows:read",
             input_schema=_object({"workflow_id": workflow_id}, required=["workflow_id"]),
         ),
@@ -156,7 +165,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.create",
             "Create workflow",
-            "Create a versioned workflow whose action steps can invoke any normal Workspace capability. Scheduled execution never receives extra authority.",
+            "Create a versioned workflow whose action steps invoke only capabilities authorized in the workflow's Personal or Workspace scope.",
             permission="workflows:write",
             input_schema=_object(
                 {
@@ -208,7 +217,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.enable",
             "Enable workflow",
-            "Allow this workflow's schedule to enqueue future runs.",
+            "Allow this workflow's schedules and semantic event triggers to enqueue future runs.",
             permission="workflows:write",
             input_schema=_object({"workflow_id": workflow_id}, required=["workflow_id"]),
             risk=CapabilityRisk.HIGH,
@@ -219,7 +228,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.disable",
             "Disable workflow",
-            "Stop future scheduled runs without deleting definitions, versions, runs, attempts, or trace history.",
+            "Stop future scheduled/event runs without deleting definition or trace history.",
             permission="workflows:write",
             input_schema=_object({"workflow_id": workflow_id}, required=["workflow_id"]),
             risk=CapabilityRisk.LOW,
@@ -229,7 +238,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.archive",
             "Archive workflow",
-            "Archive a workflow while preserving every version, run, step, attempt, and trace event.",
+            "Archive a workflow while preserving every version, run, step, attempt, trigger, and trace event.",
             permission="workflows:write",
             input_schema=_object({"workflow_id": workflow_id}, required=["workflow_id"]),
             risk=CapabilityRisk.HIGH,
@@ -238,9 +247,43 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
             emits=("workflow.archived",),
         ),
         _capability(
+            "workflow.trigger.list",
+            "List workflow event triggers",
+            "List semantic Kernel-event subscriptions for one workflow.",
+            permission="workflows:read",
+            input_schema=_object({"workflow_id": workflow_id}, required=["workflow_id"]),
+        ),
+        _capability(
+            "workflow.trigger.create",
+            "Create workflow event trigger",
+            "Subscribe an enabled workflow to a same-scope semantic event pattern with an optional deterministic condition.",
+            permission="workflows:write",
+            input_schema=_object(
+                {
+                    "workflow_id": workflow_id,
+                    "event_pattern": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "condition": condition_schema,
+                },
+                required=["workflow_id", "event_pattern"],
+            ),
+            risk=CapabilityRisk.HIGH,
+            approval=True,
+            reversible=True,
+            emits=("workflow.trigger.created",),
+        ),
+        _capability(
+            "workflow.trigger.delete",
+            "Delete workflow event trigger",
+            "Remove one semantic event trigger from a workflow.",
+            permission="workflows:write",
+            input_schema=_object({"trigger_id": trigger_id}, required=["trigger_id"]),
+            risk=CapabilityRisk.LOW,
+            emits=("workflow.trigger.deleted",),
+        ),
+        _capability(
             "workflow.run.start",
             "Run workflow now",
-            "Queue a manual workflow run. Each action step is independently authorized by the normal Workspace capability policy.",
+            "Queue a manual workflow run. Each action step is independently authorized by the normal scoped capability policy.",
             permission="workflows:run",
             input_schema=_object(
                 {"workflow_id": workflow_id, "trigger": {"type": "object"}},
@@ -265,14 +308,14 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.run.get",
             "Inspect workflow run",
-            "Inspect the pinned definition version plus every step and immutable action attempt, including exact arguments/results and Kernel/approval correlation.",
+            "Inspect pinned definition plus every step and immutable attempt, including Kernel/approval correlation.",
             permission="workflows:read",
             input_schema=_object({"run_id": run_id}, required=["run_id"]),
         ),
         _capability(
             "workflow.run.cancel",
             "Cancel workflow run",
-            "Cancel a queued, waiting, or running workflow before another workflow step is dispatched.",
+            "Cancel a queued, waiting, or running workflow before another step is dispatched.",
             permission="workflows:run",
             input_schema=_object({"run_id": run_id}, required=["run_id"]),
             risk=CapabilityRisk.LOW,
@@ -281,7 +324,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.run.retry",
             "Retry failed workflow run",
-            "Resume a failed workflow from its failed step while preserving completed steps and every previous immutable attempt.",
+            "Resume a failed workflow from its failed step while preserving previous immutable attempts.",
             permission="workflows:run",
             input_schema=_object({"run_id": run_id}, required=["run_id"]),
             risk=CapabilityRisk.MEDIUM,
@@ -291,7 +334,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.trace",
             "Read workflow trace",
-            "Read durable orchestration events correlating workflow definitions, runs, steps, attempts, Kernel runs, and approvals.",
+            "Read durable events correlating definitions, runs, steps, attempts, Kernel runs, and approvals.",
             permission="workflows:read",
             input_schema=_object(
                 {
@@ -317,7 +360,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
         _capability(
             "workflow.runtime.status",
             "Workflow runtime status",
-            "Read scheduler health, polling cadence, worker capacity, and last dispatcher error.",
+            "Read scheduler and semantic-event dispatcher health.",
             permission="workflows:read",
         ),
     )
@@ -351,12 +394,53 @@ def _snapshot(
     }
 
 
+def _scope_definition_filters(context: ExecutionContext):
+    if context.is_personal:
+        return (
+            WorkflowDefinition.scope_kind == "personal",
+            WorkflowDefinition.workspace_id.is_(None),
+            WorkflowDefinition.owner_user_id == context.user_id,
+        )
+    return (
+        WorkflowDefinition.scope_kind == "workspace",
+        WorkflowDefinition.workspace_id == context.workspace_id,
+    )
+
+
+def _scope_run_filters(context: ExecutionContext):
+    if context.is_personal:
+        return (
+            WorkflowRun.scope_kind == "personal",
+            WorkflowRun.workspace_id.is_(None),
+            WorkflowRun.authority_user_id == context.user_id,
+        )
+    return (
+        WorkflowRun.scope_kind == "workspace",
+        WorkflowRun.workspace_id == context.workspace_id,
+    )
+
+
+def _scope_trace_filters(context: ExecutionContext):
+    if context.is_personal:
+        return (
+            WorkflowTraceEvent.scope_kind == "personal",
+            WorkflowTraceEvent.workspace_id.is_(None),
+            WorkflowTraceEvent.owner_user_id == context.user_id,
+        )
+    return (
+        WorkflowTraceEvent.scope_kind == "workspace",
+        WorkflowTraceEvent.workspace_id == context.workspace_id,
+    )
+
+
 def _workflow_json(
     row: WorkflowDefinition,
     schedule: WorkflowSchedule | None = None,
 ) -> dict[str, Any]:
     return {
         "id": row.id,
+        "scope_kind": row.scope_kind,
+        "workspace_id": row.workspace_id,
         "name": row.name,
         "description": row.description,
         "status": row.status,
@@ -364,11 +448,7 @@ def _workflow_json(
         "current_version": row.current_version,
         "schedule": _loads(schedule.schedule_json, {}) if schedule else None,
         "schedule_enabled": bool(schedule.enabled) if schedule else False,
-        "next_run_at": (
-            schedule.next_run_at.isoformat()
-            if schedule and schedule.next_run_at
-            else None
-        ),
+        "next_run_at": schedule.next_run_at.isoformat() if schedule and schedule.next_run_at else None,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
@@ -398,6 +478,8 @@ def _run_json(row: WorkflowRun) -> dict[str, Any]:
         "id": row.id,
         "workflow_id": row.workflow_id,
         "workflow_version_id": row.workflow_version_id,
+        "scope_kind": row.scope_kind,
+        "workspace_id": row.workspace_id,
         "authority_user_id": row.authority_user_id,
         "initiated_by_user_id": row.initiated_by_user_id,
         "status": row.status,
@@ -432,10 +514,7 @@ def _attempt_json(row: WorkflowStepAttempt) -> dict[str, Any]:
     }
 
 
-def _step_json(
-    row: WorkflowStepRun,
-    attempts: list[WorkflowStepAttempt] | None = None,
-) -> dict[str, Any]:
+def _step_json(row: WorkflowStepRun, attempts: list[WorkflowStepAttempt] | None = None) -> dict[str, Any]:
     return {
         "id": row.id,
         "step_key": row.step_key,
@@ -458,6 +537,19 @@ def _step_json(
     }
 
 
+def _trigger_json(row: WorkflowEventTrigger) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "workflow_id": row.workflow_id,
+        "event_pattern": row.event_pattern,
+        "condition": _loads(row.condition_json, {}),
+        "enabled": row.enabled,
+        "created_by_user_id": row.created_by_user_id,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
 class WorkflowProvider:
     def __init__(self) -> None:
         self._handlers = {
@@ -470,6 +562,9 @@ class WorkflowProvider:
             "workflow.enable": self._enable,
             "workflow.disable": self._disable,
             "workflow.archive": self._archive,
+            "workflow.trigger.list": self._list_triggers,
+            "workflow.trigger.create": self._create_trigger,
+            "workflow.trigger.delete": self._delete_trigger,
             "workflow.run.start": self._start_run,
             "workflow.run.list": self._list_runs,
             "workflow.run.get": self._get_run,
@@ -490,54 +585,36 @@ class WorkflowProvider:
         minimum_context: dict[str, Any],
     ) -> CapabilityExecutionResult:
         del minimum_context
-        if not context.workspace_id:
-            raise PermissionError("Workflow requires Workspace authority")
+        if not context.user_id:
+            raise PermissionError("Workflow authority requires an Operly user")
+        if context.is_workspace and not context.workspace_id:
+            raise PermissionError("Workspace workflow requires Workspace authority")
         handler = self._handlers.get(capability.id)
         if handler is None:
             raise LookupError("Workflow capability is not implemented")
         return await handler(db, context, arguments)
 
-    async def _workflow(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        workflow_id: str,
-    ) -> WorkflowDefinition:
+    async def _workflow(self, db: AsyncSession, context: ExecutionContext, workflow_id: str) -> WorkflowDefinition:
         row = await db.scalar(
             select(WorkflowDefinition).where(
                 WorkflowDefinition.id == workflow_id,
-                WorkflowDefinition.workspace_id == context.workspace_id,
+                *_scope_definition_filters(context),
             )
         )
         if row is None:
-            raise LookupError("Workflow is unavailable")
+            raise LookupError("Workflow is unavailable in this authority scope")
         return row
 
-    async def _run(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        run_id: str,
-    ) -> WorkflowRun:
+    async def _run(self, db: AsyncSession, context: ExecutionContext, run_id: str) -> WorkflowRun:
         row = await db.scalar(
-            select(WorkflowRun).where(
-                WorkflowRun.id == run_id,
-                WorkflowRun.workspace_id == context.workspace_id,
-            )
+            select(WorkflowRun).where(WorkflowRun.id == run_id, *_scope_run_filters(context))
         )
         if row is None:
-            raise LookupError("Workflow run is unavailable")
+            raise LookupError("Workflow run is unavailable in this authority scope")
         return row
 
-    async def _list(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        statement = select(WorkflowDefinition).where(
-            WorkflowDefinition.workspace_id == context.workspace_id
-        )
+    async def _list(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        statement = select(WorkflowDefinition).where(*_scope_definition_filters(context))
         if not bool(arguments.get("include_archived")):
             statement = statement.where(WorkflowDefinition.status != "archived")
         rows = (
@@ -547,30 +624,19 @@ class WorkflowProvider:
                 )
             )
         ).all()
-        schedules = (
-            {
-                row.workflow_id: row
-                for row in (
-                    await db.scalars(
-                        select(WorkflowSchedule).where(
-                            WorkflowSchedule.workflow_id.in_([item.id for item in rows])
-                        )
+        schedules = {
+            row.workflow_id: row
+            for row in (
+                await db.scalars(
+                    select(WorkflowSchedule).where(
+                        WorkflowSchedule.workflow_id.in_([item.id for item in rows])
                     )
-                ).all()
-            }
-            if rows
-            else {}
-        )
-        return CapabilityExecutionResult(
-            value={"workflows": [_workflow_json(row, schedules.get(row.id)) for row in rows]}
-        )
+                )
+            ).all()
+        } if rows else {}
+        return CapabilityExecutionResult(value={"workflows": [_workflow_json(row, schedules.get(row.id)) for row in rows]})
 
-    async def _get(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _get(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         version = await db.scalar(
             select(WorkflowVersion).where(
@@ -578,33 +644,31 @@ class WorkflowProvider:
                 WorkflowVersion.version == row.current_version,
             )
         )
-        schedule = await db.scalar(
-            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id)
-        )
+        schedule = await db.scalar(select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id))
+        triggers = (
+            await db.scalars(
+                select(WorkflowEventTrigger)
+                .where(WorkflowEventTrigger.workflow_id == row.id)
+                .order_by(WorkflowEventTrigger.created_at.asc())
+            )
+        ).all()
         runs = (
             await db.scalars(
-                select(WorkflowRun)
-                .where(WorkflowRun.workflow_id == row.id)
-                .order_by(WorkflowRun.created_at.desc())
-                .limit(20)
+                select(WorkflowRun).where(WorkflowRun.workflow_id == row.id).order_by(WorkflowRun.created_at.desc()).limit(20)
             )
         ).all()
         return CapabilityExecutionResult(
             value={
                 "workflow": _workflow_json(row, schedule),
                 "version": _version_json(version, include_definition=True) if version else None,
+                "event_triggers": [_trigger_json(item) for item in triggers],
                 "recent_runs": [_run_json(item) for item in runs],
             },
             resource_type="workflow",
             resource_id=row.id,
         )
 
-    async def _list_versions(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _list_versions(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
         rows = (
             await db.scalars(
@@ -614,18 +678,9 @@ class WorkflowProvider:
                 .limit(max(1, min(int(arguments.get("limit") or 100), 200)))
             )
         ).all()
-        return CapabilityExecutionResult(
-            value={"versions": [_version_json(row) for row in rows]},
-            resource_type="workflow",
-            resource_id=workflow.id,
-        )
+        return CapabilityExecutionResult(value={"versions": [_version_json(row) for row in rows]}, resource_type="workflow", resource_id=workflow.id)
 
-    async def _get_version(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _get_version(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
         row = await db.scalar(
             select(WorkflowVersion).where(
@@ -635,43 +690,29 @@ class WorkflowProvider:
         )
         if row is None:
             raise LookupError("Workflow version is unavailable")
-        return CapabilityExecutionResult(
-            value={"version": _version_json(row, include_definition=True)},
-            resource_type="workflow_version",
-            resource_id=row.id,
-        )
+        return CapabilityExecutionResult(value={"version": _version_json(row, include_definition=True)}, resource_type="workflow_version", resource_id=row.id)
 
-    def _future_schedule_time(
-        self,
-        schedule_spec: dict[str, Any] | None,
-        *,
-        enabled: bool,
-    ) -> datetime | None:
+    def _future_schedule_time(self, schedule_spec: dict[str, Any] | None, *, enabled: bool) -> datetime | None:
         if not schedule_spec or not enabled:
             return None
-        next_run = next_schedule_time(
-            schedule_spec, after=datetime.utcnow() - timedelta(seconds=1)
-        )
+        next_run = next_schedule_time(schedule_spec, after=datetime.utcnow() - timedelta(seconds=1))
         if next_run is None:
             raise ValueError("Enabled schedule has no future occurrence")
         return next_run
 
-    async def _create(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        if not context.user_id:
-            raise PermissionError("Workflow owner must be an Operly user")
+    async def _create(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        name = str(arguments["name"]).strip()
+        if not name:
+            raise ValueError("Workflow name is required")
         spec = validate_workflow_spec(arguments["spec"])
         schedule_spec = validate_schedule(arguments.get("schedule"))
         enabled = bool(arguments.get("enabled"))
         next_run = self._future_schedule_time(schedule_spec, enabled=enabled)
         row = WorkflowDefinition(
+            scope_kind=context.scope_kind.value,
             workspace_id=context.workspace_id,
             owner_user_id=context.user_id,
-            name=str(arguments["name"]).strip(),
+            name=name,
             description=str(arguments.get("description") or ""),
             status="enabled" if enabled else "disabled",
             current_version=1,
@@ -682,15 +723,7 @@ class WorkflowProvider:
             workflow_id=row.id,
             version=1,
             spec_json=_dumps(spec),
-            snapshot_json=_dumps(
-                _snapshot(
-                    name=row.name,
-                    description=row.description,
-                    spec=spec,
-                    schedule=schedule_spec,
-                    status=row.status,
-                )
-            ),
+            snapshot_json=_dumps(_snapshot(name=row.name, description=row.description, spec=spec, schedule=schedule_spec, status=row.status)),
             created_by_user_id=context.user_id,
         )
         db.add(version)
@@ -715,29 +748,16 @@ class WorkflowProvider:
             actor_id=context.user_id,
             owner_user_id=context.user_id,
             principal_id=context.principal_id,
-            payload={
-                "version": 1,
-                "version_id": version.id,
-                "enabled": enabled,
-                "schedule_type": schedule_spec.get("type") if schedule_spec else "manual",
-            },
+            payload={"scope_kind": row.scope_kind, "version": 1, "version_id": version.id, "enabled": enabled, "schedule_type": schedule_spec.get("type") if schedule_spec else "manual"},
         )
         return CapabilityExecutionResult(
-            value={
-                "workflow": _workflow_json(row, schedule),
-                "version": _version_json(version, include_definition=True),
-            },
+            value={"workflow": _workflow_json(row, schedule), "version": _version_json(version, include_definition=True)},
             resource_type="workflow",
             resource_id=row.id,
             event_payload={"workflow_id": row.id, "workflow_version_id": version.id},
         )
 
-    async def _update(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _update(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         if row.status == "archived":
             raise ValueError("Archived workflow cannot be edited")
@@ -750,19 +770,17 @@ class WorkflowProvider:
         if current_version is None:
             raise RuntimeError("Current workflow version is unavailable")
         current_spec = _loads(current_version.spec_json, {})
-        schedule = await db.scalar(
-            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id)
-        )
+        schedule = await db.scalar(select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id))
         current_schedule = _loads(schedule.schedule_json, {}) if schedule else None
-
         new_name = row.name
         new_description = row.description
         new_spec = current_spec
         new_schedule = current_schedule
         changed: list[str] = []
-
         if arguments.get("name") is not None:
             candidate = str(arguments["name"]).strip()
+            if not candidate:
+                raise ValueError("Workflow name cannot be empty")
             if candidate != row.name:
                 new_name = candidate
                 changed.append("name")
@@ -781,25 +799,11 @@ class WorkflowProvider:
             if candidate != current_schedule:
                 new_schedule = candidate
                 changed.append("schedule")
-
         if not changed:
-            return CapabilityExecutionResult(
-                value={
-                    "workflow": _workflow_json(row, schedule),
-                    "version": _version_json(current_version, include_definition=True),
-                    "changed": [],
-                },
-                resource_type="workflow",
-                resource_id=row.id,
-            )
-
-        next_run = self._future_schedule_time(
-            new_schedule,
-            enabled=row.status == "enabled",
-        )
+            return CapabilityExecutionResult(value={"workflow": _workflow_json(row, schedule), "version": _version_json(current_version, include_definition=True), "changed": []}, resource_type="workflow", resource_id=row.id)
+        next_run = self._future_schedule_time(new_schedule, enabled=row.status == "enabled")
         row.name = new_name
         row.description = new_description
-
         if "schedule" in changed:
             if new_schedule is None:
                 if schedule is not None:
@@ -807,33 +811,19 @@ class WorkflowProvider:
                     schedule = None
             else:
                 if schedule is None:
-                    schedule = WorkflowSchedule(
-                        workflow_id=row.id,
-                        schedule_type=new_schedule["type"],
-                        schedule_json=_dumps(new_schedule),
-                        timezone=new_schedule.get("timezone", "UTC"),
-                    )
+                    schedule = WorkflowSchedule(workflow_id=row.id, schedule_type=new_schedule["type"], schedule_json=_dumps(new_schedule), timezone=new_schedule.get("timezone", "UTC"))
                     db.add(schedule)
                 schedule.schedule_type = new_schedule["type"]
                 schedule.schedule_json = _dumps(new_schedule)
                 schedule.timezone = new_schedule.get("timezone", "UTC")
                 schedule.enabled = row.status == "enabled"
                 schedule.next_run_at = next_run
-
         row.current_version += 1
         version = WorkflowVersion(
             workflow_id=row.id,
             version=row.current_version,
             spec_json=_dumps(new_spec),
-            snapshot_json=_dumps(
-                _snapshot(
-                    name=row.name,
-                    description=row.description,
-                    spec=new_spec,
-                    schedule=new_schedule,
-                    status=row.status,
-                )
-            ),
+            snapshot_json=_dumps(_snapshot(name=row.name, description=row.description, spec=new_spec, schedule=new_schedule, status=row.status)),
             created_by_user_id=context.user_id,
         )
         db.add(version)
@@ -847,218 +837,128 @@ class WorkflowProvider:
             actor_id=context.user_id,
             owner_user_id=row.owner_user_id,
             principal_id=context.principal_id,
-            payload={
-                "version": row.current_version,
-                "version_id": version.id,
-                "previous_version_id": current_version.id,
-                "changed": changed,
-            },
+            payload={"version": row.current_version, "version_id": version.id, "previous_version_id": current_version.id, "changed": changed},
         )
-        return CapabilityExecutionResult(
-            value={
-                "workflow": _workflow_json(row, schedule),
-                "version": _version_json(version, include_definition=True),
-                "changed": changed,
-            },
-            resource_type="workflow",
-            resource_id=row.id,
-            event_payload={"workflow_id": row.id, "workflow_version_id": version.id},
-        )
+        return CapabilityExecutionResult(value={"workflow": _workflow_json(row, schedule), "version": _version_json(version, include_definition=True), "changed": changed}, resource_type="workflow", resource_id=row.id, event_payload={"workflow_id": row.id, "workflow_version_id": version.id})
 
-    async def _enable(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _enable(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         if row.status == "archived":
             raise ValueError("Archived workflow cannot be enabled")
-        schedule = await db.scalar(
-            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id)
-        )
-        next_run = None
-        if schedule:
-            next_run = self._future_schedule_time(
-                _loads(schedule.schedule_json, {}), enabled=True
-            )
+        schedule = await db.scalar(select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id))
+        next_run = self._future_schedule_time(_loads(schedule.schedule_json, {}), enabled=True) if schedule else None
         row.status = "enabled"
         if schedule:
             schedule.enabled = True
             schedule.next_run_at = next_run
-        await record_workflow_event(
-            db,
-            workspace_id=context.workspace_id,
-            workflow_id=row.id,
-            event_type="workflow.enabled",
-            actor_type="human",
-            actor_id=context.user_id,
-            owner_user_id=row.owner_user_id,
-            principal_id=context.principal_id,
-            payload={"next_run_at": next_run.isoformat() if next_run else None},
-        )
-        return CapabilityExecutionResult(
-            value={"workflow": _workflow_json(row, schedule)},
-            resource_type="workflow",
-            resource_id=row.id,
-        )
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=row.id, event_type="workflow.enabled", actor_type="human", actor_id=context.user_id, owner_user_id=row.owner_user_id, principal_id=context.principal_id, payload={"next_run_at": next_run.isoformat() if next_run else None})
+        return CapabilityExecutionResult(value={"workflow": _workflow_json(row, schedule)}, resource_type="workflow", resource_id=row.id)
 
-    async def _disable(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _disable(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         if row.status != "archived":
             row.status = "disabled"
-        schedule = await db.scalar(
-            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id)
-        )
+        schedule = await db.scalar(select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id))
         if schedule:
             schedule.enabled = False
             schedule.next_run_at = None
-        await record_workflow_event(
-            db,
-            workspace_id=context.workspace_id,
-            workflow_id=row.id,
-            event_type="workflow.disabled",
-            actor_type="human",
-            actor_id=context.user_id,
-            owner_user_id=row.owner_user_id,
-            principal_id=context.principal_id,
-        )
-        return CapabilityExecutionResult(
-            value={"workflow": _workflow_json(row, schedule)},
-            resource_type="workflow",
-            resource_id=row.id,
-        )
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=row.id, event_type="workflow.disabled", actor_type="human", actor_id=context.user_id, owner_user_id=row.owner_user_id, principal_id=context.principal_id)
+        return CapabilityExecutionResult(value={"workflow": _workflow_json(row, schedule)}, resource_type="workflow", resource_id=row.id)
 
-    async def _archive(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _archive(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         row.status = "archived"
-        schedule = await db.scalar(
-            select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id)
-        )
+        schedule = await db.scalar(select(WorkflowSchedule).where(WorkflowSchedule.workflow_id == row.id))
         if schedule:
             schedule.enabled = False
             schedule.next_run_at = None
-        await record_workflow_event(
-            db,
-            workspace_id=context.workspace_id,
-            workflow_id=row.id,
-            event_type="workflow.archived",
-            actor_type="human",
-            actor_id=context.user_id,
-            owner_user_id=row.owner_user_id,
-            principal_id=context.principal_id,
-        )
-        return CapabilityExecutionResult(
-            value={"workflow": _workflow_json(row, schedule)},
-            resource_type="workflow",
-            resource_id=row.id,
-        )
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=row.id, event_type="workflow.archived", actor_type="human", actor_id=context.user_id, owner_user_id=row.owner_user_id, principal_id=context.principal_id)
+        return CapabilityExecutionResult(value={"workflow": _workflow_json(row, schedule)}, resource_type="workflow", resource_id=row.id)
 
-    async def _start_run(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _list_triggers(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
+        rows = (
+            await db.scalars(
+                select(WorkflowEventTrigger)
+                .where(WorkflowEventTrigger.workflow_id == workflow.id)
+                .order_by(WorkflowEventTrigger.created_at.asc())
+            )
+        ).all()
+        return CapabilityExecutionResult(value={"triggers": [_trigger_json(row) for row in rows]}, resource_type="workflow", resource_id=workflow.id)
+
+    async def _create_trigger(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
+        if workflow.status == "archived":
+            raise ValueError("Archived workflow cannot receive triggers")
+        pattern = normalize_event_pattern(str(arguments["event_pattern"]))
+        condition = arguments.get("condition") or {}
+        if condition:
+            validate_condition(condition)
+        existing = await db.scalar(
+            select(WorkflowEventTrigger).where(
+                WorkflowEventTrigger.workflow_id == workflow.id,
+                WorkflowEventTrigger.event_pattern == pattern,
+            )
+        )
+        if existing is not None:
+            raise ValueError("Workflow already has this event pattern")
+        row = WorkflowEventTrigger(
+            workflow_id=workflow.id,
+            event_pattern=pattern,
+            condition_json=_dumps(condition),
+            enabled=True,
+            created_by_user_id=context.user_id,
+        )
+        db.add(row)
+        await db.flush()
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=workflow.id, event_type="workflow.trigger.created", actor_type="human", actor_id=context.user_id, owner_user_id=workflow.owner_user_id, principal_id=context.principal_id, payload={"trigger_id": row.id, "event_pattern": pattern, "condition_present": bool(condition)})
+        return CapabilityExecutionResult(value={"trigger": _trigger_json(row)}, resource_type="workflow_trigger", resource_id=row.id)
+
+    async def _delete_trigger(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        trigger = await db.get(WorkflowEventTrigger, str(arguments["trigger_id"]))
+        if trigger is None:
+            raise LookupError("Workflow trigger is unavailable")
+        workflow = await self._workflow(db, context, trigger.workflow_id)
+        trigger_id = trigger.id
+        pattern = trigger.event_pattern
+        await db.delete(trigger)
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=workflow.id, event_type="workflow.trigger.deleted", actor_type="human", actor_id=context.user_id, owner_user_id=workflow.owner_user_id, principal_id=context.principal_id, payload={"trigger_id": trigger_id, "event_pattern": pattern})
+        return CapabilityExecutionResult(value={"deleted": True, "trigger_id": trigger_id}, resource_type="workflow", resource_id=workflow.id)
+
+    async def _start_run(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         row = await self._workflow(db, context, str(arguments["workflow_id"]))
         if row.status == "archived":
             raise ValueError("Archived workflow cannot run")
-        run = await queue_workflow_run(
-            db,
-            workflow=row,
-            trigger_type="manual",
-            trigger_payload=(
-                arguments.get("trigger")
-                if isinstance(arguments.get("trigger"), dict)
-                else {}
-            ),
-            initiated_by_user_id=context.user_id,
-        )
-        return CapabilityExecutionResult(
-            value={"run": _run_json(run)},
-            resource_type="workflow_run",
-            resource_id=run.id,
-            event_payload={"workflow_id": row.id, "workflow_run_id": run.id},
-        )
+        run = await queue_workflow_run(db, workflow=row, trigger_type="manual", trigger_payload=arguments.get("trigger") if isinstance(arguments.get("trigger"), dict) else {}, initiated_by_user_id=context.user_id)
+        return CapabilityExecutionResult(value={"run": _run_json(run)}, resource_type="workflow_run", resource_id=run.id, event_payload={"workflow_id": row.id, "workflow_run_id": run.id})
 
-    async def _list_runs(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        statement = select(WorkflowRun).where(
-            WorkflowRun.workspace_id == context.workspace_id
-        )
+    async def _list_runs(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        statement = select(WorkflowRun).where(*_scope_run_filters(context))
         if arguments.get("workflow_id"):
-            statement = statement.where(
-                WorkflowRun.workflow_id == str(arguments["workflow_id"])
-            )
+            workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
+            statement = statement.where(WorkflowRun.workflow_id == workflow.id)
         if arguments.get("status"):
             statement = statement.where(WorkflowRun.status == str(arguments["status"]))
         rows = (
-            await db.scalars(
-                statement.order_by(WorkflowRun.created_at.desc()).limit(
-                    max(1, min(int(arguments.get("limit") or 100), 200))
-                )
-            )
+            await db.scalars(statement.order_by(WorkflowRun.created_at.desc()).limit(max(1, min(int(arguments.get("limit") or 100), 200))))
         ).all()
         return CapabilityExecutionResult(value={"runs": [_run_json(row) for row in rows]})
 
-    async def _get_run(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _get_run(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         run = await self._run(db, context, str(arguments["run_id"]))
         version = await db.get(WorkflowVersion, run.workflow_version_id)
         steps = (
-            await db.scalars(
-                select(WorkflowStepRun)
-                .where(WorkflowStepRun.workflow_run_id == run.id)
-                .order_by(WorkflowStepRun.step_order)
-            )
+            await db.scalars(select(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == run.id).order_by(WorkflowStepRun.step_order))
         ).all()
         attempts = (
-            await db.scalars(
-                select(WorkflowStepAttempt)
-                .where(WorkflowStepAttempt.workflow_run_id == run.id)
-                .order_by(WorkflowStepAttempt.step_run_id, WorkflowStepAttempt.attempt)
-            )
+            await db.scalars(select(WorkflowStepAttempt).where(WorkflowStepAttempt.workflow_run_id == run.id).order_by(WorkflowStepAttempt.step_run_id, WorkflowStepAttempt.attempt))
         ).all()
         attempts_by_step: dict[str, list[WorkflowStepAttempt]] = {}
         for attempt in attempts:
             attempts_by_step.setdefault(attempt.step_run_id, []).append(attempt)
-        return CapabilityExecutionResult(
-            value={
-                "run": _run_json(run),
-                "version": _version_json(version, include_definition=True) if version else None,
-                "steps": [
-                    _step_json(row, attempts_by_step.get(row.id, [])) for row in steps
-                ],
-                "result": _loads(run.result_json, {}),
-            },
-            resource_type="workflow_run",
-            resource_id=run.id,
-        )
+        return CapabilityExecutionResult(value={"run": _run_json(run), "version": _version_json(version, include_definition=True) if version else None, "steps": [_step_json(row, attempts_by_step.get(row.id, [])) for row in steps], "result": _loads(run.result_json, {})}, resource_type="workflow_run", resource_id=run.id)
 
-    async def _cancel_run(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _cancel_run(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         run = await self._run(db, context, str(arguments["run_id"]))
         terminal = {"completed", "completed_with_errors", "failed", "cancelled", "orphaned"}
         if run.status not in terminal:
@@ -1070,70 +970,23 @@ class WorkflowProvider:
             step = None
             attempt = None
             if run.current_step_key:
-                step = await db.scalar(
-                    select(WorkflowStepRun).where(
-                        WorkflowStepRun.workflow_run_id == run.id,
-                        WorkflowStepRun.step_key == run.current_step_key,
-                    )
-                )
+                step = await db.scalar(select(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == run.id, WorkflowStepRun.step_key == run.current_step_key))
                 if step is not None and previous_status in {"waiting", "waiting_approval"}:
                     step.status = "cancelled"
                     step.finished_at = run.finished_at
                     if step.step_kind == "action" and step.attempt > 0:
-                        attempt = await db.scalar(
-                            select(WorkflowStepAttempt).where(
-                                WorkflowStepAttempt.step_run_id == step.id,
-                                WorkflowStepAttempt.attempt == step.attempt,
-                            )
-                        )
+                        attempt = await db.scalar(select(WorkflowStepAttempt).where(WorkflowStepAttempt.step_run_id == step.id, WorkflowStepAttempt.attempt == step.attempt))
                         if attempt is not None:
                             attempt.status = "cancelled"
                             attempt.finished_at = run.finished_at
-            await record_workflow_event(
-                db,
-                workspace_id=context.workspace_id,
-                workflow_id=run.workflow_id,
-                workflow_run_id=run.id,
-                step_run_id=step.id if step else None,
-                step_attempt_id=attempt.id if attempt else None,
-                event_type="workflow.run.cancelled",
-                actor_type="human",
-                actor_id=context.user_id,
-                owner_user_id=run.authority_user_id,
-                principal_id=context.principal_id,
-                capability_id=step.capability_id if step else None,
-                kernel_run_id=step.kernel_run_id if step else None,
-                approval_id=step.approval_id if step else None,
-                payload={
-                    "previous_status": previous_status,
-                    "current_step_key": run.current_step_key,
-                },
-            )
-        return CapabilityExecutionResult(
-            value={"run": _run_json(run)},
-            resource_type="workflow_run",
-            resource_id=run.id,
-        )
+            await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=run.workflow_id, workflow_run_id=run.id, step_run_id=step.id if step else None, step_attempt_id=attempt.id if attempt else None, event_type="workflow.run.cancelled", actor_type="human", actor_id=context.user_id, owner_user_id=run.authority_user_id, principal_id=context.principal_id, capability_id=step.capability_id if step else None, kernel_run_id=step.kernel_run_id if step else None, approval_id=step.approval_id if step else None, payload={"previous_status": previous_status, "current_step_key": run.current_step_key})
+        return CapabilityExecutionResult(value={"run": _run_json(run)}, resource_type="workflow_run", resource_id=run.id)
 
-    async def _retry_run(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _retry_run(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         run = await self._run(db, context, str(arguments["run_id"]))
         if run.status != "failed":
-            raise ValueError(
-                "Only failed workflow runs can be retried; orphaned runs require manual reconciliation"
-            )
-        failed = await db.scalar(
-            select(WorkflowStepRun)
-            .where(
-                WorkflowStepRun.workflow_run_id == run.id,
-                WorkflowStepRun.status == "failed",
-            )
-            .order_by(WorkflowStepRun.step_order.desc())
-        )
+            raise ValueError("Only failed workflow runs can be retried; orphaned runs require manual reconciliation")
+        failed = await db.scalar(select(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == run.id, WorkflowStepRun.status == "failed").order_by(WorkflowStepRun.step_order.desc()))
         if failed:
             failed.status = "pending"
             failed.request_id = None
@@ -1150,81 +1003,23 @@ class WorkflowProvider:
         run.finished_at = None
         run.lease_token = None
         run.lease_until = None
-        await record_workflow_event(
-            db,
-            workspace_id=context.workspace_id,
-            workflow_id=run.workflow_id,
-            workflow_run_id=run.id,
-            step_run_id=failed.id if failed else None,
-            event_type="workflow.run.retry_requested",
-            actor_type="human",
-            actor_id=context.user_id,
-            owner_user_id=run.authority_user_id,
-            principal_id=context.principal_id,
-            payload={
-                "step_key": failed.step_key if failed else None,
-                "next_attempt": (failed.attempt + 1) if failed else None,
-            },
-        )
-        return CapabilityExecutionResult(
-            value={"run": _run_json(run)},
-            resource_type="workflow_run",
-            resource_id=run.id,
-        )
+        await record_workflow_event(db, workspace_id=context.workspace_id, workflow_id=run.workflow_id, workflow_run_id=run.id, step_run_id=failed.id if failed else None, event_type="workflow.run.retry_requested", actor_type="human", actor_id=context.user_id, owner_user_id=run.authority_user_id, principal_id=context.principal_id, payload={"step_key": failed.step_key if failed else None, "next_attempt": (failed.attempt + 1) if failed else None})
+        return CapabilityExecutionResult(value={"run": _run_json(run)}, resource_type="workflow_run", resource_id=run.id)
 
-    async def _trace(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        statement = select(WorkflowTraceEvent).where(
-            WorkflowTraceEvent.workspace_id == context.workspace_id
-        )
+    async def _trace(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
+        statement = select(WorkflowTraceEvent).where(*_scope_trace_filters(context))
         if arguments.get("workflow_id"):
-            statement = statement.where(
-                WorkflowTraceEvent.workflow_id == str(arguments["workflow_id"])
-            )
+            workflow = await self._workflow(db, context, str(arguments["workflow_id"]))
+            statement = statement.where(WorkflowTraceEvent.workflow_id == workflow.id)
         if arguments.get("run_id"):
-            statement = statement.where(
-                WorkflowTraceEvent.workflow_run_id == str(arguments["run_id"])
-            )
+            run = await self._run(db, context, str(arguments["run_id"]))
+            statement = statement.where(WorkflowTraceEvent.workflow_run_id == run.id)
         rows = (
-            await db.scalars(
-                statement.order_by(WorkflowTraceEvent.created_at.desc()).limit(
-                    max(1, min(int(arguments.get("limit") or 200), 500))
-                )
-            )
+            await db.scalars(statement.order_by(WorkflowTraceEvent.created_at.desc()).limit(max(1, min(int(arguments.get("limit") or 200), 500))))
         ).all()
-        return CapabilityExecutionResult(
-            value={
-                "events": [
-                    {
-                        "id": row.id,
-                        "event_type": row.event_type,
-                        "workflow_id": row.workflow_id,
-                        "workflow_run_id": row.workflow_run_id,
-                        "step_run_id": row.step_run_id,
-                        "step_attempt_id": row.step_attempt_id,
-                        "capability_id": row.capability_id,
-                        "kernel_run_id": row.kernel_run_id,
-                        "approval_id": row.approval_id,
-                        "actor_type": row.actor_type,
-                        "actor_id": row.actor_id,
-                        "payload": _loads(row.payload_json, {}),
-                        "created_at": row.created_at.isoformat(),
-                    }
-                    for row in rows
-                ]
-            }
-        )
+        return CapabilityExecutionResult(value={"events": [{"id": row.id, "scope_kind": row.scope_kind, "event_type": row.event_type, "workflow_id": row.workflow_id, "workflow_run_id": row.workflow_run_id, "step_run_id": row.step_run_id, "step_attempt_id": row.step_attempt_id, "capability_id": row.capability_id, "kernel_run_id": row.kernel_run_id, "approval_id": row.approval_id, "actor_type": row.actor_type, "actor_id": row.actor_id, "payload": _loads(row.payload_json, {}), "created_at": row.created_at.isoformat()} for row in rows]})
 
-    async def _schedule_preview(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _schedule_preview(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         del db, context
         schedule = validate_schedule(arguments["schedule"])
         if schedule is None:
@@ -1238,17 +1033,11 @@ class WorkflowProvider:
                 break
             occurrences.append(next_at.isoformat())
             cursor = next_at
-        return CapabilityExecutionResult(
-            value={"schedule": schedule, "occurrences": occurrences}
-        )
+        return CapabilityExecutionResult(value={"schedule": schedule, "occurrences": occurrences})
 
-    async def _runtime_status(
-        self,
-        db: AsyncSession,
-        context: ExecutionContext,
-        arguments: dict[str, Any],
-    ) -> CapabilityExecutionResult:
+    async def _runtime_status(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         del db, context, arguments
         from packages.workflow.scheduler import workflow_scheduler
+        from packages.workflow.triggers import workflow_event_dispatcher
 
-        return CapabilityExecutionResult(value=workflow_scheduler.status())
+        return CapabilityExecutionResult(value={"scheduler": workflow_scheduler.status(), "event_dispatcher": workflow_event_dispatcher.status()})
