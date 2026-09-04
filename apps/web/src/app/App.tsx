@@ -3,9 +3,7 @@ import { useEffect, useState } from "react";
 import { ProviderAuthPage } from "../auth/ProviderAuthPage";
 import { LegalPage } from "../legal/LegalPage";
 import { MinimalApp } from "../minimal/MinimalApp";
-import { PluginLabPage } from "../public/PluginLabPage";
 import { PublicApp } from "../public/PublicApp";
-import { TempAppLabPage } from "../public/TempAppLabPage";
 import { WorkspaceSafeApp } from "../workspace-lite/WorkspaceSafeApp";
 
 function currentPath() {
@@ -25,8 +23,6 @@ export function App() {
   if (pathname === "/login" || pathname === "/signup") return <ProviderAuthPage pathname={pathname} />;
   if (pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (pathname === "/terms") return <LegalPage kind="terms" />;
-  if (pathname.startsWith("/plugin-lab/")) return <PluginLabPage pathname={pathname} />;
-  if (pathname.startsWith("/temp-app-lab/")) return <TempAppLabPage pathname={pathname} />;
   if (
     pathname === "/account"
     || pathname === "/personal"

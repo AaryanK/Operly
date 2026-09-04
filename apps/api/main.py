@@ -26,13 +26,14 @@ from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
+from packages.personal_modules.connectors import router as personal_connectors_router
+from packages.personal_modules.router import router as personal_tools_router
 from packages.plugins.egress_router import router as runtime_egress_router
 from packages.plugins.event_router import router as plugin_event_router
 from packages.plugins.gateway_router import router as capability_gateway_router
 from packages.plugins.hosted_public_router import public_router as plugin_hosted_public_router
 from packages.plugins.router import router as plugin_platform_router
 from packages.plugins.runtime_router import router as plugin_runtime_management_router
-from packages.plugins.temp_demo_router import router as plugin_temp_demo_router
 from packages.plugins.webhook_router import (
     management_router as plugin_webhook_management_router,
     public_router as plugin_webhook_public_router,
@@ -124,7 +125,7 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.8.0-digital-infra", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.9.0-personal-capabilities", lifespan=lifespan)
 
 # Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
 # agent all resolve current authority and execute through the same governed runtime.
@@ -159,7 +160,6 @@ app.add_middleware(
         "Content-Type",
         "Authorization",
         "X-CSRF-Token",
-        "X-Operly-Demo-Token",
         "MCP-Protocol-Version",
         "Mcp-Method",
         "Mcp-Name",
@@ -171,6 +171,8 @@ app.add_middleware(
 
 app.include_router(session_router)
 app.include_router(discord_auth_router)
+app.include_router(personal_connectors_router)
+app.include_router(personal_tools_router)
 app.include_router(workspace_os_router)
 app.include_router(workspace_simple_router)
 app.include_router(workspace_integrations_router)
@@ -179,7 +181,6 @@ app.include_router(artifact_router)
 app.include_router(plugin_platform_router)
 app.include_router(plugin_runtime_management_router)
 app.include_router(plugin_hosted_public_router)
-app.include_router(plugin_temp_demo_router)
 app.include_router(plugin_event_router)
 app.include_router(plugin_webhook_management_router)
 app.include_router(plugin_webhook_public_router)
@@ -200,6 +201,9 @@ async def health():
         "service": "operly",
         "runtime": "operly-kernel-v3",
         "account_access": True,
+        "personal_tools_enabled": True,
+        "personal_google_connectors_enabled": True,
+        "personal_tool_discovery": "search-then-describe",
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
@@ -232,9 +236,12 @@ async def health():
 @app.get("/api/rebuild-status")
 async def rebuild_status():
     return {
-        "state": "digital-business-infrastructure",
+        "state": "personal-and-digital-business-infrastructure",
         "deterministic_core": True,
         "account_access": True,
+        "personal_tools_enabled": True,
+        "personal_tool_discovery": "authorization-aware-search-then-describe",
+        "personal_google_connector_ownership": "account",
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
@@ -262,9 +269,8 @@ async def rebuild_status():
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Operly is establishing the digital business substrate before any AI runtime: immutable plugin packages, "
-            "Workspace installations, trusted runtime profiles, isolated validation, reconciled runtime health, namespaced plugin storage, short-lived runtime identities, "
-            "capability bindings, credential-safe egress, durable events/webhooks, artifacts and resource budgets remain subordinate to Kernel authority."
+            "Operly now exposes account-owned and Workspace-owned abilities through searchable Kernel capability registries. "
+            "A future agent resolves scope first, searches relevant capabilities, describes only selected schemas, and executes through the canonical policy, approval, idempotency and audit boundary."
         ),
     }
 
@@ -273,7 +279,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_DIST = WEB_ROOT / "dist"
 KNOWN_REACT_ROUTES = {
     "", "login", "signup", "join", "verify-email", "forgot-password", "reset-password",
-    "onboarding", "account", "personal", "app", "privacy", "terms", "plugin-lab", "temp-app-lab",
+    "onboarding", "account", "personal", "app", "privacy", "terms",
 }
 
 
@@ -293,12 +299,6 @@ async def frontend(path: str):
     built_asset = WEB_DIST / route
     if route and built_asset.is_file():
         return FileResponse(built_asset)
-    if (
-        route in KNOWN_REACT_ROUTES
-        or route == "channels"
-        or route.startswith("channels/")
-        or route.startswith("plugin-lab/")
-        or route.startswith("temp-app-lab/")
-    ):
+    if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/"):
         return react_shell()
     return react_shell(status_code=404)
