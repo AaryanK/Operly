@@ -10,6 +10,43 @@ Every executable step is converted into a Kernel `RuntimeRequest`. Kernel then r
 
 `AgentRuntimeSettings` still defaults to disabled. The only environment switch recognized by this runtime is `OPERLY_AGENT_RUNTIME_ENABLED=1`; legacy agent flags do not enable it. No API route or production worker currently sets that switch, and the API continues to report `ai_runtime_enabled: false`.
 
+## Runtime 1.0 front door
+
+Runtime 1.0 starts by interpreting the human objective before exposing capabilities. `ObjectiveInterpreter` is a model-powered semantic boundary that classifies requests into a small finite representation rather than trying to enumerate every possible domain intent.
+
+`ObjectiveIR` records a concise objective, a request kind, finite operations (`respond`, `retrieve`, `analyze`, `transform`, `act`, `wait`), semantic resource hints, whether external state/mutation/future waiting is required, and a bounded complexity class. From that representation the runtime derives four execution paths:
+
+- `respond`: no capability discovery. Reason, explain, converse, or transform supplied content directly.
+- `direct_capability`: one small external read or mutation can be satisfied through the governed capability layer.
+- `agent_loop`: compound/open-ended work needs repeated reasoning, capability composition, observation and replanning.
+- `wait`: completion depends on a future event or condition.
+
+**No tool is a first-class successful outcome.** Runtime 1.0 does not teach the model that being an agent means calling a tool. Capability discovery begins only when the Objective IR says external state is genuinely required.
+
+The interpreter receives trusted scope and surface *labels* so it can understand whether it is operating in a Personal or Workspace conversation, but it does not receive workspace IDs, user IDs, membership IDs, principals, roles, permissions, approvals, provider routes, or credentials. Model output cannot supply those fields. Meaning is model-derived; authority remains trusted runtime state.
+
+The current Objective IR is a front-door contract, not durable authority and not an executable plan. Kernel still owns every authorization decision.
+
+## Context engineering
+
+Context is treated as a budgeted runtime resource, not a global prompt that is automatically forwarded everywhere.
+
+`ContextAssembler` accepts candidate conversation fragments, memories, observations, artifacts, or user-provided content and produces a `ContextSlice` for one inference phase. Selection is relevance/priority/query-aware and is bounded by item count, per-item bytes, and total bytes. Oversized or irrelevant candidates are omitted instead of forwarding the entire candidate set.
+
+Context does **not** implicitly inherit across runtime phases. The objective interpreter, planner, observation/replan loop, and final response should each request the smallest context slice required for their own decision. A tool/capability step must not receive the entire system conversation merely because earlier reasoning had access to it.
+
+Internal context keys are retained server-side but omitted from model-facing prompt items. The Objective IR creates a compact capability-discovery query from the concise objective, external operations, and semantic resource hints; raw user history, memory payloads, and observation dumps do not automatically flow into capability discovery.
+
+This is a foundation rather than the final retrieval system. Future memory and observation retrieval should add semantic/embedding or task-aware relevance upstream, while `ContextAssembler` remains the final hard byte/item gate before inference.
+
+## One runtime, Studio-authored capabilities
+
+Operly should keep one Agent Runtime for Personal AI, Workspaces, Studio-generated solutions, MCP/delegated clients, and future surfaces. Studio should not create a second agent engine.
+
+Instead, Studio is the authoring/install surface for custom capabilities and capability packs. A Workspace-specific plugin can define narrowly scoped schemas, permissions, risk/approval requirements and provider bindings, then register through the same canonical Kernel capability fabric. The runtime discovers only capabilities that are currently effective for the trusted Personal/Workspace execution context.
+
+This keeps reasoning, context engineering, loop control, budgets, memory boundaries, approvals and recovery semantics consistent everywhere while still allowing each Workspace to have custom tools. Customization happens in the **capability set and context**, not by forking the runtime.
+
 ## Authorization-aware planning
 
 `GovernedAgentPlanner` adds a model-planning boundary without adding another execution path. It receives the canonical `CapabilityRegistry` selected by the caller and retrieves a small candidate set with `effective_only=True`, so scope, surface visibility, and current `ExecutionContext` permissions are applied before a capability can be shown to a planner. Production composition must pass the registry owned by the Kernel runtime that will execute the resulting plan; Kernel still independently re-resolves and re-authorizes every requested capability.
@@ -22,7 +59,7 @@ The provider-neutral `AgentPlannerModel` interface returns only structured plann
 
 The pre-Kernel-v3 `packages/model_runtime` implementation was intentionally demolished during the runtime rebuild. It must not be restored wholesale merely to satisfy the planner interface. The new inference boundary is tracked separately in #318 and must be designed for the current Kernel-v3 authority model.
 
-Model output has exactly one allowed top-level field, `steps`. Each step has exactly `capability_id` and `arguments`. Model-supplied step IDs, approvals, permissions, principals, workspace IDs, scopes, or other authority-shaped fields are rejected. Operly assigns durable `step-001`, `step-002`, ... identities server-side.
+The *planner* output has exactly one allowed top-level field, `steps`. Each step has exactly `capability_id` and `arguments`. Model-supplied step IDs, approvals, permissions, principals, workspace IDs, scopes, or other authority-shaped fields are rejected. Operly assigns durable `step-001`, `step-002`, ... identities server-side. The planner is entered only on an external-capability path; the Runtime 1.0 front door can instead choose the no-tool `respond` path.
 
 A selected capability must be in the exact retrieved candidate set. Arguments are validated against the canonical capability input schema before an `AgentPlan` is created. Mutation and step budgets are checked while constructing the plan and are checked again by the executor before any capability executes. Kernel independently re-authorizes every step at execution time, so planner visibility is never durable authority.
 
@@ -42,7 +79,7 @@ Before execution, the foundation preflights the complete plan against `max_steps
 
 Queued or approval-waiting runs become terminal immediately when cancelled. A cancellation arriving while a capability is already executing cannot pretend that side effect did not occur: the current result is recorded and the run stops before any later step.
 
-Planning adds prompt/candidate/model-output bounds, but wall-clock, inference-token, monetary, and observation budgets are still future work. Those limits must remain enforcement controls rather than model suggestions.
+Planning adds prompt/candidate/model-output bounds. Objective interpretation now also has request/output/context bounds. Wall-clock, inference-token, monetary, and observation budgets are still future work. Those limits must remain enforcement controls rather than model suggestions.
 
 ## Approval behavior
 
@@ -68,17 +105,24 @@ Before **every pending capability**, it reconstructs a fresh `ExecutionContext` 
 
 Long-running capability execution is protected by an independent heartbeat that uses a separate database session from the execution session. Losing the heartbeat/lease fails closed before durable step completion is recorded. Kernel's stable request identity remains the at-most-once boundary for a mutating step; a recovering worker reuses the same logical step identity rather than inventing another write.
 
+## Runtime 1.0 evaluation
+
+The dedicated runtime test suite includes a structural reference scorecard for the front-door paths: general/no-tool response, external retrieval, direct mutation, compound agent work, and future wait. It also adversarially verifies that unrelated/oversized context is omitted, raw context does not automatically flow into capability discovery, internal context keys/authority metadata are not exposed, authority-shaped model output fails closed, inconsistent objective flags fail closed, and malformed/oversized model output is rejected.
+
+This scorecard measures runtime contracts and routing invariants with deterministic fake model outputs. It is **not yet a semantic accuracy score for Qwen/DeepSeek/Llama or another real model**. Real-model classification/tool-composition scoring belongs after the Kernel-v3 inference adapter in #318 exists.
+
 ## Remaining runtime roadmap
 
 The next implementation slices should continue without weakening the Kernel boundary:
 
 1. build the new narrow Kernel-v3 inference substrate tracked in #318; do not revive the deliberately demolished pre-v3 `packages/model_runtime` wholesale;
-2. connect `AgentPlannerModel` to that inference substrate with strict structured output plus inference-token, time, attempt, provider-failover, and monetary budgets;
-3. add observation/replan loops with bounded observations and explicit loop budgets;
-4. keep scoped working context and retrieved memory separate from authority;
-5. add a real bounded worker service/loop while keeping the global runtime kill switch off in production;
-6. expand adversarial evaluation for malicious tool outputs, runaway replanning, context poisoning, restart recovery, and model/provider failure;
-7. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
+2. connect both `ObjectiveInterpreterModel` and `AgentPlannerModel` to that inference substrate with strict structured output plus inference-token, time, attempt, provider-failover, and monetary budgets;
+3. compose the Runtime 1.0 dispatch paths so no-tool responses, direct capabilities, durable agent loops and waits share one entry point;
+4. add observation/replan loops where every iteration receives its own bounded context slice rather than inheriting full prior context;
+5. add scoped working context and memory retrieval/compression while keeping memory separate from authority;
+6. add a real bounded worker service/loop while keeping the global runtime kill switch off in production;
+7. run real open-model evaluation for objective classification, no-tool restraint, capability selection, multi-step recovery, context efficiency and adversarial tool-output resistance;
+8. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
 
 ## Legacy agent and model code
 

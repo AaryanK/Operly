@@ -1,3 +1,4 @@
+from .context import ContextAssembler, ContextBudget, ContextItem, ContextKind, ContextSlice
 from .contracts import (
     AgentBudget,
     AgentPlan,
@@ -7,6 +8,18 @@ from .contracts import (
     AgentStepResult,
     AgentStepStatus,
     stable_step_request_id,
+)
+from .objective import (
+    ObjectiveComplexity,
+    ObjectiveIR,
+    ObjectiveInterpretationError,
+    ObjectiveInterpreter,
+    ObjectiveInterpreterLimits,
+    ObjectiveInterpreterModel,
+    ObjectiveInterpreterRequest,
+    ObjectiveKind,
+    ObjectiveOperation,
+    RuntimeDispatchPath,
 )
 from .orchestrator import AgentLeaseLost, DurableAgentOrchestrator
 from .planning import (
@@ -44,9 +57,24 @@ __all__ = [
     "AgentStepResult",
     "AgentStepStatus",
     "AuthorizedCapabilityRetriever",
+    "ContextAssembler",
+    "ContextBudget",
+    "ContextItem",
+    "ContextKind",
+    "ContextSlice",
     "DurableAgentOrchestrator",
     "GovernedAgentPlanner",
     "GovernedAgentRuntime",
+    "ObjectiveComplexity",
+    "ObjectiveIR",
+    "ObjectiveInterpretationError",
+    "ObjectiveInterpreter",
+    "ObjectiveInterpreterLimits",
+    "ObjectiveInterpreterModel",
+    "ObjectiveInterpreterRequest",
+    "ObjectiveKind",
+    "ObjectiveOperation",
     "PlannerCapability",
+    "RuntimeDispatchPath",
     "stable_step_request_id",
 ]
