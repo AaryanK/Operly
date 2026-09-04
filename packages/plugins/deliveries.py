@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
-import ipaddress
 import json
-import socket
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Mapping
@@ -20,6 +17,14 @@ from packages.database.digital_event_models import DigitalEventDeliveryRecord
 from packages.database.plugin_platform_models import (
     DigitalEventOutboxRecord,
     DigitalEventSubscriptionRecord,
+)
+from packages.security.pinned_https import (
+    PublicHostPolicyError,
+    PublicHostResolutionError,
+    host_header,
+    pinned_https_url,
+    resolve_public_addresses,
+    sni_extensions,
 )
 
 
@@ -54,6 +59,8 @@ def _safe_target_url(value: str) -> tuple[str, str, int]:
         raise EventDeliveryError("Webhook event targets must use HTTPS", permanent=True)
     if parsed.username or parsed.password:
         raise EventDeliveryError("Webhook target credentials may not appear in the URL", permanent=True)
+    if parsed.fragment:
+        raise EventDeliveryError("Webhook target URL may not contain a fragment", permanent=True)
     host = str(parsed.hostname or "").strip().lower().rstrip(".")
     if not host:
         raise EventDeliveryError("Webhook target hostname is required", permanent=True)
@@ -68,42 +75,6 @@ def _safe_target_url(value: str) -> tuple[str, str, int]:
     if not 1 <= port <= 65535:
         raise EventDeliveryError("Webhook target port is invalid", permanent=True)
     return raw, host, port
-
-
-def _address_is_public(value: str) -> bool:
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError:
-        return False
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-    )
-
-
-async def _assert_public_dns(host: str, port: int) -> tuple[str, ...]:
-    try:
-        rows = await asyncio.to_thread(
-            socket.getaddrinfo,
-            host,
-            port,
-            type=socket.SOCK_STREAM,
-        )
-    except socket.gaierror as error:
-        raise EventDeliveryError("Webhook target DNS could not be resolved") from error
-    addresses = sorted({str(row[4][0]) for row in rows if row and row[4]})
-    if not addresses:
-        raise EventDeliveryError("Webhook target DNS returned no addresses")
-    if any(not _address_is_public(address) for address in addresses):
-        raise EventDeliveryError(
-            "Webhook target resolves to a private, local, or reserved address",
-            permanent=True,
-        )
-    return tuple(addresses)
 
 
 class DigitalEventDeliveryService:
@@ -222,7 +193,21 @@ class DigitalEventDeliveryService:
             )
 
         target, host, port = _safe_target_url(subscription.target_reference)
-        resolved_addresses = await _assert_public_dns(host, port)
+        try:
+            resolved_addresses = await resolve_public_addresses(host, port)
+        except PublicHostPolicyError as error:
+            raise EventDeliveryError(str(error), permanent=True) from error
+        except PublicHostResolutionError as error:
+            raise EventDeliveryError(str(error)) from error
+        pinned_address = resolved_addresses[0]
+        parsed_target = urlsplit(target)
+        pinned_target = pinned_https_url(
+            pinned_address,
+            port=port,
+            path=parsed_target.path or "/",
+            query=parsed_target.query,
+        )
+
         policy = _json_object(subscription.delivery_policy_json)
         timeout_seconds = max(1.0, min(float(policy.get("timeout_seconds", 20)), 60.0))
         max_response_bytes = max(
@@ -253,6 +238,7 @@ class DigitalEventDeliveryService:
             "User-Agent": "Operly-Event-Delivery/1",
             "X-Operly-Event-ID": event.id,
             "X-Operly-Event-Type": event.event_type,
+            "Host": host_header(host, port),
         }
         if subscription.secret_reference:
             secret_payload = await read_secret(
@@ -278,7 +264,11 @@ class DigitalEventDeliveryService:
                 trust_env=False,
             ) as client:
                 async with client.stream(
-                    "POST", target, headers=headers, content=body
+                    "POST",
+                    pinned_target,
+                    headers=headers,
+                    content=body,
+                    extensions=sni_extensions(host),
                 ) as response:
                     async for chunk in response.aiter_bytes():
                         response_bytes += len(chunk)
