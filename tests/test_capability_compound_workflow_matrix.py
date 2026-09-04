@@ -6,14 +6,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from packages.database.db import Base, SessionFactory, engine
-from packages.database.kernel_models import KernelApproval, KernelRun
+from packages.database.kernel_models import KernelApproval, KernelEventRecord, KernelRun
 from packages.database.models import AppUser, Tenant, TenantMember
 from packages.database.schema import import_all_models
 from packages.kernel.approvals import decide_approval
-from packages.kernel.contracts import CapabilityExecutionResult
+from packages.kernel.contracts import CapabilityExecutionResult, RuntimeRequest
 from packages.kernel.providers import ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry
-from packages.kernel.runtime import OperlyKernelRuntime
+from packages.kernel.runtime import OperlyKernelRuntime, RuntimeExecutionError
 from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import (
     resolve_execution_context,
@@ -29,10 +29,9 @@ from packages.workflow.models import (
     WorkflowStepRun,
     WorkflowVersion,
 )
-from packages.workflow.spec import validate_workflow_spec
+from packages.workflow.spec import WorkflowSpecError, validate_workflow_spec
 from packages.workflow.triggers import workflow_event_dispatcher
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
-from packages.database.kernel_models import KernelEventRecord
 
 
 TRIGGER_FLAVORS = ("exact", "namespace", "global", "condition")
@@ -131,6 +130,12 @@ def _catalog(scope_kind):
     return tuple(spec for spec in runtime.registry.all() if scope_kind in spec.scopes)
 
 
+def _partition(specs):
+    workflow_specs = tuple(spec for spec in specs if spec.id.startswith("workflow."))
+    ordinary_specs = tuple(spec for spec in specs if not spec.id.startswith("workflow."))
+    return ordinary_specs, workflow_specs
+
+
 def _test_runtime(specs):
     registry = CapabilityRegistry(specs)
     providers = ProviderRegistry()
@@ -149,8 +154,8 @@ def _steps(specs):
             "arguments": _sample(capability.input_schema),
         }
         if index:
-            # A branching DAG: odd nodes depend on the prior node; even nodes join
-            # the two immediately preceding branches. Every dependency points backward.
+            # Branching/joining DAG. Every dependency points backward so the real
+            # Workflow validator owns the topological safety rule.
             if index >= 2 and index % 2 == 0:
                 step["depends_on"] = [f"s{index - 1:02d}", f"s{index - 2:02d}"]
             else:
@@ -291,16 +296,74 @@ class CapabilityCompoundWorkflowMatrixTests(unittest.IsolatedAsyncioTestCase):
             return approvals
         self.fail(f"Workflow {run.id} did not reach a terminal state")
 
-    async def test_every_registered_capability_runs_in_compound_event_workflows(self):
-        workspace_specs = _catalog("workspace")
-        personal_specs = _catalog("personal")
-        self.assertTrue(workspace_specs)
-        self.assertTrue(personal_specs)
-        self.assertEqual(len({spec.id for spec in workspace_specs}), len(workspace_specs))
-        self.assertEqual(len({spec.id for spec in personal_specs}), len(personal_specs))
+    async def _direct_kernel_execution(self, db, runtime, context, spec, index):
+        arguments = _sample(spec.input_schema)
+        request_id = f"direct:{context.scope_kind.value}:{index}:{spec.id}"
+        request = RuntimeRequest(
+            capability_id=spec.id,
+            arguments=arguments,
+            conversation_id=f"stress-direct:{context.scope_kind.value}",
+            request_id=request_id,
+        )
+        try:
+            response = await runtime.execute(db, context=context, request=request)
+            return response, 0
+        except RuntimeExecutionError as error:
+            if error.code != "approval_required" or not error.approval_id:
+                raise
+            await decide_approval(
+                db,
+                context=context,
+                approval_id=error.approval_id,
+                approved=True,
+                decided_by_user_id=context.user_id,
+            )
+            await db.commit()
+            response = await runtime.execute(
+                db,
+                context=context,
+                request=RuntimeRequest(
+                    capability_id=spec.id,
+                    arguments=arguments,
+                    conversation_id=f"stress-direct:{context.scope_kind.value}",
+                    request_id=request_id,
+                    approval_id=error.approval_id,
+                ),
+            )
+            return response, 1
 
-        workspace_runtime, workspace_provider = _test_runtime(workspace_specs)
-        personal_runtime, personal_provider = _test_runtime(personal_specs)
+    async def test_every_registered_capability_runs_in_compound_event_workflows(self):
+        workspace_all = _catalog("workspace")
+        personal_all = _catalog("personal")
+        self.assertTrue(workspace_all)
+        self.assertTrue(personal_all)
+        self.assertEqual(len({spec.id for spec in workspace_all}), len(workspace_all))
+        self.assertEqual(len({spec.id for spec in personal_all}), len(personal_all))
+
+        workspace_specs, workspace_workflow_specs = _partition(workspace_all)
+        personal_specs, personal_workflow_specs = _partition(personal_all)
+        self.assertTrue(workspace_workflow_specs)
+        self.assertTrue(personal_workflow_specs)
+
+        # Workflow-management capabilities are deliberately forbidden inside Workflow
+        # specs. Verify every such capability remains rejected instead of weakening the
+        # recursion/self-modification safety rule for the sake of coverage.
+        for spec in (*workspace_workflow_specs, *personal_workflow_specs):
+            with self.assertRaises(WorkflowSpecError, msg=spec.id):
+                validate_workflow_spec(
+                    {
+                        "steps": [
+                            {
+                                "id": "recursive",
+                                "capability_id": spec.id,
+                                "arguments": _sample(spec.input_schema),
+                            }
+                        ]
+                    }
+                )
+
+        workspace_runtime, workspace_provider = _test_runtime(workspace_all)
+        personal_runtime, personal_provider = _test_runtime(personal_all)
         workflow_engine = WorkflowEngine()
         workflow_engine._workspace_runtime = workspace_runtime
         workflow_engine._personal_runtime = personal_runtime
@@ -380,29 +443,67 @@ class CapabilityCompoundWorkflowMatrixTests(unittest.IsolatedAsyncioTestCase):
         queued = await workflow_event_dispatcher.tick()
         self.assertEqual(queued, expected_runs)
 
-        approvals_consumed = 0
+        workflow_approvals = 0
+        direct_approvals = 0
         async with SessionFactory() as db:
             runs = (
                 await db.scalars(select(WorkflowRun).order_by(WorkflowRun.created_at, WorkflowRun.id))
             ).all()
             self.assertEqual(len(runs), expected_runs)
             for run in runs:
-                approvals_consumed += await self._execute_to_terminal(db, workflow_engine, run)
+                workflow_approvals += await self._execute_to_terminal(db, workflow_engine, run)
 
             completed_runs = (
                 await db.scalars(select(WorkflowRun).where(WorkflowRun.status == "completed"))
             ).all()
             self.assertEqual(len(completed_runs), expected_runs)
 
+            workspace_context = await resolve_execution_context(
+                db,
+                workspace_id=workspace.id,
+                user_id=workspace_user.id,
+                channel="stress",
+                surface=SurfaceKind.SYSTEM_TASK,
+                conversation_id="stress-direct:workspace",
+            )
+            personal_context = await resolve_personal_execution_context(
+                db,
+                user_id=personal_user.id,
+                channel="stress",
+                surface=SurfaceKind.SYSTEM_TASK,
+                conversation_id="stress-direct:personal",
+            )
+
+            for index, spec in enumerate(workspace_workflow_specs):
+                response, approvals = await self._direct_kernel_execution(
+                    db, workspace_runtime, workspace_context, spec, index
+                )
+                self.assertEqual(response.status, "completed", msg=spec.id)
+                direct_approvals += approvals
+
+            for index, spec in enumerate(personal_workflow_specs):
+                response, approvals = await self._direct_kernel_execution(
+                    db, personal_runtime, personal_context, spec, index
+                )
+                self.assertEqual(response.status, "completed", msg=spec.id)
+                direct_approvals += approvals
+
             consumed_approvals = (
                 await db.scalars(select(KernelApproval).where(KernelApproval.status == "consumed"))
             ).all()
-            self.assertEqual(len(consumed_approvals), approvals_consumed)
-
+            self.assertEqual(len(consumed_approvals), workflow_approvals + direct_approvals)
             kernel_runs = (await db.scalars(select(KernelRun))).all()
 
-        workspace_counts = Counter(capability_id for scope, capability_id, _ in workspace_provider.calls if scope == "workspace")
-        personal_counts = Counter(capability_id for scope, capability_id, _ in personal_provider.calls if scope == "personal")
+        workspace_counts = Counter(
+            capability_id
+            for scope, capability_id, _ in workspace_provider.calls
+            if scope == "workspace"
+        )
+        personal_counts = Counter(
+            capability_id
+            for scope, capability_id, _ in personal_provider.calls
+            if scope == "personal"
+        )
 
         for spec in workspace_specs:
             self.assertEqual(
@@ -416,30 +517,52 @@ class CapabilityCompoundWorkflowMatrixTests(unittest.IsolatedAsyncioTestCase):
                 len(TRIGGER_FLAVORS),
                 msg=f"Personal capability did not receive complete trigger coverage: {spec.id}",
             )
+        for spec in workspace_workflow_specs:
+            self.assertEqual(workspace_counts[spec.id], 1, msg=spec.id)
+        for spec in personal_workflow_specs:
+            self.assertEqual(personal_counts[spec.id], 1, msg=spec.id)
 
+        compound_executions = (
+            len(workspace_specs) + len(personal_specs)
+        ) * len(TRIGGER_FLAVORS)
+        direct_executions = len(workspace_workflow_specs) + len(personal_workflow_specs)
         total_executions = len(workspace_provider.calls) + len(personal_provider.calls)
-        expected_executions = (len(workspace_specs) + len(personal_specs)) * len(TRIGGER_FLAVORS)
+        expected_executions = compound_executions + direct_executions
         self.assertEqual(total_executions, expected_executions)
-        self.assertEqual(len(kernel_runs), expected_executions)
+
+        # Each approved mutation records one blocked Kernel run before its completed
+        # approved run. Non-approval executions have exactly one Kernel run.
+        expected_kernel_runs = expected_executions + workflow_approvals + direct_approvals
+        self.assertEqual(len(kernel_runs), expected_kernel_runs)
 
         print(
             "CAPABILITY_MATRIX_SUMMARY="
             + json.dumps(
                 {
-                    "workspace_capabilities": len(workspace_specs),
-                    "personal_capabilities": len(personal_specs),
+                    "workspace_capabilities": len(workspace_all),
+                    "personal_capabilities": len(personal_all),
                     "unique_capability_ids": len(
-                        {spec.id for spec in workspace_specs} | {spec.id for spec in personal_specs}
+                        {spec.id for spec in workspace_all} | {spec.id for spec in personal_all}
                     ),
+                    "workspace_compound_capabilities": len(workspace_specs),
+                    "personal_compound_capabilities": len(personal_specs),
+                    "workspace_workflow_management_capabilities": len(workspace_workflow_specs),
+                    "personal_workflow_management_capabilities": len(personal_workflow_specs),
+                    "workflow_management_recursion_rejections": len(workspace_workflow_specs)
+                    + len(personal_workflow_specs),
                     "workspace_workflows": len(workspace_workflows),
                     "personal_workflows": len(personal_workflows),
                     "workflow_runs": expected_runs,
                     "trigger_flavors": list(TRIGGER_FLAVORS),
+                    "compound_capability_executions": compound_executions,
+                    "direct_workflow_capability_executions": direct_executions,
                     "capability_executions": total_executions,
                     "kernel_runs": len(kernel_runs),
-                    "approvals_consumed": approvals_consumed,
-                    "workspace_ids": [spec.id for spec in workspace_specs],
-                    "personal_ids": [spec.id for spec in personal_specs],
+                    "workflow_approvals_consumed": workflow_approvals,
+                    "direct_approvals_consumed": direct_approvals,
+                    "approvals_consumed": workflow_approvals + direct_approvals,
+                    "workspace_ids": [spec.id for spec in workspace_all],
+                    "personal_ids": [spec.id for spec in personal_all],
                 },
                 separators=(",", ":"),
                 sort_keys=True,
