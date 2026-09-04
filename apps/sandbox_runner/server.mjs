@@ -9,11 +9,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const TOOL_HELPER = await fs.readFile(path.join(here, "computer_tool.py"));
 const PORT = Math.max(1, Math.min(Number(process.env.PORT || 3000), 65535));
 const RUNNER_TOKEN = String(process.env.OPERLY_RUNNER_TOKEN || "").trim();
+const RUNNER_SIGNING_KEY = String(process.env.OPERLY_RUNNER_SIGNING_KEY || "").trim();
 const ENVIRONMENT_ID = String(process.env.RAILWAY_ENVIRONMENT_ID || "").trim();
 const MAX_REQUEST_BYTES = 30 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
+const MAX_CLOCK_SKEW_MS = Math.max(10000, Math.min(Number(process.env.OPERLY_RUNNER_MAX_CLOCK_SKEW_MS || 120000), 300000));
+const REPLAY_TTL_MS = MAX_CLOCK_SKEW_MS * 2;
 const SESSION_RE = /^[A-Za-z0-9_-]{4,200}$/;
 const TOOL_RE = /^[a-z][a-z0-9_.-]{1,120}$/;
+const NONCE_RE = /^[A-Za-z0-9_-]{16,200}$/;
 const PYTHON = "/opt/operly-py/bin/python";
 const WORKSPACE = "/workspace/work";
 const REQUESTS = "/workspace/.operly/requests";
@@ -29,6 +33,7 @@ const TOOL_IDS = Object.freeze([
   "artifact.import", "artifact.export", "environment.info",
 ]);
 const TOOL_SET = new Set(TOOL_IDS);
+const replayNonces = new Map();
 
 let cachedTemplate = null;
 let templateWarmPromise = null;
@@ -98,7 +103,7 @@ function ensureComputerTemplateWarm() {
 }
 
 function hmac(value) {
-  return crypto.createHmac("sha256", RUNNER_TOKEN).update(value).digest("hex");
+  return crypto.createHmac("sha256", RUNNER_SIGNING_KEY).update(value).digest("hex");
 }
 
 function safeEqual(left, right) {
@@ -107,8 +112,23 @@ function safeEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function canonical(method, pathname, raw) {
-  return Buffer.concat([Buffer.from(`${method.toUpperCase()}\n${pathname}\n`, "utf8"), raw]);
+function canonical(method, pathname, timestamp, nonce, raw) {
+  return Buffer.concat([
+    Buffer.from(`${method.toUpperCase()}\n${pathname}\n${timestamp}\n${nonce}\n`, "utf8"),
+    raw,
+  ]);
+}
+
+function pruneReplayNonces(now = Date.now()) {
+  for (const [nonce, expiresAt] of replayNonces) {
+    if (expiresAt <= now) replayNonces.delete(nonce);
+  }
+  // Bound memory even if a trusted-but-buggy caller sprays valid unique requests.
+  while (replayNonces.size > 50000) {
+    const first = replayNonces.keys().next().value;
+    if (first === undefined) break;
+    replayNonces.delete(first);
+  }
 }
 
 async function readBody(req, limit = MAX_REQUEST_BYTES) {
@@ -123,12 +143,30 @@ async function readBody(req, limit = MAX_REQUEST_BYTES) {
 }
 
 function authenticate(req, pathname, raw) {
-  if (!RUNNER_TOKEN) throw Object.assign(new Error("runner token is not configured"), { statusCode: 503 });
+  if (!RUNNER_TOKEN || !RUNNER_SIGNING_KEY) throw Object.assign(new Error("runner authentication is not configured"), { statusCode: 503 });
   const auth = String(req.headers.authorization || "");
   if (!safeEqual(auth, `Bearer ${RUNNER_TOKEN}`)) throw Object.assign(new Error("invalid runner authorization"), { statusCode: 401 });
+
+  const timestamp = String(req.headers["x-operly-timestamp"] || "").trim();
+  const nonce = String(req.headers["x-operly-nonce"] || "").trim();
+  if (!/^\d{10,16}$/.test(timestamp) || !NONCE_RE.test(nonce)) {
+    throw Object.assign(new Error("runner freshness proof is missing or invalid"), { statusCode: 401 });
+  }
+  const requestTime = Number(timestamp);
+  const now = Date.now();
+  if (!Number.isFinite(requestTime) || Math.abs(now - requestTime) > MAX_CLOCK_SKEW_MS) {
+    throw Object.assign(new Error("runner request timestamp is outside the allowed window"), { statusCode: 401 });
+  }
+
   const supplied = String(req.headers["x-operly-signature"] || "");
-  const expected = hmac(canonical(req.method || "GET", pathname, raw));
+  const expected = hmac(canonical(req.method || "GET", pathname, timestamp, nonce, raw));
   if (!supplied || !safeEqual(supplied, expected)) throw Object.assign(new Error("invalid runner request signature"), { statusCode: 401 });
+
+  pruneReplayNonces(now);
+  if (replayNonces.has(nonce)) {
+    throw Object.assign(new Error("runner request replay detected"), { statusCode: 409 });
+  }
+  replayNonces.set(nonce, now + REPLAY_TTL_MS);
 }
 
 function sendJson(res, status, value, { signed = true } = {}) {
@@ -138,7 +176,7 @@ function sendJson(res, status, value, { signed = true } = {}) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Content-Length", String(body.length));
   res.setHeader("Cache-Control", "no-store");
-  if (signed && RUNNER_TOKEN) res.setHeader("X-Operly-Signature", hmac(body));
+  if (signed && RUNNER_SIGNING_KEY) res.setHeader("X-Operly-Signature", hmac(body));
   res.end(body);
 }
 
@@ -378,6 +416,8 @@ const server = http.createServer(async (req, res) => {
       computer_runtime: true,
       isolation: "railway-sandbox",
       private_network_default: false,
+      replay_protection: true,
+      split_authentication_secrets: true,
       tools: TOOL_IDS.length,
       computer_template: templateWarmStatus(),
     }, { signed: false });
@@ -403,6 +443,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (!RUNNER_TOKEN) { console.error("OPERLY_RUNNER_TOKEN is required"); process.exit(1); }
+if (!RUNNER_SIGNING_KEY) { console.error("OPERLY_RUNNER_SIGNING_KEY is required"); process.exit(1); }
+if (safeEqual(RUNNER_TOKEN, RUNNER_SIGNING_KEY)) { console.error("OPERLY_RUNNER_TOKEN and OPERLY_RUNNER_SIGNING_KEY must be different"); process.exit(1); }
 if (!ENVIRONMENT_ID) { console.error("RAILWAY_ENVIRONMENT_ID is required"); process.exit(1); }
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Operly Sandbox Runner listening on :${PORT}`);
