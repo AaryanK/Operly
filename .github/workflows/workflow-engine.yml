@@ -9,6 +9,7 @@ on:
       - "alembic/versions/0053_digital_business_infrastructure.py"
       - "alembic/versions/0054_digital_runtime_support.py"
       - "alembic/versions/0055_platform_job_idempotency_scope.py"
+      - "alembic/versions/0056_universal_workflow_scope_events.py"
       - "apps/api/access_router.py"
       - "apps/api/artifact_router.py"
       - "apps/api/dependencies.py"
@@ -35,6 +36,7 @@ on:
       - "packages/database/plugin_storage_models.py"
       - "packages/database/principal_models.py"
       - "packages/database/schema.py"
+      - "packages/kernel/audit.py"
       - "packages/mcp/**"
       - "packages/personal_modules/**"
       - "packages/plugins/**"
@@ -49,6 +51,7 @@ on:
       - "tests/test_plugin_platform.py"
       - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
+      - "tests/test_workflow_stress_matrix.py"
   push:
     branches:
       - main
@@ -59,6 +62,7 @@ on:
       - "alembic/versions/0053_digital_business_infrastructure.py"
       - "alembic/versions/0054_digital_runtime_support.py"
       - "alembic/versions/0055_platform_job_idempotency_scope.py"
+      - "alembic/versions/0056_universal_workflow_scope_events.py"
       - "apps/api/access_router.py"
       - "apps/api/artifact_router.py"
       - "apps/api/dependencies.py"
@@ -85,6 +89,7 @@ on:
       - "packages/database/plugin_storage_models.py"
       - "packages/database/principal_models.py"
       - "packages/database/schema.py"
+      - "packages/kernel/audit.py"
       - "packages/mcp/**"
       - "packages/personal_modules/**"
       - "packages/plugins/**"
@@ -99,6 +104,7 @@ on:
       - "tests/test_plugin_platform.py"
       - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
+      - "tests/test_workflow_stress_matrix.py"
 
 permissions:
   contents: read
@@ -125,10 +131,14 @@ jobs:
       - name: Compile Workflow package
         run: |
           python -m compileall -q packages/workflow
-          python -m py_compile alembic/versions/0051_workflow_engine.py
+          python -m py_compile alembic/versions/0051_workflow_engine.py alembic/versions/0056_universal_workflow_scope_events.py
+          python -m py_compile packages/kernel/audit.py packages/security/execution_context.py
+          python -m py_compile tests/test_workflow_package.py tests/test_workflow_stress_matrix.py
 
       - name: Run Workflow package tests
-        run: python -m unittest discover -s tests -p "test_workflow_package.py" -v
+        run: |
+          python -m unittest discover -s tests -p "test_workflow_package.py" -v
+          python -m unittest discover -s tests -p "test_workflow_stress_matrix.py" -v
 
   mcp-gateway:
     runs-on: ubuntu-latest
@@ -209,7 +219,7 @@ jobs:
           python -m py_compile packages/database/plugin_platform_models.py packages/database/plugin_storage_models.py
           python -m py_compile packages/database/plugin_credential_models.py packages/database/capability_binding_models.py
           python -m py_compile packages/database/digital_event_models.py packages/database/digital_job_models.py packages/database/digital_usage_models.py
-          python -m py_compile alembic/versions/0053_digital_business_infrastructure.py alembic/versions/0054_digital_runtime_support.py alembic/versions/0055_platform_job_idempotency_scope.py
+          python -m py_compile alembic/versions/0053_digital_business_infrastructure.py alembic/versions/0054_digital_runtime_support.py alembic/versions/0055_platform_job_idempotency_scope.py alembic/versions/0056_universal_workflow_scope_events.py
           python -m py_compile apps/api/artifact_router.py apps/api/main.py
 
       - name: Import runtime infrastructure boundaries
