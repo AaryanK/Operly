@@ -226,7 +226,7 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIn("workflow_depth", audit)
         self.assertIn("workflow.trigger.create", provider)
         self.assertIn("A non-owner may only access their own workflows", access)
-        self.assertIn('ALEMBIC_HEAD = "0056_universal_workflow_scope_events"', schema)
+        self.assertIn('ALEMBIC_HEAD = "0057_agent_runtime_foundation"', schema)
 
     def test_workflow_engine_does_not_import_external_provider_executors(self):
         root = Path(__file__).resolve().parents[1]
