@@ -12,6 +12,10 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
+from apps.api.agent_runtime_router import (
+    personal_router as personal_agent_runtime_router,
+    workspace_router as workspace_agent_runtime_router,
+)
 from apps.api.artifact_router import router as artifact_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.discord_auth_router import router as discord_auth_router
@@ -24,6 +28,8 @@ from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
+from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute
+from packages.agent_runtime.runtime import AgentRuntimeSettings
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 from packages.personal_modules.connectors import router as personal_connectors_router
@@ -132,9 +138,6 @@ def validate_runtime_configuration() -> None:
     if PUBLIC_BASE_URL == "https://operly.example":
         raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
 
-    # Published/model-authored HTML is an untrusted principal. If Studio hosting is
-    # enabled, require a dedicated hostname that is not even in the same conservative
-    # cookie-site suffix as the authenticated Operly application.
     if os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip():
         if not STUDIO_PUBLIC_HOST:
             raise RuntimeError(
@@ -147,6 +150,35 @@ def validate_runtime_configuration() -> None:
             raise RuntimeError(
                 "Studio published content must use a separate registrable-style origin from Operly authentication"
             )
+
+
+def _agent_runtime_status() -> dict[str, object]:
+    enabled = AgentRuntimeSettings.from_environment().enabled
+    if not enabled:
+        return {
+            "enabled": False,
+            "configured": False,
+            "provider": None,
+            "model": None,
+            "reason": "OPERLY_AGENT_RUNTIME_ENABLED is off",
+        }
+    try:
+        route = InferenceRoute.from_environment()
+    except AgentInferenceError as error:
+        return {
+            "enabled": True,
+            "configured": False,
+            "provider": None,
+            "model": None,
+            "reason": str(error),
+        }
+    return {
+        "enabled": True,
+        "configured": True,
+        "provider": route.provider,
+        "model": route.model_id,
+        "reason": None,
+    }
 
 
 @asynccontextmanager
@@ -166,10 +198,11 @@ async def lifespan(app: FastAPI):
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.10.0-universal-workflows", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.11.0-agent-runtime-1", lifespan=lifespan)
 
-# Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
-# agent all resolve current authority and execute through the same governed runtime.
+# AI ingress is still deployment-gated. When enabled, every model-proposed capability
+# executes through the same live ExecutionContext + Kernel authority boundary as humans,
+# workflows, MCP and plugin runtimes.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthRequestSafetyMiddleware)
 app.add_middleware(PublicEndpointSafetyMiddleware)
@@ -214,6 +247,8 @@ app.add_middleware(
 
 app.include_router(session_router)
 app.include_router(discord_auth_router)
+app.include_router(personal_agent_runtime_router)
+app.include_router(workspace_agent_runtime_router)
 app.include_router(personal_connectors_router)
 app.include_router(personal_tools_router)
 app.include_router(workspace_os_router)
@@ -239,13 +274,14 @@ app.include_router(studio_public_router)
 @app.get("/api/health")
 async def health():
     discord = discord_bot_lifecycle.status()
+    agent = _agent_runtime_status()
     studio_hosting_configured = bool(
         os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip() and STUDIO_PUBLIC_HOST
     )
     return {
         "ok": True,
         "service": "operly",
-        "runtime": "operly-kernel-v3",
+        "runtime": "operly-kernel-v3+agent-runtime-1",
         "account_access": True,
         "personal_tools_enabled": True,
         "personal_google_connectors_enabled": True,
@@ -277,9 +313,18 @@ async def health():
         "studio_content_host": STUDIO_PUBLIC_HOST or None,
         "discord_bot_configured": discord["configured"],
         "discord_bot_running": discord["task_running"],
+        "discord_agent_runtime": True,
+        "discord_workspace_plugins": "same-request-local-workspace-runtime",
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
-        "ai_runtime_enabled": False,
+        "ai_runtime_enabled": bool(agent["enabled"] and agent["configured"]),
+        "ai_runtime_gate_enabled": agent["enabled"],
+        "ai_runtime_configured": agent["configured"],
+        "ai_runtime_provider": agent["provider"],
+        "ai_runtime_model": agent["model"],
+        "ai_runtime_reason": agent["reason"],
+        "ai_runtime_surfaces": ["personal_web", "workspace_web", "discord_dm", "discord_guild"],
+        "ai_runtime_logging": "structured-stdout-operly-agent",
     }
 
 
@@ -288,8 +333,9 @@ async def rebuild_status():
     studio_hosting_configured = bool(
         os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip() and STUDIO_PUBLIC_HOST
     )
+    agent = _agent_runtime_status()
     return {
-        "state": "personal-and-digital-business-infrastructure",
+        "state": "agent-runtime-1-testable",
         "deterministic_core": True,
         "account_access": True,
         "personal_tools_enabled": True,
@@ -322,12 +368,18 @@ async def rebuild_status():
         "studio_hosting_configured": studio_hosting_configured,
         "studio_content_host": STUDIO_PUBLIC_HOST or None,
         "discord_bot": discord_bot_lifecycle.status(),
+        "discord_agent_runtime": True,
+        "discord_plugin_discovery": "request-local-installed-workspace-capabilities",
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
-        "ai_runtime_enabled": False,
+        "ai_runtime_enabled": bool(agent["enabled"] and agent["configured"]),
+        "ai_runtime_gate_enabled": agent["enabled"],
+        "ai_runtime_configured": agent["configured"],
+        "ai_runtime_provider": agent["provider"],
+        "ai_runtime_model": agent["model"],
         "message": (
-            "Operly exposes Personal and Workspace abilities through searchable Kernel capability registries. "
-            "Durable workflows now use the same scope-native authority and can be triggered by schedules, manual runs, or same-scope semantic Kernel events."
+            "Operly Runtime 1.0 now shares one objective/context/capability loop across Personal AI, Workspace AI, and Discord. "
+            "Workspace Discord requests discover the same authorized installed plugin capabilities as Workspace tools."
         ),
     }
 
