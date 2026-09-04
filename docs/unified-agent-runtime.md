@@ -12,13 +12,15 @@ Every executable step is converted into a Kernel `RuntimeRequest`. Kernel then r
 
 ## Authorization-aware planning
 
-`GovernedAgentPlanner` adds a model-planning boundary without adding another execution path. It receives the same canonical `CapabilityRegistry` used by Kernel and retrieves a small candidate set with `effective_only=True`, so scope, surface visibility, and current `ExecutionContext` permissions are applied before a capability can be shown to a planner.
+`GovernedAgentPlanner` adds a model-planning boundary without adding another execution path. It receives the canonical `CapabilityRegistry` selected by the caller and retrieves a small candidate set with `effective_only=True`, so scope, surface visibility, and current `ExecutionContext` permissions are applied before a capability can be shown to a planner. Production composition must pass the registry owned by the Kernel runtime that will execute the resulting plan; Kernel still independently re-resolves and re-authorizes every requested capability.
 
 The planner never receives the full registry by default. Candidate count, description length, per-capability bytes, total prompt bytes, model-output bytes, plan steps, and mutations are bounded. Oversized capability contracts are omitted rather than truncated into a misleading schema; if no safe authorized candidate remains, planning fails closed.
 
 Planner-facing capability cards contain only the capability ID, display name, bounded description, input schema, risk, and approval requirement. Provider IDs, permission lists, scope internals, credentials, and principals are not part of the planner contract. Capability descriptions and schemas are explicitly treated as untrusted data, not instructions.
 
-The provider-neutral `AgentPlannerModel` interface returns only structured planning data. This slice deliberately does not give that interface a capability execution method or provider registry. A concrete model transport can be attached later behind the model-runtime boundary without changing authority or execution semantics.
+The provider-neutral `AgentPlannerModel` interface returns only structured planning data. This slice deliberately does not give that interface a capability execution method or provider registry. A concrete model transport can be attached later behind a new Kernel-v3 inference boundary without changing authority or execution semantics.
+
+The pre-Kernel-v3 `packages/model_runtime` implementation was intentionally demolished during the runtime rebuild. It must not be restored wholesale merely to satisfy the planner interface. The new inference boundary is tracked separately in #318 and must be designed for the current Kernel-v3 authority model.
 
 Model output has exactly one allowed top-level field, `steps`. Each step has exactly `capability_id` and `arguments`. Model-supplied step IDs, approvals, permissions, principals, workspace IDs, scopes, or other authority-shaped fields are rejected. Operly assigns durable `step-001`, `step-002`, ... identities server-side.
 
@@ -70,13 +72,16 @@ Long-running capability execution is protected by an independent heartbeat that 
 
 The next implementation slices should continue without weakening the Kernel boundary:
 
-1. connect `AgentPlannerModel` to the canonical provider-neutral model runtime once the concrete model-runtime package is present on the active repository branch;
-2. add observation/replan loops with explicit inference-token, time, monetary, and observation budgets;
-3. keep scoped working context and retrieved memory separate from authority;
-4. add a real bounded worker service/loop while keeping the global runtime kill switch off in production;
-5. expand adversarial evaluation for malicious tool outputs, runaway replanning, context poisoning, restart recovery, and model/provider failure;
-6. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
+1. build the new narrow Kernel-v3 inference substrate tracked in #318; do not revive the deliberately demolished pre-v3 `packages/model_runtime` wholesale;
+2. connect `AgentPlannerModel` to that inference substrate with strict structured output plus inference-token, time, attempt, provider-failover, and monetary budgets;
+3. add observation/replan loops with bounded observations and explicit loop budgets;
+4. keep scoped working context and retrieved memory separate from authority;
+5. add a real bounded worker service/loop while keeping the global runtime kill switch off in production;
+6. expand adversarial evaluation for malicious tool outputs, runaway replanning, context poisoning, restart recovery, and model/provider failure;
+7. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
 
-## Legacy agent code
+## Legacy agent and model code
 
 The historical `/api/agent` and business-brain paths are not the new runtime and must not be re-mounted as part of this work. They predate the current TrustedIngress/ExecutionContext/Kernel authority model. Conversation history or model-routing utilities may be migrated selectively, but execution authority must stay in the Kernel.
+
+Likewise, old model-runtime branches and the removed `packages/model_runtime` tree are reference material only. Any useful provider-neutral contracts or qualification ideas must be re-evaluated and reimplemented against Kernel-v3 rather than merged back as a legacy runtime.
