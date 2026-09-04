@@ -1,0 +1,165 @@
+name: Security Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  regression:
+    name: Security regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install locked runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.lock
+          python -m pip check
+      - name: Verify dependency lock is current
+        run: |
+          python -m pip install --dry-run --report /tmp/requirements-report.json -r requirements.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/requirements-report.json").read_text())
+          pending = report.get("install") or []
+          if pending:
+              names = sorted(
+                  str((item.get("metadata") or {}).get("name") or "unknown")
+                  for item in pending
+              )
+              raise SystemExit(
+                  "requirements.lock is stale or incompatible with requirements.txt; "
+                  "pip would install: " + ", ".join(names)
+              )
+          PY
+      - name: Verify production consumes the lock
+        run: grep -F 'pip install --no-cache-dir -r requirements.lock' Dockerfile
+      - name: Compile hardened Python boundaries
+        run: |
+          python -m py_compile \
+            apps/api/auth_cookies.py \
+            apps/api/main.py \
+            apps/api/public_safety.py \
+            apps/api/security_headers.py \
+            apps/api/mcp_router.py \
+            packages/mcp/oauth.py \
+            packages/plugins/egress_router.py \
+            packages/workspace_modules/tools/__init__.py \
+            tests/test_security_hardening.py
+      - name: Run exploit regressions
+        run: python -m unittest tests.test_security_hardening -v
+      - name: Validate Sandbox Runner syntax
+        run: node --check apps/sandbox_runner/server.mjs
+
+  python-dependency-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Audit locked Python graph
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit==2.10.1
+          python -m pip_audit -r requirements.lock --strict
+
+  npm-dependency-audit:
+    name: npm dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/sandbox_runner/package-lock.json
+      - name: Install and audit frontend dependency graph
+        working-directory: apps/web
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+      - name: Install and audit Sandbox Runner dependency graph
+        working-directory: apps/sandbox_runner
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+
+  secret-diff-scan:
+    name: Secret diff scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Install secret scanner
+        run: python -m pip install detect-secrets==1.5.0
+      - name: Reject newly committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --name-only --diff-filter=ACMR -z "${{ github.event.pull_request.base.sha }}...${{ github.sha }}" \
+              | xargs -0 -r detect-secrets-hook --no-verify
+          else
+            before="${{ github.event.before }}"
+            if [[ -n "$before" && "$before" != "0000000000000000000000000000000000000000" ]]; then
+              git diff --name-only --diff-filter=ACMR -z "$before...${{ github.sha }}" \
+                | xargs -0 -r detect-secrets-hook --no-verify
+            else
+              git ls-files -z | xargs -0 -r detect-secrets-hook --no-verify
+            fi
+          fi
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - name: Analyze
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d

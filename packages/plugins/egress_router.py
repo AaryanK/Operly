@@ -8,7 +8,7 @@ import json
 import re
 import socket
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -87,6 +87,57 @@ def _json_list(raw: str | None) -> list[str]:
     except json.JSONDecodeError:
         return []
     return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _canonical_egress_path(raw: str) -> str:
+    """Return one unambiguous relative absolute path or reject it.
+
+    Authorization is performed against exactly the path sent outbound. Encoded
+    separators/dot-segments are decoded before comparison, and ambiguous forms are
+    rejected rather than normalized into a potentially broader credential grant.
+    """
+
+    value = str(raw or "").strip()
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or "\r" in value
+        or "\n" in value
+        or "\x00" in value
+        or "?" in value
+        or "#" in value
+    ):
+        raise ValueError("Egress path must be an unambiguous absolute-path reference")
+
+    current = value
+    try:
+        for _ in range(4):
+            decoded = unquote(current, errors="strict")
+            if decoded == current:
+                break
+            current = decoded
+    except UnicodeError as error:
+        raise ValueError("Egress path contains invalid percent-encoding") from error
+
+    if "\\" in current or not current.startswith("/") or current.startswith("//"):
+        raise ValueError("Egress path contains an unsafe path separator")
+    if "?" in current or "#" in current or "\x00" in current:
+        raise ValueError("Egress path contains an unsafe delimiter")
+    if "//" in current:
+        raise ValueError("Egress path contains ambiguous empty segments")
+    segments = current.split("/")[1:]
+    if any(segment in {".", ".."} for segment in segments):
+        raise ValueError("Egress path may not contain dot segments")
+    return current
+
+
+def _path_grant_allows(path: str, prefixes: list[str]) -> bool:
+    for raw_prefix in prefixes:
+        prefix = _canonical_egress_path(raw_prefix)
+        base = prefix.rstrip("/") or "/"
+        if base == "/" or path == base or path.startswith(base + "/"):
+            return True
+    return False
 
 
 def _public_address(value: str) -> bool:
@@ -224,11 +275,9 @@ async def runtime_egress(
         allowed_methods = {item.upper() for item in _json_list(grant.methods_json)}
         if method not in allowed_methods:
             raise PermissionError("Egress grant does not allow this HTTP method")
-        path = payload.path.strip()
-        if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
-            raise ValueError("Egress path must be a relative absolute-path reference")
+        path = _canonical_egress_path(payload.path)
         prefixes = _json_list(grant.path_prefixes_json)
-        if not any(path.startswith(prefix) for prefix in prefixes):
+        if not _path_grant_allows(path, prefixes):
             raise PermissionError("Egress grant does not allow this path")
 
         host = grant.host.strip().lower()
