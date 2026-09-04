@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import socket
 import tempfile
 import unittest
 from datetime import datetime
@@ -11,8 +13,10 @@ from starlette.requests import Request
 
 from apps.api.auth_cookies import csrf_secret_from_request, session_secret_from_request
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
-from apps.api.security_headers import _unsafe_request_path, confined_file
-from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
+from apps.api.request_safety import AuthRequestSafetyMiddleware, _prepare_mcp_body
+from apps.api.security_headers import PUBLISHED_STUDIO_CSP, _unsafe_request_path, confined_file
+from packages.kernel.contracts import CapabilityRisk, CapabilitySpec, RuntimeRequest
+from packages.kernel.idempotency import IdempotencyConflict, reserve_request
 from packages.mcp.oauth import (
     McpOAuthError,
     _secret,
@@ -21,6 +25,12 @@ from packages.mcp.oauth import (
     issue_refresh_token,
 )
 from packages.plugins.egress_router import _canonical_egress_path, _path_grant_allows
+from packages.security.pinned_https import (
+    PublicHostPolicyError,
+    pinned_https_url,
+    resolve_public_addresses,
+    sni_extensions,
+)
 from packages.workspace_modules.tools import _governed_computer_capabilities
 
 
@@ -95,6 +105,14 @@ class SecurityHardeningContractTests(unittest.TestCase):
             else:
                 self.assertIsNone(confined_file(root, "escape.txt"))
 
+    def test_published_studio_is_forced_into_opaque_origin_sandbox(self):
+        self.assertIn("sandbox", PUBLISHED_STUDIO_CSP)
+        self.assertIn("allow-scripts", PUBLISHED_STUDIO_CSP)
+        self.assertNotIn("allow-same-origin", PUBLISHED_STUDIO_CSP)
+        source = Path("apps/api/security_headers.py").read_text(encoding="utf-8")
+        self.assertIn('published_studio=path.startswith("/studio-sites/")', source)
+        self.assertIn('response.headers["Content-Security-Policy"]=PUBLISHED_STUDIO_CSP', source)
+
     def test_plugin_egress_paths_are_canonical_and_segment_bounded(self):
         self.assertEqual(_canonical_egress_path("/api/user/profile"), "/api/user/profile")
         self.assertTrue(_path_grant_allows("/api/user", ["/api/user"]))
@@ -111,6 +129,52 @@ class SecurityHardeningContractTests(unittest.TestCase):
             with self.subTest(path=unsafe):
                 with self.assertRaises(ValueError):
                     _canonical_egress_path(unsafe)
+
+    def test_credential_egress_and_event_delivery_pin_validated_dns(self):
+        egress = Path("packages/plugins/egress_router.py").read_text(encoding="utf-8")
+        deliveries = Path("packages/plugins/deliveries.py").read_text(encoding="utf-8")
+        self.assertIn("resolved_addresses = await resolve_public_addresses(host, 443)", egress)
+        self.assertIn("pinned_https_url(", egress)
+        self.assertIn("extensions=sni_extensions(host)", egress)
+        self.assertIn("resolved_addresses = await resolve_public_addresses(host, port)", deliveries)
+        self.assertIn("pinned_target = pinned_https_url(", deliveries)
+        self.assertIn("extensions=sni_extensions(host)", deliveries)
+
+    def test_pinned_https_uses_literal_socket_target_but_original_sni(self):
+        self.assertEqual(
+            pinned_https_url("93.184.216.34", path="/api", query={"a": "b"}),
+            "https://93.184.216.34/api?a=b",
+        )
+        self.assertEqual(
+            pinned_https_url("2001:db8::1", port=8443, path="/hook"),
+            "https://[2001:db8::1]:8443/hook",
+        )
+        self.assertEqual(sni_extensions("Example.COM."), {"sni_hostname": "example.com"})
+
+    def test_mcp_jsonrpc_id_becomes_stable_operly_request_id(self):
+        raw = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 42,
+                "method": "tools/call",
+                "params": {"name": "workflow.run.start", "arguments": {"workflow_id": "w1"}},
+            }
+        ).encode()
+        first = json.loads(_prepare_mcp_body(raw))
+        second = json.loads(_prepare_mcp_body(raw))
+        self.assertEqual(
+            first["params"]["_meta"]["operly/requestId"],
+            "mcp-rpc:workflow.run.start:42",
+        )
+        self.assertEqual(first, second)
+
+    def test_approval_execution_holds_row_lock_until_consumed(self):
+        source = Path("packages/kernel/approvals.py").read_text(encoding="utf-8")
+        validation = source.split("async def validate_approved_invocation", 1)[1].split(
+            "async def consume_approval", 1
+        )[0]
+        self.assertIn("lock=True", validation)
+        self.assertIn("with_for_update", source)
 
     def test_production_uses_only_host_prefixed_auth_cookies(self):
         with patch.dict(os.environ, {"OPERLY_ENV": "production"}, clear=False):
@@ -167,6 +231,25 @@ class SecurityHardeningContractTests(unittest.TestCase):
         self.assertIn("requiredBootstrapExec", section)
         self.assertIn('"network-verify"', section)
         self.assertNotIn("catch {}", section)
+
+    def test_sandbox_runner_authentication_is_split_and_replay_resistant(self):
+        runner = Path("apps/sandbox_runner/server.mjs").read_text(encoding="utf-8")
+        client = Path("packages/workspace_modules/agent_computer/sandbox.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("OPERLY_RUNNER_SIGNING_KEY", runner)
+        self.assertIn("OPERLY_RUNNER_TOKEN and OPERLY_RUNNER_SIGNING_KEY must be different", runner)
+        self.assertIn('req.headers["x-operly-timestamp"]', runner)
+        self.assertIn('req.headers["x-operly-nonce"]', runner)
+        self.assertIn("runner request replay detected", runner)
+        self.assertIn("OPERLY_SANDBOX_RUNNER_SIGNING_KEY", client)
+        self.assertIn('"X-Operly-Timestamp"', client)
+        self.assertIn('"X-Operly-Nonce"', client)
+
+    def test_production_container_drops_root(self):
+        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("USER 10001:10001", dockerfile)
+        self.assertLess(dockerfile.index("USER 10001:10001"), dockerfile.index("CMD ["))
 
     def test_production_requires_dedicated_mcp_signing_secret(self):
         with patch.dict(
@@ -260,6 +343,62 @@ class SecurityHardeningAsyncTests(unittest.IsolatedAsyncioTestCase):
         starts = [message for message in sent if message["type"] == "http.response.start"]
         self.assertEqual(starts[0]["status"], 413)
         self.assertFalse(app_reached_response)
+
+    async def test_authenticated_api_body_is_bounded_before_fastapi(self):
+        app_reached = False
+
+        async def app(scope, receive, send):
+            nonlocal app_reached
+            app_reached = True
+
+        middleware = AuthRequestSafetyMiddleware(app)
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/api/kernel/personal/execute",
+            "raw_path": b"/api/kernel/personal/execute",
+            "query_string": b"",
+            "headers": [(b"content-length", str(9 * 1024 * 1024).encode())],
+            "client": ("203.0.113.30", 50000),
+            "server": ("operly.example", 443),
+        }
+        await middleware(scope, receive, send)
+        starts = [message for message in sent if message["type"] == "http.response.start"]
+        self.assertEqual(starts[0]["status"], 413)
+        self.assertFalse(app_reached)
+
+    async def test_mutation_without_request_id_fails_closed(self):
+        request = RuntimeRequest(
+            capability_id="test.write",
+            arguments={"value": 1},
+            request_id=None,
+        )
+        with self.assertRaises(IdempotencyConflict):
+            await reserve_request(
+                SimpleNamespace(),
+                context=SimpleNamespace(),
+                request=request,
+                run_id="run-1",
+            )
+
+    async def test_dns_policy_rejects_any_private_answer_before_pinning(self):
+        rows = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+        ]
+        with patch("packages.security.pinned_https.socket.getaddrinfo", return_value=rows):
+            with self.assertRaises(PublicHostPolicyError):
+                await resolve_public_addresses("example.com", 443)
 
     async def test_mcp_refresh_token_replay_revokes_the_family(self):
         grant = SimpleNamespace(

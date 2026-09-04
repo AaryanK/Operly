@@ -13,12 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.agent_computer_models import AgentComputerSessionRecord, AgentComputerStepRecord
 from packages.kernel.approvals import ApprovalError, decide_approval
-from packages.kernel.contracts import CapabilitySpec, RuntimeRequest
+from packages.kernel.contracts import CapabilityRisk, CapabilitySpec, RuntimeRequest
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.kernel.runtime import RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.agent_computer.native_tools import computer_native_capabilities
+from packages.workspace_modules.tools import _governed_computer_capabilities
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
@@ -89,6 +90,13 @@ async def _context(
 async def _available_specs(db: AsyncSession, context: ExecutionContext) -> dict[str, CapabilitySpec]:
     specs = await _runtime.available_capabilities(db, context=context, query=None, limit=1000)
     return {spec.id: spec for spec in specs if spec.resource_scope == "workspace"}
+
+
+def _governed_native_contracts() -> tuple[CapabilitySpec, ...]:
+    # Keep human/API metadata sourced from the same risk transformation the canonical
+    # Workspace runtime uses. Raw native declarations are implementation contracts,
+    # not an authority/risk surface.
+    return _governed_computer_capabilities(computer_native_capabilities())
 
 
 def _arguments(payload: CreateComputerSessionInput) -> dict[str, Any]:
@@ -259,7 +267,19 @@ async def _execute_capability(
     specs = await _available_specs(db, context)
     if capability_id not in specs:
         raise HTTPException(status_code=403, detail=f"{capability_id} is not currently authorized or available")
-    request_id = request_id or f"agent-computer:{row.id}:{uuid4()}"
+    spec = specs[capability_id]
+    clean_request_id = str(request_id or "").strip() or None
+    if spec.risk is not CapabilityRisk.READ_ONLY and not clean_request_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "request_id_required",
+                "message": "Mutating Agent Computer tools require a stable request_id for safe retries.",
+            },
+        )
+    # Read-only calls may use an ephemeral correlation ID because replay cannot create
+    # a second side effect. Mutations must arrive with a caller-stable ID above.
+    stable_request_id = clean_request_id or f"agent-computer-read:{row.id}:{uuid4()}"
     try:
         response = await _runtime.execute(
             db,
@@ -269,7 +289,7 @@ async def _execute_capability(
                 capability_id=capability_id,
                 arguments=arguments,
                 conversation_id=f"agent-computer:{row.id}",
-                request_id=request_id,
+                request_id=stable_request_id,
                 approval_id=approval_id,
             ),
         )
@@ -278,12 +298,12 @@ async def _execute_capability(
             "code": error.code,
             "message": str(error),
             "run_id": error.run_id,
-            "request_id": request_id,
+            "request_id": stable_request_id,
         }
         if error.approval_id:
             detail["approval_id"] = error.approval_id
         raise HTTPException(status_code=error.status_code, detail=detail) from error
-    return {**response.as_dict(), "request_id": request_id}
+    return {**response.as_dict(), "request_id": stable_request_id}
 
 
 async def _execute_preset(
@@ -413,7 +433,7 @@ async def agent_computer_status(
 ):
     context = await _context(db, auth)
     specs = await _available_specs(db, context)
-    native_contracts = computer_native_capabilities()
+    native_contracts = _governed_native_contracts()
     native_ids = {spec.id for spec in native_contracts}
     available_native = native_ids & set(specs)
     return {
@@ -585,6 +605,7 @@ async def run_agent_computer_session(
                     "ttl_seconds": 7200,
                 },
                 goal=row.objective,
+                request_id=f"agent-computer:{row.id}:runtime:start:{row.runtime_session_id or 'initial'}",
             )
         except HTTPException as error:
             row.state = "failed"
@@ -628,7 +649,7 @@ async def list_session_tools(
     context = await _context(db, auth, session_id=session_id)
     specs = await _available_specs(db, context)
     tools = []
-    for contract in computer_native_capabilities():
+    for contract in _governed_native_contracts():
         available = contract.id in specs
         tools.append(
             {
@@ -663,6 +684,7 @@ async def start_session_runtime(
         capability_id="computer.runtime.start",
         arguments=arguments,
         goal=f"Start isolated Computer runtime for {row.objective}",
+        request_id=f"agent-computer:{row.id}:runtime:start:{row.runtime_session_id or 'initial'}",
     )
     row.state = "active" if row.action == "general" else row.state
     await db.commit()
@@ -696,6 +718,7 @@ async def stop_session_runtime(
 ):
     row = await _owned_session(db, auth, session_id)
     context = await _context(db, auth, session_id=session_id)
+    runtime_id = row.runtime_session_id or "none"
     response = await _execute_capability(
         db,
         context=context,
@@ -703,6 +726,7 @@ async def stop_session_runtime(
         capability_id="computer.runtime.stop",
         arguments={"computer_session_id": row.id},
         goal="Stop Agent Computer runtime",
+        request_id=f"agent-computer:{row.id}:runtime:stop:{runtime_id}",
     )
     return response
 
@@ -755,6 +779,7 @@ async def cancel_agent_computer_session(
         except ApprovalError:
             pass
     if row.runtime_session_id:
+        runtime_id = row.runtime_session_id
         try:
             await _execute_capability(
                 db,
@@ -763,6 +788,7 @@ async def cancel_agent_computer_session(
                 capability_id="computer.runtime.stop",
                 arguments={"computer_session_id": row.id},
                 goal="Tear down cancelled Agent Computer runtime",
+                request_id=f"agent-computer:{row.id}:runtime:stop:{runtime_id}",
             )
         except HTTPException:
             # Cancellation remains authoritative even if an already-broken runner

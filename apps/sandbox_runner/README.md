@@ -40,11 +40,25 @@ shared host filesystem.
 
 ## Protocol
 
-Authenticated requests use `OPERLY_RUNNER_TOKEN` plus an HMAC SHA-256 signature over:
+Runner authentication deliberately uses **two different secrets**:
 
-`METHOD + "\n" + PATH + "\n" + RAW_BODY`
+- `OPERLY_RUNNER_TOKEN` authenticates the control plane with a Bearer credential.
+- `OPERLY_RUNNER_SIGNING_KEY` authenticates request/response integrity with HMAC
+  SHA-256. The runner refuses to start if the two values are equal.
 
-Responses are HMAC-signed over the raw response body.
+Every authenticated request carries `X-Operly-Timestamp` and a random
+`X-Operly-Nonce`. The HMAC input is:
+
+`METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + RAW_BODY`
+
+The runner rejects timestamps outside its bounded freshness window and rejects a nonce
+that has already been accepted during the replay window. Responses are HMAC-signed over
+the raw response body with the signing key.
+
+**Replica constraint:** the nonce replay cache is currently process-local. Run the
+Sandbox Runner as a **single replica** until replay claims are moved to a shared atomic
+store or an equivalent cluster-wide idempotency boundary. See
+[`SECURITY.md`](./SECURITY.md) before horizontally scaling this service.
 
 Endpoints:
 
@@ -56,13 +70,21 @@ Endpoints:
 
 ## Railway configuration
 
-The service expects the existing Railway variables:
+The Runner service requires:
 
-- `OPERLY_RUNNER_TOKEN`
+- `OPERLY_RUNNER_TOKEN` — random transport/Bearer secret
+- `OPERLY_RUNNER_SIGNING_KEY` — a different random HMAC signing secret
 - `RAILWAY_ENVIRONMENT_ID`
 - Railway authentication (`RAILWAY_TOKEN`) for Sandbox SDK operations
 - `PORT` (Railway normally injects this)
 
-The Operly API points to this service using its existing
-`OPERLY_SANDBOX_RUNNER_URL` and `OPERLY_SANDBOX_RUNNER_TOKEN` variables. There is no
-second Agent-Computer-specific runner service or token contract.
+The Operly API points to this service with:
+
+- `OPERLY_SANDBOX_RUNNER_URL`
+- `OPERLY_SANDBOX_RUNNER_TOKEN` — same value as the Runner's `OPERLY_RUNNER_TOKEN`
+- `OPERLY_SANDBOX_RUNNER_SIGNING_KEY` — same value as the Runner's
+  `OPERLY_RUNNER_SIGNING_KEY`
+
+Rotate the Bearer token and signing key independently. During a coordinated rotation,
+update both services before enabling Agent Computer traffic again; the boundary fails
+closed when either value is absent or when the two secrets are the same.

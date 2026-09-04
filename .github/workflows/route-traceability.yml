@@ -22,6 +22,10 @@ on:
       - "scripts/route_inventory.py"
       - "tests/test_route_traceability.py"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

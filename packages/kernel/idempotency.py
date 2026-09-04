@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.kernel_models import KernelRequestClaim
+from packages.kernel.approvals import approval_for_context, claim_approved_invocation
 from packages.kernel.contracts import AuthorizationDecision, RuntimeRequest, RuntimeResponse
 from packages.security.execution_context import ExecutionContext
 
@@ -37,9 +38,30 @@ def _scope_identity(context: ExecutionContext) -> str:
     return f"workspace:{context.workspace_id}"
 
 
+def _ingress_namespace(context: ExecutionContext) -> str:
+    """Bind transport-derived request IDs to the authenticated ingress identity.
+
+    MCP JSON-RPC IDs are stable enough to recognize a transport retry, but they are
+    only client-local identifiers. The trusted MCP ingress records the authenticated
+    client and grant in ExecutionContext metadata. Include a compact digest of those
+    values in the durable idempotency namespace so two grants owned by the same user
+    cannot collide merely because their clients reuse the same JSON-RPC ID.
+    """
+
+    metadata = getattr(context, "metadata", None) or {}
+    if str(metadata.get("ingress") or "").strip().lower() != "operly_mcp":
+        return ""
+    client_id = str(metadata.get("mcp_client_id") or "").strip()
+    grant_id = str(metadata.get("mcp_grant_id") or "").strip()
+    if not client_id or not grant_id:
+        raise IdempotencyConflict("MCP request is missing its authenticated client/grant identity")
+    digest = hashlib.sha256(f"{client_id}\0{grant_id}".encode("utf-8")).hexdigest()[:24]
+    return f":mcp:{digest}"
+
+
 def _idempotency_key(context: ExecutionContext, request_id: str) -> str:
     principal = str(context.principal_id or context.user_id or "anonymous")
-    return f"{_scope_identity(context)}:{principal}:{request_id}"
+    return f"{_scope_identity(context)}:{principal}{_ingress_namespace(context)}:{request_id}"
 
 
 def _arguments_hash(request: RuntimeRequest) -> str:
@@ -122,11 +144,21 @@ async def reserve_request(
     request: RuntimeRequest,
     run_id: str,
 ) -> IdempotencyReservation:
-    """Claim an authorized request immediately before side-effecting execution."""
+    """Durably claim an authorized mutation immediately before provider execution.
+
+    Mutations are never allowed to bypass idempotency. Every ingress must provide a
+    stable request identity (or derive one from its transport, as MCP does). For an
+    approval-gated mutation, the same transaction also atomically transitions the
+    exact human approval from approved to executing and binds it to its original
+    request ID. The reservation is committed before the provider runs, so a crash or
+    lost response cannot roll back the at-most-once boundary and resurrect a write.
+    """
 
     request_id = str(request.request_id or "").strip()
     if not request_id:
-        return IdempotencyReservation(claim=None)
+        raise IdempotencyConflict(
+            "Mutating capability execution requires a stable request_id"
+        )
 
     key = _idempotency_key(context, request_id)
     arguments_hash = _arguments_hash(request)
@@ -141,7 +173,28 @@ async def reserve_request(
         existing.run_id = run_id
         existing.response_json = "{}"
         await db.flush()
+        await db.commit()
         return IdempotencyReservation(claim=existing)
+
+    if request.approval_id:
+        # Resolve the already-authorized capability from the durable approval itself.
+        # The Kernel has just validated that approval against the resolved capability;
+        # using the stored ID here also supports goal-resolved RuntimeRequests whose
+        # request.capability_id is intentionally omitted.
+        approval = await approval_for_context(
+            db,
+            context=context,
+            approval_id=request.approval_id,
+            lock=True,
+        )
+        await claim_approved_invocation(
+            db,
+            context=context,
+            approval_id=request.approval_id,
+            request_id=request_id,
+            capability_id=approval.capability_id,
+            arguments=dict(request.arguments),
+        )
 
     claim = KernelRequestClaim(
         idempotency_key=key,
@@ -159,10 +212,14 @@ async def reserve_request(
     db.add(claim)
     try:
         await db.flush()
+        # This commit is deliberate: the at-most-once reservation (and approval claim,
+        # when present) must survive a provider timeout, process crash, or later
+        # transaction rollback. Provider/database effects happen only after this point.
+        await db.commit()
         return IdempotencyReservation(claim=claim)
     except IntegrityError:
-        # Another transaction won the same scoped request key. This reservation occurs
-        # immediately before provider execution, so rolling back is safe.
+        # Another transaction won the same scoped request key. Rolling back also
+        # restores any local approval transition attempted by this losing transaction.
         await db.rollback()
         existing = await db.scalar(
             select(KernelRequestClaim).where(KernelRequestClaim.idempotency_key == key)

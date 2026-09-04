@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
-import ipaddress
 import json
 import re
-import socket
 from typing import Any
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -24,6 +21,12 @@ from packages.database.plugin_credential_models import (
 )
 from packages.plugins.bindings import RuntimeBindingService
 from packages.plugins.budgets import ResourceBudgetExceeded, resource_budgets
+from packages.security.pinned_https import (
+    host_header,
+    pinned_https_url,
+    resolve_public_addresses,
+    sni_extensions,
+)
 
 
 router = APIRouter(prefix="/api/runtime-egress", tags=["runtime-egress"])
@@ -140,40 +143,6 @@ def _path_grant_allows(path: str, prefixes: list[str]) -> bool:
     return False
 
 
-def _public_address(value: str) -> bool:
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError:
-        return False
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-    )
-
-
-async def _assert_public_host(host: str, port: int = 443) -> None:
-    clean = str(host or "").strip().lower().rstrip(".")
-    if not clean or clean in {"localhost", "localhost.localdomain"} or clean.endswith(
-        (".localhost", ".local", ".internal", ".home.arpa")
-    ):
-        raise PermissionError("Egress host is local or invalid")
-    try:
-        rows = await asyncio.to_thread(
-            socket.getaddrinfo, clean, port, type=socket.SOCK_STREAM
-        )
-    except socket.gaierror as error:
-        raise RuntimeError("Egress host DNS could not be resolved") from error
-    addresses = {str(row[4][0]) for row in rows if row and row[4]}
-    if not addresses:
-        raise RuntimeError("Egress host DNS returned no addresses")
-    if any(not _public_address(address) for address in addresses):
-        raise PermissionError("Egress host resolves to a private, local, or reserved address")
-
-
 def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
     result: dict[str, str] = {}
     if len(headers) > 50:
@@ -280,8 +249,11 @@ async def runtime_egress(
         if not _path_grant_allows(path, prefixes):
             raise PermissionError("Egress grant does not allow this path")
 
-        host = grant.host.strip().lower()
-        await _assert_public_host(host)
+        host = grant.host.strip().lower().rstrip(".")
+        resolved_addresses = await resolve_public_addresses(host, 443)
+        # Connect to the exact address that passed policy validation. The original
+        # hostname remains the Host header and TLS SNI/certificate identity.
+        pinned_address = resolved_addresses[0]
         headers = _safe_headers(payload.headers)
         credential_binding: PluginCredentialBindingRecord | None = None
         if grant.credential_binding_id:
@@ -314,8 +286,14 @@ async def runtime_egress(
             raise ValueError("body_base64 is invalid") from error
         if len(body) > 1024 * 1024:
             raise ValueError("Egress request body exceeds 1 MiB")
-        query = urlencode(payload.query)
-        url = f"https://{host}{path}" + (f"?{query}" if query else "")
+
+        url = pinned_https_url(
+            pinned_address,
+            port=443,
+            path=path,
+            query=payload.query,
+        )
+        headers["Host"] = host_header(host, 443)
 
         await resource_budgets.consume(
             db,
@@ -352,6 +330,7 @@ async def runtime_egress(
                 url,
                 headers=headers,
                 content=body if body else None,
+                extensions=sni_extensions(host),
             ) as response:
                 async for chunk in response.aiter_bytes():
                     response_size += len(chunk)
@@ -386,10 +365,12 @@ async def runtime_egress(
             "size_bytes": response_size,
             "sha256": digest.hexdigest(),
             "host": host,
+            "resolved_address": pinned_address,
             "grant_id": grant.id,
             "credential_injected": credential_binding is not None,
             "credential_exposed": False,
             "redirect_followed": False,
+            "dns_pinned": True,
         }
     except ResourceBudgetExceeded as error:
         await db.rollback()

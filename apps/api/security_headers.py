@@ -6,6 +6,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
 
+PUBLISHED_STUDIO_CSP = (
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads; "
+    "default-src 'self' https: data: blob:; "
+    "img-src 'self' https: data: blob:; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "script-src 'self' 'unsafe-inline' https:; "
+    "font-src 'self' https: data:; "
+    "connect-src https:; "
+    "frame-src https:; "
+    "worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action https:; "
+    "upgrade-insecure-requests"
+)
+
+
 def _runner_preview_origins() -> tuple[str, ...]:
     origins=[]
     for value in os.getenv("OPERLY_SANDBOX_PREVIEW_HOSTS","").split(","):
@@ -14,6 +29,13 @@ def _runner_preview_origins() -> tuple[str, ...]:
             continue
         origins.append(f"https://{host}")
     return tuple(dict.fromkeys(origins))
+
+
+def _studio_public_host() -> str:
+    host = os.getenv("OPERLY_STUDIO_PUBLIC_HOST", "").strip().lower().rstrip(".")
+    if host and any(token in host for token in ("/", "@", "?", "#", ":")):
+        return ""
+    return host
 
 
 def _permissions_policy(solution_studio: bool) -> str:
@@ -74,6 +96,24 @@ def _unsafe_request_path(request) -> bool:
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request,call_next):
+        path=request.url.path
+        request_host=str(request.url.hostname or "").strip().lower().rstrip(".")
+        studio_host=_studio_public_host()
+        if studio_host and request_host == studio_host:
+            # The generated-content hostname is a deliberately tiny origin. It must
+            # never expose Operly UI/API/auth routes even though DNS may point to the
+            # same deployment. Only immutable-ish published-site GET/HEAD requests
+            # reach routing; everything else fails closed before session/CSRF logic.
+            if request.method.upper() not in {"GET", "HEAD"} or not path.startswith("/studio-sites/"):
+                return PlainTextResponse(
+                    "Not Found",
+                    status_code=404,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "Referrer-Policy": "no-referrer",
+                    },
+                )
         if _unsafe_request_path(request):
             return PlainTextResponse(
                 "Bad Request",
@@ -83,7 +123,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response=await call_next(request)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
-        path=request.url.path
         solution_studio=path.startswith("/channels/") and path.endswith("/solutions")
         response.headers["Permissions-Policy"]=_permissions_policy(solution_studio)
         response.headers["Cross-Origin-Opener-Policy"]="same-origin-allow-popups"
@@ -91,10 +130,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         source_preview=path.startswith("/api/studio/projects/") and "/source/preview" in path
         generated_preview=path.startswith("/api/custom-software/previews/")
         hosted_plugin=path.startswith("/api/public/plugins/")
+        published_studio=path.startswith("/studio-sites/")
         studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or source_preview or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview")) or generated_preview or path.startswith("/api/coding-harness/sources/") or solution_preview
         response.headers["X-Frame-Options"]="SAMEORIGIN" if (studio_preview or hosted_plugin) else "DENY"
 
-        if hosted_plugin:
+        if published_studio:
+            response.headers["Content-Security-Policy"]=PUBLISHED_STUDIO_CSP
+            response.headers["Referrer-Policy"]="no-referrer"
+            response.headers["Cross-Origin-Resource-Policy"]="cross-origin"
+        elif hosted_plugin:
             # Workspace plugin UI is untrusted authored content. It may be framed by
             # Operly, but CSP sandbox deliberately gives it an opaque origin even when
             # opened standalone so it cannot inherit Operly cookies/local storage or

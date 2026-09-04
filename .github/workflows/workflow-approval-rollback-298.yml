@@ -28,6 +28,10 @@ on:
       - "tests/test_workflow_native_approval_matrix.py"
       - "tests/test_capability_compound_workflow_matrix.py"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

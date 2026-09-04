@@ -133,6 +133,7 @@ class OperlyKernelRuntime:
         execution_result = None
         idempotency_claim = None
         planned_arguments: dict[str, Any] | None = None
+        execution_request: RuntimeRequest | None = None
         used_approval = None
         try:
             goal = str(request.goal or "").strip()
@@ -190,12 +191,35 @@ class OperlyKernelRuntime:
             plan = self.planner.plan(request, capability)
             planned_arguments = dict(plan.arguments)
             validate_schema(planned_arguments, capability.input_schema)
+            # Idempotency and approval claims must describe the exact operation the
+            # provider will execute, not merely the ingress payload. Today the planner
+            # is pass-through; a future model planner may normalize arguments. Resolve
+            # the canonical capability ID and exact planned arguments once, then use
+            # this execution request for replay/reservation and provider authorization.
+            execution_request = RuntimeRequest(
+                goal=request.goal,
+                capability_id=capability.id,
+                arguments=planned_arguments,
+                conversation_id=request.conversation_id,
+                request_id=request.request_id,
+                approval_id=request.approval_id,
+            )
             audit.step(
                 7,
                 RuntimeStage.REASON_PLAN.value,
                 "ok",
                 {"capability_id": plan.capability_id, "planner": "deterministic"},
             )
+
+            # A mutation must have one stable transport/request identity before it can
+            # reach authorization or generate an approval. Otherwise an approval could
+            # be created that can never be safely resumed, and a client retry could be
+            # indistinguishable from a second write.
+            if (
+                capability.risk is not CapabilityRisk.READ_ONLY
+                and not str(execution_request.request_id or "").strip()
+            ):
+                raise ValueError("Mutating capability execution requires a stable request_id")
 
             # Policy is always evaluated from the freshly resolved ExecutionContext
             # before an idempotent response can be replayed. A cached result therefore
@@ -218,16 +242,16 @@ class OperlyKernelRuntime:
                 replay = await find_completed_request(
                     db,
                     context=context,
-                    request=request,
+                    request=execution_request,
                 )
                 if replay is not None:
                     return replay
 
-            if decision is AuthorizationDecision.ASK and request.approval_id:
+            if decision is AuthorizationDecision.ASK and execution_request.approval_id:
                 used_approval = await validate_approved_invocation(
                     db,
                     context=context,
-                    approval_id=request.approval_id,
+                    approval_id=execution_request.approval_id,
                     capability_id=capability.id,
                     arguments=planned_arguments,
                 )
@@ -239,7 +263,7 @@ class OperlyKernelRuntime:
                 decision.value,
                 {
                     "reason": authorization_reason,
-                    "approval_id": request.approval_id if used_approval is not None else None,
+                    "approval_id": execution_request.approval_id if used_approval is not None else None,
                 },
             )
             if decision is AuthorizationDecision.ASK:
@@ -253,13 +277,14 @@ class OperlyKernelRuntime:
                 raise PermissionError(authorization_reason)
 
             # Claim only an already-authorized mutating request, immediately before
-            # provider execution. This keeps retried writes single-execution without
-            # allowing the idempotency layer to become an authorization shortcut.
+            # provider execution. The idempotency layer durably reserves the exact
+            # planned operation and, for approval-gated calls, claims the exact approval
+            # before any side effect so a crash or response loss cannot resurrect it.
             if capability.risk is not CapabilityRisk.READ_ONLY:
                 reservation = await reserve_request(
                     db,
                     context=context,
-                    request=request,
+                    request=execution_request,
                     run_id=audit.run_id,
                 )
                 if reservation.replay is not None:
@@ -339,7 +364,7 @@ class OperlyKernelRuntime:
                     context=context,
                     capability_id=capability.id,
                     arguments=planned_arguments,
-                    request_id=request.request_id,
+                    request_id=(execution_request.request_id if execution_request else request.request_id),
                     conversation_id=request.conversation_id,
                     source_run_id=audit.run_id,
                 )

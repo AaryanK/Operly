@@ -96,16 +96,33 @@ async def approval_for_context(
     *,
     context: ExecutionContext,
     approval_id: str,
+    lock: bool = False,
 ) -> KernelApproval:
-    row = await db.scalar(
-        select(KernelApproval).where(
-            KernelApproval.id == approval_id,
-            *_scope_filters(context),
-        )
+    statement = select(KernelApproval).where(
+        KernelApproval.id == approval_id,
+        *_scope_filters(context),
     )
+    if lock:
+        statement = statement.with_for_update()
+    row = await db.scalar(statement)
     if row is None:
         raise ApprovalError("Approval is unavailable in this scope")
     return row
+
+
+def _validate_binding(
+    row: KernelApproval,
+    *,
+    context: ExecutionContext,
+    capability_id: str,
+    arguments: dict[str, Any],
+) -> None:
+    if row.requested_by_principal_id and row.requested_by_principal_id != context.principal_id:
+        raise ApprovalError("Approval belongs to a different initiating principal")
+    if row.capability_id != capability_id:
+        raise ApprovalError("Approval is bound to a different capability")
+    if row.arguments_hash != arguments_hash(capability_id, arguments):
+        raise ApprovalError("Approval arguments do not match the authorized invocation")
 
 
 async def decide_approval(
@@ -116,7 +133,11 @@ async def decide_approval(
     approved: bool,
     decided_by_user_id: str,
 ) -> KernelApproval:
-    row = await approval_for_context(db, context=context, approval_id=approval_id)
+    # Serialize competing human decisions. Only one transaction may transition a
+    # pending approval, which also gives the execution path a stable state to lock.
+    row = await approval_for_context(
+        db, context=context, approval_id=approval_id, lock=True
+    )
     if row.status != "pending":
         raise ApprovalError(f"Approval is already {row.status}")
     row.status = "approved" if approved else "denied"
@@ -134,15 +155,59 @@ async def validate_approved_invocation(
     capability_id: str,
     arguments: dict[str, Any],
 ) -> KernelApproval:
-    row = await approval_for_context(db, context=context, approval_id=approval_id)
+    # This authorization-stage check intentionally does not consume the approval.
+    # Mutating requests atomically and durably transition approved -> executing in
+    # the idempotency reservation immediately before provider execution.
+    row = await approval_for_context(
+        db, context=context, approval_id=approval_id, lock=True
+    )
     if row.status != "approved":
         raise ApprovalError(f"Approval is not executable: {row.status}")
-    if row.requested_by_principal_id and row.requested_by_principal_id != context.principal_id:
-        raise ApprovalError("Approval belongs to a different initiating principal")
-    if row.capability_id != capability_id:
-        raise ApprovalError("Approval is bound to a different capability")
-    if row.arguments_hash != arguments_hash(capability_id, arguments):
-        raise ApprovalError("Approval arguments do not match the authorized invocation")
+    _validate_binding(
+        row,
+        context=context,
+        capability_id=capability_id,
+        arguments=arguments,
+    )
+    return row
+
+
+async def claim_approved_invocation(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    approval_id: str,
+    request_id: str,
+    capability_id: str,
+    arguments: dict[str, Any],
+) -> KernelApproval:
+    """Atomically claim one exact approved mutation before its provider side effect.
+
+    The approval is tied to the stable request ID that originally requested human
+    authorization. A concurrent resume using the same approval but a different
+    request ID cannot pass this transition. The caller must commit the transition
+    before provider execution so a process crash cannot resurrect the approval.
+    """
+
+    row = await approval_for_context(
+        db, context=context, approval_id=approval_id, lock=True
+    )
+    if row.status != "approved":
+        raise ApprovalError(f"Approval is not executable: {row.status}")
+    _validate_binding(
+        row,
+        context=context,
+        capability_id=capability_id,
+        arguments=arguments,
+    )
+    original_request_id = str(row.request_id or "").strip()
+    current_request_id = str(request_id or "").strip()
+    if not original_request_id:
+        raise ApprovalError("Approval is missing its original stable request_id")
+    if not current_request_id or current_request_id != original_request_id:
+        raise ApprovalError("Approval is bound to a different request_id")
+    row.status = "executing"
+    await db.flush()
     return row
 
 
@@ -154,8 +219,8 @@ async def consume_approval(
 ) -> None:
     if approval is None:
         return
-    if approval.status != "approved":
-        raise ApprovalError("Only an approved invocation can be consumed")
+    if approval.status not in {"approved", "executing"}:
+        raise ApprovalError("Only an approved or executing invocation can be consumed")
     approval.status = "consumed"
     approval.consumed_run_id = run_id
     approval.consumed_at = datetime.utcnow()
