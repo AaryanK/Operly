@@ -4,11 +4,11 @@ The core security invariant is unchanged: every human, workflow, generated solut
 
 ## Runtime boundary
 
-The new agent runtime is an orchestration layer above the Operly Kernel, not a second execution engine. An agent may decide *which* capability to request and *with what arguments*, but it never supplies its own workspace role, permissions, principal, provider credentials, or durable authority.
+The new agent runtime is an orchestration layer above the Operly Kernel, not a second execution engine. An agent may decide *which* capability to request and *with what arguments*, but it never supplies its own workspace role, permissions, principal, provider credentials, approval identity, request identity, or durable authority.
 
 Every executable step is converted into a Kernel `RuntimeRequest`. Kernel then re-resolves the canonical capability, validates its schema, evaluates current `ExecutionContext` authority, applies approval policy, reserves mutating idempotency, executes the provider, validates output, emits events, and records audit trace.
 
-The implementation remains deliberately non-model and non-routable. `AgentRuntimeSettings` defaults to disabled. The only environment switch recognized by this runtime is `OPERLY_AGENT_RUNTIME_ENABLED=1`; legacy agent flags do not enable it. No API route or production worker currently sets that switch, and the API continues to report `ai_runtime_enabled: false`.
+`AgentRuntimeSettings` still defaults to disabled. The only environment switch recognized by this runtime is `OPERLY_AGENT_RUNTIME_ENABLED=1`; legacy agent flags do not enable it. No new API route or production agent worker is introduced by the planner slice, and production enablement remains a separate gate.
 
 ## Plan and retry identity
 
@@ -24,11 +24,13 @@ Before execution, the foundation preflights the complete plan against `max_steps
 
 Queued or approval-waiting runs become terminal immediately when cancelled. A cancellation arriving while a capability is already executing cannot pretend that side effect did not occur: the current result is recorded and the run stops before any later step.
 
-Future slices may add wall-clock, inference-token, monetary, and observation budgets, but these limits must remain enforcement controls rather than model suggestions.
+The planner adds separate hard limits for capability candidates, steps per planning turn, replans, model-output bytes, argument bytes, capability-descriptor bytes, and observation size/depth. These values are runtime policy, not model suggestions. Wall-clock, inference-token, and monetary budgets remain future enforcement work.
 
 ## Approval behavior
 
 If Kernel returns `approval_required`, the agent run stops immediately with `waiting_approval`. No later step executes. Resumption uses the same run ID, same step ID, same capability and arguments, the same deterministic Kernel request identity, and a 36-character Kernel approval ID. Kernel remains the authority that validates and claims that approval.
+
+The planner is never allowed to emit an approval ID or request ID. Those fields are rejected before an `AgentPlan` can be accepted.
 
 ## Durable run state
 
@@ -44,25 +46,46 @@ Initial durable creation is restricted to trusted Personal-private and full-Work
 
 ## Durable orchestration and current authority
 
-`DurableAgentOrchestrator` is an internal orchestration component, not an HTTP endpoint or background service. It claims a run with a bounded lease and renews/verifies that lease around every Kernel step.
+`DurableAgentOrchestrator` is an internal orchestration component, not an HTTP endpoint. It claims a run with a bounded lease and renews/verifies that lease around every Kernel step.
 
 Before **every pending capability**, it reconstructs a fresh `ExecutionContext` from current Operly state using the stored user/workspace plus trusted source channel/surface. Current user activity, membership, role and permissions are therefore re-evaluated between steps. A role downgrade affects the next capability. Membership removal stops the run before the next capability. The reconstructed principal, scope and surface must still match the durable provenance.
 
-If a lease is lost during a capability, the orchestrator stops instead of continuing the plan. Kernel's stable request identity remains the at-most-once boundary for a mutating step; a recovering worker reuses the same logical step identity rather than inventing another write.
+Long-running capability execution is protected by an independent heartbeat using a separate database session. If heartbeat renewal or the explicit post-step ownership check fails, the orchestrator stops before recording durable completion. Kernel's stable request identity remains the at-most-once boundary for a mutating step; a recovering worker reuses the same logical step identity rather than inventing another write.
 
-The current lease implementation renews immediately before and after steps. A production worker service will additionally need an independent lease heartbeat for capabilities that can exceed the lease interval; this must exist before horizontal worker scaling or production canarying.
+## Governed model planning
+
+`GovernedAgentPlanner` is a provider-neutral planning boundary. It receives an injected `AgentPlannerModel`; concrete model/provider routing belongs below that interface. The planner itself has no provider registry and no capability execution method.
+
+Capability discovery reuses the Kernel `CapabilityRegistry.search(..., effective_only=True)` path with the current `ExecutionContext` and a small candidate limit. The model therefore receives only capabilities that are currently visible on the trusted surface and currently permitted for that principal. It does **not** receive the full registry. Model-visible descriptors omit provider identity and permission/authority metadata.
+
+A model may return only:
+
+- `done`, with a bounded textual summary and no executable steps; or
+- bounded steps containing exactly a freshly offered capability ID plus JSON arguments.
+
+Step IDs are generated by Operly, not by the model. Provider IDs, request IDs, approval IDs, model-authored step IDs, and other unsupported fields are rejected. Proposed arguments are validated against the canonical Kernel capability input schema before the plan is accepted. Mutation and remaining-step budgets are recomputed by Operly and cannot be reset by model output.
+
+## Observations and replanning
+
+Capability results supplied to a future planning turn are explicitly labeled `untrusted_capability_output`. Their strings, object keys, list lengths, nesting depth, and total result size are bounded before they cross the model boundary. Oversized results collapse to size plus digest instead of becoming gigantic prompts.
+
+This is not a claim that text sanitization can make arbitrary tool output trustworthy. The real safety boundary is structural: observations are data, never authority; every replan re-runs effective-only capability discovery using the **current** `ExecutionContext`; the model may select only the freshly offered set; and Kernel still reauthorizes every actual execution. A malicious observation that asks the model to call a privileged capability cannot make that capability available.
+
+Replanning is itself capped. Consumed step and mutation counts are passed in as runtime-owned counters, remaining budgets only decrease, and the model cannot override them.
+
+The current planner slice validates and produces plans, but does not yet connect model planning/replanning to the durable worker loop. That integration must preserve stable durable step identity, approval resume behavior, cancellation, lease ownership, and uncertain-mutation handling already enforced by the foundation.
 
 ## Remaining runtime roadmap
 
 The next implementation slices should continue without weakening the Kernel boundary:
 
-1. add a real worker service/loop with independent lease heartbeat and bounded polling, while keeping the global runtime kill switch off in production;
-2. add authorization-aware capability discovery for a planner;
-3. add a model planner that emits bounded plans but has no provider execution access;
-4. add observation/replan loops with explicit model/token/time budgets;
-5. keep scoped working context and retrieved memory separate from authority;
-6. add adversarial evaluation for approval bypass, duplicate mutation, cross-scope access, prompt/tool injection, malicious tool outputs, runaway loops, restart recovery, and provider failure;
-7. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
+1. connect the provider-neutral planner contract to the actual shared model-runtime adapter once that runtime package is present/verified in the active tree;
+2. integrate initial planning plus observation-driven replanning into durable orchestration while preserving immutable attempt history and stable mutation identity;
+3. add explicit inference-token, wall-clock, and monetary budgets;
+4. add scoped working context and retrieved memory as data, never as authority;
+5. add a bounded production worker loop/canary path behind the global kill switch, with no public ingress until recovery behavior is exercised under failure;
+6. expand adversarial evaluation for prompt/tool injection, malicious observations, capability-catalog poisoning, stale authority, runaway replans, provider failures, token exhaustion, restart recovery, and cross-scope access;
+7. only after those gates, add carefully scoped ingress and consider production enablement.
 
 ## Legacy agent code
 
