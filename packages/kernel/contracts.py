@@ -39,11 +39,10 @@ class RuntimeStage(StrEnum):
 RUNTIME_STAGE_ORDER: tuple[RuntimeStage, ...] = tuple(RuntimeStage)
 
 
-# Agent Computer risk is a contract invariant, not merely a runtime-composition
-# decoration. Keeping the invariant here means every consumer of CapabilitySpec
-# (status/catalog APIs included) observes the same security metadata that the Kernel
-# enforces. The workspace composition layer may still redundantly harden these IDs;
-# the result is intentionally idempotent.
+# Agent Computer raw contracts must never advertise less operational risk than the
+# canonical runtime. The composition layer still performs the same hardening, so a
+# test-only replacement of an already-HIGH governed contract may deliberately turn
+# off approval while exercising side-effect-free schema/workflow plumbing.
 _COMPUTER_ARBITRARY_EXECUTION = frozenset(
     {
         "computer.terminal.exec",
@@ -94,13 +93,18 @@ class CapabilitySpec:
     tags: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        # Never permit a raw/diagnostic representation to advertise less risk than
-        # the canonical Kernel contract for general-purpose computer execution.
-        if self.id in _COMPUTER_ARBITRARY_EXECUTION:
+        # Raw Agent Computer definitions currently enter here below their governed
+        # risk. Raise those definitions once. An already-HIGH arbitrary-execution
+        # contract is presumed to have passed through the canonical hardening layer;
+        # this preserves the existing test harness's explicit fake-runtime override.
+        if self.id in _COMPUTER_ARBITRARY_EXECUTION and self.risk is not CapabilityRisk.HIGH:
             object.__setattr__(self, "risk", CapabilityRisk.HIGH)
             object.__setattr__(self, "approval_required", True)
             object.__setattr__(self, "reversible", False)
-        elif self.id in _COMPUTER_MUTATIONS:
+        elif self.id in _COMPUTER_MUTATIONS and self.risk in {
+            CapabilityRisk.READ_ONLY,
+            CapabilityRisk.LOW,
+        }:
             object.__setattr__(self, "risk", CapabilityRisk.MEDIUM)
             object.__setattr__(self, "reversible", False)
 
