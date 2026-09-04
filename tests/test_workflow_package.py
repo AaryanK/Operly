@@ -28,26 +28,12 @@ class WorkflowPackageTests(unittest.TestCase):
         workspace = {spec.id: spec for spec in workflow_capabilities()}
         personal = {spec.id: spec for spec in personal_workflow_capabilities()}
         expected = {
-            "workflow.list",
-            "workflow.get",
-            "workflow.version.list",
-            "workflow.version.get",
-            "workflow.create",
-            "workflow.update",
-            "workflow.enable",
-            "workflow.disable",
-            "workflow.archive",
-            "workflow.trigger.list",
-            "workflow.trigger.create",
-            "workflow.trigger.delete",
-            "workflow.run.start",
-            "workflow.run.list",
-            "workflow.run.get",
-            "workflow.run.cancel",
-            "workflow.run.retry",
-            "workflow.trace",
-            "workflow.schedule.preview",
-            "workflow.runtime.status",
+            "workflow.list", "workflow.get", "workflow.version.list", "workflow.version.get",
+            "workflow.create", "workflow.update", "workflow.enable", "workflow.disable",
+            "workflow.archive", "workflow.trigger.list", "workflow.trigger.create",
+            "workflow.trigger.delete", "workflow.run.start", "workflow.run.list",
+            "workflow.run.get", "workflow.run.cancel", "workflow.run.retry", "workflow.trace",
+            "workflow.schedule.preview", "workflow.runtime.status",
         }
         self.assertEqual(set(workspace), expected)
         self.assertEqual(set(personal), expected)
@@ -62,11 +48,7 @@ class WorkflowPackageTests(unittest.TestCase):
             self.assertIn("workflow", spec.tags)
             self.assertIn("personal", spec.tags)
         for capability_id in (
-            "workflow.create",
-            "workflow.update",
-            "workflow.enable",
-            "workflow.archive",
-            "workflow.trigger.create",
+            "workflow.create", "workflow.update", "workflow.enable", "workflow.archive", "workflow.trigger.create",
         ):
             self.assertEqual(workspace[capability_id].risk, CapabilityRisk.HIGH)
             self.assertTrue(workspace[capability_id].approval_required)
@@ -83,83 +65,33 @@ class WorkflowPackageTests(unittest.TestCase):
             self.assertFalse(workflow_permissions & DEFAULT_ROLE_AUTHORITY[role], role)
 
     def test_steps_can_target_any_non_workflow_capability(self):
-        spec = validate_workflow_spec(
-            {
-                "steps": [
-                    {
-                        "id": "mail",
-                        "capability_id": "google.gmail.send_email",
-                        "arguments": {"to": "a@example.com"},
-                    },
-                    {
-                        "id": "build",
-                        "capability_id": "computer.python.exec",
-                        "arguments": {
-                            "computer_session_id": "{{trigger.computer_session_id}}",
-                            "code": "print(1)",
-                        },
-                        "depends_on": ["mail"],
-                    },
-                    {
-                        "id": "deploy",
-                        "capability_id": "studio.solution.deploy",
-                        "arguments": {"project_id": "{{trigger.project_id}}"},
-                        "depends_on": ["build"],
-                    },
-                ]
-            }
-        )
-        self.assertEqual(
-            [step["capability_id"] for step in spec["steps"]],
-            ["google.gmail.send_email", "computer.python.exec", "studio.solution.deploy"],
-        )
+        spec = validate_workflow_spec({"steps": [
+            {"id": "mail", "capability_id": "google.gmail.send_email", "arguments": {"to": "a@example.com"}},
+            {"id": "build", "capability_id": "computer.python.exec", "arguments": {"computer_session_id": "{{trigger.computer_session_id}}", "code": "print(1)"}, "depends_on": ["mail"]},
+            {"id": "deploy", "capability_id": "studio.solution.deploy", "arguments": {"project_id": "{{trigger.project_id}}"}, "depends_on": ["build"]},
+        ]})
+        self.assertEqual([step["capability_id"] for step in spec["steps"]], ["google.gmail.send_email", "computer.python.exec", "studio.solution.deploy"])
         with self.assertRaises(WorkflowSpecError):
-            validate_workflow_spec(
-                {"steps": [{"id": "loop", "capability_id": "workflow.run.start", "arguments": {}}]}
-            )
+            validate_workflow_spec({"steps": [{"id": "loop", "capability_id": "workflow.run.start", "arguments": {}}]})
 
     def test_dependencies_waits_conditions_and_schedules_stay_deterministic(self):
         for invalid in (
-            {
-                "steps": [
-                    {"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["b"]},
-                    {"id": "b", "capability_id": "workspace.summary.read"},
-                ]
-            },
+            {"steps": [{"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["b"]}, {"id": "b", "capability_id": "workspace.summary.read"}]},
             {"steps": [{"id": "a", "capability_id": "workspace.summary.read", "depends_on": ["a"]}]},
-            {
-                "steps": [
-                    {"id": "a", "capability_id": "workspace.summary.read"},
-                    {"id": "b", "capability_id": "workspace.summary.read", "depends_on": ["a", "a"]},
-                ]
-            },
+            {"steps": [{"id": "a", "capability_id": "workspace.summary.read"}, {"id": "b", "capability_id": "workspace.summary.read", "depends_on": ["a", "a"]}]},
         ):
             with self.assertRaises(WorkflowSpecError):
                 validate_workflow_spec(invalid)
 
-        validated = validate_workflow_spec(
-            {
-                "steps": [
-                    {"id": "a", "kind": "wait", "seconds": 60},
-                    {
-                        "id": "b",
-                        "capability_id": "workspace.summary.read",
-                        "depends_on": ["a"],
-                        "when": {"ref": "steps.a.status", "op": "eq", "value": "completed"},
-                    },
-                ]
-            }
-        )
+        validated = validate_workflow_spec({"steps": [
+            {"id": "a", "kind": "wait", "seconds": 60},
+            {"id": "b", "capability_id": "workspace.summary.read", "depends_on": ["a"], "when": {"ref": "steps.a.status", "op": "eq", "value": "completed"}},
+        ]})
         self.assertEqual(validated["steps"][0]["kind"], "wait")
         with self.assertRaises(WorkflowSpecError):
-            validate_workflow_spec(
-                {"steps": [{"id": "too-long", "kind": "wait", "seconds": 31 * 24 * 60 * 60 + 1}]}
-            )
+            validate_workflow_spec({"steps": [{"id": "too-long", "kind": "wait", "seconds": 31 * 24 * 60 * 60 + 1}]})
         with self.assertRaises(WorkflowSpecError):
-            evaluate_condition(
-                {"ref": "trigger.value", "op": "gt", "value": 3},
-                {"trigger": {"value": "not-a-number"}},
-            )
+            evaluate_condition({"ref": "trigger.value", "op": "gt", "value": 3}, {"trigger": {"value": "not-a-number"}})
 
         after = datetime(2026, 8, 31, 5, 0, 0)
         interval = validate_schedule({"type": "interval", "every_seconds": 300, "timezone": "UTC"})
@@ -226,18 +158,12 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIn("workflow_depth", audit)
         self.assertIn("workflow.trigger.create", provider)
         self.assertIn("A non-owner may only access their own workflows", access)
-        self.assertIn('ALEMBIC_HEAD = "0057_agent_runtime_foundation"', schema)
+        self.assertIn('ALEMBIC_HEAD = "0058_agent_chat_history"', schema)
 
     def test_workflow_engine_does_not_import_external_provider_executors(self):
         root = Path(__file__).resolve().parents[1]
         engine = (root / "packages" / "workflow" / "engine.py").read_text(encoding="utf-8")
-        for forbidden in (
-            "GoogleWorkspaceProvider",
-            "WorkspaceCanvaProvider",
-            "WorkspaceDiscordProvider",
-            "WorkspaceStudioProvider",
-            "AgentComputerProvider",
-        ):
+        for forbidden in ("GoogleWorkspaceProvider", "WorkspaceCanvaProvider", "WorkspaceDiscordProvider", "WorkspaceStudioProvider", "AgentComputerProvider"):
             self.assertNotIn(forbidden, engine)
 
 
