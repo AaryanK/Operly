@@ -8,8 +8,8 @@ from packages.workspace_modules.agent_computer.router import _governed_native_co
 class PreAgentRuntimeSecurityGateTests(unittest.TestCase):
     def test_kernel_rejects_unstable_mutations_before_approval(self):
         source = Path("packages/kernel/runtime.py").read_text(encoding="utf-8")
-        request_guard = 'and not str(request.request_id or "").strip()'
-        approval_branch = "if decision is AuthorizationDecision.ASK and request.approval_id:"
+        request_guard = 'and not str(execution_request.request_id or "").strip()'
+        approval_branch = "if decision is AuthorizationDecision.ASK and execution_request.approval_id:"
         self.assertIn(request_guard, source)
         self.assertLess(source.index(request_guard), source.index(approval_branch))
 
