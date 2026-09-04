@@ -8,10 +8,16 @@ Personal or Workspace authority.
 from dataclasses import replace
 
 from packages.kernel.contracts import CapabilitySpec
-from packages.workflow.access import WorkflowProvider
+from packages.workflow.concurrency import (
+    WorkflowProvider,
+    extend_workflow_capabilities,
+    install_concurrency_scheduler,
+)
 from packages.workflow.provider import PROVIDER_ID, workflow_capabilities as _workflow_capabilities
-from packages.workflow.scheduler import workflow_scheduler
 from packages.workflow.triggers import workflow_event_dispatcher
+
+
+workflow_scheduler = install_concurrency_scheduler()
 
 
 def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
@@ -19,7 +25,7 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
 
     return tuple(
         replace(spec, tags=frozenset((*spec.tags, "operations")))
-        for spec in _workflow_capabilities()
+        for spec in extend_workflow_capabilities(_workflow_capabilities())
     )
 
 
@@ -36,7 +42,7 @@ def personal_workflow_capabilities() -> tuple[CapabilitySpec, ...]:
                 for tag in (*spec.tags, "operations")
             ),
         )
-        for spec in _workflow_capabilities()
+        for spec in extend_workflow_capabilities(_workflow_capabilities())
     )
 
 
