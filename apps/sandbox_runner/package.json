@@ -9,6 +9,6 @@
     "test": "node --check server_ready.mjs && node --check server.mjs"
   },
   "dependencies": {
-    "railway": "3.10.0"
+    "railway": "3.11.0"
   }
 }
