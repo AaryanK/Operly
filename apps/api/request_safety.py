@@ -106,9 +106,11 @@ def _auth_shield_limited(scope, path: str, method: str) -> bool:
 
 
 def _body_guarded(path: str, method: str) -> bool:
-    return method in UNSAFE_METHODS and (
-        path.startswith("/api/") or path in {"/mcp", "/oauth/token"}
-    )
+    # The size ceiling is method-independent. GET/OPTIONS/other requests normally
+    # carry no body, but if they do, they must not provide an unbounded memory/parse
+    # path merely because the route is nominally read-only.
+    del method
+    return path.startswith("/api/") or path in {"/mcp", "/oauth/token"}
 
 
 def _is_auth_json_path(path: str) -> bool:
@@ -214,12 +216,13 @@ def _prepare_mcp_body(raw: bytes) -> bytes:
 
 
 class AuthRequestSafetyMiddleware:
-    """Bound unsafe request bodies and reject cheap abuse before route execution.
+    """Bound API request bodies and reject cheap abuse before route execution.
 
-    Auth routes additionally require small, duplicate-key-free JSON bodies. MCP tool
-    calls must be unambiguous JSON and carry either a bounded explicit Operly request
-    ID or a deterministic ID derived from a scalar JSON-RPC request ID. This prevents
-    transport retries from silently becoming a second mutating invocation.
+    The byte ceiling applies to every HTTP method under the authenticated API/MCP
+    surfaces. Auth mutation routes additionally require small, duplicate-key-free JSON
+    bodies. MCP tool calls must carry either a bounded explicit Operly request ID or a
+    deterministic ID derived from a scalar JSON-RPC request ID, preventing retries
+    from silently becoming a second mutating invocation.
     """
 
     def __init__(self, app):
@@ -254,7 +257,7 @@ class AuthRequestSafetyMiddleware:
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers") or []
         }
-        auth_path = _is_auth_json_path(path)
+        auth_path = method in UNSAFE_METHODS and _is_auth_json_path(path)
         limit = min(_api_body_limit(), AUTH_BODY_MAX_BYTES) if auth_path else _api_body_limit()
 
         content_length = headers.get("content-length")
@@ -310,7 +313,7 @@ class AuthRequestSafetyMiddleware:
                 await response(scope, receive, send)
                 return
 
-        if path == "/mcp":
+        if path == "/mcp" and method in UNSAFE_METHODS:
             if content_type != "application/json":
                 response = _error(415, "JSON_REQUIRED", "Send MCP requests as JSON")
                 await response(scope, receive, send)
