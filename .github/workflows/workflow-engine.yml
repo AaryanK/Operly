@@ -290,10 +290,12 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/sandbox_runner/package-lock.json
 
       - name: Install pinned Railway SDK
         working-directory: apps/sandbox_runner
-        run: npm install --ignore-scripts --no-package-lock
+        run: npm ci --ignore-scripts
 
       - name: Validate Sandbox Runner syntax
         working-directory: apps/sandbox_runner
