@@ -1,0 +1,72 @@
+name: Workflow Approval Rollback 298
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/workflow-approval-rollback-298.yml"
+      - "packages/workflow/**"
+      - "packages/kernel/**"
+      - "packages/security/**"
+      - "packages/database/**"
+      - "packages/personal_modules/**"
+      - "packages/workspace_modules/**"
+      - "tests/test_workflow_approval_rollback_298.py"
+      - "tests/test_workflow_native_approval_matrix.py"
+      - "tests/test_capability_compound_workflow_matrix.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/workflow-approval-rollback-298.yml"
+      - "packages/workflow/**"
+      - "packages/kernel/**"
+      - "packages/security/**"
+      - "packages/database/**"
+      - "packages/personal_modules/**"
+      - "packages/workspace_modules/**"
+      - "tests/test_workflow_approval_rollback_298.py"
+      - "tests/test_workflow_native_approval_matrix.py"
+      - "tests/test_capability_compound_workflow_matrix.py"
+
+permissions:
+  contents: read
+
+jobs:
+  native-approval-resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: sqlite+aiosqlite:///./workflow-approval-298.db
+      SESSION_SECRET: workflow-approval-298-ci-secret
+      OPERLY_ENV: development
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install application dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile approval regression surfaces
+        run: |
+          python -m py_compile packages/workflow/engine.py
+          python -m py_compile tests/test_workflow_approval_rollback_298.py
+          python -m py_compile tests/test_workflow_native_approval_matrix.py
+          python -m py_compile tests/test_capability_compound_workflow_matrix.py
+
+      - name: Run focused rollback regression
+        run: python -m unittest discover -s tests -p "test_workflow_approval_rollback_298.py" -v
+
+      - name: Run native approval compound matrix
+        run: python -m unittest discover -s tests -p "test_workflow_native_approval_matrix.py" -v
+
+      - name: Re-run capability compound matrix
+        run: python -m unittest discover -s tests -p "test_capability_compound_workflow_matrix.py" -v

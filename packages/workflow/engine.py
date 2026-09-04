@@ -791,14 +791,24 @@ class WorkflowEngine:
                 message="Workflow authority user is unavailable",
             )
 
+        # Kernel execution may roll back this shared SQLAlchemy session before
+        # raising (for example on approval_required). Rollback expires ORM state,
+        # including attributes that would otherwise look safe such as primary keys.
+        # Preserve scalar lineage identifiers before crossing that transaction
+        # boundary so every post-Kernel reload is explicit async I/O rather than an
+        # accidental expired-attribute lazy load (SQLAlchemy MissingGreenlet).
+        step_run_id = row.id
+        step_attempt_id = attempt.id
+        workflow_run_id = run.id
+
         try:
             authority = await self._resolve_authority(
                 db, run=run, row=row, attempt=attempt
             )
         except (ExecutionContextError, PermissionError) as error:
-            row = await db.get(WorkflowStepRun, row.id)
-            attempt = await db.get(WorkflowStepAttempt, attempt.id)
-            run = await db.get(WorkflowRun, run.id)
+            row = await db.get(WorkflowStepRun, step_run_id)
+            attempt = await db.get(WorkflowStepAttempt, step_attempt_id)
+            run = await db.get(WorkflowRun, workflow_run_id)
             assert row is not None and attempt is not None and run is not None
             return await self._fail_action_before_runtime(
                 db,
@@ -822,9 +832,9 @@ class WorkflowEngine:
                 ),
             )
         except RuntimeExecutionError as error:
-            row = await db.get(WorkflowStepRun, row.id)
-            attempt = await db.get(WorkflowStepAttempt, attempt.id)
-            run = await db.get(WorkflowRun, run.id)
+            row = await db.get(WorkflowStepRun, step_run_id)
+            attempt = await db.get(WorkflowStepAttempt, step_attempt_id)
+            run = await db.get(WorkflowRun, workflow_run_id)
             assert row is not None and attempt is not None and run is not None
             row.kernel_run_id = error.run_id
             attempt.kernel_run_id = error.run_id
@@ -894,9 +904,9 @@ class WorkflowEngine:
             await db.commit()
             return row
 
-        row = await db.get(WorkflowStepRun, row.id)
-        attempt = await db.get(WorkflowStepAttempt, attempt.id)
-        run = await db.get(WorkflowRun, run.id)
+        row = await db.get(WorkflowStepRun, step_run_id)
+        attempt = await db.get(WorkflowStepAttempt, step_attempt_id)
+        run = await db.get(WorkflowRun, workflow_run_id)
         assert row is not None and attempt is not None and run is not None
         finished = datetime.utcnow()
         row.status = "completed"
