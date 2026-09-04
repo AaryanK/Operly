@@ -15,6 +15,7 @@ from packages.workflow.models import (
     WorkflowDefinition,
     WorkflowEventCursor,
     WorkflowEventTrigger,
+    WorkflowRun,
 )
 from packages.workflow.spec import WorkflowSpecError, evaluate_condition
 
@@ -35,8 +36,7 @@ def normalize_event_pattern(value: str) -> str:
     if ".." in pattern or pattern.startswith(".") or pattern.endswith("."):
         raise ValueError("Event pattern is invalid")
     # Workflow lifecycle events are orchestration evidence, not automation triggers.
-    # Keeping them off the trigger plane prevents accidental self-trigger loops. A
-    # future explicit recursion primitive can add bounded semantics deliberately.
+    # Keeping them off the trigger plane prevents accidental self-trigger loops.
     if pattern == "workflow.*" or pattern.startswith("workflow."):
         raise ValueError("workflow.* lifecycle events cannot be workflow triggers")
     return pattern
@@ -78,6 +78,7 @@ def event_envelope(row: KernelEventRecord) -> dict[str, Any]:
         "payload": payload,
         "created_at": row.created_at.isoformat(),
         "correlation_id": payload.get("workflow_correlation_id") or row.id,
+        "causation_id": payload.get("workflow_causation_id"),
     }
 
 
@@ -175,23 +176,30 @@ class WorkflowEventDispatcher:
                 # Migration seeds this row. If another replica currently owns the lock,
                 # skip this tick instead of creating a second cursor.
                 return 0
+            if cursor.last_created_at is None:
+                # Defensive compatibility for a partially upgraded database. Start at
+                # now rather than replaying the historical Kernel event log.
+                cursor.last_created_at = datetime.utcnow()
+                cursor.last_event_id = ""
+                await db.commit()
+                return 0
 
-            statement = select(KernelEventRecord)
-            if cursor.last_created_at is not None:
-                statement = statement.where(
-                    or_(
-                        KernelEventRecord.created_at > cursor.last_created_at,
-                        and_(
-                            KernelEventRecord.created_at == cursor.last_created_at,
-                            KernelEventRecord.id > str(cursor.last_event_id or ""),
-                        ),
-                    )
-                )
             events = (
                 await db.scalars(
-                    statement.order_by(
+                    select(KernelEventRecord)
+                    .where(
+                        or_(
+                            KernelEventRecord.created_at > cursor.last_created_at,
+                            and_(
+                                KernelEventRecord.created_at == cursor.last_created_at,
+                                KernelEventRecord.id > str(cursor.last_event_id or ""),
+                            ),
+                        )
+                    )
+                    .order_by(
                         KernelEventRecord.created_at.asc(), KernelEventRecord.id.asc()
-                    ).limit(self._batch_size)
+                    )
+                    .limit(self._batch_size)
                 )
             ).all()
             if not events:
@@ -211,35 +219,25 @@ class WorkflowEventDispatcher:
                             continue
                         dedupe_key = f"event:{trigger.id}:{event.id}"
                         existing = await db.scalar(
-                            select(WorkflowDefinition.id)
-                            .join_from(WorkflowDefinition, WorkflowEventTrigger)
-                            .where(
-                                WorkflowEventTrigger.id == trigger.id,
-                                WorkflowDefinition.id == workflow.id,
+                            select(WorkflowRun.id).where(
+                                WorkflowRun.dedupe_key == dedupe_key
                             )
                         )
-                        if existing is None:
+                        if existing is not None:
                             continue
-                        try:
-                            await queue_workflow_run(
-                                db,
-                                workflow=workflow,
-                                trigger_type="event",
-                                trigger_payload={
-                                    "event": envelope,
-                                    "trigger_id": trigger.id,
-                                    "depth": depth + 1,
-                                },
-                                initiated_by_user_id=None,
-                                dedupe_key=dedupe_key,
-                            )
-                            queued += 1
-                        except Exception as error:
-                            # Unique dedupe conflicts are benign when a transaction is
-                            # retried by infrastructure. Other failures abort this batch,
-                            # leaving the cursor untouched so the event is retried.
-                            if "dedupe" not in str(error).lower() and "unique" not in str(error).lower():
-                                raise
+                        await queue_workflow_run(
+                            db,
+                            workflow=workflow,
+                            trigger_type="event",
+                            trigger_payload={
+                                "event": envelope,
+                                "trigger_id": trigger.id,
+                                "depth": depth + 1,
+                            },
+                            initiated_by_user_id=None,
+                            dedupe_key=dedupe_key,
+                        )
+                        queued += 1
 
                 cursor.last_created_at = event.created_at
                 cursor.last_event_id = event.id
