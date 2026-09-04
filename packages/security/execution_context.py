@@ -30,6 +30,12 @@ PERSONAL_EXECUTION_PERMISSIONS = frozenset(
         "model:invoke",
         "context:human:read",
         "context:human:write",
+        # Personal workflow authority owns only definitions/runs whose scope_kind is
+        # personal and owner_user_id is this same account. It never grants Workspace
+        # traversal or Workspace capability execution.
+        "workflows:read",
+        "workflows:write",
+        "workflows:run",
         # Private artifact/computer operations remain account-scoped and the
         # Agent Computer has no production credentials or outbound network.
         "files:process",
