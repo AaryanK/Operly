@@ -60,7 +60,21 @@ PUBLIC_BASE_URL = (
     or RAILWAY_PUBLIC_URL
     or "http://localhost:8000"
 )
+STUDIO_PUBLIC_HOST = os.getenv("OPERLY_STUDIO_PUBLIC_HOST", "").strip().lower().rstrip(".")
 PRODUCTION = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).lower() in {"production", "prod"}
+
+
+def _site_suffix_hint(host: str | None) -> str:
+    """Conservative cookie-site guard without depending on a public-suffix library.
+
+    Matching the final two labels catches ordinary sibling-subdomain deployments.
+    It deliberately over-rejects some multi-label public suffixes (for example co.uk)
+    rather than accidentally accepting a content hostname that could receive a broad
+    parent-domain Operly cookie.
+    """
+
+    labels = [part for part in str(host or "").strip().lower().rstrip(".").split(".") if part]
+    return ".".join(labels[-2:]) if len(labels) >= 2 else ".".join(labels)
 
 
 async def bootstrap_admin() -> None:
@@ -118,6 +132,22 @@ def validate_runtime_configuration() -> None:
     if PUBLIC_BASE_URL == "https://operly.example":
         raise RuntimeError("PUBLIC_BASE_URL still uses the example value")
 
+    # Published/model-authored HTML is an untrusted principal. If Studio hosting is
+    # enabled, require a dedicated hostname that is not even in the same conservative
+    # cookie-site suffix as the authenticated Operly application.
+    if os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip():
+        if not STUDIO_PUBLIC_HOST:
+            raise RuntimeError(
+                "OPERLY_STUDIO_PUBLIC_HOST is required when Studio hosting is enabled in production"
+            )
+        if any(token in STUDIO_PUBLIC_HOST for token in ("/", "@", "?", "#", ":")):
+            raise RuntimeError("OPERLY_STUDIO_PUBLIC_HOST must be a bare hostname")
+        app_host = str(urlparse(PUBLIC_BASE_URL).hostname or "").lower().rstrip(".")
+        if STUDIO_PUBLIC_HOST == app_host or _site_suffix_hint(STUDIO_PUBLIC_HOST) == _site_suffix_hint(app_host):
+            raise RuntimeError(
+                "Studio published content must use a separate registrable-style origin from Operly authentication"
+            )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -148,6 +178,8 @@ allowed_hosts = {"healthcheck.railway.app"}
 public_host = urlparse(PUBLIC_BASE_URL).hostname
 if public_host:
     allowed_hosts.add(public_host)
+if STUDIO_PUBLIC_HOST:
+    allowed_hosts.add(STUDIO_PUBLIC_HOST)
 if RAILWAY_PUBLIC_DOMAIN:
     allowed_hosts.add(RAILWAY_PUBLIC_DOMAIN)
 if RUNNING_ON_RAILWAY:
@@ -207,6 +239,9 @@ app.include_router(studio_public_router)
 @app.get("/api/health")
 async def health():
     discord = discord_bot_lifecycle.status()
+    studio_hosting_configured = bool(
+        os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip() and STUDIO_PUBLIC_HOST
+    )
     return {
         "ok": True,
         "service": "operly",
@@ -238,7 +273,8 @@ async def health():
         "mcp_enabled": True,
         "mcp_protocol_version": "2026-07-28",
         "mcp_authority_model": "live-workspace-authority-plus-client-narrowing",
-        "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
+        "studio_hosting_configured": studio_hosting_configured,
+        "studio_content_host": STUDIO_PUBLIC_HOST or None,
         "discord_bot_configured": discord["configured"],
         "discord_bot_running": discord["task_running"],
         "human_workflows_enabled": True,
@@ -249,6 +285,9 @@ async def health():
 
 @app.get("/api/rebuild-status")
 async def rebuild_status():
+    studio_hosting_configured = bool(
+        os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip() and STUDIO_PUBLIC_HOST
+    )
     return {
         "state": "personal-and-digital-business-infrastructure",
         "deterministic_core": True,
@@ -267,7 +306,7 @@ async def rebuild_status():
         "capability_gateway": "short-lived-runtime-identity-plus-live-workspace-authority",
         "runtime_egress_broker": "grant-scoped-credential-injection",
         "plugin_runtime_reconciliation": "queued-health-verified-no-direct-health-override",
-        "workspace_plugin_hosting": "validated-artifact-over-operly-workspace-url",
+        "workspace_plugin_hosting": "validated-artifact-over-dedicated-content-origin",
         "digital_webhook_ingress_enabled": True,
         "digital_event_delivery_enabled": True,
         "isolated_plugin_validation_enabled": True,
@@ -280,7 +319,8 @@ async def rebuild_status():
         "mcp_enabled": True,
         "mcp_protocol_version": "2026-07-28",
         "mcp_gateway": "canonical-workspace-capability-runtime",
-        "studio_hosting_configured": bool(os.getenv("OPERLY_DEPLOYMENT_ROOT", "").strip()),
+        "studio_hosting_configured": studio_hosting_configured,
+        "studio_content_host": STUDIO_PUBLIC_HOST or None,
         "discord_bot": discord_bot_lifecycle.status(),
         "human_workflows_enabled": True,
         "kernel_runtime_enabled": True,
