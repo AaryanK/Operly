@@ -42,6 +42,8 @@ def upgrade():
             ),
             sa.Column("principal_id", sa.String(200), nullable=False),
             sa.Column("conversation_id", sa.String(120), nullable=True),
+            sa.Column("source_channel", sa.String(40), nullable=False),
+            sa.Column("source_surface", sa.String(40), nullable=False),
             sa.Column("goal", sa.Text(), nullable=False),
             sa.Column("plan_json", sa.Text(), nullable=False),
             sa.Column("budget_json", sa.Text(), nullable=False),

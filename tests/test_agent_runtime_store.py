@@ -25,19 +25,26 @@ from packages.database.agent_runtime_models import (
 from packages.database.db import Base
 from packages.database.schema import ALEMBIC_HEAD, import_all_models
 from packages.security.execution_context import ExecutionContext, ScopeKind
+from packages.security.surfaces import SurfaceKind
 
 
-def workspace_context(*, principal: str = "user:user-1") -> ExecutionContext:
+def workspace_context(
+    *,
+    principal: str = "user:user-1",
+    workspace_mode: str = "full",
+) -> ExecutionContext:
     return ExecutionContext(
         workspace_id="workspace-1",
         user_id="user-1",
-        membership_id="membership-1",
-        role="owner",
+        membership_id=None if workspace_mode == "guest" else "membership-1",
+        role="guest" if workspace_mode == "guest" else "owner",
         permissions=frozenset({"workspace:read"}),
         channel="web",
+        surface=SurfaceKind.WORKSPACE_PRIVATE,
         conversation_id="conversation-1",
         scope_kind=ScopeKind.WORKSPACE,
         principal_id=principal,
+        workspace_mode=workspace_mode,
     )
 
 
@@ -49,6 +56,7 @@ def personal_context() -> ExecutionContext:
         role="personal_owner",
         permissions=frozenset({"workspace:read"}),
         channel="personal",
+        surface=SurfaceKind.PERSONAL_PRIVATE,
         conversation_id="personal-conversation",
         scope_kind=ScopeKind.PERSONAL,
         principal_id="user:user-personal",
@@ -95,6 +103,8 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row.owner_user_id)
         self.assertEqual(row.authority_user_id, "user-1")
         self.assertEqual(row.principal_id, "user:user-1")
+        self.assertEqual(row.source_channel, "web")
+        self.assertEqual(row.source_surface, SurfaceKind.WORKSPACE_PRIVATE.value)
         self.assertEqual([item.step_id for item in steps], ["read", "write"])
         self.assertEqual(len({item.request_id for item in steps}), 2)
         self.assertTrue(all(len(item.request_id) <= 160 for item in steps))
@@ -117,6 +127,19 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row.workspace_id)
         self.assertEqual(row.owner_user_id, "user-personal")
         self.assertEqual(row.principal_id, "user:user-personal")
+        self.assertEqual(row.source_surface, SurfaceKind.PERSONAL_PRIVATE.value)
+
+    async def test_guest_workspace_run_is_rejected_until_provenance_is_durable(self):
+        async with self.sessions() as db:
+            with self.assertRaisesRegex(
+                AgentRunStateError,
+                "Guest Workspace agent runs require durable external-installation provenance",
+            ):
+                await create_run(
+                    db,
+                    context=workspace_context(workspace_mode="guest"),
+                    plan=plan("guest-run"),
+                )
 
     async def test_context_lookup_is_principal_and_scope_bound(self):
         async with self.sessions() as db:
@@ -156,10 +179,10 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
                 db, run_id="lease-run", lease_token="worker-b", lease_seconds=60
             )
             await db.commit()
-
-        self.assertIsNotNone(recovered)
-        self.assertEqual(recovered.lease_token, "worker-b")
-        self.assertIsNotNone(recovered.started_at)
+            self.assertIsNotNone(recovered)
+            await db.refresh(recovered)
+            self.assertEqual(recovered.lease_token, "worker-b")
+            self.assertIsNotNone(recovered.started_at)
 
     async def test_cancellation_is_durable_and_scope_bound(self):
         async with self.sessions() as db:
@@ -184,6 +207,11 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
                     db, run_id="cancel-run", lease_token="worker-a", lease_seconds=60
                 )
             )
+
+    async def test_missing_run_cancellation_check_fails_closed(self):
+        async with self.sessions() as db:
+            with self.assertRaises(AgentRunStateError):
+                await cancellation_requested(db, run_id="missing-agent-run")
 
     async def test_step_attempt_history_preserves_request_identity(self):
         async with self.sessions() as db:

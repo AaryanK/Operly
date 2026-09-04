@@ -36,6 +36,8 @@ class AgentRuntimeRun(Base):
     )
     principal_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     conversation_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    source_channel: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_surface: Mapped[str] = mapped_column(String(40), nullable=False)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     plan_json: Mapped[str] = mapped_column(Text, nullable=False)
     budget_json: Mapped[str] = mapped_column(Text, nullable=False)

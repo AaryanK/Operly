@@ -65,9 +65,13 @@ def _budget_json(plan: AgentPlan) -> str:
 def _scope_values(context: ExecutionContext) -> tuple[str, str | None, str | None]:
     if not context.principal_id:
         raise AgentRunStateError("Agent runs require a resolved principal_id")
+    if not context.user_id:
+        raise AgentRunStateError("Initial agent runtime supports authenticated users only")
+    if context.is_guest_workspace:
+        raise AgentRunStateError(
+            "Guest Workspace agent runs require durable external-installation provenance"
+        )
     if context.scope_kind is ScopeKind.PERSONAL:
-        if not context.user_id:
-            raise AgentRunStateError("Personal agent runs require an authenticated user")
         return "personal", None, context.user_id
     if not context.workspace_id:
         raise AgentRunStateError("Workspace agent runs require a workspace_id")
@@ -92,6 +96,8 @@ async def create_run(
         authority_user_id=context.user_id,
         principal_id=str(context.principal_id),
         conversation_id=context.conversation_id,
+        source_channel=str(context.channel or "unknown")[:40],
+        source_surface=context.surface.value,
         goal=plan.goal,
         plan_json=_plan_json(plan),
         budget_json=_budget_json(plan),
@@ -161,9 +167,12 @@ async def request_cancellation(
 
 
 async def cancellation_requested(db: AsyncSession, *, run_id: str) -> bool:
-    value = await db.scalar(
+    result = await db.execute(
         select(AgentRuntimeRun.cancellation_requested).where(AgentRuntimeRun.id == run_id)
     )
+    value = result.scalar_one_or_none()
+    if value is None:
+        raise AgentRunStateError("Agent run does not exist")
     return bool(value)
 
 
