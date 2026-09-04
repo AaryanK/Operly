@@ -89,9 +89,8 @@ def policy_from_snapshot(snapshot: Any) -> dict[str, Any]:
     try:
         return normalize_concurrency_policy(snapshot.get("concurrency"))
     except ValueError:
-        # Historical/corrupt snapshot metadata must never grant *more* dispatch
-        # authority through an exception path. The backward-compatible safe behavior
-        # is the explicit pre-feature default (global scheduler bound only).
+        # Preserve the explicit pre-feature behavior for historical malformed metadata
+        # rather than making dispatch depend on an unreadable policy blob.
         return dict(DEFAULT_CONCURRENCY_POLICY)
 
 
@@ -130,6 +129,18 @@ def extend_workflow_capabilities(
     return tuple(extended)
 
 
+def _version_payload(row: WorkflowVersion) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "workflow_id": row.workflow_id,
+        "version": row.version,
+        "created_by_user_id": row.created_by_user_id,
+        "created_at": row.created_at.isoformat(),
+        "spec": _loads(row.spec_json, {}),
+        "snapshot": _loads(row.snapshot_json, {}),
+    }
+
+
 class WorkflowProvider(AccessWorkflowProvider):
     """Universal Workflow provider plus immutable concurrency policy snapshots.
 
@@ -161,26 +172,10 @@ class WorkflowProvider(AccessWorkflowProvider):
             raise LookupError("Workflow is unavailable")
         return locked
 
-    async def _current_policy(
+    async def _current_version(
         self,
         db: AsyncSession,
         workflow: WorkflowDefinition,
-    ) -> dict[str, Any]:
-        version = await db.scalar(
-            select(WorkflowVersion).where(
-                WorkflowVersion.workflow_id == workflow.id,
-                WorkflowVersion.version == workflow.current_version,
-            )
-        )
-        if version is None:
-            return dict(DEFAULT_CONCURRENCY_POLICY)
-        return policy_from_snapshot(_loads(version.snapshot_json, {}))
-
-    async def _store_current_policy(
-        self,
-        db: AsyncSession,
-        workflow: WorkflowDefinition,
-        policy: dict[str, Any],
     ) -> WorkflowVersion:
         version = await db.scalar(
             select(WorkflowVersion).where(
@@ -190,12 +185,54 @@ class WorkflowProvider(AccessWorkflowProvider):
         )
         if version is None:
             raise RuntimeError("Current workflow version is unavailable")
+        return version
+
+    async def _current_policy(
+        self,
+        db: AsyncSession,
+        workflow: WorkflowDefinition,
+    ) -> dict[str, Any]:
+        version = await self._current_version(db, workflow)
+        return policy_from_snapshot(_loads(version.snapshot_json, {}))
+
+    async def _store_current_policy(
+        self,
+        db: AsyncSession,
+        workflow: WorkflowDefinition,
+        policy: dict[str, Any],
+    ) -> WorkflowVersion:
+        version = await self._current_version(db, workflow)
         snapshot = _loads(version.snapshot_json, {})
         if not isinstance(snapshot, dict):
             snapshot = {}
         snapshot["concurrency"] = dict(policy)
         version.snapshot_json = _dumps(snapshot)
         return version
+
+    async def _create_concurrency_only_version(
+        self,
+        db: AsyncSession,
+        *,
+        workflow: WorkflowDefinition,
+        policy: dict[str, Any],
+        created_by_user_id: str | None,
+    ) -> tuple[WorkflowVersion, WorkflowVersion]:
+        previous = await self._current_version(db, workflow)
+        snapshot = _loads(previous.snapshot_json, {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        snapshot["concurrency"] = dict(policy)
+        workflow.current_version += 1
+        version = WorkflowVersion(
+            workflow_id=workflow.id,
+            version=workflow.current_version,
+            spec_json=previous.spec_json,
+            snapshot_json=_dumps(snapshot),
+            created_by_user_id=created_by_user_id,
+        )
+        db.add(version)
+        await db.flush()
+        return previous, version
 
     @staticmethod
     def _decorate_value(
@@ -233,6 +270,7 @@ class WorkflowProvider(AccessWorkflowProvider):
         )
 
         previous_policy: dict[str, Any] | None = None
+        previous_version_number: int | None = None
         locked_workflow: WorkflowDefinition | None = None
         if capability_id == "workflow.update":
             locked_workflow = await self._authorized_workflow(
@@ -242,6 +280,12 @@ class WorkflowProvider(AccessWorkflowProvider):
                 lock=True,
             )
             previous_policy = await self._current_policy(db, locked_workflow)
+            previous_version_number = locked_workflow.current_version
+
+        concurrency_changed = bool(
+            concurrency_supplied
+            and requested_policy != (previous_policy or dict(DEFAULT_CONCURRENCY_POLICY))
+        )
 
         provider_arguments = dict(arguments)
         provider_arguments.pop("concurrency", None)
@@ -264,11 +308,77 @@ class WorkflowProvider(AccessWorkflowProvider):
                 policy = previous_policy or dict(DEFAULT_CONCURRENCY_POLICY)
             else:
                 policy = dict(DEFAULT_CONCURRENCY_POLICY)
-            version = await self._store_current_policy(db, workflow, policy)
+
+            created_concurrency_only_version = False
+            previous_version: WorkflowVersion | None = None
+            if (
+                capability_id == "workflow.update"
+                and concurrency_changed
+                and workflow.current_version == previous_version_number
+            ):
+                previous_version, version = await self._create_concurrency_only_version(
+                    db,
+                    workflow=workflow,
+                    policy=policy,
+                    created_by_user_id=context.user_id,
+                )
+                created_concurrency_only_version = True
+            elif capability_id == "workflow.create" or (
+                capability_id == "workflow.update"
+                and workflow.current_version != previous_version_number
+            ):
+                # The version was created in this same transaction by the base
+                # provider, so adding concurrency metadata here does not mutate any
+                # previously visible immutable snapshot.
+                version = await self._store_current_policy(db, workflow, policy)
+            else:
+                # No ordinary fields changed and the requested concurrency policy was
+                # identical to the existing one. Do not create or mutate a version.
+                version = await self._current_version(db, workflow)
+
             if isinstance(result.value, dict):
+                if created_concurrency_only_version:
+                    result.value["version"] = _version_payload(version)
+                    result.value["changed"] = ["concurrency"]
+                    workflow_payload = result.value.get("workflow")
+                    if isinstance(workflow_payload, dict):
+                        workflow_payload["current_version"] = workflow.current_version
+                elif concurrency_changed:
+                    changed = result.value.get("changed")
+                    if isinstance(changed, list) and "concurrency" not in changed:
+                        changed.append("concurrency")
                 self._decorate_value(result.value, policy)
 
-            if concurrency_supplied:
+            if created_concurrency_only_version:
+                await record_workflow_event(
+                    db,
+                    workspace_id=context.workspace_id,
+                    workflow_id=workflow.id,
+                    event_type="workflow.updated",
+                    actor_type="human",
+                    actor_id=context.user_id,
+                    owner_user_id=workflow.owner_user_id,
+                    principal_id=context.principal_id,
+                    payload={
+                        "version": workflow.current_version,
+                        "version_id": version.id,
+                        "previous_version_id": previous_version.id if previous_version else None,
+                        "changed": ["concurrency"],
+                    },
+                )
+                result = CapabilityExecutionResult(
+                    value=result.value,
+                    resource_type=result.resource_type,
+                    resource_id=result.resource_id,
+                    event_payload={
+                        "workflow_id": workflow.id,
+                        "workflow_version_id": version.id,
+                    },
+                )
+
+            if concurrency_changed or (
+                capability_id == "workflow.create" and concurrency_supplied
+            ):
                 await record_workflow_event(
                     db,
                     workspace_id=context.workspace_id,
@@ -341,6 +451,7 @@ class ConcurrentWorkflowScheduler(WorkflowScheduler):
         policy: dict[str, Any],
         now: datetime,
     ) -> None:
+        del workflow
         run.status = "cancelled"
         run.error_code = "concurrency_suppressed"
         run.error_message = (
