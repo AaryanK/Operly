@@ -48,7 +48,7 @@ def _ingress_namespace(context: ExecutionContext) -> str:
     cannot collide merely because their clients reuse the same JSON-RPC ID.
     """
 
-    metadata = context.metadata or {}
+    metadata = getattr(context, "metadata", None) or {}
     if str(metadata.get("ingress") or "").strip().lower() != "operly_mcp":
         return ""
     client_id = str(metadata.get("mcp_client_id") or "").strip()
