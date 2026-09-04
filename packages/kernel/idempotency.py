@@ -38,9 +38,30 @@ def _scope_identity(context: ExecutionContext) -> str:
     return f"workspace:{context.workspace_id}"
 
 
+def _ingress_namespace(context: ExecutionContext) -> str:
+    """Bind transport-derived request IDs to the authenticated ingress identity.
+
+    MCP JSON-RPC IDs are stable enough to recognize a transport retry, but they are
+    only client-local identifiers. The trusted MCP ingress records the authenticated
+    client and grant in ExecutionContext metadata. Include a compact digest of those
+    values in the durable idempotency namespace so two grants owned by the same user
+    cannot collide merely because their clients reuse the same JSON-RPC ID.
+    """
+
+    metadata = context.metadata or {}
+    if str(metadata.get("ingress") or "").strip().lower() != "operly_mcp":
+        return ""
+    client_id = str(metadata.get("mcp_client_id") or "").strip()
+    grant_id = str(metadata.get("mcp_grant_id") or "").strip()
+    if not client_id or not grant_id:
+        raise IdempotencyConflict("MCP request is missing its authenticated client/grant identity")
+    digest = hashlib.sha256(f"{client_id}\0{grant_id}".encode("utf-8")).hexdigest()[:24]
+    return f":mcp:{digest}"
+
+
 def _idempotency_key(context: ExecutionContext, request_id: str) -> str:
     principal = str(context.principal_id or context.user_id or "anonymous")
-    return f"{_scope_identity(context)}:{principal}:{request_id}"
+    return f"{_scope_identity(context)}:{principal}{_ingress_namespace(context)}:{request_id}"
 
 
 def _arguments_hash(request: RuntimeRequest) -> str:
