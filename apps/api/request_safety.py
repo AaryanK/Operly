@@ -1,5 +1,7 @@
 import json
 import os
+import time
+from collections import deque
 
 from starlette.responses import JSONResponse
 
@@ -8,7 +10,15 @@ AUTH_BODY_MAX_BYTES = 20 * 1024
 DEFAULT_API_BODY_MAX_BYTES = 8 * 1024 * 1024
 MIN_API_BODY_MAX_BYTES = 64 * 1024
 MAX_API_BODY_MAX_BYTES = 64 * 1024 * 1024
+AUTH_SHIELD_WINDOW_SECONDS = 60.0
+AUTH_SHIELD_DEFAULT_LIMIT = 60
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# Cheap process-local first line of defense. The durable DB limiter remains the
+# authoritative secondary policy, but repeated hostile requests from one source are
+# dropped here before they can amplify into one database insert per attempt.
+_auth_shield_hits: dict[str, deque[float]] = {}
+_auth_shield_last_prune = 0.0
 
 
 class DuplicateJSONKey(ValueError):
@@ -39,6 +49,50 @@ def _api_body_limit() -> int:
     except ValueError:
         value = DEFAULT_API_BODY_MAX_BYTES
     return max(MIN_API_BODY_MAX_BYTES, min(value, MAX_API_BODY_MAX_BYTES))
+
+
+def _auth_shield_limit() -> int:
+    raw = os.getenv("OPERLY_AUTH_EDGE_REQUESTS_PER_MINUTE", "").strip()
+    try:
+        value = int(raw) if raw else AUTH_SHIELD_DEFAULT_LIMIT
+    except ValueError:
+        value = AUTH_SHIELD_DEFAULT_LIMIT
+    return max(10, min(value, 600))
+
+
+def _auth_shield_key(scope, path: str) -> str:
+    client = scope.get("client")
+    address = str(client[0] if isinstance(client, (tuple, list)) and client else "unknown")
+    return f"{address}:{path}"
+
+
+def _auth_shield_limited(scope, path: str, method: str) -> bool:
+    global _auth_shield_last_prune
+    if method not in UNSAFE_METHODS or not _is_auth_json_path(path):
+        return False
+    now = time.monotonic()
+    cutoff = now - AUTH_SHIELD_WINDOW_SECONDS
+    key = _auth_shield_key(scope, path)
+    hits = _auth_shield_hits.setdefault(key, deque())
+    while hits and hits[0] < cutoff:
+        hits.popleft()
+    if len(hits) >= _auth_shield_limit():
+        return True
+    hits.append(now)
+
+    if now - _auth_shield_last_prune > AUTH_SHIELD_WINDOW_SECONDS:
+        _auth_shield_last_prune = now
+        for candidate in list(_auth_shield_hits):
+            bucket = _auth_shield_hits[candidate]
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if not bucket:
+                _auth_shield_hits.pop(candidate, None)
+        # Fail bounded if a distributed source spray creates many one-off keys.
+        if len(_auth_shield_hits) > 20000:
+            for candidate in list(_auth_shield_hits)[: len(_auth_shield_hits) - 20000]:
+                _auth_shield_hits.pop(candidate, None)
+    return False
 
 
 def _body_guarded(path: str, method: str) -> bool:
@@ -91,7 +145,7 @@ def _prepare_mcp_body(raw: bytes) -> bytes:
 
 
 class AuthRequestSafetyMiddleware:
-    """Bound unsafe request bodies before FastAPI parses them.
+    """Bound unsafe request bodies and reject cheap abuse before route execution.
 
     Auth routes additionally require small, duplicate-key-free JSON bodies. MCP tool
     calls inherit a stable idempotency request ID from the JSON-RPC request ID when a
@@ -111,6 +165,20 @@ class AuthRequestSafetyMiddleware:
         path = str(scope.get("path") or "")
         if not _body_guarded(path, method):
             await self.app(scope, receive, send)
+            return
+
+        if _auth_shield_limited(scope, path, method):
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "RATE_LIMITED",
+                        "message": "Too many attempts. Please wait and try again.",
+                    }
+                },
+                status_code=429,
+                headers={"Cache-Control": "no-store", "Retry-After": "60"},
+            )
+            await response(scope, receive, send)
             return
 
         headers = {
