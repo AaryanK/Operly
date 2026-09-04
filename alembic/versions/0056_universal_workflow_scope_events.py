@@ -170,9 +170,12 @@ def upgrade():
             "workflow_event_cursors",
             ["last_created_at"],
         )
+        # Begin at migration time: semantic event triggers are opt-in going forward and
+        # must never retroactively replay the historical Kernel audit log.
         op.execute(
             sa.text(
-                "INSERT INTO workflow_event_cursors (id, updated_at) VALUES ('kernel', CURRENT_TIMESTAMP)"
+                "INSERT INTO workflow_event_cursors (id, last_created_at, last_event_id, updated_at) "
+                "VALUES ('kernel', CURRENT_TIMESTAMP, '', CURRENT_TIMESTAMP)"
             )
         )
 
