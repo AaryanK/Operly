@@ -122,11 +122,19 @@ async def reserve_request(
     request: RuntimeRequest,
     run_id: str,
 ) -> IdempotencyReservation:
-    """Claim an authorized request immediately before side-effecting execution."""
+    """Claim an authorized mutating request immediately before provider execution.
+
+    Mutations are never allowed to bypass idempotency. Every ingress must provide a
+    stable request identity (or derive one from its transport, as MCP does). This turns
+    ambiguous network retries into deterministic replay/conflict behavior instead of a
+    second side effect.
+    """
 
     request_id = str(request.request_id or "").strip()
     if not request_id:
-        return IdempotencyReservation(claim=None)
+        raise IdempotencyConflict(
+            "Mutating capability execution requires a stable request_id"
+        )
 
     key = _idempotency_key(context, request_id)
     arguments_hash = _arguments_hash(request)
