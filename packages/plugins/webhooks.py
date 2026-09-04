@@ -58,12 +58,15 @@ class DigitalWebhookService:
         if secret_reference:
             # Ownership check only; raw value is never returned from this method.
             await read_secret(db, tenant_id, secret_reference)
+        event_name = str(event_type or "").strip().lower()
+        if not event_name or len(event_name) > 160:
+            raise ValueError("Webhook event_type must be between 1 and 160 characters")
         endpoint_key = "whk_" + secrets.token_urlsafe(32)
         row = DigitalWebhookEndpointRecord(
             tenant_id=tenant_id,
             installation_id=installation_id,
             endpoint_key_hash=self._hash_key(endpoint_key),
-            event_type=str(event_type or "").strip()[:180],
+            event_type=event_name,
             verification_type=verification,
             secret_reference=secret_reference,
             max_body_bytes=max(1024, min(int(max_body_bytes), self.MAX_BODY_BYTES)),
@@ -71,8 +74,6 @@ class DigitalWebhookService:
             metadata_json=json.dumps(dict(metadata or {}), separators=(",", ":"), sort_keys=True),
             created_by=created_by,
         )
-        if not row.event_type:
-            raise ValueError("Webhook event_type is required")
         db.add(row)
         await db.flush()
         return CreatedWebhookEndpoint(
@@ -151,6 +152,12 @@ class DigitalWebhookService:
         )
         db.add(receipt)
         await db.flush()
+        safe_projection = {
+            "receipt_id": receipt.id,
+            "artifact_id": artifact.id,
+            "body_sha256": digest,
+            "content_type": artifact.content_type,
+        }
         event = await DigitalEventService().emit(
             db,
             tenant_id=row.tenant_id,
@@ -159,12 +166,8 @@ class DigitalWebhookService:
             source_id=row.id,
             subject_type="plugin_installation" if row.installation_id else "workspace",
             subject_id=row.installation_id or row.tenant_id,
-            payload={
-                "receipt_id": receipt.id,
-                "artifact_id": artifact.id,
-                "body_sha256": digest,
-                "content_type": artifact.content_type,
-            },
+            payload=safe_projection,
+            trigger_payload=safe_projection,
         )
         receipt.event_id = event.id
         await db.flush()
