@@ -212,6 +212,7 @@ class AgentPlannerSafetyTests(unittest.IsolatedAsyncioTestCase):
                 run_id="run-round-budget",
                 goal="keep reading forever",
                 context=context(),
+                initial_query="records",
                 execution_budget=AgentBudget(max_steps=8, max_mutations=0),
             )
         self.assertEqual(len(planner.requests), 2)
