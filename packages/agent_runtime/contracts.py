@@ -51,8 +51,8 @@ class AgentPlanStep:
         object.__setattr__(self, "capability_id", capability_id)
         object.__setattr__(self, "arguments", dict(self.arguments))
         approval_id = str(self.approval_id or "").strip() or None
-        if approval_id is not None and len(approval_id) > 120:
-            raise ValueError("approval_id must be at most 120 characters")
+        if approval_id is not None and len(approval_id) > 36:
+            raise ValueError("approval_id must be at most 36 characters")
         object.__setattr__(self, "approval_id", approval_id)
 
 

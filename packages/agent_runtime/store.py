@@ -13,8 +13,16 @@ from packages.database.agent_runtime_models import (
     AgentRuntimeStepAttempt,
 )
 from packages.security.execution_context import ExecutionContext, ScopeKind
+from packages.security.surfaces import SurfaceKind
 
-from .contracts import AgentPlan, AgentStepResult, AgentStepStatus, stable_step_request_id
+from .contracts import (
+    AgentBudget,
+    AgentPlan,
+    AgentPlanStep,
+    AgentStepResult,
+    AgentStepStatus,
+    stable_step_request_id,
+)
 
 
 class AgentRunStateError(RuntimeError):
@@ -29,10 +37,24 @@ _ALLOWED_TRANSITIONS = {
     ),
     "waiting_approval": frozenset({"queued", "cancelled"}),
 }
+_ALLOWED_PERSONAL_SURFACES = frozenset({SurfaceKind.PERSONAL_PRIVATE})
+_ALLOWED_WORKSPACE_SURFACES = frozenset(
+    {SurfaceKind.WORKSPACE_PRIVATE, SurfaceKind.WORKSPACE_SHARED}
+)
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _object_json(raw: str, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as error:
+        raise AgentRunStateError(f"Stored {label} is invalid JSON") from error
+    if not isinstance(value, dict):
+        raise AgentRunStateError(f"Stored {label} must be a JSON object")
+    return value
 
 
 def _plan_json(plan: AgentPlan) -> str:
@@ -72,10 +94,34 @@ def _scope_values(context: ExecutionContext) -> tuple[str, str | None, str | Non
             "Guest Workspace agent runs require durable external-installation provenance"
         )
     if context.scope_kind is ScopeKind.PERSONAL:
+        if context.surface not in _ALLOWED_PERSONAL_SURFACES:
+            raise AgentRunStateError(
+                "Initial Personal agent runs require the trusted personal-private surface"
+            )
         return "personal", None, context.user_id
     if not context.workspace_id:
         raise AgentRunStateError("Workspace agent runs require a workspace_id")
+    if context.surface not in _ALLOWED_WORKSPACE_SURFACES:
+        raise AgentRunStateError(
+            "Delegated/external Workspace surfaces require durable delegation provenance"
+        )
     return "workspace", context.workspace_id, None
+
+
+def _context_matches_run(context: ExecutionContext, row: AgentRuntimeRun) -> bool:
+    if str(context.principal_id or "") != row.principal_id:
+        return False
+    if row.scope_kind == "personal":
+        return (
+            context.scope_kind is ScopeKind.PERSONAL
+            and context.user_id == row.owner_user_id
+            and context.workspace_id is None
+        )
+    return (
+        context.scope_kind is ScopeKind.WORKSPACE
+        and context.workspace_id == row.workspace_id
+        and not context.is_guest_workspace
+    )
 
 
 async def create_run(
@@ -121,32 +167,61 @@ async def create_run(
     return row
 
 
+async def load_plan(db: AsyncSession, *, run_id: str) -> AgentPlan:
+    row = await db.get(AgentRuntimeRun, run_id)
+    if row is None:
+        raise AgentRunStateError("Agent run does not exist")
+    budget_data = _object_json(row.budget_json, label="agent budget")
+    steps = await list_steps(db, run_id=run_id)
+    if not steps:
+        raise AgentRunStateError("Durable agent run has no steps")
+    try:
+        budget = AgentBudget(
+            max_steps=int(budget_data.get("max_steps", 0)),
+            max_mutations=int(budget_data.get("max_mutations", -1)),
+        )
+        return AgentPlan(
+            run_id=row.id,
+            goal=row.goal,
+            budget=budget,
+            steps=tuple(
+                AgentPlanStep(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    arguments=_object_json(
+                        step.arguments_json, label=f"step {step.step_id} arguments"
+                    ),
+                    approval_id=step.approval_id,
+                )
+                for step in steps
+            ),
+        )
+    except (TypeError, ValueError) as error:
+        raise AgentRunStateError("Stored agent plan violates runtime contracts") from error
+
+
+async def list_steps(db: AsyncSession, *, run_id: str) -> list[AgentRuntimeStep]:
+    return list(
+        (
+            await db.scalars(
+                select(AgentRuntimeStep)
+                .where(AgentRuntimeStep.agent_run_id == run_id)
+                .order_by(AgentRuntimeStep.step_order)
+            )
+        ).all()
+    )
+
+
 async def get_run_for_context(
     db: AsyncSession,
     *,
     context: ExecutionContext,
     run_id: str,
 ) -> AgentRuntimeRun | None:
-    principal_id = str(context.principal_id or "").strip()
-    if not principal_id:
+    row = await db.get(AgentRuntimeRun, run_id)
+    if row is None or not _context_matches_run(context, row):
         return None
-    conditions = [AgentRuntimeRun.id == run_id, AgentRuntimeRun.principal_id == principal_id]
-    if context.scope_kind is ScopeKind.PERSONAL:
-        conditions.extend(
-            [
-                AgentRuntimeRun.scope_kind == "personal",
-                AgentRuntimeRun.owner_user_id == context.user_id,
-                AgentRuntimeRun.workspace_id.is_(None),
-            ]
-        )
-    else:
-        conditions.extend(
-            [
-                AgentRuntimeRun.scope_kind == "workspace",
-                AgentRuntimeRun.workspace_id == context.workspace_id,
-            ]
-        )
-    return await db.scalar(select(AgentRuntimeRun).where(*conditions))
+    return row
 
 
 async def request_cancellation(
@@ -155,13 +230,22 @@ async def request_cancellation(
     context: ExecutionContext,
     run_id: str,
 ) -> AgentRuntimeRun:
-    row = await get_run_for_context(db, context=context, run_id=run_id)
-    if row is None:
+    row = await db.scalar(
+        select(AgentRuntimeRun).where(AgentRuntimeRun.id == run_id).with_for_update()
+    )
+    if row is None or not _context_matches_run(context, row):
         raise AgentRunStateError("Agent run is unavailable in this authority scope")
     if row.status in TERMINAL_RUN_STATUSES:
         return row
+
+    now = datetime.utcnow()
     row.cancellation_requested = True
-    row.updated_at = datetime.utcnow()
+    if row.status in {"queued", "waiting_approval"}:
+        row.status = "cancelled"
+        row.finished_at = now
+        row.lease_token = None
+        row.lease_until = None
+    row.updated_at = now
     await db.flush()
     return row
 
@@ -181,7 +265,7 @@ async def claim_run(
     *,
     run_id: str,
     lease_token: str,
-    lease_seconds: int = 60,
+    lease_seconds: int = 300,
 ) -> AgentRuntimeRun | None:
     token = str(lease_token or "").strip()
     if not token or len(token) > 80:
@@ -216,6 +300,35 @@ async def claim_run(
         return None
     await db.flush()
     return await db.get(AgentRuntimeRun, run_id)
+
+
+async def renew_run_lease(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    lease_token: str,
+    lease_seconds: int = 300,
+) -> bool:
+    token = str(lease_token or "").strip()
+    if not token or len(token) > 80:
+        raise ValueError("lease_token must contain 1-80 characters")
+    if not 5 <= lease_seconds <= 900:
+        raise ValueError("lease_seconds must be between 5 and 900")
+    result = await db.execute(
+        update(AgentRuntimeRun)
+        .where(
+            AgentRuntimeRun.id == run_id,
+            AgentRuntimeRun.status == "running",
+            AgentRuntimeRun.lease_token == token,
+            AgentRuntimeRun.cancellation_requested.is_(False),
+        )
+        .values(
+            lease_until=datetime.utcnow() + timedelta(seconds=lease_seconds),
+            updated_at=datetime.utcnow(),
+        )
+    )
+    await db.flush()
+    return result.rowcount == 1
 
 
 async def release_run_lease(
@@ -262,11 +375,56 @@ async def transition_run(
     row.error_message = error_message or None
     if result is not None:
         row.result_json = _json(result)
-    if target in TERMINAL_RUN_STATUSES:
-        row.finished_at = now
+    if target == "waiting_approval" or target in TERMINAL_RUN_STATUSES:
         row.lease_token = None
         row.lease_until = None
+    if target in TERMINAL_RUN_STATUSES:
+        row.finished_at = now
     row.updated_at = now
+    await db.flush()
+    return row
+
+
+async def queue_after_approval(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    run_id: str,
+    approval_id: str,
+) -> AgentRuntimeRun:
+    approval = str(approval_id or "").strip()
+    if not approval or len(approval) > 36:
+        raise ValueError("approval_id must contain 1-36 characters")
+    row = await db.scalar(
+        select(AgentRuntimeRun).where(AgentRuntimeRun.id == run_id).with_for_update()
+    )
+    if row is None or not _context_matches_run(context, row):
+        raise AgentRunStateError("Agent run is unavailable in this authority scope")
+    if row.cancellation_requested:
+        raise AgentRunStateError("Cancelled agent run cannot resume")
+    if row.status != "waiting_approval" or not row.current_step_id:
+        raise AgentRunStateError("Agent run is not waiting for approval")
+    step = await db.scalar(
+        select(AgentRuntimeStep)
+        .where(
+            AgentRuntimeStep.agent_run_id == run_id,
+            AgentRuntimeStep.step_id == row.current_step_id,
+        )
+        .with_for_update()
+    )
+    if step is None or step.status != AgentStepStatus.WAITING_APPROVAL.value:
+        raise AgentRunStateError("Approval-waiting agent step is unavailable")
+    step.approval_id = approval
+    step.status = "pending"
+    step.error_code = None
+    step.error_message = None
+    step.updated_at = datetime.utcnow()
+    row.status = "queued"
+    row.lease_token = None
+    row.lease_until = None
+    row.error_code = None
+    row.error_message = None
+    row.updated_at = datetime.utcnow()
     await db.flush()
     return row
 

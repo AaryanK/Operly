@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +12,7 @@ from packages.security.execution_context import ExecutionContext
 
 from .contracts import (
     AgentPlan,
+    AgentPlanStep,
     AgentRunResult,
     AgentRunStatus,
     AgentStepResult,
@@ -49,13 +49,7 @@ class AgentCancellation:
 
 
 class GovernedAgentRuntime:
-    """Execute a pre-built plan only through the canonical Operly Kernel.
-
-    This class is deliberately not a model planner. Plan contents are untrusted input:
-    Kernel re-resolves the canonical capability, validates arguments, reloads current
-    authority, applies approval policy, reserves mutation idempotency and records the
-    audit trail for every step.
-    """
+    """Execute agent steps only through the canonical Operly Kernel."""
 
     def __init__(
         self,
@@ -66,7 +60,11 @@ class GovernedAgentRuntime:
         self.kernel = kernel
         self.settings = settings or AgentRuntimeSettings.from_environment()
 
-    def _preflight_budget(self, plan: AgentPlan) -> str | None:
+    def require_enabled(self) -> None:
+        if not self.settings.enabled:
+            raise AgentRuntimeDisabled("Agent runtime is disabled")
+
+    def preflight_plan(self, plan: AgentPlan) -> str | None:
         if len(plan.steps) > plan.budget.max_steps:
             return (
                 f"Plan contains {len(plan.steps)} steps but the budget allows "
@@ -89,6 +87,64 @@ class GovernedAgentRuntime:
             )
         return None
 
+    async def execute_step(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        run_id: str,
+        goal: str,
+        step: AgentPlanStep,
+    ) -> AgentStepResult:
+        """Execute exactly one logical step through Kernel.
+
+        The deterministic request ID is reused for approval resume and crash recovery.
+        Kernel remains responsible for canonical capability resolution, authorization,
+        approval validation, durable mutation reservation, provider execution and audit.
+        """
+
+        self.require_enabled()
+        request_id = stable_step_request_id(run_id, step.step_id)
+        request = RuntimeRequest(
+            goal=goal,
+            capability_id=step.capability_id,
+            arguments=dict(step.arguments),
+            conversation_id=context.conversation_id,
+            request_id=request_id,
+            approval_id=step.approval_id,
+        )
+        try:
+            response = await self.kernel.execute(
+                db,
+                context=context,
+                request=request,
+            )
+        except RuntimeExecutionError as error:
+            status = (
+                AgentStepStatus.WAITING_APPROVAL
+                if error.code == "approval_required"
+                else AgentStepStatus.FAILED
+            )
+            return AgentStepResult(
+                step_id=step.step_id,
+                capability_id=step.capability_id,
+                request_id=request_id,
+                status=status,
+                kernel_run_id=error.run_id,
+                approval_id=error.approval_id,
+                error_code=error.code,
+                error=str(error),
+            )
+
+        return AgentStepResult(
+            step_id=step.step_id,
+            capability_id=step.capability_id,
+            request_id=request_id,
+            status=AgentStepStatus.COMPLETED,
+            kernel_run_id=response.run_id,
+            result=dict(response.result or {}),
+        )
+
     async def execute_plan(
         self,
         db: AsyncSession,
@@ -97,10 +153,9 @@ class GovernedAgentRuntime:
         plan: AgentPlan,
         cancellation: AgentCancellation | None = None,
     ) -> AgentRunResult:
-        if not self.settings.enabled:
-            raise AgentRuntimeDisabled("Agent runtime is disabled")
+        self.require_enabled()
 
-        budget_error = self._preflight_budget(plan)
+        budget_error = self.preflight_plan(plan)
         if budget_error:
             return AgentRunResult(
                 run_id=plan.run_id,
@@ -135,76 +190,34 @@ class GovernedAgentRuntime:
                     error="Agent run was cancelled",
                 )
 
-            request = RuntimeRequest(
+            step_result = await self.execute_step(
+                db,
+                context=context,
+                run_id=plan.run_id,
                 goal=plan.goal,
-                capability_id=step.capability_id,
-                arguments=dict(step.arguments),
-                conversation_id=context.conversation_id,
-                request_id=request_id,
-                approval_id=step.approval_id,
+                step=step,
             )
-            try:
-                response = await self.kernel.execute(
-                    db,
-                    context=context,
-                    request=request,
+            records.append(step_result)
+            if step_result.status is AgentStepStatus.WAITING_APPROVAL:
+                return AgentRunResult(
+                    run_id=plan.run_id,
+                    status=AgentRunStatus.WAITING_APPROVAL,
+                    steps=tuple(records),
+                    next_step_id=step.step_id,
+                    approval_id=step_result.approval_id,
+                    error_code=step_result.error_code,
+                    error=step_result.error,
                 )
-            except RuntimeExecutionError as error:
-                if error.code == "approval_required":
-                    records.append(
-                        AgentStepResult(
-                            step_id=step.step_id,
-                            capability_id=step.capability_id,
-                            request_id=request_id,
-                            status=AgentStepStatus.WAITING_APPROVAL,
-                            kernel_run_id=error.run_id,
-                            approval_id=error.approval_id,
-                            error_code=error.code,
-                            error=str(error),
-                        )
-                    )
-                    return AgentRunResult(
-                        run_id=plan.run_id,
-                        status=AgentRunStatus.WAITING_APPROVAL,
-                        steps=tuple(records),
-                        next_step_id=step.step_id,
-                        approval_id=error.approval_id,
-                        error_code=error.code,
-                        error=str(error),
-                    )
-
-                records.append(
-                    AgentStepResult(
-                        step_id=step.step_id,
-                        capability_id=step.capability_id,
-                        request_id=request_id,
-                        status=AgentStepStatus.FAILED,
-                        kernel_run_id=error.run_id,
-                        approval_id=error.approval_id,
-                        error_code=error.code,
-                        error=str(error),
-                    )
-                )
+            if step_result.status is AgentStepStatus.FAILED:
                 return AgentRunResult(
                     run_id=plan.run_id,
                     status=AgentRunStatus.FAILED,
                     steps=tuple(records),
                     next_step_id=step.step_id,
-                    approval_id=error.approval_id,
-                    error_code=error.code,
-                    error=str(error),
+                    approval_id=step_result.approval_id,
+                    error_code=step_result.error_code,
+                    error=step_result.error,
                 )
-
-            records.append(
-                AgentStepResult(
-                    step_id=step.step_id,
-                    capability_id=step.capability_id,
-                    request_id=request_id,
-                    status=AgentStepStatus.COMPLETED,
-                    kernel_run_id=response.run_id,
-                    result=dict(response.result or {}),
-                )
-            )
 
         return AgentRunResult(
             run_id=plan.run_id,

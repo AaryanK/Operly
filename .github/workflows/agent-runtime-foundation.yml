@@ -9,6 +9,7 @@ on:
       - "alembic/versions/0057_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_store.py"
+      - "tests/test_agent_runtime_orchestrator.py"
       - "docs/unified-agent-runtime.md"
       - ".github/workflows/agent-runtime-foundation.yml"
 
@@ -44,15 +45,18 @@ jobs:
             packages/agent_runtime/contracts.py \
             packages/agent_runtime/runtime.py \
             packages/agent_runtime/store.py \
+            packages/agent_runtime/orchestrator.py \
             packages/database/agent_runtime_models.py \
             packages/database/schema.py \
             alembic/versions/0057_agent_runtime_foundation.py \
             tests/test_agent_runtime_foundation.py \
-            tests/test_agent_runtime_store.py
+            tests/test_agent_runtime_store.py \
+            tests/test_agent_runtime_orchestrator.py
       - name: Run foundation adversarial tests
         run: |
           python -m unittest tests.test_agent_runtime_foundation -v
           python -m unittest tests.test_agent_runtime_store -v
+          python -m unittest tests.test_agent_runtime_orchestrator -v
       - name: Validate clean database migration
         run: |
           rm -f /tmp/operly-agent-runtime-foundation.db

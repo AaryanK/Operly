@@ -8,6 +8,7 @@ from .contracts import (
     AgentStepStatus,
     stable_step_request_id,
 )
+from .orchestrator import AgentLeaseLost, DurableAgentOrchestrator
 from .runtime import (
     AgentCancellation,
     AgentRuntimeDisabled,
@@ -19,6 +20,7 @@ from .store import AgentRunStateError
 __all__ = [
     "AgentBudget",
     "AgentCancellation",
+    "AgentLeaseLost",
     "AgentPlan",
     "AgentPlanStep",
     "AgentRunResult",
@@ -28,6 +30,7 @@ __all__ = [
     "AgentRuntimeSettings",
     "AgentStepResult",
     "AgentStepStatus",
+    "DurableAgentOrchestrator",
     "GovernedAgentRuntime",
     "stable_step_request_id",
 ]
