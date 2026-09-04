@@ -49,8 +49,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Compile route inventory
-        run: python -m py_compile scripts/route_inventory.py
+      - name: Compile route traceability contract
+        run: |
+          python -m py_compile scripts/route_inventory.py
+          python -m py_compile packages/kernel/route_traceability.py tests/test_route_traceability.py
 
       - name: Print current API operation inventory
         run: python scripts/route_inventory.py
+
+      - name: Enforce pinned route classifications
+        run: python -m unittest discover -s tests -p "test_route_traceability.py" -v
