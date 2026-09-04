@@ -28,18 +28,31 @@ Future slices may add wall-clock, inference-token, monetary, and observation bud
 
 If Kernel returns `approval_required`, the agent run stops immediately with `waiting_approval`. No later step executes. Resumption must use the same run ID, same step ID, same capability and arguments, and the approved invocation ID. Kernel remains the authority that validates and claims the approval.
 
-## Durable execution roadmap
+## Durable run state
 
-The next implementation slices should add durable run/step state and recovery without weakening the Kernel boundary:
+Revision `0057_agent_runtime_foundation` introduces separate durable runtime tables rather than overloading legacy conversation history:
 
-1. database-backed `AgentRun` / `AgentStep` state with explicit state-transition rules;
-2. durable cancellation and lease/recovery semantics for interrupted orchestration;
-3. authorization-aware capability discovery for a planner;
-4. a model planner that emits bounded plans but has no provider execution access;
-5. observation/replan loops with explicit model/token/time budgets;
-6. scoped working context and retrieved memory kept separate from authority;
-7. adversarial evaluation for approval bypass, duplicate mutation, cross-scope access, prompt/tool injection, malicious tool outputs, runaway loops, restart recovery, and provider failure;
-8. limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
+- `agent_runtime_runs` records the stable run ID, goal/plan/budget, state, cancellation, lease/recovery fields and authority provenance.
+- `agent_runtime_steps` records one durable logical step and its stable Kernel request ID.
+- `agent_runtime_step_attempts` records immutable attempt history, including approval waits and later completion using the same request identity.
+
+A durable run stores `scope_kind`, workspace or personal ownership, `authority_user_id`, and `principal_id`, but **does not store role or permission snapshots**. Those are not durable authority. A future worker must reconstruct a fresh `ExecutionContext` from current application state before every execution boundary.
+
+Run lookup is scope + principal bound. Personal runs cannot acquire a workspace ID. Workspace runs require a workspace ID. The database has a check constraint enforcing this ownership split.
+
+Worker claims use a bounded lease. One unexpired lease prevents another worker from claiming the run; an expired lease can be reclaimed for restart recovery. Cancellation is stored durably and blocks new claims.
+
+## Remaining runtime roadmap
+
+The next implementation slices should continue without weakening the Kernel boundary:
+
+1. connect the durable store to a worker/orchestrator that re-resolves current authority and persists each executor result transactionally;
+2. add authorization-aware capability discovery for a planner;
+3. add a model planner that emits bounded plans but has no provider execution access;
+4. add observation/replan loops with explicit model/token/time budgets;
+5. keep scoped working context and retrieved memory separate from authority;
+6. add adversarial evaluation for approval bypass, duplicate mutation, cross-scope access, prompt/tool injection, malicious tool outputs, runaway loops, restart recovery, and provider failure;
+7. run a limited canary behind the global kill switch before `ai_runtime_enabled` can become true.
 
 ## Legacy agent code
 

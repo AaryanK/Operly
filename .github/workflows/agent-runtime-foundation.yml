@@ -4,7 +4,11 @@ on:
   pull_request:
     paths:
       - "packages/agent_runtime/**"
+      - "packages/database/agent_runtime_models.py"
+      - "packages/database/schema.py"
+      - "alembic/versions/0057_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_foundation.py"
+      - "tests/test_agent_runtime_store.py"
       - "docs/unified-agent-runtime.md"
       - ".github/workflows/agent-runtime-foundation.yml"
 
@@ -19,7 +23,7 @@ jobs:
   foundation:
     name: Governed agent foundation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -39,6 +43,18 @@ jobs:
             packages/agent_runtime/__init__.py \
             packages/agent_runtime/contracts.py \
             packages/agent_runtime/runtime.py \
-            tests/test_agent_runtime_foundation.py
+            packages/agent_runtime/store.py \
+            packages/database/agent_runtime_models.py \
+            packages/database/schema.py \
+            alembic/versions/0057_agent_runtime_foundation.py \
+            tests/test_agent_runtime_foundation.py \
+            tests/test_agent_runtime_store.py
       - name: Run foundation adversarial tests
-        run: python -m unittest tests.test_agent_runtime_foundation -v
+        run: |
+          python -m unittest tests.test_agent_runtime_foundation -v
+          python -m unittest tests.test_agent_runtime_store -v
+      - name: Validate clean database migration
+        run: |
+          rm -f /tmp/operly-agent-runtime-foundation.db
+          DATABASE_URL=sqlite+aiosqlite:////tmp/operly-agent-runtime-foundation.db \
+            python -m packages.database.migrate upgrade

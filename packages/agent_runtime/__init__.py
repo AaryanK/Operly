@@ -14,6 +14,7 @@ from .runtime import (
     AgentRuntimeSettings,
     GovernedAgentRuntime,
 )
+from .store import AgentRunStateError
 
 __all__ = [
     "AgentBudget",
@@ -21,6 +22,7 @@ __all__ = [
     "AgentPlan",
     "AgentPlanStep",
     "AgentRunResult",
+    "AgentRunStateError",
     "AgentRunStatus",
     "AgentRuntimeDisabled",
     "AgentRuntimeSettings",
