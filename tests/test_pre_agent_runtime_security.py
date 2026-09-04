@@ -1,5 +1,7 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +18,7 @@ from packages.kernel.approvals import (
 from packages.kernel.contracts import CapabilityRisk, RuntimeRequest
 from packages.kernel.idempotency import _idempotency_key, reserve_request
 from packages.workspace_modules.agent_computer.router import _governed_native_contracts
-from packages.workspace_modules.studio.router import _enforce_content_origin
+from packages.workspace_modules.studio.router import _enforce_content_origin, _published_candidate
 
 
 def _request(path: str, *, host: str) -> Request:
@@ -269,6 +271,41 @@ class PreAgentRuntimeSecurityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
+    def test_studio_request_path_is_manifest_lookup_not_filesystem_join(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            artifact = base / "artifact"
+            asset_dir = artifact / "assets"
+            asset_dir.mkdir(parents=True)
+            index = artifact / "index.html"
+            asset = asset_dir / "app.js"
+            index.write_text("index", encoding="utf-8")
+            asset.write_text("app", encoding="utf-8")
+
+            self.assertEqual(_published_candidate(artifact, "assets/app.js"), asset.resolve())
+            self.assertEqual(
+                _published_candidate(artifact, "client/side/route"), index.resolve()
+            )
+            with self.assertRaises(HTTPException):
+                _published_candidate(artifact, "../outside.txt")
+
+            outside = base / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            link = artifact / "escape.txt"
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                pass
+            else:
+                with self.assertRaises(HTTPException):
+                    _published_candidate(artifact, "escape.txt")
+
+        source = Path("packages/workspace_modules/studio/router.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("artifact / relative", source)
+        self.assertIn("files.get(relative)", source)
+
     def test_production_boot_requires_separate_studio_cookie_site(self):
         source = open("apps/api/main.py", encoding="utf-8").read()
         self.assertIn("OPERLY_STUDIO_PUBLIC_HOST", source)
