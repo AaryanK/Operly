@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from packages.database.db import Base
@@ -17,8 +17,14 @@ class WorkflowDefinition(Base):
     __tablename__ = "workflow_definitions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    # Workflows are first-class in either the Personal or Workspace authority namespace.
+    # Personal workflows intentionally keep workspace_id=None instead of inventing a
+    # synthetic tenant. Existing rows migrate as Workspace workflows.
+    scope_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="workspace", index=True
+    )
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
     )
     owner_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
@@ -36,13 +42,7 @@ class WorkflowDefinition(Base):
 
 
 class WorkflowVersion(Base):
-    """Immutable editable-definition snapshot.
-
-    ``spec_json`` remains a direct execution field so the engine never needs to infer
-    runnable steps from audit metadata. ``snapshot_json`` preserves the corresponding
-    human-facing name, description, schedule, and status at the moment this version
-    was created.
-    """
+    """Immutable editable-definition snapshot."""
 
     __tablename__ = "workflow_versions"
     __table_args__ = (
@@ -88,6 +88,53 @@ class WorkflowSchedule(Base):
     )
 
 
+class WorkflowEventTrigger(Base):
+    """Subscribe one workflow to semantic Kernel events in the same authority scope."""
+
+    __tablename__ = "workflow_event_triggers"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_id",
+            "event_pattern",
+            name="uq_workflow_event_trigger_pattern",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    workflow_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_definitions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_pattern: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    condition_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class WorkflowEventCursor(Base):
+    """Transactional cursor for HA event-trigger fanout.
+
+    The dispatcher advances this row in the same transaction that queues matching
+    workflow runs. This prevents both event loss and double-dispatch across replicas.
+    """
+
+    __tablename__ = "workflow_event_cursors"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default="kernel")
+    last_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 class WorkflowRun(Base):
     __tablename__ = "workflow_runs"
 
@@ -98,11 +145,14 @@ class WorkflowRun(Base):
     workflow_version_id: Mapped[str] = mapped_column(
         ForeignKey("workflow_versions.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    scope_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="workspace", index=True
     )
-    # The exact user whose current Workspace authority is re-resolved for every action.
-    # This is the initiator for manual runs and the definition owner for scheduled runs.
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # The exact user whose current authority is re-resolved for every action. This is
+    # the initiator for manual runs and the definition owner for scheduled/event runs.
     authority_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -171,12 +221,7 @@ class WorkflowStepRun(Base):
 
 
 class WorkflowStepAttempt(Base):
-    """Immutable-in-history execution attempt for an action step.
-
-    The row may transition while one attempt is active (running -> approval wait ->
-    completed/failed), but a retry always creates a new row instead of overwriting the
-    previous attempt's exact arguments, result, approval, or Kernel correlation.
-    """
+    """Immutable-in-history execution attempt for an action step."""
 
     __tablename__ = "workflow_step_attempts"
     __table_args__ = (
@@ -218,8 +263,14 @@ class WorkflowTraceEvent(Base):
     __tablename__ = "workflow_trace_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    scope_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="workspace", index=True
+    )
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True, index=True
     )
     workflow_id: Mapped[str] = mapped_column(
         ForeignKey("workflow_definitions.id", ondelete="CASCADE"), nullable=False, index=True
