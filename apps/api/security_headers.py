@@ -31,6 +31,13 @@ def _runner_preview_origins() -> tuple[str, ...]:
     return tuple(dict.fromkeys(origins))
 
 
+def _studio_public_host() -> str:
+    host = os.getenv("OPERLY_STUDIO_PUBLIC_HOST", "").strip().lower().rstrip(".")
+    if host and any(token in host for token in ("/", "@", "?", "#", ":")):
+        return ""
+    return host
+
+
 def _permissions_policy(solution_studio: bool) -> str:
     if not solution_studio:
         return "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
@@ -89,6 +96,24 @@ def _unsafe_request_path(request) -> bool:
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request,call_next):
+        path=request.url.path
+        request_host=str(request.url.hostname or "").strip().lower().rstrip(".")
+        studio_host=_studio_public_host()
+        if studio_host and request_host == studio_host:
+            # The generated-content hostname is a deliberately tiny origin. It must
+            # never expose Operly UI/API/auth routes even though DNS may point to the
+            # same deployment. Only immutable-ish published-site GET/HEAD requests
+            # reach routing; everything else fails closed before session/CSRF logic.
+            if request.method.upper() not in {"GET", "HEAD"} or not path.startswith("/studio-sites/"):
+                return PlainTextResponse(
+                    "Not Found",
+                    status_code=404,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "Referrer-Policy": "no-referrer",
+                    },
+                )
         if _unsafe_request_path(request):
             return PlainTextResponse(
                 "Bad Request",
@@ -98,7 +123,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response=await call_next(request)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
-        path=request.url.path
         solution_studio=path.startswith("/channels/") and path.endswith("/solutions")
         response.headers["Permissions-Policy"]=_permissions_policy(solution_studio)
         response.headers["Cross-Origin-Opener-Policy"]="same-origin-allow-popups"
@@ -111,11 +135,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"]="SAMEORIGIN" if (studio_preview or hosted_plugin) else "DENY"
 
         if published_studio:
-            # Published/model-authored sites are untrusted. The CSP sandbox omits
-            # allow-same-origin, giving scripts an opaque origin even when a legacy
-            # deployment serves them from the Operly host. This prevents access to
-            # Operly cookies/storage and makes authenticated API requests cross-origin
-            # and therefore subject to CORS + CSRF rejection.
             response.headers["Content-Security-Policy"]=PUBLISHED_STUDIO_CSP
             response.headers["Referrer-Policy"]="no-referrer"
             response.headers["Cross-Origin-Resource-Policy"]="cross-origin"
