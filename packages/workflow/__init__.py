@@ -1,8 +1,8 @@
-"""Durable Workspace workflow orchestration over governed Operly capabilities.
+"""Durable Personal/Workspace workflow orchestration over governed Operly capabilities.
 
-Workflow never executes business/provider actions directly. It queues and traces
-workflow runs, while action steps are delegated to the normal Workspace Kernel
-runtime with freshly resolved Workspace authority.
+Workflow never executes provider actions directly. Runs are durable, while each action
+step is delegated to the normal scope-native Kernel runtime with freshly resolved
+Personal or Workspace authority.
 """
 
 from dataclasses import replace
@@ -11,10 +11,11 @@ from packages.kernel.contracts import CapabilitySpec
 from packages.workflow.access import WorkflowProvider
 from packages.workflow.provider import PROVIDER_ID, workflow_capabilities as _workflow_capabilities
 from packages.workflow.scheduler import workflow_scheduler
+from packages.workflow.triggers import workflow_event_dispatcher
 
 
 def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
-    """Expose Workflow through the same human/agent Workspace capability registry."""
+    """Workspace-scoped Workflow contracts."""
 
     return tuple(
         replace(spec, tags=frozenset((*spec.tags, "operations")))
@@ -22,4 +23,28 @@ def workflow_capabilities() -> tuple[CapabilitySpec, ...]:
     )
 
 
-__all__ = ["PROVIDER_ID", "WorkflowProvider", "workflow_capabilities", "workflow_scheduler"]
+def personal_workflow_capabilities() -> tuple[CapabilitySpec, ...]:
+    """Account-owned Workflow contracts with identical semantics but Personal scope."""
+
+    return tuple(
+        replace(
+            spec,
+            scopes=frozenset({"personal"}),
+            resource_scope="personal",
+            tags=frozenset(
+                "personal" if tag == "workspace" else tag
+                for tag in (*spec.tags, "operations")
+            ),
+        )
+        for spec in _workflow_capabilities()
+    )
+
+
+__all__ = [
+    "PROVIDER_ID",
+    "WorkflowProvider",
+    "personal_workflow_capabilities",
+    "workflow_capabilities",
+    "workflow_event_dispatcher",
+    "workflow_scheduler",
+]
