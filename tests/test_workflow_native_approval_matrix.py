@@ -236,14 +236,14 @@ class WorkflowNativeApprovalMatrixTests(unittest.IsolatedAsyncioTestCase):
             metadata=metadata,
         )
 
-    async def _execute_to_terminal(self, db, workflow_engine, run):
+    async def _execute_to_terminal(self, db, workflow_engine, run_id):
         approvals = 0
         for _ in range(200):
-            current = await workflow_engine.execute_run(db, run.id)
+            current = await workflow_engine.execute_run(db, run_id)
             if current.status == "waiting_approval":
                 step = await db.scalar(
                     select(WorkflowStepRun).where(
-                        WorkflowStepRun.workflow_run_id == current.id,
+                        WorkflowStepRun.workflow_run_id == run_id,
                         WorkflowStepRun.status == "waiting_approval",
                     )
                 )
@@ -263,10 +263,10 @@ class WorkflowNativeApprovalMatrixTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 current.status,
                 "completed",
-                msg=f"Workflow {current.id} ended as {current.status}: {current.error_code} {current.error_message}",
+                msg=f"Workflow {run_id} ended as {current.status}: {current.error_code} {current.error_message}",
             )
             return approvals
-        self.fail(f"Workflow {run.id} did not reach terminal state")
+        self.fail(f"Workflow {run_id} did not reach terminal state")
 
     async def test_all_approval_required_non_workflow_capabilities_resume_natively(self):
         workspace_specs = _catalog("workspace")
@@ -346,8 +346,14 @@ class WorkflowNativeApprovalMatrixTests(unittest.IsolatedAsyncioTestCase):
                 await db.scalars(select(WorkflowRun).order_by(WorkflowRun.created_at, WorkflowRun.id))
             ).all()
             self.assertEqual(len(runs), expected_runs)
-            for run in runs:
-                approvals_consumed += await self._execute_to_terminal(db, workflow_engine, run)
+            # Kernel approval requests intentionally roll back the shared session and
+            # therefore expire every ORM object in it. Capture all run identities
+            # before starting execution; the public Workflow API is scalar-ID based.
+            run_ids = [run.id for run in runs]
+            for run_id in run_ids:
+                approvals_consumed += await self._execute_to_terminal(
+                    db, workflow_engine, run_id
+                )
 
             completed = (
                 await db.scalars(select(WorkflowRun).where(WorkflowRun.status == "completed"))
