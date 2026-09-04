@@ -33,6 +33,7 @@ jobs:
       SESSION_SECRET: route-traceability-ci-secret
       OPERLY_ENV: development
       DATABASE_URL: sqlite+aiosqlite:///./route-traceability.db
+      PYTHONPATH: .
 
     steps:
       - name: Checkout
