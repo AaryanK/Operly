@@ -30,12 +30,15 @@ from packages.personal_modules.google_provider import (
 
 router = APIRouter(prefix="/api/personal-connectors", tags=["personal-connectors"])
 
+# The basic tier is deliberately read-only. Calendar event creation/update/delete is
+# available only after the user explicitly connects the full assistant tier.
 GOOGLE_BASIC_SCOPES = [
     "openid",
     "email",
     "profile",
     GMAIL_READONLY,
-    CALENDAR,
+    CALENDAR_FREEBUSY,
+    CALENDAR_LIST_READONLY,
 ]
 GOOGLE_ASSISTANT_SCOPES = [
     "openid",
@@ -56,7 +59,7 @@ def _serializer() -> URLSafeTimedSerializer:
 
 
 def _redirect_uri() -> str:
-    configured = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
+    configured = os.getenv("PERSONAL_GOOGLE_OAUTH_REDIRECT_URI", "").strip()
     if configured:
         return configured
     return (
@@ -194,7 +197,7 @@ async def personal_google_permissions(
         "tiers": [
             {
                 "id": "basic",
-                "label": "Gmail + Calendar reads",
+                "label": "Gmail reads + Calendar availability",
                 "scopes": GOOGLE_BASIC_SCOPES,
             },
             {
