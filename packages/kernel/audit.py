@@ -23,6 +23,28 @@ def _result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
     return {"result_keys": sorted(str(key) for key in result)}
 
 
+def _workflow_lineage(context: ExecutionContext) -> dict[str, Any]:
+    """Carry only orchestration metadata, never prompt/provider payloads, into events."""
+
+    allowed = (
+        "workflow_trigger_event_id",
+        "workflow_correlation_id",
+        "workflow_causation_id",
+        "workflow_depth",
+        "workflow_id",
+        "workflow_run_id",
+        "workflow_step_key",
+        "workflow_step_run_id",
+        "workflow_step_attempt_id",
+        "workflow_attempt",
+    )
+    return {
+        key: context.metadata[key]
+        for key in allowed
+        if context.metadata.get(key) is not None
+    }
+
+
 @dataclass(slots=True)
 class RuntimeAuditBuffer:
     run_id: str = field(default_factory=lambda: str(uuid4()))
@@ -104,7 +126,11 @@ async def persist_audit(
                 created_at=row["at"],
             )
         )
+    lineage = _workflow_lineage(context)
     for event in buffer.events:
+        # Provider event data wins only within its own namespace; the orchestration
+        # lineage is appended from trusted application-owned ExecutionContext metadata.
+        event_payload = {**dict(event["payload"]), **lineage}
         db.add(
             KernelEventRecord(
                 event_type=str(event["event_type"]),
@@ -119,7 +145,7 @@ async def persist_audit(
                 capability_id=capability_id,
                 resource_type=resource_type,
                 resource_id=resource_id,
-                payload_json=_safe_json(event["payload"]),
+                payload_json=_safe_json(event_payload),
                 created_at=event["at"],
             )
         )

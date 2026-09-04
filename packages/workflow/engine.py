@@ -11,7 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.database.kernel_models import KernelApproval
 from packages.kernel.contracts import RuntimeRequest
 from packages.kernel.runtime import RuntimeExecutionError
-from packages.security.execution_context import ExecutionContextError, resolve_execution_context
+from packages.security.execution_context import (
+    ExecutionContextError,
+    ScopeKind,
+    resolve_execution_context,
+    resolve_personal_execution_context,
+)
 from packages.security.surfaces import SurfaceKind
 from packages.workflow.models import (
     WorkflowDefinition,
@@ -73,6 +78,7 @@ def _step_context(run: WorkflowRun, rows: dict[str, WorkflowStepRun]) -> dict[st
         "steps": steps,
         "run": {
             "id": run.id,
+            "scope_kind": run.scope_kind,
             "trigger_type": run.trigger_type,
             "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None,
         },
@@ -98,16 +104,23 @@ async def queue_workflow_run(
     if version is None:
         raise RuntimeError("Workflow version is unavailable")
 
-    # Manual runs execute as the person who started them. Scheduled runs have no live
-    # initiator and therefore execute as the durable definition owner. Every action
-    # re-resolves this user against current Workspace membership and permissions.
+    # Manual runs execute as the person who started them. Scheduled/event runs have
+    # no live initiator and therefore execute as the durable definition owner. Every
+    # action re-resolves this user against current Personal/Workspace authority.
     authority_user_id = initiated_by_user_id or workflow.owner_user_id
     if not authority_user_id:
         raise PermissionError("Workflow run has no executable authority user")
 
+    scope_kind = str(workflow.scope_kind or "workspace")
+    if scope_kind == ScopeKind.PERSONAL.value and workflow.workspace_id is not None:
+        raise PermissionError("Personal workflow may not carry Workspace authority")
+    if scope_kind == ScopeKind.WORKSPACE.value and not workflow.workspace_id:
+        raise PermissionError("Workspace workflow requires workspace_id")
+
     run = WorkflowRun(
         workflow_id=workflow.id,
         workflow_version_id=version.id,
+        scope_kind=scope_kind,
         workspace_id=workflow.workspace_id,
         authority_user_id=authority_user_id,
         initiated_by_user_id=initiated_by_user_id,
@@ -130,6 +143,7 @@ async def queue_workflow_run(
         owner_user_id=authority_user_id,
         principal_id=f"user:{authority_user_id}",
         payload={
+            "scope_kind": scope_kind,
             "trigger_type": trigger_type,
             "scheduled_for": scheduled_for.isoformat() if scheduled_for else None,
             "workflow_version": workflow.current_version,
@@ -143,15 +157,67 @@ async def queue_workflow_run(
 class WorkflowEngine:
     def __init__(self) -> None:
         self._workspace_runtime = None
+        self._personal_runtime = None
 
-    def _runtime(self):
+    def _runtime(self, run: WorkflowRun):
         # Lazy construction prevents Workflow provider composition from recursively
-        # building another Workspace runtime while the registry is being assembled.
+        # building another runtime while the registry itself is being assembled.
+        if run.scope_kind == ScopeKind.PERSONAL.value:
+            if self._personal_runtime is None:
+                from packages.personal_modules.runtime import build_personal_runtime
+
+                self._personal_runtime = build_personal_runtime()
+            return self._personal_runtime
         if self._workspace_runtime is None:
             from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
             self._workspace_runtime = build_workspace_runtime()
         return self._workspace_runtime
+
+    async def _resolve_authority(
+        self,
+        db: AsyncSession,
+        *,
+        run: WorkflowRun,
+        row: WorkflowStepRun,
+        attempt: WorkflowStepAttempt,
+    ):
+        trigger = _loads(run.trigger_payload_json, {})
+        event = trigger.get("event") if isinstance(trigger, dict) else None
+        metadata = {
+            "workflow_id": run.workflow_id,
+            "workflow_run_id": run.id,
+            "workflow_step_key": row.step_key,
+            "workflow_step_run_id": row.id,
+            "workflow_step_attempt_id": attempt.id,
+            "workflow_attempt": row.attempt,
+        }
+        if isinstance(event, dict):
+            metadata["workflow_trigger_event_id"] = event.get("id")
+            metadata["workflow_correlation_id"] = event.get("correlation_id") or event.get("id")
+            metadata["workflow_causation_id"] = event.get("id")
+            metadata["workflow_depth"] = int(trigger.get("depth") or 1)
+
+        if run.scope_kind == ScopeKind.PERSONAL.value:
+            return await resolve_personal_execution_context(
+                db,
+                user_id=str(run.authority_user_id),
+                channel="workflow",
+                surface=SurfaceKind.SYSTEM_TASK,
+                conversation_id=f"workflow:{run.id}",
+                metadata=metadata,
+            )
+        if not run.workspace_id:
+            raise ExecutionContextError("Workspace workflow has no workspace authority")
+        return await resolve_execution_context(
+            db,
+            workspace_id=run.workspace_id,
+            user_id=run.authority_user_id,
+            channel="workflow",
+            surface=SurfaceKind.SYSTEM_TASK,
+            conversation_id=f"workflow:{run.id}",
+            metadata=metadata,
+        )
 
     async def _still_owned(
         self,
@@ -159,14 +225,6 @@ class WorkflowEngine:
         run: WorkflowRun,
         expected_lease_token: str | None,
     ) -> bool:
-        """Return whether this worker still owns the right to dispatch more work.
-
-        Provider outcomes may return after an operator cancellation, an expired lease,
-        or another scheduler marking the run orphaned. Those outcomes remain valuable
-        trace evidence, but a stale worker must never dispatch a subsequent step or
-        overwrite the durable terminal state.
-        """
-
         await db.refresh(run)
         if run.status in _STOP_STATES:
             return False
@@ -205,6 +263,10 @@ class WorkflowEngine:
                 "workflow_unavailable",
                 "Workflow definition/version is unavailable",
             )
+        if str(workflow.scope_kind or "workspace") != str(run.scope_kind or "workspace"):
+            return await self._fail(
+                db, run, workflow, "scope_mismatch", "Workflow/run authority scope changed"
+            )
         if workflow.status == "archived":
             return await self._fail(
                 db, run, workflow, "workflow_archived", "Workflow has been archived"
@@ -240,6 +302,7 @@ class WorkflowEngine:
             owner_user_id=run.authority_user_id,
             principal_id=f"user:{run.authority_user_id}",
             payload={
+                "scope_kind": run.scope_kind,
                 "workflow_version_id": run.workflow_version_id,
                 "current_step_key": run.current_step_key,
                 "authority_user_id": run.authority_user_id,
@@ -554,8 +617,6 @@ class WorkflowEngine:
         if row.status == "waiting_approval" and row.approval_id:
             attempt = await self._current_attempt(db, row)
             if attempt is None:
-                # A waiting approval without its immutable attempt row is an integrity
-                # failure. Never reconstruct/replay the invocation from guesses.
                 row.attempt += 1
                 row.request_id = row.request_id or (
                     f"workflow:{run.id}:{row.step_key}:attempt:{row.attempt}"
@@ -731,21 +792,8 @@ class WorkflowEngine:
             )
 
         try:
-            authority = await resolve_execution_context(
-                db,
-                workspace_id=run.workspace_id,
-                user_id=run.authority_user_id,
-                channel="workflow",
-                surface=SurfaceKind.SYSTEM_TASK,
-                conversation_id=f"workflow:{run.id}",
-                metadata={
-                    "workflow_id": run.workflow_id,
-                    "workflow_run_id": run.id,
-                    "workflow_step_key": row.step_key,
-                    "workflow_step_run_id": row.id,
-                    "workflow_step_attempt_id": attempt.id,
-                    "workflow_attempt": row.attempt,
-                },
+            authority = await self._resolve_authority(
+                db, run=run, row=row, attempt=attempt
             )
         except (ExecutionContextError, PermissionError) as error:
             row = await db.get(WorkflowStepRun, row.id)
@@ -762,7 +810,7 @@ class WorkflowEngine:
             )
 
         try:
-            response = await self._runtime().execute(
+            response = await self._runtime(run).execute(
                 db,
                 context=authority,
                 request=RuntimeRequest(

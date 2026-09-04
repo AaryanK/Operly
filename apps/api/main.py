@@ -38,7 +38,7 @@ from packages.plugins.webhook_router import (
     management_router as plugin_webhook_management_router,
     public_router as plugin_webhook_public_router,
 )
-from packages.workflow import workflow_scheduler
+from packages.workflow import workflow_event_dispatcher, workflow_scheduler
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
 from packages.workspace_modules.integrations.router import router as workspace_integrations_router
@@ -118,14 +118,16 @@ async def lifespan(app: FastAPI):
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
     await workflow_scheduler.start()
+    await workflow_event_dispatcher.start()
     try:
         yield
     finally:
+        await workflow_event_dispatcher.stop()
         await workflow_scheduler.stop()
         await discord_bot_lifecycle.stop()
 
 
-app = FastAPI(title="OPERLY API", version="0.9.0-personal-capabilities", lifespan=lifespan)
+app = FastAPI(title="OPERLY API", version="0.10.0-universal-workflows", lifespan=lifespan)
 
 # Models/agents remain offline. Humans, MCP clients, Workflow and the future Operly
 # agent all resolve current authority and execute through the same governed runtime.
@@ -204,6 +206,7 @@ async def health():
         "personal_tools_enabled": True,
         "personal_google_connectors_enabled": True,
         "personal_tool_discovery": "search-then-describe",
+        "personal_workflows_enabled": True,
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
@@ -221,6 +224,8 @@ async def health():
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
+        "workflow_event_dispatcher": workflow_event_dispatcher.status(),
+        "workflow_event_triggers_enabled": True,
         "mcp_enabled": True,
         "mcp_protocol_version": "2026-07-28",
         "mcp_authority_model": "live-workspace-authority-plus-client-narrowing",
@@ -242,6 +247,7 @@ async def rebuild_status():
         "personal_tools_enabled": True,
         "personal_tool_discovery": "authorization-aware-search-then-describe",
         "personal_google_connector_ownership": "account",
+        "personal_workflows_enabled": True,
         "workspace_os_enabled": True,
         "workspace_tools_enabled": True,
         "workspace_integrations_enabled": True,
@@ -260,6 +266,8 @@ async def rebuild_status():
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
         "workflow_scheduler": workflow_scheduler.status(),
+        "workflow_event_dispatcher": workflow_event_dispatcher.status(),
+        "workflow_event_triggers": "kernel-semantic-events-same-scope-only",
         "mcp_enabled": True,
         "mcp_protocol_version": "2026-07-28",
         "mcp_gateway": "canonical-workspace-capability-runtime",
@@ -269,8 +277,8 @@ async def rebuild_status():
         "kernel_runtime_enabled": True,
         "ai_runtime_enabled": False,
         "message": (
-            "Operly now exposes account-owned and Workspace-owned abilities through searchable Kernel capability registries. "
-            "A future agent resolves scope first, searches relevant capabilities, describes only selected schemas, and executes through the canonical policy, approval, idempotency and audit boundary."
+            "Operly exposes Personal and Workspace abilities through searchable Kernel capability registries. "
+            "Durable workflows now use the same scope-native authority and can be triggered by schedules, manual runs, or same-scope semantic Kernel events."
         ),
     }
 

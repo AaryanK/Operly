@@ -17,7 +17,7 @@ def _json(value: dict[str, Any] | None) -> str:
 async def record_workflow_event(
     db: AsyncSession,
     *,
-    workspace_id: str,
+    workspace_id: str | None,
     workflow_id: str,
     event_type: str,
     workflow_run_id: str | None = None,
@@ -34,15 +34,20 @@ async def record_workflow_event(
 ) -> WorkflowTraceEvent:
     """Persist Workflow-domain and global Kernel trace records atomically.
 
-    Exact action inputs/outputs live on ``WorkflowStepAttempt``. The event plane keeps
-    correlation and lifecycle metadata so Activity/FLOW-style consumers do not become
-    a second uncontrolled copy of provider/business payloads.
+    ``workspace_id=None`` is a real Personal authority namespace, never a synthetic
+    tenant. Exact action inputs/outputs live on ``WorkflowStepAttempt``; the event
+    plane keeps correlation and lifecycle metadata without becoming another copy of
+    private/provider payloads.
     """
 
-    del owner_user_id  # Workspace Kernel events intentionally do not use personal owner scope.
+    scope_kind = "workspace" if workspace_id else "personal"
+    if scope_kind == "personal" and not owner_user_id:
+        raise ValueError("Personal workflow trace requires owner_user_id")
     at = datetime.utcnow()
     trace = WorkflowTraceEvent(
+        scope_kind=scope_kind,
         workspace_id=workspace_id,
+        owner_user_id=owner_user_id if scope_kind == "personal" else None,
         workflow_id=workflow_id,
         workflow_run_id=workflow_run_id,
         step_run_id=step_run_id,
@@ -60,9 +65,9 @@ async def record_workflow_event(
     db.add(
         KernelEventRecord(
             event_type=event_type,
-            scope_kind="workspace",
+            scope_kind=scope_kind,
             workspace_id=workspace_id,
-            owner_user_id=None,
+            owner_user_id=owner_user_id if scope_kind == "personal" else None,
             principal_id=principal_id,
             actor_type=actor_type,
             actor_id=actor_id,
