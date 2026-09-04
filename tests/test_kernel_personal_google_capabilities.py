@@ -23,7 +23,6 @@ from packages.workspace_modules.integrations.google import (
     WorkspaceGoogleProvider,
     workspace_google_capabilities,
 )
-from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 class PersonalGoogleCapabilityTests(unittest.TestCase):
@@ -105,9 +104,11 @@ class PersonalGoogleCapabilityTests(unittest.TestCase):
         self.assertNotIn("input_schema", summary)
         self.assertNotIn("output_schema", summary)
 
-    def test_same_semantic_id_resolves_to_scope_specific_contract(self):
+    def test_same_semantic_id_has_distinct_scope_contracts(self):
         personal = build_personal_runtime().registry.get("google.gmail.search")
-        workspace = build_workspace_runtime().registry.get("google.gmail.search")
+        workspace = {spec.id: spec for spec in workspace_google_capabilities()}[
+            "google.gmail.search"
+        ]
         self.assertEqual(personal.scopes, frozenset({"personal"}))
         self.assertEqual(personal.resource_scope, "personal")
         self.assertEqual(workspace.scopes, frozenset({"workspace"}))
