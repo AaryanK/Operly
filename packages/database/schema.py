@@ -1,6 +1,6 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0057_agent_runtime_foundation"
+ALEMBIC_HEAD = "0058_agent_chat_history"
 
 
 def import_all_models() -> None:
@@ -8,6 +8,7 @@ def import_all_models() -> None:
     from packages.database import operations_models  # noqa: F401
     from packages.database import agent_models  # noqa: F401
     from packages.database import agent_runtime_models  # noqa: F401
+    from packages.database import agent_chat_models  # noqa: F401
     from packages.database import agent_computer_models  # noqa: F401
     from packages.database import artifact_models  # noqa: F401
     from packages.database import business_models  # noqa: F401
