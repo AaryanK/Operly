@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.database.kernel_models import KernelRequestClaim
+from packages.kernel.approvals import approval_for_context, claim_approved_invocation
 from packages.kernel.contracts import AuthorizationDecision, RuntimeRequest, RuntimeResponse
 from packages.security.execution_context import ExecutionContext
 
@@ -122,12 +123,14 @@ async def reserve_request(
     request: RuntimeRequest,
     run_id: str,
 ) -> IdempotencyReservation:
-    """Claim an authorized mutating request immediately before provider execution.
+    """Durably claim an authorized mutation immediately before provider execution.
 
     Mutations are never allowed to bypass idempotency. Every ingress must provide a
-    stable request identity (or derive one from its transport, as MCP does). This turns
-    ambiguous network retries into deterministic replay/conflict behavior instead of a
-    second side effect.
+    stable request identity (or derive one from its transport, as MCP does). For an
+    approval-gated mutation, the same transaction also atomically transitions the
+    exact human approval from approved to executing and binds it to its original
+    request ID. The reservation is committed before the provider runs, so a crash or
+    lost response cannot roll back the at-most-once boundary and resurrect a write.
     """
 
     request_id = str(request.request_id or "").strip()
@@ -149,7 +152,28 @@ async def reserve_request(
         existing.run_id = run_id
         existing.response_json = "{}"
         await db.flush()
+        await db.commit()
         return IdempotencyReservation(claim=existing)
+
+    if request.approval_id:
+        # Resolve the already-authorized capability from the durable approval itself.
+        # The Kernel has just validated that approval against the resolved capability;
+        # using the stored ID here also supports goal-resolved RuntimeRequests whose
+        # request.capability_id is intentionally omitted.
+        approval = await approval_for_context(
+            db,
+            context=context,
+            approval_id=request.approval_id,
+            lock=True,
+        )
+        await claim_approved_invocation(
+            db,
+            context=context,
+            approval_id=request.approval_id,
+            request_id=request_id,
+            capability_id=approval.capability_id,
+            arguments=dict(request.arguments),
+        )
 
     claim = KernelRequestClaim(
         idempotency_key=key,
@@ -167,10 +191,14 @@ async def reserve_request(
     db.add(claim)
     try:
         await db.flush()
+        # This commit is deliberate: the at-most-once reservation (and approval claim,
+        # when present) must survive a provider timeout, process crash, or later
+        # transaction rollback. Provider/database effects happen only after this point.
+        await db.commit()
         return IdempotencyReservation(claim=claim)
     except IntegrityError:
-        # Another transaction won the same scoped request key. This reservation occurs
-        # immediately before provider execution, so rolling back is safe.
+        # Another transaction won the same scoped request key. Rolling back also
+        # restores any local approval transition attempted by this losing transaction.
         await db.rollback()
         existing = await db.scalar(
             select(KernelRequestClaim).where(KernelRequestClaim.idempotency_key == key)
