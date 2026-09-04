@@ -1,0 +1,55 @@
+name: Route Traceability
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/route-traceability.yml"
+      - "apps/api/**"
+      - "packages/**/router.py"
+      - "packages/**/**_router.py"
+      - "packages/kernel/route_traceability.py"
+      - "scripts/route_inventory.py"
+      - "tests/test_route_traceability.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/route-traceability.yml"
+      - "apps/api/**"
+      - "packages/**/router.py"
+      - "packages/**/**_router.py"
+      - "packages/kernel/route_traceability.py"
+      - "scripts/route_inventory.py"
+      - "tests/test_route_traceability.py"
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SESSION_SECRET: route-traceability-ci-secret
+      OPERLY_ENV: development
+      DATABASE_URL: sqlite+aiosqlite:///./route-traceability.db
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install application dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile route inventory
+        run: python -m py_compile scripts/route_inventory.py
+
+      - name: Print current API operation inventory
+        run: python scripts/route_inventory.py
