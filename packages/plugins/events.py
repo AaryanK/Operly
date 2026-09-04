@@ -7,15 +7,18 @@ from typing import Any, Mapping
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.database.kernel_models import KernelEventRecord
 from packages.database.plugin_platform_models import DigitalEventOutboxRecord
 
 
 class DigitalEventService:
-    """Durable event outbox for plugins, Workflows and future hosted Solutions.
+    """Durable DigitalEvent outbox plus canonical Kernel semantic-event bridge.
 
-    Delivery workers lease rows; callers do not execute webhook/plugin side effects in
-    the API transaction that produced the event. Expired leases are reclaimable after
-    worker crashes or deployments.
+    Delivery workers lease outbox rows; callers do not execute webhook/plugin side
+    effects in the API transaction that produced the event. Every emitted Workspace
+    DigitalEvent is also represented by a minimized Kernel event in the *same database
+    transaction*, so Workflow can consume one semantic event plane without copying
+    arbitrary external payloads into Kernel audit.
     """
 
     async def emit(
@@ -29,10 +32,13 @@ class DigitalEventService:
         subject_type: str | None = None,
         subject_id: str | None = None,
         payload: Mapping[str, Any] | None = None,
+        trigger_payload: Mapping[str, Any] | None = None,
         available_at: datetime | None = None,
+        bridge_to_kernel: bool = True,
     ) -> DigitalEventOutboxRecord:
-        if not event_type or len(event_type) > 180:
-            raise ValueError("event_type is invalid")
+        event_type = str(event_type or "").strip().lower()
+        if not event_type or len(event_type) > 160:
+            raise ValueError("event_type is invalid; canonical semantic events are at most 160 characters")
         row = DigitalEventOutboxRecord(
             tenant_id=tenant_id,
             event_type=event_type,
@@ -45,6 +51,42 @@ class DigitalEventService:
         )
         db.add(row)
         await db.flush()
+
+        if bridge_to_kernel:
+            # Only trusted, explicitly selected trigger metadata crosses into Kernel
+            # audit. The full DigitalEvent/webhook payload remains in the outbox or
+            # artifact store and is never mirrored implicitly.
+            safe_trigger = dict(trigger_payload or {})
+            encoded_trigger = json.dumps(safe_trigger, separators=(",", ":"), sort_keys=True)
+            if len(encoded_trigger.encode("utf-8")) > 8192:
+                raise ValueError("trigger_payload exceeds the 8 KiB semantic-event projection limit")
+            envelope = {
+                "digital_event_id": row.id,
+                "digital_source_kind": str(source_kind or "")[:80],
+                "digital_source_id": str(source_id)[:160] if source_id else None,
+                "digital_subject_type": str(subject_type)[:100] if subject_type else None,
+                "digital_subject_id": str(subject_id)[:160] if subject_id else None,
+                "trigger": safe_trigger,
+            }
+            external = str(source_kind or "").lower() in {"webhook", "plugin", "plugin_runtime", "external"}
+            db.add(
+                KernelEventRecord(
+                    event_type=event_type,
+                    scope_kind="workspace",
+                    workspace_id=tenant_id,
+                    owner_user_id=None,
+                    principal_id=f"digital:{str(source_kind or 'system')[:120]}",
+                    actor_type="external" if external else "system",
+                    actor_id=str(source_id)[:160] if source_id else None,
+                    initiator_principal_id=None,
+                    executor_principal_id="operly:digital-event-bridge",
+                    capability_id=None,
+                    resource_type="digital_event",
+                    resource_id=row.id,
+                    payload_json=json.dumps(envelope, separators=(",", ":"), sort_keys=True),
+                )
+            )
+            await db.flush()
         return row
 
     async def lease_batch(
