@@ -96,13 +96,15 @@ async def approval_for_context(
     *,
     context: ExecutionContext,
     approval_id: str,
+    lock: bool = False,
 ) -> KernelApproval:
-    row = await db.scalar(
-        select(KernelApproval).where(
-            KernelApproval.id == approval_id,
-            *_scope_filters(context),
-        )
+    statement = select(KernelApproval).where(
+        KernelApproval.id == approval_id,
+        *_scope_filters(context),
     )
+    if lock:
+        statement = statement.with_for_update()
+    row = await db.scalar(statement)
     if row is None:
         raise ApprovalError("Approval is unavailable in this scope")
     return row
@@ -116,7 +118,11 @@ async def decide_approval(
     approved: bool,
     decided_by_user_id: str,
 ) -> KernelApproval:
-    row = await approval_for_context(db, context=context, approval_id=approval_id)
+    # Serialize competing human decisions. Only one transaction may transition a
+    # pending approval, which also gives the execution path a stable state to lock.
+    row = await approval_for_context(
+        db, context=context, approval_id=approval_id, lock=True
+    )
     if row.status != "pending":
         raise ApprovalError(f"Approval is already {row.status}")
     row.status = "approved" if approved else "denied"
@@ -134,7 +140,13 @@ async def validate_approved_invocation(
     capability_id: str,
     arguments: dict[str, Any],
 ) -> KernelApproval:
-    row = await approval_for_context(db, context=context, approval_id=approval_id)
+    # This row lock is intentionally held through provider execution and the final
+    # consume_approval() call in the Kernel transaction. A second resume therefore
+    # cannot validate the same approved action concurrently; once the first commits,
+    # the second observes "consumed" and fails closed before any side effect.
+    row = await approval_for_context(
+        db, context=context, approval_id=approval_id, lock=True
+    )
     if row.status != "approved":
         raise ApprovalError(f"Approval is not executable: {row.status}")
     if row.requested_by_principal_id and row.requested_by_principal_id != context.principal_id:
