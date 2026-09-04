@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -27,6 +29,7 @@ class ComputerRunnerClient:
     def __init__(self) -> None:
         self.base_url = os.getenv("OPERLY_SANDBOX_RUNNER_URL", "").strip().rstrip("/")
         self.token = os.getenv("OPERLY_SANDBOX_RUNNER_TOKEN", "").strip()
+        self.signing_key = os.getenv("OPERLY_SANDBOX_RUNNER_SIGNING_KEY", "").strip()
         self.timeout_seconds = max(
             5.0,
             min(float(os.getenv("OPERLY_AGENT_COMPUTER_TIMEOUT_SECONDS", "120")), 900.0),
@@ -41,15 +44,42 @@ class ComputerRunnerClient:
 
     @property
     def configured(self) -> bool:
-        return bool(self.base_url and self.token)
+        return bool(
+            self.base_url
+            and self.token
+            and self.signing_key
+            and not hmac.compare_digest(self.token, self.signing_key)
+        )
 
-    def _signature(self, method: str, path: str, raw: bytes) -> str:
-        canonical = method.upper().encode("utf-8") + b"\n" + path.encode("utf-8") + b"\n" + raw
-        return hmac.new(self.token.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+    def _signature(
+        self,
+        method: str,
+        path: str,
+        raw: bytes,
+        *,
+        timestamp: str,
+        nonce: str,
+    ) -> str:
+        canonical = (
+            method.upper().encode("utf-8")
+            + b"\n"
+            + path.encode("utf-8")
+            + b"\n"
+            + timestamp.encode("ascii")
+            + b"\n"
+            + nonce.encode("ascii")
+            + b"\n"
+            + raw
+        )
+        return hmac.new(
+            self.signing_key.encode("utf-8"), canonical, hashlib.sha256
+        ).hexdigest()
 
     def _verify_response(self, response: httpx.Response) -> None:
         supplied = response.headers.get("x-operly-signature", "").strip()
-        expected = hmac.new(self.token.encode("utf-8"), response.content, hashlib.sha256).hexdigest()
+        expected = hmac.new(
+            self.signing_key.encode("utf-8"), response.content, hashlib.sha256
+        ).hexdigest()
         if not supplied or not hmac.compare_digest(supplied, expected):
             raise ComputerRunnerError("Operly Sandbox Runner returned an invalid response signature")
 
@@ -63,8 +93,9 @@ class ComputerRunnerClient:
     ) -> dict[str, Any]:
         if not self.configured:
             raise ComputerRunnerError(
-                "Operly Sandbox Runner is not configured. Set "
-                "OPERLY_SANDBOX_RUNNER_URL and OPERLY_SANDBOX_RUNNER_TOKEN."
+                "Operly Sandbox Runner is not configured with separate transport "
+                "and signing credentials. Set OPERLY_SANDBOX_RUNNER_URL, "
+                "OPERLY_SANDBOX_RUNNER_TOKEN and OPERLY_SANDBOX_RUNNER_SIGNING_KEY."
             )
 
         raw = b"" if payload is None else json.dumps(
@@ -73,17 +104,31 @@ class ComputerRunnerClient:
             sort_keys=True,
             ensure_ascii=False,
         ).encode("utf-8")
+        timestamp = str(int(time.time() * 1000))
+        nonce = secrets.token_urlsafe(24)
         headers = {
             "Authorization": f"Bearer {self.token}",
-            "X-Operly-Signature": self._signature(method, path, raw),
-            "User-Agent": "operly-agent-computer/2",
+            "X-Operly-Timestamp": timestamp,
+            "X-Operly-Nonce": nonce,
+            "X-Operly-Signature": self._signature(
+                method,
+                path,
+                raw,
+                timestamp=timestamp,
+                nonce=nonce,
+            ),
+            "User-Agent": "operly-agent-computer/3",
         }
         if payload is not None:
             headers["Content-Type"] = "application/json"
         timeout = max(1.0, min(timeout_seconds or self.timeout_seconds, 930.0))
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 response = await client.request(
                     method,
                     f"{self.base_url}{path}",
@@ -122,7 +167,11 @@ class ComputerRunnerClient:
         if not self.base_url:
             raise ComputerRunnerError("OPERLY_SANDBOX_RUNNER_URL is not configured")
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=10,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 response = await client.get(f"{self.base_url}/health")
         except httpx.HTTPError as error:
             raise ComputerRunnerError("Operly Sandbox Runner is unavailable") from error
