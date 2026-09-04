@@ -197,19 +197,54 @@ async function writeHelper(box) {
   await bootstrapOperation("prepare-workspace", () => box.exec("mkdir -p /workspace/work /workspace/.operly/requests /workspace/.operly/processes && chown -R operly:operly /workspace", { timeoutSec: 20 }));
 }
 
+function requireExecSuccess(result, label) {
+  const rawCode = result?.exitCode ?? result?.exit_code ?? result?.code ?? 0;
+  const exitCode = Number(rawCode);
+  if (!Number.isFinite(exitCode) || exitCode !== 0) {
+    throw Object.assign(
+      new Error(`Agent Computer ${label} failed closed (exit ${String(rawCode)})`),
+      { statusCode: 503 },
+    );
+  }
+  return result;
+}
+
+async function requiredBootstrapExec(box, label, command) {
+  const result = await bootstrapOperation(label, () => box.exec(command, { timeoutSec: 10 }));
+  return requireExecSuccess(result, label);
+}
+
 async function harden(box, networkPolicy) {
   const rules = [
-    "iptables -C OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT",
-    "ip6tables -C OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT",
+    {
+      apply: "iptables -C OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT",
+      verify: "iptables -C OUTPUT -m owner --uid-owner 10001 -d 169.254.0.0/16 -j REJECT",
+    },
+    {
+      apply: "ip6tables -C OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT",
+      verify: "ip6tables -C OUTPUT -m owner --uid-owner 10001 -d fe80::/10 -j REJECT",
+    },
   ];
   if (networkPolicy === "off") {
     rules.push(
-      "iptables -C OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT",
-      "ip6tables -C OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT",
+      {
+        apply: "iptables -C OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || iptables -A OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT",
+        verify: "iptables -C OUTPUT -m owner --uid-owner 10001 ! -d 127.0.0.0/8 -j REJECT",
+      },
+      {
+        apply: "ip6tables -C OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT 2>/dev/null || ip6tables -A OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT",
+        verify: "ip6tables -C OUTPUT -m owner --uid-owner 10001 ! -d ::1/128 -j REJECT",
+      },
     );
   }
+
+  // Network isolation is a security boundary. Never swallow firewall failures:
+  // apply every required rule, then independently verify that the kernel has it.
   for (const rule of rules) {
-    try { await bootstrapOperation("network-harden", () => box.exec(rule, { timeoutSec: 10 })); } catch {}
+    await requiredBootstrapExec(box, "network-harden", rule.apply);
+  }
+  for (const rule of rules) {
+    await requiredBootstrapExec(box, "network-verify", rule.verify);
   }
 }
 

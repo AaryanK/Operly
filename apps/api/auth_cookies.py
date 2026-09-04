@@ -28,11 +28,15 @@ def csrf_cookie_name() -> str:
 
 
 def session_secret_from_request(request: Request) -> str | None:
-    return request.cookies.get(PROD_SESSION_COOKIE) or request.cookies.get(DEV_SESSION_COOKIE)
+    if production():
+        return request.cookies.get(PROD_SESSION_COOKIE)
+    return request.cookies.get(DEV_SESSION_COOKIE) or request.cookies.get(PROD_SESSION_COOKIE)
 
 
 def csrf_secret_from_request(request: Request) -> str | None:
-    return request.cookies.get(PROD_CSRF_COOKIE) or request.cookies.get(DEV_CSRF_COOKIE)
+    if production():
+        return request.cookies.get(PROD_CSRF_COOKIE)
+    return request.cookies.get(DEV_CSRF_COOKIE) or request.cookies.get(PROD_CSRF_COOKIE)
 
 
 def set_session_cookies(response: Response, session_secret: str, csrf_secret: str) -> None:

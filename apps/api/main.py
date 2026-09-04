@@ -20,7 +20,7 @@ from apps.api.mcp_router import router as mcp_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
-from apps.api.security_headers import SecurityHeadersMiddleware
+from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
@@ -95,15 +95,24 @@ async def bootstrap_admin() -> None:
 
 
 def validate_runtime_configuration() -> None:
-    if not os.getenv("SESSION_SECRET"):
+    session_secret = os.getenv("SESSION_SECRET", "")
+    if not session_secret:
         raise RuntimeError("SESSION_SECRET is missing")
     if not PRODUCTION:
         return
     token_pepper = os.getenv("AUTH_TOKEN_PEPPER", "")
     if len(token_pepper.encode("utf-8")) < 32:
         raise RuntimeError("AUTH_TOKEN_PEPPER must contain at least 32 bytes")
-    if token_pepper == os.getenv("SESSION_SECRET"):
+    if token_pepper == session_secret:
         raise RuntimeError("AUTH_TOKEN_PEPPER and SESSION_SECRET must be different")
+    mcp_token_secret = (
+        os.getenv("OPERLY_MCP_TOKEN_SECRET", "").strip()
+        or os.getenv("MCP_OAUTH_SECRET", "").strip()
+    )
+    if len(mcp_token_secret.encode("utf-8")) < 32:
+        raise RuntimeError("A dedicated MCP token signing secret of at least 32 bytes is required")
+    if mcp_token_secret in {session_secret, token_pepper}:
+        raise RuntimeError("MCP token signing secret must be distinct from session/auth secrets")
     if not PUBLIC_BASE_URL.startswith("https://"):
         raise RuntimeError("PUBLIC_BASE_URL must use HTTPS in production")
     if PUBLIC_BASE_URL == "https://operly.example":
@@ -304,8 +313,8 @@ def react_shell(*, status_code: int = 200) -> HTMLResponse:
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend(path: str):
     route = path.strip("/")
-    built_asset = WEB_DIST / route
-    if route and built_asset.is_file():
+    built_asset = confined_file(WEB_DIST, route) if route else None
+    if built_asset is not None:
         return FileResponse(built_asset)
     if route in KNOWN_REACT_ROUTES or route == "channels" or route.startswith("channels/"):
         return react_shell()

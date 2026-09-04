@@ -13,8 +13,10 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements.txt declares reviewed compatibility ranges; production installs the
+# exact audited graph so a rebuild cannot silently pick a newly published release.
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock && pip check
 
 COPY . .
 COPY --from=web-build /web/dist /app/apps/web/dist
