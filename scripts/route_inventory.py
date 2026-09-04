@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Iterable
 
@@ -44,14 +45,7 @@ def _rows_from_routes(routes: Iterable[Any], *, source: str) -> list[dict[str, A
 
 
 def route_inventory() -> list[dict[str, Any]]:
-    """Return the complete backend operation surface assembled by ``apps.api.main``.
-
-    FastAPI currently exposes only app-local routes through ``app.routes`` in the CI
-    dependency combination used here, even though ``include_router`` has already bound
-    the imported APIRouters. To make the parity contract fail closed against the app
-    that is actually assembled, inspect both the app-local routes and every APIRouter
-    imported into ``apps.api.main`` and included there.
-    """
+    """Return the complete backend operation surface assembled by ``apps.api.main``."""
 
     rows = _rows_from_routes(getattr(api_main.app, "routes", ()), source="app")
     for symbol, value in sorted(vars(api_main).items()):
@@ -59,16 +53,30 @@ def route_inventory() -> list[dict[str, Any]]:
             continue
         rows.extend(_rows_from_routes(value.routes, source=symbol))
 
-    # Routers are also copied onto FastAPI on versions where app.routes is complete;
-    # dedupe by semantic operation + endpoint rather than assuming one framework shape.
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         deduped[(row["operation"], row["endpoint"])] = row
     return sorted(deduped.values(), key=lambda row: (row["operation"], row["endpoint"]))
 
 
+def route_inventory_digest(rows: Iterable[dict[str, Any]]) -> str:
+    """Stable fingerprint of the exact mounted operation/endpoint/source surface."""
+
+    canonical = [
+        {
+            "operation": str(row["operation"]),
+            "endpoint": str(row["endpoint"]),
+            "source": str(row["source"]),
+        }
+        for row in rows
+    ]
+    encoded = json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 if __name__ == "__main__":
     rows = route_inventory()
     print(f"OPERLY_ROUTE_COUNT={len(rows)}")
+    print(f"OPERLY_ROUTE_DIGEST={route_inventory_digest(rows)}")
     for row in rows:
         print(json.dumps(row, separators=(",", ":"), sort_keys=True))
