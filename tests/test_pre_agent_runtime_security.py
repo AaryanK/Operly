@@ -271,6 +271,13 @@ class PreAgentRuntimeSecurityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
+    def test_kernel_idempotency_uses_resolved_planned_execution(self):
+        source = Path("packages/kernel/runtime.py").read_text(encoding="utf-8")
+        self.assertIn("execution_request = RuntimeRequest(", source)
+        self.assertIn("capability_id=capability.id", source)
+        self.assertIn("arguments=planned_arguments", source)
+        self.assertGreaterEqual(source.count("request=execution_request"), 2)
+
     def test_studio_request_path_is_manifest_lookup_not_filesystem_join(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -282,6 +289,7 @@ class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
             index.write_text("index", encoding="utf-8")
             asset.write_text("app", encoding="utf-8")
 
+            # First lookup builds/caches the confined manifest.
             self.assertEqual(_published_candidate(artifact, "assets/app.js"), asset.resolve())
             self.assertEqual(
                 _published_candidate(artifact, "client/side/route"), index.resolve()
@@ -297,8 +305,16 @@ class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
             except (OSError, NotImplementedError):
                 pass
             else:
+                # A new symlink is not in the cached manifest.
                 with self.assertRaises(HTTPException):
                     _published_candidate(artifact, "escape.txt")
+
+                # More importantly, replacing a previously cached safe entry with a
+                # symlink must be caught by response-time re-resolution.
+                asset.unlink()
+                asset.symlink_to(outside)
+                with self.assertRaises(HTTPException):
+                    _published_candidate(artifact, "assets/app.js")
 
         source = Path("packages/workspace_modules/studio/router.py").read_text(
             encoding="utf-8"
