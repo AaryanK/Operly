@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +15,11 @@ from packages.database.product_models import SolutionDeployment
 
 
 public_router = APIRouter(tags=["published-studio"])
-MAX_PUBLISHED_FILES = 20_000
+# The Studio publisher enforces the same limit before writing a deployment. Keeping
+# the serving-side limit aligned prevents a legacy/mutated artifact from turning one
+# public GET into an unbounded filesystem walk.
+MAX_PUBLISHED_FILES = 1_000
+MAX_PUBLISHED_MANIFESTS = 128
 
 # Published/model-authored software is untrusted content. Even on the dedicated
 # content origin, keep an opaque-origin CSP as defense in depth so generated scripts
@@ -50,6 +55,8 @@ def _studio_public_host() -> str:
 
 def _safe_relative_path(raw: str) -> str:
     value = str(raw or "index.html").replace("\\", "/").lstrip("/") or "index.html"
+    if len(value.encode("utf-8")) > 2048:
+        raise HTTPException(status_code=404, detail="Published Studio file not found")
     path = PurePosixPath(value)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise HTTPException(status_code=404, detail="Published Studio file not found")
@@ -63,13 +70,15 @@ def _sites_root() -> Path:
     return (Path(configured).expanduser().resolve() / "studio-sites").resolve()
 
 
+@lru_cache(maxsize=MAX_PUBLISHED_MANIFESTS)
 def _artifact_files(artifact: Path) -> dict[str, Path]:
-    """Enumerate trusted deployed files without joining request data into a path.
+    """Enumerate one immutable deployment into a bounded trusted file manifest.
 
-    The request path is used only as a lookup key into this manifest. Filesystem paths
-    are derived exclusively from the already-confined deployment directory, which
-    prevents traversal/symlink escapes and removes the user-controlled path-expression
-    sink flagged by CodeQL.
+    The request path is never joined into a filesystem expression; it is only used as
+    a dictionary key against this cached manifest. Filesystem paths come exclusively
+    from the already-confined artifact directory. Published artifacts are immutable by
+    design, while `_published_candidate` still re-resolves the selected entry before
+    every response so an unexpected post-cache symlink mutation cannot escape.
     """
 
     files: dict[str, Path] = {}
@@ -105,7 +114,17 @@ def _published_candidate(artifact: Path, request_path: str) -> Path:
         candidate = files.get("index.html")
     if candidate is None:
         raise HTTPException(status_code=404, detail="Published Studio file not found")
-    return candidate
+
+    # Cached manifests are an optimization, never an authority boundary. Re-resolve
+    # the selected trusted entry at response time to catch deletion, replacement, or a
+    # symlink introduced after the manifest was built.
+    try:
+        current = candidate.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail="Published Studio file not found")
+    if artifact not in current.parents or not current.is_file():
+        raise HTTPException(status_code=404, detail="Published Studio file not found")
+    return current
 
 
 def _enforce_content_origin(request: Request):
