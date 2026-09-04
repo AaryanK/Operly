@@ -120,37 +120,49 @@ def _wait_condition_case(index: int) -> dict:
 
 
 def _resilience_case(index: int) -> dict:
-    return {
-        "steps": [
-            {
-                "id": "attempt",
-                "capability_id": CAPABILITIES[index % len(CAPABILITIES)],
-                "on_error": "continue",
-                "arguments": {"request": "{{trigger.request}}", "case": index},
+    steps = [
+        {
+            "id": "attempt",
+            "capability_id": CAPABILITIES[index % len(CAPABILITIES)],
+            "on_error": "continue",
+            "arguments": {"request": "{{trigger.request}}", "case": index},
+        },
+        {
+            "id": "inspect",
+            "capability_id": CAPABILITIES[(index + 5) % len(CAPABILITIES)],
+            "depends_on": ["attempt"],
+            "when": {
+                "any": [
+                    {"ref": "steps.attempt.status", "op": "eq", "value": "completed"},
+                    {"ref": "steps.attempt.status", "op": "eq", "value": "failed"},
+                ]
             },
-            {
-                "id": "inspect",
-                "capability_id": CAPABILITIES[(index + 5) % len(CAPABILITIES)],
-                "depends_on": ["attempt"],
-                "when": {
-                    "any": [
-                        {"ref": "steps.attempt.status", "op": "eq", "value": "completed"},
-                        {"ref": "steps.attempt.status", "op": "eq", "value": "failed"},
-                    ]
-                },
-                "arguments": {
-                    "status": "{{steps.attempt.status}}",
-                    "result": "{{steps.attempt.result}}",
-                },
+            "arguments": {
+                "status": "{{steps.attempt.status}}",
+                "result": "{{steps.attempt.result}}",
             },
+        },
+    ]
+    finish_dependency = "inspect"
+    if index % 2:
+        steps.append(
             {
-                "id": "finish",
-                "capability_id": CAPABILITIES[(index + 6) % len(CAPABILITIES)],
+                "id": "cooldown",
+                "kind": "wait",
+                "seconds": 1 + index,
                 "depends_on": ["inspect"],
-                "arguments": {"case": index, "status": "{{steps.inspect.status}}"},
-            },
-        ]
-    }
+            }
+        )
+        finish_dependency = "cooldown"
+    steps.append(
+        {
+            "id": "finish",
+            "capability_id": CAPABILITIES[(index + 6) % len(CAPABILITIES)],
+            "depends_on": [finish_dependency],
+            "arguments": {"case": index, "status": "{{steps.inspect.status}}"},
+        }
+    )
+    return {"steps": steps}
 
 
 def build_workflow_matrix() -> list[dict]:
@@ -285,6 +297,7 @@ class WorkflowDispatcherIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
 
     async def test_60_real_event_triggered_runs_are_scope_isolated_and_deduplicated(self):
         baseline = datetime.utcnow() - timedelta(seconds=2)
