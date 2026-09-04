@@ -16,7 +16,7 @@ public_router = APIRouter(prefix="/api/public/webhooks", tags=["webhooks"])
 
 class CreateWebhookInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    event_type: str = Field(min_length=1, max_length=180)
+    event_type: str = Field(min_length=1, max_length=160)
     installation_id: str | None = Field(default=None, max_length=80)
     verification_type: str = Field(default="none", pattern="^(none|hmac_sha256)$")
     webhook_secret: str | None = Field(default=None, max_length=4096)
