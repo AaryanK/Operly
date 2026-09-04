@@ -6,6 +6,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
 
+PUBLISHED_STUDIO_CSP = (
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads; "
+    "default-src 'self' https: data: blob:; "
+    "img-src 'self' https: data: blob:; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "script-src 'self' 'unsafe-inline' https:; "
+    "font-src 'self' https: data:; "
+    "connect-src https:; "
+    "frame-src https:; "
+    "worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action https:; "
+    "upgrade-insecure-requests"
+)
+
+
 def _runner_preview_origins() -> tuple[str, ...]:
     origins=[]
     for value in os.getenv("OPERLY_SANDBOX_PREVIEW_HOSTS","").split(","):
@@ -91,10 +106,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         source_preview=path.startswith("/api/studio/projects/") and "/source/preview" in path
         generated_preview=path.startswith("/api/custom-software/previews/")
         hosted_plugin=path.startswith("/api/public/plugins/")
+        published_studio=path.startswith("/studio-sites/")
         studio_preview=(path.startswith("/apps/") and path.endswith("/preview")) or (path.startswith("/api/studio/projects/") and path.endswith("/preview")) or source_preview or (path.startswith("/api/custom-software/projects/") and path.endswith("/preview")) or generated_preview or path.startswith("/api/coding-harness/sources/") or solution_preview
         response.headers["X-Frame-Options"]="SAMEORIGIN" if (studio_preview or hosted_plugin) else "DENY"
 
-        if hosted_plugin:
+        if published_studio:
+            # Published/model-authored sites are untrusted. The CSP sandbox omits
+            # allow-same-origin, giving scripts an opaque origin even when a legacy
+            # deployment serves them from the Operly host. This prevents access to
+            # Operly cookies/storage and makes authenticated API requests cross-origin
+            # and therefore subject to CORS + CSRF rejection.
+            response.headers["Content-Security-Policy"]=PUBLISHED_STUDIO_CSP
+            response.headers["Referrer-Policy"]="no-referrer"
+            response.headers["Cross-Origin-Resource-Policy"]="cross-origin"
+        elif hosted_plugin:
             # Workspace plugin UI is untrusted authored content. It may be framed by
             # Operly, but CSP sandbox deliberately gives it an opaque origin even when
             # opened standalone so it cannot inherit Operly cookies/local storage or
