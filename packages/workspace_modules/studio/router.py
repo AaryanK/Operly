@@ -15,6 +15,24 @@ from packages.database.product_models import SolutionDeployment
 
 public_router = APIRouter(tags=["published-studio"])
 
+# Published/model-authored software is untrusted content even when Operly generated
+# it. CSP sandbox without allow-same-origin gives every page an opaque origin, so its
+# JavaScript cannot inherit Operly cookies/localStorage or act as an authenticated
+# Operly application merely because the asset is currently served by the same host.
+PUBLISHED_STUDIO_CSP = (
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads; "
+    "default-src 'self' https: data: blob:; "
+    "img-src 'self' https: data: blob:; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "script-src 'self' 'unsafe-inline' https:; "
+    "font-src 'self' https: data:; "
+    "connect-src https:; "
+    "frame-src https:; "
+    "worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action https:; "
+    "upgrade-insecure-requests"
+)
+
 
 def _safe_relative_path(raw: str) -> str:
     value = str(raw or "index.html").replace("\\", "/").lstrip("/") or "index.html"
@@ -70,15 +88,9 @@ async def published_studio_solution(
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "public, max-age=60",
+        "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Resource-Policy": "cross-origin",
     }
     if media_type == "text/html":
-        headers["Content-Security-Policy"] = (
-            "default-src 'self' https: data:; "
-            "img-src 'self' https: data:; "
-            "style-src 'self' 'unsafe-inline' https:; "
-            "script-src 'self' 'unsafe-inline' https:; "
-            "font-src 'self' https: data:; "
-            "connect-src 'self' https:; "
-            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
-        )
+        headers["Content-Security-Policy"] = PUBLISHED_STUDIO_CSP
     return FileResponse(candidate, media_type=media_type, headers=headers)
