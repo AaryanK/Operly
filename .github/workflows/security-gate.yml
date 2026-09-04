@@ -85,8 +85,8 @@ jobs:
           python -m pip install pip-audit==2.10.1
           python -m pip_audit -r requirements.lock --strict
 
-  npm-dependency-audit:
-    name: npm dependency audit
+  npm-frontend-audit:
+    name: npm frontend dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -97,14 +97,26 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            apps/web/package-lock.json
-            apps/sandbox_runner/package-lock.json
+          cache-dependency-path: apps/web/package-lock.json
       - name: Install and audit frontend dependency graph
         working-directory: apps/web
         run: |
           npm ci --ignore-scripts
           npm audit --audit-level=high
+
+  npm-sandbox-runner-audit:
+    name: npm Sandbox Runner dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/sandbox_runner/package-lock.json
       - name: Install and audit Sandbox Runner dependency graph
         working-directory: apps/sandbox_runner
         run: |
