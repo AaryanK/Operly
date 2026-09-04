@@ -1,5 +1,8 @@
 import os
+from urllib.parse import unquote
+
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import PlainTextResponse
 
 
 def _runner_preview_origins() -> tuple[str, ...]:
@@ -22,8 +25,43 @@ def _permissions_policy(solution_studio: bool) -> str:
     return f"camera=({delegated}), microphone=({delegated}), geolocation=({delegated}), payment=({delegated}), usb=({delegated})"
 
 
+def _unsafe_request_path(request) -> bool:
+    """Reject traversal before any catch-all/static-file route can touch disk.
+
+    ASGI servers and proxies do not all normalize encoded path separators in the
+    same order. Check both Starlette's decoded path and the raw path, repeatedly
+    decoding a small bounded number of times so double-encoded dot segments cannot
+    reach filesystem-backed routes.
+    """
+
+    raw_path = request.scope.get("raw_path", b"")
+    if isinstance(raw_path, bytes):
+        raw_text = raw_path.decode("latin-1", "ignore")
+    else:
+        raw_text = str(raw_path or "")
+    for candidate in (request.url.path, raw_text):
+        current = str(candidate or "")
+        for _ in range(4):
+            if "\x00" in current:
+                return True
+            normalized = current.replace("\\", "/")
+            if any(segment == ".." for segment in normalized.split("/")):
+                return True
+            decoded = unquote(current)
+            if decoded == current:
+                break
+            current = decoded
+    return False
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request,call_next):
+        if _unsafe_request_path(request):
+            return PlainTextResponse(
+                "Bad Request",
+                status_code=400,
+                headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+            )
         response=await call_next(request)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
