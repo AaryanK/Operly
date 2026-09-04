@@ -55,6 +55,11 @@ The runner rejects timestamps outside its bounded freshness window and rejects a
 that has already been accepted during the replay window. Responses are HMAC-signed over
 the raw response body with the signing key.
 
+**Replica constraint:** the nonce replay cache is currently process-local. Run the
+Sandbox Runner as a **single replica** until replay claims are moved to a shared atomic
+store or an equivalent cluster-wide idempotency boundary. See
+[`SECURITY.md`](./SECURITY.md) before horizontally scaling this service.
+
 Endpoints:
 
 - `GET /health`
