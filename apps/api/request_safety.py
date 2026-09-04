@@ -13,6 +13,7 @@ MIN_API_BODY_MAX_BYTES = 64 * 1024
 MAX_API_BODY_MAX_BYTES = 64 * 1024 * 1024
 AUTH_SHIELD_WINDOW_SECONDS = 60.0
 AUTH_SHIELD_DEFAULT_LIMIT = 60
+MAX_RUNTIME_REQUEST_ID_BYTES = 160
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 # Cheap process-local first line of defense. The durable DB limiter remains the
@@ -24,6 +25,14 @@ _auth_shield_last_prune = 0.0
 
 class DuplicateJSONKey(ValueError):
     pass
+
+
+class McpRequestSafetyError(ValueError):
+    def __init__(self, code: str, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
 
 
 def _unique_object(pairs):
@@ -106,18 +115,32 @@ def _is_auth_json_path(path: str) -> bool:
     return path.startswith("/api/auth/") or path == "/api/session/login"
 
 
+def _mcp_rpc_id(payload: dict):
+    rpc_id = payload.get("id")
+    if rpc_id is None or isinstance(rpc_id, (dict, list, bool)):
+        raise McpRequestSafetyError(
+            "MCP_REQUEST_ID_REQUIRED",
+            "MCP tools/call requires a scalar JSON-RPC request id",
+        )
+    if not isinstance(rpc_id, (str, int, float)):
+        raise McpRequestSafetyError(
+            "MCP_REQUEST_ID_INVALID",
+            "MCP JSON-RPC request id must be a string or number",
+        )
+    return rpc_id
+
+
 def _stable_mcp_request_id(payload: dict) -> str | None:
     if str(payload.get("method") or "").strip() != "tools/call":
         return None
-    rpc_id = payload.get("id")
-    if rpc_id is None or isinstance(rpc_id, (dict, list)):
-        return None
+    rpc_id = _mcp_rpc_id(payload)
     params = payload.get("params")
     if not isinstance(params, dict):
-        return None
+        raise McpRequestSafetyError(
+            "MCP_PARAMS_INVALID",
+            "MCP tools/call params must be an object",
+        )
     name = str(params.get("name") or "").strip()
-    if not name:
-        return None
     # JSON-RPC identifiers are transport-controlled and may be arbitrarily long,
     # while Kernel approval/request IDs are deliberately bounded database fields.
     # Hash the exact typed RPC identity plus tool name: retries remain deterministic,
@@ -129,27 +152,55 @@ def _stable_mcp_request_id(payload: dict) -> str | None:
 
 def _prepare_mcp_body(raw: bytes) -> bytes:
     if not raw:
-        return raw
+        raise McpRequestSafetyError("INVALID_JSON", "Send a valid MCP JSON request")
     try:
         payload = json.loads(raw, object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError, DuplicateJSONKey):
-        return raw
+    except DuplicateJSONKey as error:
+        raise McpRequestSafetyError(
+            "DUPLICATE_JSON_FIELD",
+            "Each MCP JSON field may be provided only once",
+        ) from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise McpRequestSafetyError("INVALID_JSON", "Send a valid MCP JSON request") from error
     if not isinstance(payload, dict):
+        raise McpRequestSafetyError(
+            "MCP_REQUEST_INVALID",
+            "MCP requests must be a JSON object",
+        )
+
+    if str(payload.get("method") or "").strip() != "tools/call":
+        # Parsing above still rejects ambiguous duplicate-key requests for every MCP
+        # method. Non-tool calls do not need an Operly idempotency identity.
         return raw
+
     stable_id = _stable_mcp_request_id(payload)
-    if not stable_id:
-        return raw
     params = payload.get("params")
     if not isinstance(params, dict):
-        return raw
+        raise McpRequestSafetyError(
+            "MCP_PARAMS_INVALID",
+            "MCP tools/call params must be an object",
+        )
     meta = params.get("_meta")
     if meta is None:
         meta = {}
         params["_meta"] = meta
     if not isinstance(meta, dict):
-        return raw
-    if not str(meta.get("operly/requestId") or "").strip():
+        raise McpRequestSafetyError(
+            "MCP_META_INVALID",
+            "MCP tools/call _meta must be an object",
+        )
+
+    explicit_request_id = str(meta.get("operly/requestId") or "").strip()
+    if explicit_request_id:
+        if len(explicit_request_id.encode("utf-8")) > MAX_RUNTIME_REQUEST_ID_BYTES:
+            raise McpRequestSafetyError(
+                "MCP_REQUEST_ID_TOO_LONG",
+                "operly/requestId exceeds the durable request-id limit",
+            )
+        meta["operly/requestId"] = explicit_request_id
+    else:
         meta["operly/requestId"] = stable_id
+
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -157,9 +208,9 @@ class AuthRequestSafetyMiddleware:
     """Bound unsafe request bodies and reject cheap abuse before route execution.
 
     Auth routes additionally require small, duplicate-key-free JSON bodies. MCP tool
-    calls inherit a stable, bounded idempotency request ID from the JSON-RPC request
-    ID when a client does not provide Operly's explicit request ID, so transport
-    retries cannot silently become a second mutating invocation.
+    calls must be unambiguous JSON and carry either a bounded explicit Operly request
+    ID or a deterministic ID derived from a scalar JSON-RPC request ID. This prevents
+    transport retries from silently becoming a second mutating invocation.
     """
 
     def __init__(self, app):
@@ -250,8 +301,17 @@ class AuthRequestSafetyMiddleware:
                 await response(scope, receive, send)
                 return
 
-        if path == "/mcp" and content_type == "application/json":
-            body = _prepare_mcp_body(body)
+        if path == "/mcp":
+            if content_type != "application/json":
+                response = _error(415, "JSON_REQUIRED", "Send MCP requests as JSON")
+                await response(scope, receive, send)
+                return
+            try:
+                body = _prepare_mcp_body(body)
+            except McpRequestSafetyError as error:
+                response = _error(error.status_code, error.code, error.message)
+                await response(scope, receive, send)
+                return
 
         delivered = False
 
