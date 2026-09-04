@@ -39,40 +39,6 @@ class RuntimeStage(StrEnum):
 RUNTIME_STAGE_ORDER: tuple[RuntimeStage, ...] = tuple(RuntimeStage)
 
 
-# Agent Computer raw contracts must never advertise less operational risk than the
-# canonical runtime. The composition layer still performs the same hardening, so a
-# test-only replacement of an already-HIGH governed contract may deliberately turn
-# off approval while exercising side-effect-free schema/workflow plumbing.
-_COMPUTER_ARBITRARY_EXECUTION = frozenset(
-    {
-        "computer.terminal.exec",
-        "computer.python.exec",
-        "computer.git.exec",
-        "computer.browser.evaluate",
-    }
-)
-_COMPUTER_MUTATIONS = frozenset(
-    {
-        "computer.runtime.start",
-        "computer.runtime.stop",
-        "computer.files.write",
-        "computer.files.mkdir",
-        "computer.files.remove",
-        "computer.files.move",
-        "computer.process.kill",
-        "computer.web.download",
-        "computer.browser.open",
-        "computer.browser.navigate",
-        "computer.browser.click",
-        "computer.browser.type",
-        "computer.browser.press",
-        "computer.browser.close",
-        "computer.artifact.import",
-        "computer.artifact.export",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class CapabilitySpec:
     id: str
@@ -91,22 +57,6 @@ class CapabilitySpec:
     aliases: tuple[str, ...] = ()
     emits: tuple[str, ...] = ()
     tags: frozenset[str] = frozenset()
-
-    def __post_init__(self) -> None:
-        # Raw Agent Computer definitions currently enter here below their governed
-        # risk. Raise those definitions once. An already-HIGH arbitrary-execution
-        # contract is presumed to have passed through the canonical hardening layer;
-        # this preserves the existing test harness's explicit fake-runtime override.
-        if self.id in _COMPUTER_ARBITRARY_EXECUTION and self.risk is not CapabilityRisk.HIGH:
-            object.__setattr__(self, "risk", CapabilityRisk.HIGH)
-            object.__setattr__(self, "approval_required", True)
-            object.__setattr__(self, "reversible", False)
-        elif self.id in _COMPUTER_MUTATIONS and self.risk in {
-            CapabilityRisk.READ_ONLY,
-            CapabilityRisk.LOW,
-        }:
-            object.__setattr__(self, "risk", CapabilityRisk.MEDIUM)
-            object.__setattr__(self, "reversible", False)
 
     def public_dict(self) -> dict[str, Any]:
         return {
