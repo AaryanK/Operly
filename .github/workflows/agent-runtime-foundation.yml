@@ -8,11 +8,13 @@ on:
       - "packages/database/schema.py"
       - "alembic/versions/0057_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_foundation.py"
+      - "tests/test_agent_runtime_planner.py"
       - "tests/test_agent_runtime_store.py"
       - "tests/test_agent_runtime_orchestrator.py"
       - "tests/test_agent_runtime_races.py"
       - "tests/test_agent_runtime_uncertain.py"
       - "docs/unified-agent-runtime.md"
+      - "docs/agent-runtime-planner-safety.md"
       - ".github/workflows/agent-runtime-foundation.yml"
 
 concurrency:
@@ -45,6 +47,7 @@ jobs:
           python -m py_compile \
             packages/agent_runtime/__init__.py \
             packages/agent_runtime/contracts.py \
+            packages/agent_runtime/planner.py \
             packages/agent_runtime/runtime.py \
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
@@ -52,6 +55,7 @@ jobs:
             packages/database/schema.py \
             alembic/versions/0057_agent_runtime_foundation.py \
             tests/test_agent_runtime_foundation.py \
+            tests/test_agent_runtime_planner.py \
             tests/test_agent_runtime_store.py \
             tests/test_agent_runtime_orchestrator.py \
             tests/test_agent_runtime_races.py \
@@ -59,6 +63,7 @@ jobs:
       - name: Run foundation adversarial tests
         run: |
           python -m unittest tests.test_agent_runtime_foundation -v
+          python -m unittest tests.test_agent_runtime_planner -v
           python -m unittest tests.test_agent_runtime_store -v
           python -m unittest tests.test_agent_runtime_orchestrator -v
           python -m unittest tests.test_agent_runtime_races -v
