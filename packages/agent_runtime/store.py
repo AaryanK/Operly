@@ -29,11 +29,20 @@ class AgentRunStateError(RuntimeError):
     pass
 
 
-TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "budget_exhausted"})
+TERMINAL_RUN_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "budget_exhausted", "execution_uncertain"}
+)
 _ALLOWED_TRANSITIONS = {
     "queued": frozenset({"running", "cancelled"}),
     "running": frozenset(
-        {"waiting_approval", "completed", "failed", "cancelled", "budget_exhausted"}
+        {
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled",
+            "budget_exhausted",
+            "execution_uncertain",
+        }
     ),
     "waiting_approval": frozenset({"queued", "cancelled"}),
 }
@@ -486,7 +495,12 @@ async def record_step_result(
     step.finished_at = (
         now
         if step_result.status
-        in {AgentStepStatus.COMPLETED, AgentStepStatus.FAILED, AgentStepStatus.CANCELLED}
+        in {
+            AgentStepStatus.COMPLETED,
+            AgentStepStatus.FAILED,
+            AgentStepStatus.CANCELLED,
+            AgentStepStatus.EXECUTION_UNCERTAIN,
+        }
         else None
     )
     step.updated_at = now

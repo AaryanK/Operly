@@ -150,6 +150,34 @@ class DurableAgentOrchestrator:
             error="Agent run was cancelled",
         )
 
+    async def _mark_execution_uncertain(
+        self,
+        db: AsyncSession,
+        *,
+        run_id: str,
+        step_result: AgentStepResult,
+        records: tuple[AgentStepResult, ...],
+    ) -> AgentRunResult:
+        message = step_result.error or "Mutating capability outcome is uncertain"
+        await transition_run(
+            db,
+            run_id=run_id,
+            to_status="execution_uncertain",
+            current_step_id=step_result.step_id,
+            error_code="execution_outcome_uncertain",
+            error_message=message,
+        )
+        await db.commit()
+        return AgentRunResult(
+            run_id=run_id,
+            status=AgentRunStatus.EXECUTION_UNCERTAIN,
+            steps=records,
+            next_step_id=step_result.step_id,
+            approval_id=step_result.approval_id,
+            error_code="execution_outcome_uncertain",
+            error=message,
+        )
+
     async def run_once(
         self,
         db: AsyncSession,
@@ -318,6 +346,17 @@ class DurableAgentOrchestrator:
 
             await record_step_result(db, run_id=run_id, step_result=step_result)
             records.append(step_result)
+
+            # An uncertain mutation outcome dominates cancellation. Cancellation cannot
+            # prove whether an external side effect happened and must never hide the
+            # reconciliation requirement.
+            if step_result.status is AgentStepStatus.EXECUTION_UNCERTAIN:
+                return await self._mark_execution_uncertain(
+                    db,
+                    run_id=run_id,
+                    step_result=step_result,
+                    records=tuple(records),
+                )
 
             # Close the small race between the first post-step cancellation check and
             # lease renewal/step recording before deciding whether another step may run.

@@ -11,6 +11,7 @@ on:
       - "tests/test_agent_runtime_store.py"
       - "tests/test_agent_runtime_orchestrator.py"
       - "tests/test_agent_runtime_races.py"
+      - "tests/test_agent_runtime_uncertain.py"
       - "docs/unified-agent-runtime.md"
       - ".github/workflows/agent-runtime-foundation.yml"
 
@@ -53,13 +54,15 @@ jobs:
             tests/test_agent_runtime_foundation.py \
             tests/test_agent_runtime_store.py \
             tests/test_agent_runtime_orchestrator.py \
-            tests/test_agent_runtime_races.py
+            tests/test_agent_runtime_races.py \
+            tests/test_agent_runtime_uncertain.py
       - name: Run foundation adversarial tests
         run: |
           python -m unittest tests.test_agent_runtime_foundation -v
           python -m unittest tests.test_agent_runtime_store -v
           python -m unittest tests.test_agent_runtime_orchestrator -v
           python -m unittest tests.test_agent_runtime_races -v
+          python -m unittest tests.test_agent_runtime_uncertain -v
       - name: Validate clean database migration
         run: |
           rm -f /tmp/operly-agent-runtime-foundation.db

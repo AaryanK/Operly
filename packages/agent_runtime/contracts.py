@@ -12,6 +12,7 @@ class AgentRunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    EXECUTION_UNCERTAIN = "execution_uncertain"
 
 
 class AgentStepStatus(StrEnum):
@@ -19,6 +20,7 @@ class AgentStepStatus(StrEnum):
     WAITING_APPROVAL = "waiting_approval"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    EXECUTION_UNCERTAIN = "execution_uncertain"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +113,7 @@ class AgentRunResult:
             AgentRunStatus.FAILED,
             AgentRunStatus.CANCELLED,
             AgentRunStatus.BUDGET_EXHAUSTED,
+            AgentRunStatus.EXECUTION_UNCERTAIN,
         }
 
 

@@ -5,7 +5,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.kernel.contracts import CapabilityRisk, RuntimeRequest
+from packages.kernel.contracts import CapabilityRisk, RuntimeRequest, RuntimeResponse
+from packages.kernel.idempotency import (
+    IdempotencyConflict,
+    IdempotencyInProgress,
+    find_completed_request,
+)
 from packages.kernel.registry import CapabilityRegistryError
 from packages.kernel.runtime import OperlyKernelRuntime, RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext
@@ -87,6 +92,44 @@ class GovernedAgentRuntime:
             )
         return None
 
+    async def _mutation_recovery_state(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        request: RuntimeRequest,
+        step: AgentPlanStep,
+        kernel_error: RuntimeExecutionError,
+    ) -> tuple[RuntimeResponse | None, bool]:
+        """Inspect Kernel's durable mutation claim after an execution error.
+
+        A completed claim means the response became durable despite the observed error
+        and can be replayed safely. A running claim means the provider boundary may have
+        been crossed, so the outcome is fail-closed/uncertain until reconciliation.
+        Pre-reservation validation/authorization failures have no claim and remain
+        ordinary failed steps.
+        """
+
+        try:
+            spec = self.kernel.registry.get(step.capability_id)
+        except CapabilityRegistryError:
+            return None, kernel_error.code == "request_in_progress"
+        if spec.risk is CapabilityRisk.READ_ONLY:
+            return None, False
+
+        uncertain = kernel_error.code == "request_in_progress"
+        try:
+            replay = await find_completed_request(
+                db,
+                context=context,
+                request=request,
+            )
+        except IdempotencyInProgress:
+            return None, True
+        except IdempotencyConflict:
+            return None, uncertain
+        return replay, uncertain
+
     async def execute_step(
         self,
         db: AsyncSession,
@@ -120,6 +163,36 @@ class GovernedAgentRuntime:
                 request=request,
             )
         except RuntimeExecutionError as error:
+            replay, uncertain = await self._mutation_recovery_state(
+                db,
+                context=context,
+                request=request,
+                step=step,
+                kernel_error=error,
+            )
+            if replay is not None:
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=AgentStepStatus.COMPLETED,
+                    kernel_run_id=replay.run_id,
+                    result=dict(replay.result or {}),
+                )
+            if uncertain:
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=AgentStepStatus.EXECUTION_UNCERTAIN,
+                    kernel_run_id=error.run_id,
+                    approval_id=error.approval_id,
+                    error_code="execution_outcome_uncertain",
+                    error=(
+                        "Mutating capability outcome is uncertain and must be reconciled "
+                        f"before any fresh execution: {error.code}: {error}"
+                    ),
+                )
             status = (
                 AgentStepStatus.WAITING_APPROVAL
                 if error.code == "approval_required"
@@ -198,6 +271,16 @@ class GovernedAgentRuntime:
                 step=step,
             )
             records.append(step_result)
+            if step_result.status is AgentStepStatus.EXECUTION_UNCERTAIN:
+                return AgentRunResult(
+                    run_id=plan.run_id,
+                    status=AgentRunStatus.EXECUTION_UNCERTAIN,
+                    steps=tuple(records),
+                    next_step_id=step.step_id,
+                    approval_id=step_result.approval_id,
+                    error_code=step_result.error_code,
+                    error=step_result.error,
+                )
             if step_result.status is AgentStepStatus.WAITING_APPROVAL:
                 return AgentRunResult(
                     run_id=plan.run_id,
