@@ -1,0 +1,54 @@
+name: Capability Compound Workflow Matrix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/capability-compound-matrix.yml"
+      - "packages/kernel/**"
+      - "packages/personal_modules/**"
+      - "packages/workflow/**"
+      - "packages/workspace_modules/**"
+      - "tests/test_capability_compound_workflow_matrix.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/capability-compound-matrix.yml"
+      - "packages/kernel/**"
+      - "packages/personal_modules/**"
+      - "packages/workflow/**"
+      - "packages/workspace_modules/**"
+      - "tests/test_capability_compound_workflow_matrix.py"
+
+permissions:
+  contents: read
+
+jobs:
+  capability-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: sqlite+aiosqlite:///./capability-compound-matrix.db
+      SESSION_SECRET: capability-compound-matrix-ci-secret
+      OPERLY_ENV: development
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install application dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile capability matrix
+        run: python -m py_compile tests/test_capability_compound_workflow_matrix.py
+
+      - name: Run capability-wide compound workflows
+        run: python -m unittest discover -s tests -p "test_capability_compound_workflow_matrix.py" -v
