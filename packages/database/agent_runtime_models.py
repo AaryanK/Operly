@@ -17,7 +17,7 @@ class AgentRuntimeRun(Base):
     __tablename__ = "agent_runtime_runs"
     __table_args__ = (
         CheckConstraint(
-            "(scope_kind = 'workspace' AND workspace_id IS NOT NULL) OR "
+            "(scope_kind = 'workspace' AND workspace_id IS NOT NULL AND owner_user_id IS NULL) OR "
             "(scope_kind = 'personal' AND workspace_id IS NULL AND owner_user_id IS NOT NULL)",
             name="ck_agent_runtime_run_scope_owner",
         ),

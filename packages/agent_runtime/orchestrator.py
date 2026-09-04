@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -124,6 +123,33 @@ class DurableAgentOrchestrator:
             error=message,
         )
 
+    async def _cancel_run(
+        self,
+        db: AsyncSession,
+        *,
+        run_id: str,
+        message: str,
+        current_step_id: str | None = None,
+        records: tuple[AgentStepResult, ...] = (),
+    ) -> AgentRunResult:
+        await transition_run(
+            db,
+            run_id=run_id,
+            to_status="cancelled",
+            current_step_id=current_step_id,
+            error_code="cancelled",
+            error_message=message,
+        )
+        await db.commit()
+        return AgentRunResult(
+            run_id=run_id,
+            status=AgentRunStatus.CANCELLED,
+            steps=records,
+            next_step_id=current_step_id,
+            error_code="cancelled",
+            error="Agent run was cancelled",
+        )
+
     async def run_once(
         self,
         db: AsyncSession,
@@ -142,6 +168,15 @@ class DurableAgentOrchestrator:
             await db.rollback()
             return None
         await db.commit()
+
+        # A recovery worker may legitimately claim an expired running lease after a
+        # cancellation request. Terminalize before reconstructing or executing work.
+        if await cancellation_requested(db, run_id=run_id):
+            return await self._cancel_run(
+                db,
+                run_id=run_id,
+                message="Agent run was cancelled before capability execution",
+            )
 
         try:
             plan = await load_plan(db, run_id=run_id)
@@ -217,22 +252,12 @@ class DurableAgentOrchestrator:
                 )
 
             if await cancellation_requested(db, run_id=run_id):
-                await transition_run(
+                return await self._cancel_run(
                     db,
                     run_id=run_id,
-                    to_status="cancelled",
+                    message="Agent run was cancelled before the next capability",
                     current_step_id=durable_step.step_id,
-                    error_code="cancelled",
-                    error_message="Agent run was cancelled before the next capability",
-                )
-                await db.commit()
-                return AgentRunResult(
-                    run_id=run_id,
-                    status=AgentRunStatus.CANCELLED,
-                    steps=tuple(records),
-                    next_step_id=durable_step.step_id,
-                    error_code="cancelled",
-                    error="Agent run was cancelled",
+                    records=tuple(records),
                 )
 
             if not await renew_run_lease(
@@ -244,6 +269,18 @@ class DurableAgentOrchestrator:
                 await db.rollback()
                 raise AgentLeaseLost("Agent run lease was lost before capability execution")
             await db.commit()
+
+            # Cancellation and lease ownership are independent state. Renewal must not
+            # turn cancellation into a fake lease-loss signal; re-check immediately
+            # after the lease transaction and stop before entering Kernel.
+            if await cancellation_requested(db, run_id=run_id):
+                return await self._cancel_run(
+                    db,
+                    run_id=run_id,
+                    message="Agent run was cancelled before the next capability",
+                    current_step_id=durable_step.step_id,
+                    records=tuple(records),
+                )
 
             row = await db.get(AgentRuntimeRun, run_id)
             if row is None:
@@ -282,23 +319,18 @@ class DurableAgentOrchestrator:
             await record_step_result(db, run_id=run_id, step_result=step_result)
             records.append(step_result)
 
+            # Close the small race between the first post-step cancellation check and
+            # lease renewal/step recording before deciding whether another step may run.
+            if not cancelled_after_step:
+                cancelled_after_step = await cancellation_requested(db, run_id=run_id)
+
             if cancelled_after_step:
-                await transition_run(
+                return await self._cancel_run(
                     db,
                     run_id=run_id,
-                    to_status="cancelled",
+                    message="Agent run was cancelled after the current capability completed",
                     current_step_id=durable_step.step_id,
-                    error_code="cancelled",
-                    error_message="Agent run was cancelled after the current capability completed",
-                )
-                await db.commit()
-                return AgentRunResult(
-                    run_id=run_id,
-                    status=AgentRunStatus.CANCELLED,
-                    steps=tuple(records),
-                    next_step_id=durable_step.step_id,
-                    error_code="cancelled",
-                    error="Agent run was cancelled",
+                    records=tuple(records),
                 )
 
             if step_result.status is AgentStepStatus.WAITING_APPROVAL:

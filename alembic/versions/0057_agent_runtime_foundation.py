@@ -65,7 +65,7 @@ def upgrade():
             sa.Column("started_at", sa.DateTime(), nullable=True),
             sa.Column("finished_at", sa.DateTime(), nullable=True),
             sa.CheckConstraint(
-                "(scope_kind = 'workspace' AND workspace_id IS NOT NULL) OR "
+                "(scope_kind = 'workspace' AND workspace_id IS NOT NULL AND owner_user_id IS NULL) OR "
                 "(scope_kind = 'personal' AND workspace_id IS NULL AND owner_user_id IS NOT NULL)",
                 name="ck_agent_runtime_run_scope_owner",
             ),

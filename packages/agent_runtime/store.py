@@ -240,7 +240,12 @@ async def request_cancellation(
 
     now = datetime.utcnow()
     row.cancellation_requested = True
-    if row.status in {"queued", "waiting_approval"}:
+    has_live_lease = bool(
+        row.lease_token and row.lease_until is not None and row.lease_until > now
+    )
+    if row.status in {"queued", "waiting_approval"} or (
+        row.status == "running" and not has_live_lease
+    ):
         row.status = "cancelled"
         row.finished_at = now
         row.lease_token = None
@@ -280,7 +285,10 @@ async def claim_run(
         .where(
             AgentRuntimeRun.id == run_id,
             AgentRuntimeRun.status.in_(("queued", "running")),
-            AgentRuntimeRun.cancellation_requested.is_(False),
+            or_(
+                AgentRuntimeRun.cancellation_requested.is_(False),
+                AgentRuntimeRun.status == "running",
+            ),
             or_(
                 AgentRuntimeRun.lease_until.is_(None),
                 AgentRuntimeRun.lease_until < now,
@@ -314,17 +322,17 @@ async def renew_run_lease(
         raise ValueError("lease_token must contain 1-80 characters")
     if not 5 <= lease_seconds <= 900:
         raise ValueError("lease_seconds must be between 5 and 900")
+    now = datetime.utcnow()
     result = await db.execute(
         update(AgentRuntimeRun)
         .where(
             AgentRuntimeRun.id == run_id,
             AgentRuntimeRun.status == "running",
             AgentRuntimeRun.lease_token == token,
-            AgentRuntimeRun.cancellation_requested.is_(False),
         )
         .values(
-            lease_until=datetime.utcnow() + timedelta(seconds=lease_seconds),
-            updated_at=datetime.utcnow(),
+            lease_until=now + timedelta(seconds=lease_seconds),
+            updated_at=now,
         )
     )
     await db.flush()
