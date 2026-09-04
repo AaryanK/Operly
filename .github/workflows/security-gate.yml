@@ -61,6 +61,7 @@ jobs:
             apps/api/security_headers.py \
             apps/api/mcp_router.py \
             packages/kernel/approvals.py \
+            packages/kernel/contracts.py \
             packages/kernel/idempotency.py \
             packages/kernel/runtime.py \
             packages/mcp/oauth.py \
@@ -69,13 +70,16 @@ jobs:
             packages/security/pinned_https.py \
             packages/workspace_modules/agent_computer/router.py \
             packages/workspace_modules/agent_computer/sandbox.py \
+            packages/workspace_modules/studio/router.py \
             packages/workspace_modules/tools/__init__.py \
             tests/test_security_hardening.py \
-            tests/test_pre_agent_runtime_gate.py
+            tests/test_pre_agent_runtime_gate.py \
+            tests/test_pre_agent_runtime_security.py
       - name: Run exploit regressions
         run: |
           python -m unittest tests.test_security_hardening -v
           python -m unittest tests.test_pre_agent_runtime_gate -v
+          python -m unittest tests.test_pre_agent_runtime_security -v
       - name: Validate Sandbox Runner syntax
         run: node --check apps/sandbox_runner/server.mjs
 
