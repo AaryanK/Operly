@@ -204,6 +204,7 @@ class AgentRuntimeRaceTests(unittest.IsolatedAsyncioTestCase):
                 kernel=kernel,
                 settings=AgentRuntimeSettings(enabled=True),
             ),
+            heartbeat_session_factory=self.sessions,
             lease_seconds=60,
         )
         async with self.sessions() as db:

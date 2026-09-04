@@ -226,7 +226,7 @@ class PluginPlatformContractTests(unittest.TestCase):
             "http://api.acme.example",
             "https://localhost",
             "https://service.internal",
-            "https://user:pass@api.acme.example",
+            "https://user:pass@api.acme.example",  # pragma: allowlist secret
             "https://api.acme.example?token=nope",
         ):
             with self.assertRaises(ValueError, msg=invalid):
@@ -247,7 +247,7 @@ class PluginPlatformContractTests(unittest.TestCase):
             "http://hooks.example.com/operly",
             "https://localhost/hook",
             "https://worker.internal/hook",
-            "https://user:password@hooks.example.com/hook",
+            "https://user:password@hooks.example.com/hook",  # pragma: allowlist secret
         ):
             with self.assertRaises(ValueError, msg=invalid):
                 _validate_target_url(invalid)

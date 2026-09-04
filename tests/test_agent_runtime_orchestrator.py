@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -55,6 +57,7 @@ class FakeKernel:
         self.delete_membership_after_first = False
         self.require_approval = False
         self.steal_lease_after_first = False
+        self.delay_seconds = 0.0
         self.approval_id = "11111111-1111-1111-1111-111111111111"
 
     async def execute(self, db, *, context, request):
@@ -87,6 +90,9 @@ class FakeKernel:
             if run is not None:
                 run.lease_token = "worker-b"
                 await db.flush()
+
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
 
         return RuntimeResponse(
             run_id=f"33333333-3333-3333-3333-{call_number:012d}",
@@ -133,13 +139,15 @@ class AgentRuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             require_membership=True,
         )
 
-    def worker(self, kernel: FakeKernel) -> DurableAgentOrchestrator:
+    def worker(self, kernel: FakeKernel, *, heartbeat_interval_seconds: float | None = None) -> DurableAgentOrchestrator:
         return DurableAgentOrchestrator(
             runtime=GovernedAgentRuntime(
                 kernel=kernel,
                 settings=AgentRuntimeSettings(enabled=True),
             ),
+            heartbeat_session_factory=self.sessions,
             lease_seconds=300,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
         )
 
     async def create_workspace_run(self, db, *, run_id: str, steps: tuple[AgentPlanStep, ...]):
@@ -283,6 +291,58 @@ class AgentRuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.status, "cancelled")
         self.assertTrue(row.cancellation_requested)
         self.assertIsNotNone(row.finished_at)
+
+    async def test_corrupted_durable_request_identity_fails_before_kernel(self):
+        kernel = FakeKernel()
+        async with self.sessions() as db:
+            await self.create_workspace_run(
+                db,
+                run_id="tampered-request-run",
+                steps=(AgentPlanStep("read", "records.read"),),
+            )
+            step = await db.scalar(
+                select(AgentRuntimeStep).where(
+                    AgentRuntimeStep.agent_run_id == "tampered-request-run",
+                    AgentRuntimeStep.step_id == "read",
+                )
+            )
+            step.request_id = "tampered-request-id"
+            await db.commit()
+
+            result = await self.worker(kernel).run_once(
+                db, run_id="tampered-request-run", lease_token="worker-a"
+            )
+
+        self.assertEqual(result.status, AgentRunStatus.FAILED)
+        self.assertEqual(result.error_code, "invalid_step_identity")
+        self.assertEqual(kernel.calls, [])
+
+    async def test_lease_heartbeat_uses_independent_session_during_capability(self):
+        kernel = FakeKernel()
+        kernel.delay_seconds = 0.08
+        worker = self.worker(kernel, heartbeat_interval_seconds=0.01)
+        seen_sessions = []
+
+        async def fake_renew(session, **kwargs):
+            del kwargs
+            seen_sessions.append(session)
+            return True
+
+        async with self.sessions() as db:
+            await self.create_workspace_run(
+                db,
+                run_id="heartbeat-run",
+                steps=(AgentPlanStep("read", "records.read"),),
+            )
+            with patch("packages.agent_runtime.orchestrator.renew_run_lease", new=fake_renew):
+                result = await worker.run_once(
+                    db, run_id="heartbeat-run", lease_token="worker-a"
+                )
+            execution_session = db
+
+        self.assertEqual(result.status, AgentRunStatus.COMPLETED)
+        self.assertGreaterEqual(len(seen_sessions), 3)
+        self.assertTrue(any(session is not execution_session for session in seen_sessions))
 
     def test_approval_id_contract_matches_kernel_uuid_width(self):
         with self.assertRaises(ValueError):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +16,13 @@ from packages.security.execution_context import (
 )
 from packages.security.surfaces import SurfaceKind
 
-from .contracts import AgentRunResult, AgentRunStatus, AgentStepResult, AgentStepStatus
+from .contracts import (
+    AgentRunResult,
+    AgentRunStatus,
+    AgentStepResult,
+    AgentStepStatus,
+    stable_step_request_id,
+)
 from .runtime import GovernedAgentRuntime
 from .store import (
     AgentRunStateError,
@@ -39,14 +47,69 @@ class DurableAgentOrchestrator:
     This is not a background service or HTTP ingress. A future worker loop may call
     ``run_once``. Current authority is reconstructed from trusted application state
     before every pending step so membership/role revocation takes effect mid-run.
+
+    Long capability execution is protected by a lease heartbeat that uses its own DB
+    session. Sharing the worker's execution session with the heartbeat would be unsafe
+    because SQLAlchemy AsyncSession is not designed for concurrent use.
     """
 
     runtime: GovernedAgentRuntime
+    heartbeat_session_factory: Callable[[], AsyncSession]
     lease_seconds: int = 300
+    heartbeat_interval_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not 30 <= self.lease_seconds <= 900:
             raise ValueError("lease_seconds must be between 30 and 900")
+        if self.heartbeat_session_factory is None:
+            raise ValueError("heartbeat_session_factory is required for durable execution")
+        interval = self.heartbeat_interval_seconds
+        if interval is None:
+            interval = max(1.0, min(30.0, self.lease_seconds / 3))
+        if not 0.01 <= float(interval) < self.lease_seconds:
+            raise ValueError("heartbeat_interval_seconds must be positive and below lease_seconds")
+        object.__setattr__(self, "heartbeat_interval_seconds", float(interval))
+
+    async def _lease_heartbeat(
+        self,
+        *,
+        run_id: str,
+        lease_token: str,
+        stop: asyncio.Event,
+        lost: asyncio.Event,
+    ) -> None:
+        """Renew the run lease independently while one capability is executing."""
+
+        while True:
+            try:
+                await asyncio.wait_for(
+                    stop.wait(),
+                    timeout=float(self.heartbeat_interval_seconds or 1.0),
+                )
+                return
+            except TimeoutError:
+                pass
+
+            try:
+                async with self.heartbeat_session_factory() as heartbeat_db:
+                    renewed = await renew_run_lease(
+                        heartbeat_db,
+                        run_id=run_id,
+                        lease_token=lease_token,
+                        lease_seconds=self.lease_seconds,
+                    )
+                    if not renewed:
+                        await heartbeat_db.rollback()
+                        lost.set()
+                        return
+                    await heartbeat_db.commit()
+            except Exception:
+                # A heartbeat infrastructure failure is treated exactly like lease
+                # loss. The capability may still finish, but the durable worker must
+                # not claim continued ownership and must rely on Kernel idempotency on
+                # recovery rather than recording under an unproven lease.
+                lost.set()
+                return
 
     async def _resolve_current_context(
         self,
@@ -249,6 +312,18 @@ class DurableAgentOrchestrator:
                     current_step_id=durable_step.step_id,
                     records=tuple(records),
                 )
+
+            expected_request_id = stable_step_request_id(run_id, durable_step.step_id)
+            if durable_step.request_id != expected_request_id:
+                return await self._fail_run(
+                    db,
+                    run_id=run_id,
+                    code="invalid_step_identity",
+                    message="Durable agent step request identity is corrupted",
+                    current_step_id=durable_step.step_id,
+                    records=tuple(records),
+                )
+
             if durable_step.status == AgentStepStatus.COMPLETED.value:
                 continue
             if durable_step.status == AgentStepStatus.WAITING_APPROVAL.value and not durable_step.approval_id:
@@ -325,13 +400,31 @@ class DurableAgentOrchestrator:
                     records=tuple(records),
                 )
 
-            step_result = await self.runtime.execute_step(
-                db,
-                context=context,
-                run_id=run_id,
-                goal=plan.goal,
-                step=step,
+            heartbeat_stop = asyncio.Event()
+            heartbeat_lost = asyncio.Event()
+            heartbeat_task = asyncio.create_task(
+                self._lease_heartbeat(
+                    run_id=run_id,
+                    lease_token=lease_token,
+                    stop=heartbeat_stop,
+                    lost=heartbeat_lost,
+                )
             )
+            try:
+                step_result = await self.runtime.execute_step(
+                    db,
+                    context=context,
+                    run_id=run_id,
+                    goal=plan.goal,
+                    step=step,
+                )
+            finally:
+                heartbeat_stop.set()
+                await heartbeat_task
+
+            if heartbeat_lost.is_set():
+                await db.rollback()
+                raise AgentLeaseLost("Agent run lease heartbeat was lost during capability execution")
 
             cancelled_after_step = await cancellation_requested(db, run_id=run_id)
             if not cancelled_after_step:

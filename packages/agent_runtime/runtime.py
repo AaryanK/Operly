@@ -101,13 +101,13 @@ class GovernedAgentRuntime:
         step: AgentPlanStep,
         kernel_error: RuntimeExecutionError,
     ) -> tuple[RuntimeResponse | None, bool]:
-        """Inspect Kernel's durable mutation claim after an execution error.
+        """Inspect Kernel's durable mutation claim after a possibly post-reservation error.
 
         A completed claim means the response became durable despite the observed error
         and can be replayed safely. A running claim means the provider boundary may have
         been crossed, so the outcome is fail-closed/uncertain until reconciliation.
-        Pre-reservation validation/authorization failures have no claim and remain
-        ordinary failed steps.
+        This helper must never be called for errors known to happen before reservation,
+        such as approval_required, invalid_request, or forbidden.
         """
 
         try:
@@ -163,6 +163,34 @@ class GovernedAgentRuntime:
                 request=request,
             )
         except RuntimeExecutionError as error:
+            # These outcomes are produced before Kernel's durable mutation reservation
+            # or are already classified as an exact-request conflict. Do not probe the
+            # idempotency table: approval_required in particular must remain a clean
+            # WAITING_APPROVAL transition and must work with lightweight/fake DBs.
+            pre_reservation_codes = {
+                "approval_required",
+                "approval_invalid",
+                "idempotency_conflict",
+                "invalid_request",
+                "forbidden",
+            }
+            if error.code in pre_reservation_codes:
+                status = (
+                    AgentStepStatus.WAITING_APPROVAL
+                    if error.code == "approval_required"
+                    else AgentStepStatus.FAILED
+                )
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=status,
+                    kernel_run_id=error.run_id,
+                    approval_id=error.approval_id,
+                    error_code=error.code,
+                    error=str(error),
+                )
+
             replay, uncertain = await self._mutation_recovery_state(
                 db,
                 context=context,
@@ -193,16 +221,11 @@ class GovernedAgentRuntime:
                         f"before any fresh execution: {error.code}: {error}"
                     ),
                 )
-            status = (
-                AgentStepStatus.WAITING_APPROVAL
-                if error.code == "approval_required"
-                else AgentStepStatus.FAILED
-            )
             return AgentStepResult(
                 step_id=step.step_id,
                 capability_id=step.capability_id,
                 request_id=request_id,
-                status=status,
+                status=AgentStepStatus.FAILED,
                 kernel_run_id=error.run_id,
                 approval_id=error.approval_id,
                 error_code=error.code,

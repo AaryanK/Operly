@@ -224,6 +224,7 @@ class AgentUncertainDurabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_uncertainty_is_durable_terminal_and_dominates_cancellation(self):
         worker = DurableAgentOrchestrator(
             runtime=UncertainDurableRuntime(),
+            heartbeat_session_factory=self.sessions,
             lease_seconds=60,
         )
         async with self.sessions() as db:
