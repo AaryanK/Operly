@@ -19,8 +19,9 @@ from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
     McpOAuthError,
     consume_authorization_code,
+    consume_refresh_token,
     decode_access_token,
-    decode_refresh_token,
+    grant_refresh_generation,
     issue_access_token,
     issue_authorization_code,
     issue_refresh_token,
@@ -219,6 +220,7 @@ async def oauth_token(
     effective_resource = resource or _resource(request)
     if effective_resource != _resource(request):
         raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
+    grant: ClientGrant | None = None
     try:
         if grant_type == "authorization_code":
             if not code or not redirect_uri or not code_verifier:
@@ -234,15 +236,19 @@ async def oauth_token(
         elif grant_type == "refresh_token":
             if not refresh_token:
                 raise HTTPException(400, "Missing refresh token")
-            payload = decode_refresh_token(refresh_token)
-            if payload.get("client_id") != client_id or payload.get("resource") != effective_resource:
-                raise HTTPException(401, "Refresh token client or resource mismatch")
+            payload, grant = await consume_refresh_token(
+                db,
+                refresh_token,
+                client_id=client_id,
+                resource=effective_resource,
+            )
         else:
             raise HTTPException(400, "Unsupported grant type")
     except McpOAuthError as error:
         raise HTTPException(401, str(error)) from error
 
-    grant = await _active_grant(db, str(payload.get("grant_id", "")), client_id=client_id)
+    if grant is None:
+        grant = await _active_grant(db, str(payload.get("grant_id", "")), client_id=client_id)
     if grant.principal_id != payload.get("principal_id") or grant.tenant_id != payload.get("tenant_id"):
         raise HTTPException(401, "MCP grant identity mismatch")
     token_scopes = sorted(narrow_scope_rules(payload.get("scopes") or [], _grant_scopes(grant)))
@@ -253,6 +259,7 @@ async def oauth_token(
         "client_id": client_id,
         "resource": effective_resource,
         "scopes": token_scopes,
+        "refresh_generation": grant_refresh_generation(grant),
     }
     access_token = issue_access_token(token_payload)
     next_refresh = issue_refresh_token(token_payload)
