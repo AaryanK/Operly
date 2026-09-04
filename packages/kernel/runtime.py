@@ -197,6 +197,16 @@ class OperlyKernelRuntime:
                 {"capability_id": plan.capability_id, "planner": "deterministic"},
             )
 
+            # A mutation must have one stable transport/request identity before it can
+            # reach authorization or generate an approval. Otherwise an approval could
+            # be created that can never be safely resumed, and a client retry could be
+            # indistinguishable from a second write.
+            if (
+                capability.risk is not CapabilityRisk.READ_ONLY
+                and not str(request.request_id or "").strip()
+            ):
+                raise ValueError("Mutating capability execution requires a stable request_id")
+
             # Policy is always evaluated from the freshly resolved ExecutionContext
             # before an idempotent response can be replayed. A cached result therefore
             # cannot outlive revoked workspace membership, role permissions, or surface
@@ -253,8 +263,9 @@ class OperlyKernelRuntime:
                 raise PermissionError(authorization_reason)
 
             # Claim only an already-authorized mutating request, immediately before
-            # provider execution. This keeps retried writes single-execution without
-            # allowing the idempotency layer to become an authorization shortcut.
+            # provider execution. The idempotency layer durably reserves the request
+            # and, for approval-gated calls, claims the exact approval before any side
+            # effect so a crash or response loss cannot resurrect the write.
             if capability.risk is not CapabilityRisk.READ_ONLY:
                 reservation = await reserve_request(
                     db,
