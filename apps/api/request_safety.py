@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -114,8 +115,16 @@ def _stable_mcp_request_id(payload: dict) -> str | None:
     params = payload.get("params")
     if not isinstance(params, dict):
         return None
-    name = str(params.get("name") or "").strip()[:160]
-    return f"mcp-rpc:{name}:{str(rpc_id)[:240]}"
+    name = str(params.get("name") or "").strip()
+    if not name:
+        return None
+    # JSON-RPC identifiers are transport-controlled and may be arbitrarily long,
+    # while Kernel approval/request IDs are deliberately bounded database fields.
+    # Hash the exact typed RPC identity plus tool name: retries remain deterministic,
+    # string/number IDs do not collide, and the result always fits the durable schema.
+    rpc_identity = json.dumps(rpc_id, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(f"{name}\0{rpc_identity}".encode("utf-8")).hexdigest()
+    return f"mcp-rpc:{digest}"
 
 
 def _prepare_mcp_body(raw: bytes) -> bytes:
@@ -148,9 +157,9 @@ class AuthRequestSafetyMiddleware:
     """Bound unsafe request bodies and reject cheap abuse before route execution.
 
     Auth routes additionally require small, duplicate-key-free JSON bodies. MCP tool
-    calls inherit a stable idempotency request ID from the JSON-RPC request ID when a
-    client does not provide Operly's explicit request ID, so transport retries cannot
-    silently become a second mutating invocation.
+    calls inherit a stable, bounded idempotency request ID from the JSON-RPC request
+    ID when a client does not provide Operly's explicit request ID, so transport
+    retries cannot silently become a second mutating invocation.
     """
 
     def __init__(self, app):
