@@ -15,7 +15,7 @@ from packages.kernel.approvals import (
 )
 from packages.kernel.contracts import CapabilityRisk, RuntimeRequest
 from packages.kernel.idempotency import reserve_request
-from packages.workspace_modules.agent_computer.native_tools import computer_native_capabilities
+from packages.workspace_modules.agent_computer.router import _governed_native_contracts
 from packages.workspace_modules.studio.router import _enforce_content_origin
 
 
@@ -210,8 +210,8 @@ class PreAgentRuntimeSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertFalse(reached)
 
-    async def test_raw_agent_computer_contracts_match_governed_risk(self):
-        specs = {spec.id: spec for spec in computer_native_capabilities()}
+    async def test_agent_computer_metadata_matches_governed_risk(self):
+        specs = {spec.id: spec for spec in _governed_native_contracts()}
 
         for capability_id in (
             "computer.terminal.exec",
