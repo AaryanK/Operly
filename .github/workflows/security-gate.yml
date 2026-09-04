@@ -73,11 +73,13 @@ jobs:
             packages/workspace_modules/agent_computer/sandbox.py \
             packages/workspace_modules/studio/router.py \
             packages/workspace_modules/tools/__init__.py \
+            tests/test_mcp_request_safety.py \
             tests/test_security_hardening.py \
             tests/test_pre_agent_runtime_gate.py \
             tests/test_pre_agent_runtime_security.py
       - name: Run exploit regressions
         run: |
+          python -m unittest tests.test_mcp_request_safety -v
           python -m unittest tests.test_security_hardening -v
           python -m unittest tests.test_pre_agent_runtime_gate -v
           python -m unittest tests.test_pre_agent_runtime_security -v
