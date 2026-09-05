@@ -39,6 +39,7 @@ function recordProductPageView() {
 export function ProductApp() {
   const route = useRoute();
   const [accountSettingsTab, setAccountSettingsTab] = useState<AccountSettingsTab | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useThemePreference();
   const { loading, transitioning, error, profile, workspaces, refresh, activatePersonal, activateWorkspace } = useScope();
   const workspace = route.kind === "workspace" ? workspaces.find((item) => item.id === route.workspaceId || item.slug === route.workspaceId) : undefined;
@@ -51,11 +52,23 @@ export function ProductApp() {
   }, [activatePersonal, activateWorkspace, loading, profile, route, transitioning, workspace]);
   useEffect(() => { if (!profile || loading || transitioning || route.kind === "unknown") return; recordProductPageView().catch(() => undefined); }, [loading, profile?.email, profile?.id, route, transitioning]);
 
+  async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await api("/auth/logout", { method: "POST", body: "{}" });
+    } finally {
+      // Logout clears the session cookie server-side. A hard navigation also clears
+      // any in-memory account/workspace state even if the response body is lost.
+      window.location.assign("/login");
+    }
+  }
+
   if (loading && !profile) return <BrandedBoot message="Opening your operating layer…" />;
   if (error && !profile) return <div className="boot-screen branded-boot error-state"><OperlyMark className="boot-mark" /><strong>OPERLY</strong><h1>Operly could not open this account.</h1><p>{error}</p><a href="/login">Sign in</a></div>;
   if (route.kind === "unknown") return null;
 
-  const rail = (personal: boolean, activeWorkspaceId?: string | null) => <ScopeRail profile={profile} workspaces={workspaces} personal={personal} activeWorkspaceId={activeWorkspaceId} transitioning={transitioning} onPersonal={() => activatePersonal().catch(() => undefined)} onWorkspace={(workspaceId) => activateWorkspace(workspaceId).catch(() => undefined)} onAccount={() => setAccountSettingsTab("account")} onCreateWorkspace={() => setAccountSettingsTab("workspaces")} />;
+  const rail = (personal: boolean, activeWorkspaceId?: string | null) => <ScopeRail profile={profile} workspaces={workspaces} personal={personal} activeWorkspaceId={activeWorkspaceId} transitioning={transitioning || signingOut} onPersonal={() => activatePersonal().catch(() => undefined)} onWorkspace={(workspaceId) => activateWorkspace(workspaceId).catch(() => undefined)} onAccount={() => setAccountSettingsTab("account")} onCreateWorkspace={() => setAccountSettingsTab("workspaces")} onSignOut={() => { void signOut(); }} />;
   const settings = accountSettingsTab ? <Suspense fallback={null}><AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemePreference={setThemePreference} onClose={() => setAccountSettingsTab(null)} onRefresh={refresh} onWorkspace={(workspaceId) => activateWorkspace(workspaceId)} /></Suspense> : null;
 
   if (route.kind === "personal") {
