@@ -6,6 +6,8 @@ import { WorkspaceSummary } from "../app/types";
 import { OperlyMark } from "../ui/OperlyMark";
 import { WorkspaceOSPanel } from "./WorkspaceOSPanel";
 
+const PersonalHome = lazy(() => import("../account/PersonalHome").then((module) => ({ default: module.PersonalHome })));
+const WorkspaceOperly = lazy(() => import("../workspace/WorkspaceOperly").then((module) => ({ default: module.WorkspaceOperly })));
 const WorkflowPage = lazy(() => import("../workspace/WorkflowPage").then((module) => ({ default: module.WorkflowPage })));
 const ActivityPage = lazy(() => import("../workspace/ActivityPage").then((module) => ({ default: module.ActivityPage })));
 const AgentComputerPage = lazy(() => import("../workspace/AgentComputerPage").then((module) => ({ default: module.AgentComputerPage })));
@@ -14,9 +16,10 @@ const CapabilitiesPage = lazy(() => import("../workspace/CapabilitiesPage").then
 const AccessPage = lazy(() => import("../workspace/AccessPage").then((module) => ({ default: module.AccessPage })));
 
 type Workspace = WorkspaceSummary & { current: boolean };
-type AdvancedSection = "workflows" | "activity" | "agent-computer" | "connections" | "capabilities" | "access";
+type AdvancedSection = "operly" | "workflows" | "activity" | "agent-computer" | "connections" | "capabilities" | "access";
 
 const ADVANCED_WORKSPACE_SECTIONS = new Set<AdvancedSection>([
+  "operly",
   "workflows",
   "activity",
   "agent-computer",
@@ -49,6 +52,7 @@ function advancedWorkspaceSection(pathname: string, workspaceId: string): Advanc
 
 function AdvancedWorkspacePage({ workspace, section }: { workspace: Workspace; section: AdvancedSection }) {
   switch (section) {
+    case "operly": return <WorkspaceOperly workspace={workspace} />;
     case "workflows": return <WorkflowPage workspace={workspace} />;
     case "activity": return <ActivityPage workspace={workspace} />;
     case "agent-computer": return <AgentComputerPage workspace={workspace} />;
@@ -148,6 +152,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
         <a className="workspace-lite-brand" href="/account"><OperlyMark /><span>OPERLY</span></a>
         <div className="workspace-lite-topbar-actions">
           {selected && selected.current && <>
+            <WorkspaceControlLink workspaceId={selected.id} section="operly" active={advancedSection === "operly"}>Operly</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="workflows" active={advancedSection === "workflows"}>Workflows</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="activity" active={advancedSection === "activity"}>Activity</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="agent-computer" active={advancedSection === "agent-computer"}>Computer</WorkspaceControlLink>
@@ -162,7 +167,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
       </header>
       {error && <div className="workspace-lite-error">{error}</div>}
       {accountView && <main className="workspace-lite-main"><section className="workspace-lite-heading"><span className="workspace-lite-kicker">YOUR OPERLY</span><h1>Workspaces</h1><p>Select a workspace to continue.</p></section><div className="workspace-lite-grid">{workspaces.map((workspace) => <button className="workspace-lite-card" key={workspace.id} disabled={busy} onClick={() => void switchWorkspace(workspace.id)}><span className="workspace-lite-card-icon workspace-lite-initials">{workspace.name.trim().slice(0, 2).toUpperCase()}</span><span><strong>{workspace.name}</strong><small>{workspace.role}{workspace.current ? " · current session" : ""}</small></span></button>)}</div></main>}
-      {personalView && <main className="workspace-lite-main workspace-lite-space-view"><section className="workspace-lite-space-hero"><span className="workspace-lite-kicker">PERSONAL</span><h1>Your private Operly</h1><p>Personal account scope. Workspace business data remains isolated.</p></section></main>}
+      {personalView && <Suspense fallback={<div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening Personal Operly…</span></div>}><PersonalHome profile={null} /></Suspense>}
       {!accountView && !personalView && selected && selected.current && (advancedSection
         ? <div className="workspace-lite-advanced"><Suspense fallback={<div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening workspace tool…</span></div>}><AdvancedWorkspacePage workspace={selected} section={advancedSection} /></Suspense></div>
         : <WorkspaceOSPanel workspaceId={selected.id} pathname={pathname} />)}
