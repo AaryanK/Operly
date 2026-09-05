@@ -101,7 +101,7 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
             os.environ,
             {
                 "OPERLY_AGENT_MODEL_PROVIDER": "groq",
-                "GROQ_API_KEY": "test-key",
+                "GROQ_API_KEY": "test-key",  # pragma: allowlist secret
                 "OPERLY_AGENT_MODEL_BASE_URL": "https://attacker.invalid/v1",
                 "OPERLY_AGENT_MODEL_ID": "openai/gpt-oss-120b",
             },
