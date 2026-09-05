@@ -1,15 +1,74 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
 
-EXPECTED_ROUTE_COUNT = 154
-EXPECTED_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"
+# Keep the pre-Agent-Runtime HTTP surface cryptographically pinned while pinning the
+# newly reviewed AI ingress as its own exact surface. This avoids weakening the route
+# gate merely because Runtime 1.0 intentionally adds web chat/history operations.
+EXPECTED_BASE_ROUTE_COUNT = 154
+EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"
+EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
+EXPECTED_ROUTE_COUNT = EXPECTED_BASE_ROUTE_COUNT + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
+# Backwards-compatible export: this digest intentionally refers to the pinned base
+# surface; Runtime 1.0 ingress is pinned independently below.
+EXPECTED_ROUTE_DIGEST = EXPECTED_BASE_ROUTE_DIGEST
+
+_AGENT_RUNTIME_SOURCES = frozenset(
+    {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
+)
+_EXPECTED_AGENT_RUNTIME_ROUTES = frozenset(
+    {
+        (
+            "POST /api/agent/chat",
+            "apps.api.agent_runtime_router:workspace_chat",
+            "workspace_agent_runtime_router",
+        ),
+        (
+            "POST /api/agent/chat-with-attachments",
+            "apps.api.agent_runtime_router:workspace_chat_with_attachments",
+            "workspace_agent_runtime_router",
+        ),
+        (
+            "GET /api/agent/conversations",
+            "apps.api.agent_runtime_router:workspace_conversations",
+            "workspace_agent_runtime_router",
+        ),
+        (
+            "GET /api/agent/conversations/{conversation_id}/messages",
+            "apps.api.agent_runtime_router:workspace_messages",
+            "workspace_agent_runtime_router",
+        ),
+        (
+            "POST /api/personal-agent/chat",
+            "apps.api.agent_runtime_router:personal_chat",
+            "personal_agent_runtime_router",
+        ),
+        (
+            "POST /api/personal-agent/chat-with-attachments",
+            "apps.api.agent_runtime_router:personal_chat_with_attachments",
+            "personal_agent_runtime_router",
+        ),
+        (
+            "GET /api/personal-agent/conversations",
+            "apps.api.agent_runtime_router:personal_conversations",
+            "personal_agent_runtime_router",
+        ),
+        (
+            "GET /api/personal-agent/conversations/{conversation_id}/messages",
+            "apps.api.agent_runtime_router:personal_messages",
+            "personal_agent_runtime_router",
+        ),
+    }
+)
 
 ALLOWED_CATEGORIES = frozenset(
     {
         "kernel_governed",
+        "agent_ingress",
         "semantic_event_ingress",
         "auth_transport",
         "control_plane",
@@ -30,9 +89,8 @@ class RouteTraceability:
     reason: str
 
 
-# These source-level classifications are intentionally paired with an exact route
-# fingerprint. A newly added operation cannot silently inherit a broad source rule:
-# the digest changes and CI remains red until the surface is reviewed and repinned.
+# These source-level classifications are intentionally paired with exact route
+# fingerprints. A newly added operation cannot silently inherit a broad source rule.
 _AUTH_SOURCES = frozenset({"session_router", "discord_auth_router"})
 _CONTROL_PLANE_SOURCES = frozenset(
     {
@@ -58,10 +116,35 @@ _KERNEL_SOURCES = frozenset(
 _PUBLIC_READ_SOURCES = frozenset({"plugin_hosted_public_router", "studio_public_router"})
 
 
+def _route_digest(rows: list[dict[str, Any]]) -> str:
+    canonical = [
+        {
+            "operation": str(row.get("operation") or ""),
+            "endpoint": str(row.get("endpoint") or ""),
+            "source": str(row.get("source") or ""),
+        }
+        for row in rows
+    ]
+    encoded = json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
     source = str(row.get("source") or "")
     method = str(row.get("method") or "").upper()
     path = str(row.get("path") or "")
+
+    if source in _AGENT_RUNTIME_SOURCES:
+        return RouteTraceability(
+            category="agent_ingress",
+            kernel_governed=False,
+            semantic_event_source=False,
+            workflow_trigger_identity=False,
+            reason=(
+                "Authenticated Runtime 1.0 model ingress. No-tool responses may finish without Kernel; "
+                "every external capability action is independently authorized and executed by Kernel."
+            ),
+        )
 
     if source in _KERNEL_SOURCES:
         return RouteTraceability(
@@ -174,14 +257,39 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
 
 
 def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> list[str]:
+    del digest  # The reviewed base and Runtime 1.0 slices are pinned independently below.
     errors: list[str] = []
     if len(rows) != EXPECTED_ROUTE_COUNT:
         errors.append(
             f"route surface changed: expected {EXPECTED_ROUTE_COUNT}, found {len(rows)}; review and repin"
         )
-    if digest != EXPECTED_ROUTE_DIGEST:
+
+    agent_rows = [row for row in rows if str(row.get("source") or "") in _AGENT_RUNTIME_SOURCES]
+    base_rows = [row for row in rows if str(row.get("source") or "") not in _AGENT_RUNTIME_SOURCES]
+    if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(
-            f"route fingerprint changed: expected {EXPECTED_ROUTE_DIGEST}, found {digest}; review and repin"
+            f"base route surface changed: expected {EXPECTED_BASE_ROUTE_COUNT}, found {len(base_rows)}; review and repin"
+        )
+    base_digest = _route_digest(base_rows)
+    if base_digest != EXPECTED_BASE_ROUTE_DIGEST:
+        errors.append(
+            f"base route fingerprint changed: expected {EXPECTED_BASE_ROUTE_DIGEST}, found {base_digest}; review and repin"
+        )
+
+    actual_agent_routes = frozenset(
+        (
+            str(row.get("operation") or ""),
+            str(row.get("endpoint") or ""),
+            str(row.get("source") or ""),
+        )
+        for row in agent_rows
+    )
+    if actual_agent_routes != _EXPECTED_AGENT_RUNTIME_ROUTES:
+        missing = sorted(_EXPECTED_AGENT_RUNTIME_ROUTES - actual_agent_routes)
+        extra = sorted(actual_agent_routes - _EXPECTED_AGENT_RUNTIME_ROUTES)
+        errors.append(
+            "Runtime 1.0 route surface changed; review and repin "
+            f"missing={missing!r} extra={extra!r}"
         )
 
     seen: set[tuple[str, str]] = set()
@@ -214,6 +322,9 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
 
 __all__ = [
     "ALLOWED_CATEGORIES",
+    "EXPECTED_BASE_ROUTE_COUNT",
+    "EXPECTED_BASE_ROUTE_DIGEST",
+    "EXPECTED_AGENT_RUNTIME_ROUTE_COUNT",
     "EXPECTED_ROUTE_COUNT",
     "EXPECTED_ROUTE_DIGEST",
     "RouteTraceability",
