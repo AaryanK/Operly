@@ -59,10 +59,14 @@ assert(safeShell.includes("const [assistantOpen, setAssistantOpen]"), "Workspace
 assert(safeShell.includes("<WorkspaceAssistantPanel workspace={selected}"), "Workspace shell must render Operly inside the active workspace");
 assert(safeShell.includes('workspace-lite-stage ${showAssistant ? "assistant-open" : ""}'), "Workspace content and assistant must share one stage");
 assert(safeShell.includes('assistantOpen ? "Hide Operly" : "Ask Operly"'), "Workspace header must expose the assistant as a toggle");
-assert(safeShell.includes('className="workspace-lite-menu"'), "Secondary workspace tools must be grouped instead of flooding the top bar");
+assert(safeShell.includes('className="workspace-lite-menu workspace-lite-tools-menu"'), "Secondary workspace tools must be grouped in one discoverable menu");
 assert(safeShell.includes('className="workspace-lite-menu workspace-lite-account-menu"'), "Account actions must be grouped in their own menu");
 assert(safeShell.includes('function closeParentMenu(target: HTMLElement)'), "Workspace shell must close dropdown state after SPA actions");
 assert(safeShell.includes('closeParentMenu(event.currentTarget); navigate(path);'), "Workspace tool navigation must close its parent menu before changing route");
+assert(safeShell.includes('className="workspace-lite-mobile-menu-links"'), "Mobile workspace menu must restore advanced navigation hidden from the compact header");
+for (const mobileDestination of ["Workspace home", "Workflows", "Activity", "Workspace settings"]) {
+  assert(safeShell.includes(`>${mobileDestination}<`), `Mobile workspace menu must expose ${mobileDestination}`);
+}
 
 for (const chatContract of ["/agent/conversations", "/agent/chat", "/agent/chat-with-attachments"]) {
   assert(assistantPanel.includes(chatContract), `Integrated workspace assistant is missing ${chatContract}`);
@@ -76,5 +80,8 @@ assert(assistantStyles.includes("env(safe-area-inset-bottom)"), "Mobile assistan
 assert(assistantStyles.includes("flex-wrap: nowrap"), "Touch workspace header must stay one row so assistant overlay offset remains correct");
 assert(assistantStyles.includes("order: initial") && assistantStyles.includes("width: auto"), "Touch header actions must not inherit the old full-width second row");
 assert(assistantStyles.includes("z-index: 130"), "Workspace header menus must stay above the assistant overlay");
+assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: none; }"), "Mobile-only navigation must stay hidden on desktop");
+assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: contents; }"), "Touch workspace menu must reveal mobile-only navigation");
+assert(!assistantStyles.includes(".workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }"), "Touch layout must not hide the workspace tools menu");
 
 console.log("Workspace safe-shell interaction contracts passed.");

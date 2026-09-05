@@ -49,6 +49,10 @@ function workspaceControlPath(workspaceId: string, section: AdvancedSection): st
   return `/channels/${encodeURIComponent(workspaceId)}/${section}`;
 }
 
+function workspacePagePath(workspaceId: string, section: string): string {
+  return `/channels/${encodeURIComponent(workspaceId)}/${section}`;
+}
+
 function advancedWorkspaceSection(pathname: string, workspaceId: string): AdvancedSection | null {
   const prefix = `/channels/${encodeURIComponent(workspaceId)}/`;
   if (!pathname.startsWith(prefix)) return null;
@@ -182,9 +186,15 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
             <button className={`workspace-lite-button workspace-lite-button-primary workspace-lite-ask ${assistantOpen ? "active" : ""}`} type="button" onClick={openOperly} aria-pressed={assistantOpen}>{assistantOpen ? "Hide Operly" : "Ask Operly"}</button>
             <WorkspaceControlLink workspaceId={selected.id} section="workflows" active={advancedSection === "workflows"}>Workflows</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="activity" active={advancedSection === "activity"}>Activity</WorkspaceControlLink>
-            <details className="workspace-lite-menu">
+            <details className="workspace-lite-menu workspace-lite-tools-menu">
               <summary>Tools</summary>
               <div className="workspace-lite-menu-panel">
+                <div className="workspace-lite-mobile-menu-links">
+                  <a href={workspacePagePath(selected.id, "dashboard")} onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate(workspacePagePath(selected.id, "dashboard")); }}>Workspace home</a>
+                  <WorkspaceControlLink workspaceId={selected.id} section="workflows" active={advancedSection === "workflows"}>Workflows</WorkspaceControlLink>
+                  <WorkspaceControlLink workspaceId={selected.id} section="activity" active={advancedSection === "activity"}>Activity</WorkspaceControlLink>
+                  <a href={workspacePagePath(selected.id, "settings")} onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate(workspacePagePath(selected.id, "settings")); }}>Workspace settings</a>
+                </div>
                 <WorkspaceControlLink workspaceId={selected.id} section="agent-computer" active={advancedSection === "agent-computer"}>Computer</WorkspaceControlLink>
                 <WorkspaceControlLink workspaceId={selected.id} section="connections" active={advancedSection === "connections"}>Integrations</WorkspaceControlLink>
                 <WorkspaceControlLink workspaceId={selected.id} section="capabilities" active={advancedSection === "capabilities"}>All tools</WorkspaceControlLink>
