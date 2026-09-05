@@ -76,16 +76,19 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const headers = authorizedHeaders(path, options);
   const method = (options.method || "GET").toUpperCase();
   const mutates = !["GET", "HEAD", "OPTIONS"].includes(method);
+  const isFormData = options.body instanceof FormData;
+  let body = options.body;
 
-  // Operly's authenticated mutation contract is JSON-first, including actions
-  // that do not need a payload (logout, personal-scope, etc.). Keep this at the
-  // shared request boundary so UI controls cannot accidentally leak a raw
-  // "Send this request as JSON" API error back to the user.
-  if (mutates && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
+  // Operly's authenticated mutation contract is JSON-first. Content-Type alone
+  // is not enough: an empty body advertised as application/json is invalid JSON
+  // and can be rejected before a bodyless auth action reaches its route. Give
+  // payload-free mutations a real empty JSON object at the shared boundary.
+  if (mutates && !isFormData) {
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    if (body == null) body = "{}";
   }
 
-  const response = await fetch(`/api${path}`, { ...options, headers, credentials: "same-origin" });
+  const response = await fetch(`/api${path}`, { ...options, body, headers, credentials: "same-origin" });
   return readResponse<T>(response);
 }
 
