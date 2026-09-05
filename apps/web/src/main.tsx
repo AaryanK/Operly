@@ -16,9 +16,12 @@ import "./ui/mobile.css";
 import "./ui/surface-polish.css";
 import "./ui/public.css";
 import "./ui/react-public-admin-palette.css";
+import "./ui/react-public-live.css";
 import "./ui/auth-public-consistency.css";
-// Structural authenticated styles intentionally load after legacy/component layers so
-// the canonical ProductApp shell owns viewport, rail, navigation, and chat geometry.
+import "./ui/convergence.css";
+import "./ui/legal-links.css";
+// Structural authenticated styles intentionally load last so ProductApp owns
+// viewport, scope rail, workspace navigation, Personal AI, and chat geometry.
 import "./ui/product-shell.css";
 
 const INVITE_KEY = "operly:workspace-invite";
