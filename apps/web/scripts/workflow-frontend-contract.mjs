@@ -78,7 +78,17 @@ for (const marker of [
 for (const [section, label] of [["workflows", "Workflows"], ["activity", "Activity"], ["agent-computer", "Computer"], ["connections", "Integrations"], ["capabilities", "All tools"], ["access", "AI & MCP"]]) {
   if (!liveShell.includes(`section=\"${section}\"`) || !liveShell.includes(`>${label}</WorkspaceControlLink>`)) failures.push(`Live workspace shell must visibly link to ${label}`);
 }
-if (!liveShell.includes("event.preventDefault(); navigate(path);")) failures.push("Advanced workspace links must use in-app navigation instead of forcing a second document bootstrap");
+const workspaceLinkStart = liveShell.indexOf("function WorkspaceControlLink(");
+const workspaceLinkEnd = workspaceLinkStart >= 0 ? liveShell.indexOf("\n}\n\nexport function WorkspaceSafeApp", workspaceLinkStart) : -1;
+const workspaceLink = workspaceLinkStart >= 0 && workspaceLinkEnd > workspaceLinkStart
+  ? liveShell.slice(workspaceLinkStart, workspaceLinkEnd)
+  : "";
+if (
+  !workspaceLink.includes("event.preventDefault()")
+  || !workspaceLink.includes("navigate(path)")
+  || workspaceLink.includes("go(path)")
+  || workspaceLink.includes("window.location.assign")
+) failures.push("Advanced workspace links must use in-app navigation instead of forcing a second document bootstrap");
 
 for (const marker of [
   'api<McpCatalog>("/access/mcp-catalog")',
