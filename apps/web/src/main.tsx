@@ -17,6 +17,9 @@ import "./ui/surface-polish.css";
 import "./ui/public.css";
 import "./ui/react-public-admin-palette.css";
 import "./ui/auth-public-consistency.css";
+// Structural authenticated styles intentionally load after legacy/component layers so
+// the canonical ProductApp shell owns viewport, rail, navigation, and chat geometry.
+import "./ui/product-shell.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
