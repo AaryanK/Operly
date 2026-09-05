@@ -1,100 +1,102 @@
-# Model runtime plugins
+# Kernel-v3 model inference boundary
 
-OPERLY treats model providers and models as replaceable infrastructure plugins.
-Business, planning, semantic-routing, capability-placement, and coding harnesses
-depend on stable runtime contracts instead of provider-specific APIs.
+The pre-Kernel `packages/model_runtime` implementation was intentionally removed. Do
+not treat its old provider registry, model catalog, role pools, or `model.invoke`
+capability as current Operly architecture.
 
-Ox Alpha (`stealth/ox-alpha`) is the default orchestrator for every current role.
-Railway's existing `OPEN_ROUTER_API` variable is accepted directly. No secret
-belongs in the repository.
+The current Agent Runtime uses one narrow inference substrate:
 
-## Provider plugins
+- `packages/agent_runtime/inference.py`
+- `KernelV3AgentModel` is the model-facing facade used by objective interpretation,
+  response generation, next-move reasoning, and governed planning.
+- `AgentInferenceRuntime` owns retry/failover/budget policy.
+- `OpenAICompatibleTransport` owns only one provider request at a time.
+- Kernel remains the only capability executor. The inference runtime has no
+  `ExecutionContext`, provider capability handle, approval authority, or durable
+  mutation identity.
 
-Provider adapters own transport details: base URL, authentication, payload/response
-translation, tool-call formatting, retries, streaming and provider-specific errors.
-The harness never branches on OpenRouter vs Ollama.
+## Fixed provider destinations
 
-To switch every orchestrator role later:
+Agent inference supports these operator-known routes:
+
+- Groq: `https://api.groq.com/openai/v1`
+- OpenRouter: `https://openrouter.ai/api/v1`
+- Gemini OpenAI compatibility: `https://generativelanguage.googleapis.com/v1beta/openai`
+- NVIDIA NIM: `https://integrate.api.nvidia.com/v1`
+- local Ollama: `http://127.0.0.1:11434/v1`
+
+There is no environment variable, user field, planner output, tool result, or model
+message that can supply an inference base URL. Redirects and inherited HTTP proxy
+configuration are disabled at this boundary.
+
+The primary provider is selected with `OPERLY_AGENT_MODEL_PROVIDER`. When that value
+is omitted, Operly chooses the first configured remote provider in deterministic
+built-in order. Local Ollama is considered automatically only when
+`OPERLY_AGENT_ALLOW_LOCAL_OLLAMA=1`.
+
+## Explicit cross-provider failover
+
+Cross-provider fallback is intentionally opt-in:
 
 ```env
-OPERLY_MODEL_PROVIDER=openrouter
-OPERLY_MODEL_DEFAULT=<provider-model-id>
+OPERLY_AGENT_MODEL_PROVIDER=groq
+OPERLY_AGENT_MODEL_FALLBACK_PROVIDERS=openrouter,gemini
 ```
 
-A role can override either field without touching harness code:
+Only retryable availability/transport failures such as timeouts, 429s and 5xx
+responses may advance to the next provider. Authentication failures, invalid
+requests, and invalid provider response shapes fail closed and are not sprayed
+across vendors.
 
-```env
-OPERLY_MODEL_CODING_PROVIDER=ollama
-OPERLY_MODEL_CODING=some-local-model
+A provider rejecting OpenAI-compatible JSON response mode may receive one bounded
+retry on the same route without `response_format`; that retry consumes the same
+global attempt budget.
+
+## Runtime budgets
+
+Every inference call is bounded independently of Kernel execution:
+
+- per-attempt timeout;
+- total inference deadline;
+- request byte ceiling;
+- output byte ceiling;
+- output-token ceiling;
+- per-route attempt ceiling;
+- total attempt ceiling across all providers;
+- maximum number of provider routes considered.
+
+An optional estimated-dollar budget can also be enabled. Operly does not invent
+prices: when a finite dollar budget is configured, a remote route without explicit
+operator-supplied input and output cost metadata is not eligible.
+
+These are inference budgets only. A model retry never creates a new Kernel
+capability request ID, approval ID, principal, permission set, or execution identity.
+
+## Qualification
+
+`scripts/benchmark_models.py` is the current manual qualification harness. It imports
+only the Kernel-v3 Agent Runtime inference contract and can run text, structured JSON,
+and planner-shape probes against configured fixed-destination routes.
+
+Example:
+
+```bash
+python scripts/benchmark_models.py --provider groq --suite planner
 ```
 
-Provider adapters register with `register_model_provider(name, factory)`. A new
-provider only needs to implement the shared model client contract; harnesses then
-receive it through `model_client_for_route(model_route(role))`.
+The harness prints redacted structured results; it does not print credentials or raw
+provider error bodies and cannot execute capabilities.
 
-There is deliberately no Gemma-only, Ox-only, OpenRouter-only, or Ollama-only
-model guardrail in the harness. Defaults choose Ox Alpha today; they do not limit
-what registered providers/models may be selected tomorrow.
+Empirical route qualification is still an admission requirement. A model name alone
+is not evidence that a route supports structured output, planning, tools, coding, or
+reasoning. The runtime substrate therefore must not grow inferred capability claims
+from model-family names.
 
-## Model resources and discovery
+## Compatibility note
 
-Models are catalog resources separate from providers. Each resource can declare a
-provider, model id, human name, capabilities, free/paid status, routing priority,
-context length, input/output modalities and supported provider parameters.
+`OpenAICompatibleAgentModel` remains as a temporary import-compatible subclass of
+`KernelV3AgentModel` so existing Runtime 1.0 callers can migrate without creating a
+second inference implementation. New code should use the Kernel-v3 name.
 
-The orchestrator is always included automatically. Additional resources can come
-from three interchangeable sources:
-
-1. static environment configuration through `OPERLY_MODEL_CATALOG_JSON`;
-2. runtime registration through `register_model_resource(...)`;
-3. provider discovery plugins through `register_model_discoverer(...)`.
-
-OpenRouter discovery is installed now. It reads OpenRouter's live `/api/v1/models`
-catalog behind the provider boundary and translates provider metadata into Operly
-capabilities such as `text`, `vision`, `video`, `audio_input`, `image_generation`,
-`tools`, `reasoning`, `structured_output`, `coding`, `translation`, `reranking`,
-`transcription`, and `speech` when the provider metadata supports or identifies
-them. Discovery is cached and a provider outage does not replace configured
-resources or break the orchestrator.
-
-Example static resource:
-
-```json
-[
-  {
-    "provider": "ollama",
-    "id": "local-specialist",
-    "capabilities": ["coding"],
-    "free": true,
-    "priority": 20
-  }
-]
-```
-
-Routing asks for a capability, not a model name. Today the selector prefers free
-eligible resources and then priority. This policy can later include quality,
-latency, privacy and budget without changing the harness.
-
-Adding another marketplace/provider catalog is therefore another discovery plugin,
-not a harness rewrite.
-
-## Models as tools
-
-`model.invoke` is a normal built-in capability. The orchestrator supplies only a
-capability, objective and bounded context. At invocation time Operly refreshes
-provider discovery as needed, chooses the concrete model/provider, and invokes it
-through the provider registry.
-
-Delegated models currently receive no tools, so model-to-model delegation is one
-level deep by default and cannot recurse indefinitely. This is a delegation-loop
-safety boundary, not a restriction on which model or provider may be used.
-
-This keeps the intended boundary:
-
-- harness, context, security, permissions, memory and business tools stay constant;
-- model identity is replaceable;
-- provider transport is replaceable;
-- provider model catalogs are discoverable data;
-- additional models become capabilities/tools available to the orchestrator;
-- future image/audio/video model adapters can join the same resource catalog while
-  keeping modality-specific transport inside their provider/model plugin boundary.
+Older `OPERLY_MODEL_*` settings in `.env.example` still belong to surviving non-Agent
+compatibility surfaces. They are not the authority for the new Agent Runtime.
