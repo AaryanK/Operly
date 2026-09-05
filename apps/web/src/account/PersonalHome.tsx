@@ -168,7 +168,7 @@ export function PersonalHome({ profile }: Props) {
   const activeConversation = conversations.find((item) => item.id === conversationId);
 
   return (
-    <div className={`personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileListOpen ? "mobile-personal-list" : "mobile-personal-thread"}`}>
+    <div className={`workspace-lite-personal-stage personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileListOpen ? "mobile-personal-list" : "mobile-personal-thread"}`}>
       <aside id="personal-conversation-history" className="personal-history" aria-label="Personal Operly conversation history">
         <div className="history-head personal-message-list-head">
           <div><small>PERSONAL OPERLY</small><strong>Conversations</strong></div>
