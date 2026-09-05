@@ -1,164 +1,254 @@
 #!/usr/bin/env python3
-"""Empirically qualify concrete model routes available to Operly.
+"""Empirically qualify Kernel-v3 Agent Runtime inference routes.
 
-The safe workflow is staged:
-  probe  -> one tiny availability request per route
-  smoke  -> availability + JSON + reasoning + one tool call
-  deep   -> smoke + multi-turn tools + coding + repair + planning
+This script deliberately exercises only the narrow inference boundary. It cannot
+execute a Kernel capability, receive an ExecutionContext, or mutate Operly state.
 
 Examples:
-  python scripts/benchmark_models.py --suite deep --provider groq
-  python scripts/benchmark_models.py --suite deep --provider groq --model qwen/qwen3.6-27b
-  python scripts/benchmark_models.py --suite probe --refresh-discovery --free-only
+  python scripts/benchmark_models.py --suite smoke
+  python scripts/benchmark_models.py --provider groq --suite planner
+  python scripts/benchmark_models.py --provider groq --provider openrouter --suite smoke
 
-One MODEL_BENCH JSON line is printed per route, followed by MODEL_BENCH_SUMMARY.
+One INFERENCE_QUALIFICATION line is emitted per case and a final
+INFERENCE_QUALIFICATION_SUMMARY line is emitted at the end. Credentials and raw
+provider error bodies are never printed.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import os
-from collections import defaultdict, deque
+import time
+from dataclasses import dataclass
+from typing import Any
 
-from packages.model_runtime.catalog import model_resources, provider_is_configured
-from packages.model_runtime.discovery import refresh_model_discovery
-from packages.model_runtime.qualification_benchmark import SUITES, qualify_model
-from packages.model_runtime.registry import ModelRegistry
+from packages.agent_runtime.inference import (
+    AgentInferenceError,
+    AgentInferenceRuntime,
+    InferenceBudget,
+    InferencePortfolio,
+    InferenceRequest,
+    InferenceRoute,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class QualificationCase:
+    name: str
+    system: str
+    payload: Any
+    structured: bool
+    required_keys: tuple[str, ...] = ()
+
+
+SUITES: dict[str, tuple[QualificationCase, ...]] = {
+    "probe": (
+        QualificationCase(
+            name="text",
+            system="Reply with exactly the word ready.",
+            payload="Readiness probe.",
+            structured=False,
+        ),
+    ),
+    "smoke": (
+        QualificationCase(
+            name="text",
+            system="Reply briefly and identify the answer as Operly output.",
+            payload="Say that the route is available.",
+            structured=False,
+        ),
+        QualificationCase(
+            name="structured_json",
+            system='Return exactly one JSON object with keys "ok" and "kind".',
+            payload={"task": "Return ok=true and kind=structured"},
+            structured=True,
+            required_keys=("ok", "kind"),
+        ),
+    ),
+    "planner": (
+        QualificationCase(
+            name="structured_json",
+            system='Return exactly one JSON object with keys "ok" and "kind".',
+            payload={"task": "Return ok=true and kind=structured"},
+            structured=True,
+            required_keys=("ok", "kind"),
+        ),
+        QualificationCase(
+            name="planner_shape",
+            system=(
+                'Return exactly one JSON object with one top-level key "steps". '
+                'The value must be an array containing one object with exactly '
+                '"capability_id" and "arguments".'
+            ),
+            payload={
+                "objective": "Create a task named qualification",
+                "candidate_capabilities": [
+                    {
+                        "capability_id": "tasks.create",
+                        "input_schema": {"type": "object", "required": ["title"]},
+                    }
+                ],
+            },
+            structured=True,
+            required_keys=("steps",),
+        ),
+    ),
+}
 
 
 def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", action="append", default=[], help="Provider(s) to benchmark")
-    parser.add_argument("--model", action="append", default=[], help="Exact provider model id(s) to benchmark")
+    parser.add_argument(
+        "--provider",
+        action="append",
+        default=[],
+        help="Configured fixed-destination provider to qualify; repeat for multiple routes",
+    )
     parser.add_argument("--suite", choices=sorted(SUITES), default="smoke")
-    parser.add_argument("--refresh-discovery", action="store_true", help="Refresh dynamic catalogs such as OpenRouter")
-    parser.add_argument("--free-only", action="store_true", help="Skip routes whose catalog metadata is not free")
-    parser.add_argument("--max-per-provider", type=int, default=0, help="Optional cap after priority sort; 0 means no cap")
-    parser.add_argument("--delay", type=float, default=float(os.getenv("OPERLY_MODEL_BENCH_DELAY", "0.75")))
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=900,
+        help="Per-case output ceiling; still capped by the runtime hard budget",
+    )
     return parser.parse_args()
 
 
-def _round_robin_provider_order(rows):
-    """Avoid burning one provider's TPM quota before touching the next provider."""
-    buckets: dict[str, deque] = defaultdict(deque)
-    for resource in rows:
-        buckets[resource.provider].append(resource)
-    ordered = []
-    names = sorted(buckets)
-    while any(buckets.values()):
-        for name in names:
-            if buckets[name]:
-                ordered.append(buckets[name].popleft())
-    return ordered
+def _routes(args: argparse.Namespace) -> tuple[InferenceRoute, ...]:
+    requested = []
+    for raw in args.provider:
+        provider = str(raw or "").strip().lower()
+        if provider and provider not in requested:
+            requested.append(provider)
+    if requested:
+        return tuple(
+            InferenceRoute.for_provider(provider, primary=index == 0)
+            for index, provider in enumerate(requested)
+        )
+    return InferencePortfolio.from_environment().routes
 
 
-def _selected_resources(args: argparse.Namespace):
-    providers = {item.strip().lower() for item in args.provider if item.strip()}
-    models = {item.strip() for item in args.model if item.strip()}
-    rows = [
-        resource
-        for resource in model_resources()
-        if provider_is_configured(resource.provider)
-        and (not providers or resource.provider in providers)
-        and (not models or resource.id in models)
-        and (not args.free_only or resource.free)
-    ]
-    dedup = {(resource.provider, resource.id): resource for resource in rows}
-    rows = sorted(
-        dedup.values(),
-        key=lambda item: (
-            item.provider,
-            item.priority,
-            item.verified_latency_ms or 10**9,
-            item.id,
-        ),
-    )
-    if args.max_per_provider > 0:
-        counts: dict[str, int] = defaultdict(int)
-        limited = []
-        for resource in rows:
-            if counts[resource.provider] >= args.max_per_provider:
-                continue
-            counts[resource.provider] += 1
-            limited.append(resource)
-        rows = limited
-    return _round_robin_provider_order(rows)
+def _validate_case(case: QualificationCase, content: str) -> tuple[bool, str | None]:
+    if not content.strip():
+        return False, "empty_output"
+    if not case.structured:
+        return True, None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return False, "malformed_json"
+    if not isinstance(payload, dict):
+        return False, "json_not_object"
+    missing = [key for key in case.required_keys if key not in payload]
+    if missing:
+        return False, "missing_required_keys"
+    if case.name == "planner_shape":
+        steps = payload.get("steps")
+        if not isinstance(steps, list) or len(steps) != 1:
+            return False, "invalid_steps"
+        step = steps[0]
+        if not isinstance(step, dict) or set(step) != {"capability_id", "arguments"}:
+            return False, "invalid_step_shape"
+        if step.get("capability_id") != "tasks.create" or not isinstance(step.get("arguments"), dict):
+            return False, "invalid_capability_selection"
+    return True, None
+
+
+async def _qualify_route(
+    route: InferenceRoute,
+    *,
+    suite: str,
+    max_output_tokens: int,
+) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for case in SUITES[suite]:
+        runtime = AgentInferenceRuntime(
+            portfolio=InferencePortfolio(routes=(route,)),
+            budget=InferenceBudget(
+                total_timeout_seconds=min(max(route.timeout_seconds * route.max_attempts, 5.0), 180.0),
+                max_output_tokens=max(128, min(max_output_tokens, 4096)),
+                max_total_attempts=route.max_attempts,
+                max_provider_routes=1,
+            ),
+        )
+        started = time.monotonic()
+        try:
+            result = await runtime.complete(
+                InferenceRequest(
+                    system=case.system,
+                    user_payload=case.payload,
+                    structured=case.structured,
+                    max_output_tokens=max_output_tokens,
+                )
+            )
+            passed, validation_error = _validate_case(case, result.content)
+            report = {
+                "provider": route.provider,
+                "modelId": route.model_id,
+                "case": case.name,
+                "passed": passed,
+                "errorCode": validation_error,
+                "attempts": result.attempts,
+                "latencyMs": round((time.monotonic() - started) * 1000),
+                "outputBytes": len(result.content.encode("utf-8")),
+            }
+        except AgentInferenceError as error:
+            report = {
+                "provider": route.provider,
+                "modelId": route.model_id,
+                "case": case.name,
+                "passed": False,
+                "errorCode": error.code,
+                "retryable": error.retryable,
+                "latencyMs": round((time.monotonic() - started) * 1000),
+            }
+        print(
+            "INFERENCE_QUALIFICATION "
+            + json.dumps(report, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        reports.append(report)
+    return reports
 
 
 async def main() -> int:
     args = _args()
-    if args.refresh_discovery:
-        counts = await refresh_model_discovery(force=True)
-        print("MODEL_BENCH_DISCOVERY " + json.dumps(counts, sort_keys=True), flush=True)
-
-    resources = _selected_resources(args)
-    print(
-        "MODEL_BENCH_START "
-        + json.dumps(
-            {
-                "routes": len(resources),
-                "suite": args.suite,
-                "providers": sorted({resource.provider for resource in resources}),
-                "freeOnly": bool(args.free_only),
-                "filters": {
-                    "provider": args.provider,
-                    "model": args.model,
-                    "maxPerProvider": args.max_per_provider,
-                },
-                "scheduling": "provider_round_robin",
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
-    if not resources:
-        print("MODEL_BENCH_SUMMARY " + json.dumps({"routes": 0, "error": "no configured model routes matched"}), flush=True)
+    try:
+        routes = _routes(args)
+    except AgentInferenceError as error:
+        print(
+            "INFERENCE_QUALIFICATION_SUMMARY "
+            + json.dumps({"passed": False, "errorCode": error.code}, sort_keys=True),
+            flush=True,
+        )
         return 2
 
-    reports = []
-    registry = ModelRegistry()
-    for index, resource in enumerate(resources, 1):
-        model = registry.register_resource(resource, replace=True)
-        report = await qualify_model(model, resource, suite=args.suite)
-        reports.append(report)
-        payload = report.as_dict()
-        payload["index"] = index
-        payload["routes"] = len(resources)
-        print("MODEL_BENCH " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
-        if args.delay > 0 and index < len(resources):
-            await asyncio.sleep(args.delay)
+    all_reports: list[dict[str, Any]] = []
+    for route in routes:
+        all_reports.extend(
+            await _qualify_route(
+                route,
+                suite=args.suite,
+                max_output_tokens=max(128, min(args.max_output_tokens, 4096)),
+            )
+        )
 
-    ranked = sorted(
-        reports,
-        key=lambda report: (
-            -report.score,
-            sum(case.latency_ms for case in report.cases),
-            report.provider,
-            report.model_id,
-        ),
-    )
+    passed_cases = sum(bool(report.get("passed")) for report in all_reports)
     summary = {
-        "routes": len(reports),
         "suite": args.suite,
-        "passingAvailability": sum("text" in report.verified_capabilities for report in reports),
-        "verifiedTools": sum("tools" in report.verified_capabilities for report in reports),
-        "verifiedCoding": sum("coding" in report.verified_capabilities for report in reports),
-        "verifiedRepair": sum("repair" in report.verified_capabilities for report in reports),
-        "top": [
-            {
-                "provider": report.provider,
-                "modelId": report.model_id,
-                "free": report.free,
-                "score": report.score,
-                "verifiedCapabilities": report.verified_capabilities,
-                "latencyMs": sum(case.latency_ms for case in report.cases),
-            }
-            for report in ranked[:30]
-        ],
+        "routes": len(routes),
+        "cases": len(all_reports),
+        "passedCases": passed_cases,
+        "passed": bool(all_reports) and passed_cases == len(all_reports),
+        "providers": [route.provider for route in routes],
+        "models": [route.model_id for route in routes],
     }
-    print("MODEL_BENCH_SUMMARY " + json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0
+    print(
+        "INFERENCE_QUALIFICATION_SUMMARY "
+        + json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        flush=True,
+    )
+    return 0 if summary["passed"] else 1
 
 
 if __name__ == "__main__":
