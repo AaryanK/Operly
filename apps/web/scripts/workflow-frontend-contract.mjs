@@ -11,10 +11,9 @@ const shell = read("src/workspace/WorkspaceShell.tsx");
 const home = read("src/workspace/WorkspaceHome.tsx");
 const allTools = read("src/workspace/CapabilitiesPage.tsx");
 const rootApp = read("src/app/App.tsx");
-const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
+const productApp = read("src/app/ProductApp.tsx");
 const entry = read("src/main.tsx");
-const liveStyles = read("src/ui/workspace-lite.css");
-const surfacePolish = read("src/ui/surface-polish.css");
+const productShell = read("src/ui/product-shell.css");
 
 const requiredCapabilities = [
   "workflow.list",
@@ -58,27 +57,31 @@ if (!shell.includes('import("./WorkflowPage")') || !shell.includes('case "workfl
 if (!home.includes('section: "workflows"') || !home.includes('title: "Automate work"')) failures.push("Workspace Home must make Workflow discoverable");
 if (!allTools.includes('api<CapabilityResponse>("/workspace-tools")') || !allTools.includes("no hidden API-only action")) failures.push("All tools must remain the universal capability fallback");
 
-if (rootApp.includes("ProductApp")) failures.push("Authenticated /channels routes must not hand off to the separate ProductApp bootstrap");
-if (!rootApp.includes('pathname.startsWith("/channels/")') || !rootApp.includes("<WorkspaceSafeApp pathname={pathname}")) failures.push("All /channels routes must stay in WorkspaceSafeApp");
-if (!liveShell.includes('api<Workspace[]>("/auth/workspaces")')) failures.push("Live advanced tools must bootstrap from the same deterministic workspace session endpoint");
-if (liveShell.includes("/personal-agent/me") || liveShell.includes("/personal-agent/workspaces")) failures.push("Live advanced tools must not require the unmounted Personal Agent bootstrap");
+// The canonical authenticated shell now owns the complete channel journey. Do not
+// regress to a second bootstrap just for advanced tools or Runtime 1.0 surfaces.
+if (!rootApp.includes('import { ProductApp } from "./ProductApp"')) failures.push("Authenticated /channels routes must use ProductApp");
+if (!rootApp.includes('pathname.startsWith("/channels/")') || !rootApp.includes("<ProductApp />")) failures.push("All /channels operating surfaces must stay in ProductApp");
+if (!productApp.includes('import("../workspace/WorkspaceShell")') || !productApp.includes('<WorkspaceShell workspace={workspace} section={route.section}')) failures.push("ProductApp must own WorkspaceShell directly");
+if (!productApp.includes('import("../account/PersonalHome")') || !productApp.includes('<PersonalHome profile={profile} />')) failures.push("ProductApp must own Personal Operly directly");
+
 for (const marker of [
-  'import("../workspace/WorkflowPage")',
-  'import("../workspace/ActivityPage")',
-  'import("../workspace/AgentComputerPage")',
-  'import("../workspace/ConnectionsPage")',
-  'import("../workspace/CapabilitiesPage")',
-  'import("../workspace/AccessPage")',
-  'ADVANCED_WORKSPACE_SECTIONS',
-  '<AdvancedWorkspacePage workspace={selected} section={advancedSection} />',
-  'className="workspace-lite-advanced"',
+  'import("./WorkflowPage")',
+  'import("./ActivityPage")',
+  'import("./AgentComputerPage")',
+  'import("./ConnectionsPage")',
+  'import("./CapabilitiesPage")',
+  'import("./AccessPage")',
+  'import("./WorkspaceOperly")',
+  'workspaceSections.filter',
+  'workspace-nav-search',
+  'nav-group-heading',
 ]) {
-  if (!liveShell.includes(marker)) failures.push(`Live workspace shell missing authenticated advanced-tool boundary: ${marker}`);
+  if (!shell.includes(marker)) failures.push(`Canonical workspace shell missing authenticated boundary: ${marker}`);
 }
-for (const [section, label] of [["workflows", "Workflows"], ["activity", "Activity"], ["agent-computer", "Computer"], ["connections", "Integrations"], ["capabilities", "All tools"], ["access", "AI & MCP"]]) {
-  if (!liveShell.includes(`section=\"${section}\"`) || !liveShell.includes(`>${label}</WorkspaceControlLink>`)) failures.push(`Live workspace shell must visibly link to ${label}`);
+for (const [section, label] of [["operly", "Operly"], ["workflows", "Workflows"], ["activity", "Activity"], ["agent-computer", "Computer"], ["connections", "Integrations"], ["capabilities", "All tools"], ["access", "AI & developer access"]]) {
+  if (!routes.includes(`{ id: \"${section}\", label: \"${label}\"`)) failures.push(`Canonical workspace navigation must visibly expose ${label}`);
 }
-if (!liveShell.includes("event.preventDefault(); navigate(path);")) failures.push("Advanced workspace links must use in-app navigation instead of forcing a second document bootstrap");
+if (!shell.includes("navigate(workspacePath(workspace.id, nextSection))")) failures.push("Workspace navigation must use one in-app route transition");
 
 for (const marker of [
   'api<McpCatalog>("/access/mcp-catalog")',
@@ -94,33 +97,23 @@ for (const marker of [
 }
 if (access.includes('value="public"')) failures.push("MCP frontend must not offer anonymous/public tool execution");
 
-for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css", "surface-polish.css"]) {
-  if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for advanced workspace surfaces`);
-}
-if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/agent-computer.css')) failures.push("surface-polish.css must load after component-specific advanced workspace styles");
-for (const marker of [
-  "@media (pointer: coarse)",
-  ".workspace-lite-advanced .metric-grid",
-  ".workspace-lite-advanced .agent-computer-layout",
-  ".workspace-lite-topbar-actions > a.active",
-  "overflow-x: auto",
-]) {
-  if (!liveStyles.includes(marker)) failures.push(`Live workspace responsive styles missing: ${marker}`);
+for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css", "product-shell.css", "surface-polish.css"]) {
+  if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for canonical workspace surfaces`);
 }
 for (const marker of [
-  ".workspace-lite-shell { color-scheme: dark; }",
-  ".workspace-lite-advanced .metric-card",
-  ".workspace-lite-advanced .data-card",
-  ".workspace-lite-advanced input:not([type=\"checkbox\"]):not([type=\"radio\"])",
-  ".workspace-lite-advanced .computer-screen",
-  ".workspace-lite-advanced .integration-tabs",
-  ".workspace-lite-advanced details code",
+  ".authenticated-content",
+  ".workspace-content-frame",
+  ".workspace-nav-search",
+  ".mobile-content-open .workspace-content-frame",
+  "grid-template-columns: 72px minmax(0, 1fr)",
+  "100dvh",
+  ":focus-visible",
 ]) {
-  if (!surfacePolish.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
+  if (!productShell.includes(marker)) failures.push(`Canonical authenticated shell missing responsive contract: ${marker}`);
 }
 
 if (failures.length) {
   console.error("Workflow frontend contract failed:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities plus MCP agent governance share one authenticated, responsive dark workspace surface.`);
+console.log(`Workflow frontend contract OK: ${requiredCapabilities.length} Workflow capabilities plus MCP agent governance share one canonical authenticated ProductApp surface.`);
