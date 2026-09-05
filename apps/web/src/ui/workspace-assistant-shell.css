@@ -17,6 +17,11 @@
   overflow: auto;
 }
 
+.workspace-lite-topbar {
+  position: relative;
+  z-index: 130;
+}
+
 .workspace-lite-topbar-actions {
   position: relative;
 }
@@ -289,7 +294,25 @@
 }
 
 @media (max-width: 760px), (pointer: coarse) {
-  .workspace-lite-topbar-actions { gap: 7px; }
+  .workspace-lite-topbar {
+    min-height: 62px;
+    padding: 10px 12px;
+    flex-wrap: nowrap;
+  }
+  .workspace-lite-brand {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+  .workspace-lite-brand span { display: none; }
+  .workspace-lite-topbar-actions {
+    order: initial;
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: auto;
+    padding: 0;
+    gap: 7px;
+    overflow: visible;
+  }
   .workspace-lite-topbar-actions > a { display: none; }
   .workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }
   .workspace-lite-account-menu > summary { width: 40px; padding: 0; justify-content: center; font-size: 0; }

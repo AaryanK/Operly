@@ -61,6 +61,8 @@ assert(safeShell.includes('workspace-lite-stage ${showAssistant ? "assistant-ope
 assert(safeShell.includes('assistantOpen ? "Hide Operly" : "Ask Operly"'), "Workspace header must expose the assistant as a toggle");
 assert(safeShell.includes('className="workspace-lite-menu"'), "Secondary workspace tools must be grouped instead of flooding the top bar");
 assert(safeShell.includes('className="workspace-lite-menu workspace-lite-account-menu"'), "Account actions must be grouped in their own menu");
+assert(safeShell.includes('function closeParentMenu(target: HTMLElement)'), "Workspace shell must close dropdown state after SPA actions");
+assert(safeShell.includes('closeParentMenu(event.currentTarget); navigate(path);'), "Workspace tool navigation must close its parent menu before changing route");
 
 for (const chatContract of ["/agent/conversations", "/agent/chat", "/agent/chat-with-attachments"]) {
   assert(assistantPanel.includes(chatContract), `Integrated workspace assistant is missing ${chatContract}`);
@@ -71,5 +73,8 @@ assert(main.includes('import "./ui/workspace-assistant-shell.css"'), "Integrated
 assert(assistantStyles.includes(".workspace-lite-stage.assistant-open"), "Desktop assistant split-pane contract is missing");
 assert(assistantStyles.includes("position: fixed"), "Narrow assistant layout must become an overlay rather than crush workspace content");
 assert(assistantStyles.includes("env(safe-area-inset-bottom)"), "Mobile assistant must respect device safe areas");
+assert(assistantStyles.includes("flex-wrap: nowrap"), "Touch workspace header must stay one row so assistant overlay offset remains correct");
+assert(assistantStyles.includes("order: initial") && assistantStyles.includes("width: auto"), "Touch header actions must not inherit the old full-width second row");
+assert(assistantStyles.includes("z-index: 130"), "Workspace header menus must stay above the assistant overlay");
 
 console.log("Workspace safe-shell interaction contracts passed.");
