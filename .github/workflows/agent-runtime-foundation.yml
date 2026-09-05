@@ -20,11 +20,16 @@ on:
       - "tests/test_agent_runtime_objective.py"
       - "tests/test_agent_runtime_planning.py"
       - "tests/test_agent_runtime_live.py"
+      - "tests/test_agent_runtime_inference.py"
       - "tests/test_agent_runtime_store.py"
       - "tests/test_agent_runtime_orchestrator.py"
       - "tests/test_agent_runtime_races.py"
       - "tests/test_agent_runtime_uncertain.py"
+      - "scripts/benchmark_models.py"
+      - "docs/model-runtime.md"
+      - "docs/MULTI_PROVIDER_MODELS.md"
       - "docs/unified-agent-runtime.md"
+      - ".env.example"
       - ".github/workflows/agent-runtime-foundation.yml"
 
 concurrency:
@@ -75,10 +80,12 @@ jobs:
             packages/workspace_modules/integrations/discord/bot.py \
             alembic/versions/0057_agent_runtime_foundation.py \
             alembic/versions/0058_agent_chat_history.py \
+            scripts/benchmark_models.py \
             tests/test_agent_runtime_foundation.py \
             tests/test_agent_runtime_objective.py \
             tests/test_agent_runtime_planning.py \
             tests/test_agent_runtime_live.py \
+            tests/test_agent_runtime_inference.py \
             tests/test_agent_runtime_store.py \
             tests/test_agent_runtime_orchestrator.py \
             tests/test_agent_runtime_races.py \
@@ -89,6 +96,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_objective -v
           python -m unittest tests.test_agent_runtime_planning -v
           python -m unittest tests.test_agent_runtime_live -v
+          python -m unittest tests.test_agent_runtime_inference -v
           python -m unittest tests.test_agent_runtime_store -v
           python -m unittest tests.test_agent_runtime_orchestrator -v
           python -m unittest tests.test_agent_runtime_races -v

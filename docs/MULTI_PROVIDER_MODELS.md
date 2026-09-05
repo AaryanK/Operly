@@ -1,90 +1,109 @@
-# OPERLY multi-provider model portfolio
+# Operly Agent Runtime multi-provider inference
 
-OPERLY treats models as provider-neutral resources. A harness requests capabilities
-and traits; the model runtime chooses a concrete route. Provider credentials and
-model ids stay below that boundary.
+This document describes the **current Kernel-v3 Agent Runtime inference path**. The
+older `packages/model_runtime` model-card / automatic-role-routing system no longer
+exists and is not restored by Runtime 1.0.
 
 ## Providers
 
-The built-in runtime supports five providers:
+The Agent Runtime has five fixed destinations:
 
-- OpenRouter
-- Ollama
 - Groq
+- OpenRouter
 - Gemini OpenAI compatibility
 - NVIDIA NIM OpenAI compatibility
+- local Ollama
 
-The direct-provider adapters use the same `chat(messages, tools)` compatibility
-contract as OpenRouter/Ollama. Railway lower-case secret names
-`groq_api_key`, `gemini_api_key`, and `nvidia_api_key` are accepted as aliases.
+Provider transport is replaceable below `AgentInferenceRuntime`, but destinations are
+operator code, not model/user data. The model can choose reasoning and capability
+strategy; it cannot choose a provider URL or credential.
 
-## Model cards
+## Primary route
 
-`ModelResource` is the model card. It records:
+`OPERLY_AGENT_MODEL_PROVIDER` selects the primary route. A primary model can be
+overridden with `OPERLY_AGENT_MODEL_ID`; provider-specific defaults/overrides live in
+`OPERLY_AGENT_<PROVIDER>_MODEL_ID`.
 
-- provider route and provider model id
-- canonical model id for equivalent routes across providers
-- capabilities and selection tags
-- free/paid classification
-- billing mode and optional per-million-token costs
-- verified latency when a route has been probed
-- context/modality metadata when known
-- quality, locality, and priority traits
+If no primary provider is named, the runtime chooses the first configured remote
+provider in a fixed order. This is only initial selection; it does not automatically
+construct a pool from every secret present in the environment.
 
-OpenRouter routes explicitly verified as `$0` are marked `free-route` and carry
-numeric zero input/output costs. Other verified free-access routes are marked
-`free-tier`, because quota/free-tier access is not the same statement as a permanent
-zero token price.
+## Fallback portfolio
 
-The authenticated `GET /api/models` endpoint exposes provider status, role routing
-profiles, compatibility overrides, and all active model cards.
+Cross-provider fallback is explicit:
 
-## Automatic role routing
+```env
+OPERLY_AGENT_MODEL_PROVIDER=groq
+OPERLY_AGENT_MODEL_FALLBACK_PROVIDERS=openrouter,gemini
+```
 
-With `OPERLY_MODEL_AUTO_PORTFOLIO=1` and at least two configured providers, roles are
-resolved from capabilities and traits instead of one global model:
+The list is ordered and duplicate providers are removed. Every configured remote
+fallback must have its credential available at boot/request construction time.
+Unsupported provider names fail closed.
 
-- `business_agent`: tool-capable, fast, reliable orchestrators
-- `coding`: tool-capable coding models, preferring fast verified routes
-- `repair`: coding + stronger reasoning/heavy models
-- `planner`: heavy/reliable reasoning
-- `global_validator`: heavy/reliable reasoning
-- `requirements_analyst`: fast/reliable reasoning
-- `capability_placement`: fast reasoning
-- `bounded_task`: small/fast/free models
+Failover policy:
 
-The selector first ranks eligible cards, then builds a provider-diverse pool: one
-route per provider before a second route from a provider is considered, up to five
-models by default. Explicit `OPERLY_MODEL_<ROLE>_CANDIDATES_JSON` still wins when an
-operator wants a fixed chain.
+1. retry a retryable failure on the current route only within the route attempt cap;
+2. advance to the next explicitly configured provider only for retryable transport,
+   timeout, rate-limit, or provider-availability failures;
+3. never fan out a bad credential, invalid request, or invalid provider response to
+   another vendor;
+4. stop when the total attempt budget, provider-route budget, or total inference
+   deadline is reached.
 
-Capabilities remain truthful. A model that was verified only for text/reasoning is
-not automatically declared tool-capable just because another route or model family
-supports tools. This means all five providers can participate in reasoning/bounded
-work while a tool-using coding-agent pool may contain fewer providers until those
-specific routes are verified for tool calling.
+This inference retry logic is intentionally below Kernel. It cannot mint or change a
+capability `request_id`, approval, workspace/principal, or mutation identity.
 
-## Failure routing
+## Cost admission
 
-`ModelPool` maintains run-local health state:
+Dollar budgeting is optional because provider prices are external facts that can
+change. When `OPERLY_AGENT_INFERENCE_MAX_ESTIMATED_COST_USD` is blank, the runtime
+still enforces byte/token/time/attempt budgets but makes no dollar claim.
 
-1. a successful fallback becomes the preferred candidate for subsequent turns;
-2. a failed model enters a short cooldown;
-3. provider-wide failures such as 429, quota, or 5xx cool down the provider, so the
-   next candidate is chosen from another provider;
-4. invalid requests and bad credentials still fail closed rather than being sprayed
-   across vendors.
+When a finite dollar budget is configured, each remote route must also have explicit
+operator price metadata:
 
-This prevents a Studio run from paying the same full timeout for an unhealthy
-primary model on every agent turn.
+```env
+OPERLY_AGENT_GROQ_INPUT_COST_PER_MILLION=
+OPERLY_AGENT_GROQ_OUTPUT_COST_PER_MILLION=
+```
 
-## Same-model redundancy
+Unknown-priced routes are skipped under a finite budget. Operly uses a conservative
+input-token estimate and reserves the configured output-token ceiling for each
+attempt. This is an admission guard, not billing reconciliation.
 
-`canonical_id` identifies equivalent routes. For example the verified Nemotron 3
-Ultra routes are represented as two provider routes for one canonical model:
+Local Ollama is treated as zero token-price for this admission calculation; hardware
+and infrastructure cost are outside this estimator.
 
-- NVIDIA direct: `nvidia/nemotron-3-ultra-550b-a55b`
-- OpenRouter free: `nvidia/nemotron-3-ultra-550b-a55b:free`
+## Qualification, not inferred capability claims
 
-The direct route can therefore be preferred for latency while the OpenRouter route
-remains a redundant path to the same underlying model family.
+Model family names do not grant capabilities. Before a route is relied on for a
+runtime role, qualify that concrete provider/model route empirically:
+
+```bash
+python scripts/benchmark_models.py --provider groq --suite probe
+python scripts/benchmark_models.py --provider groq --suite smoke
+python scripts/benchmark_models.py --provider groq --suite planner
+```
+
+The current suites check:
+
+- basic text availability;
+- strict JSON-object output;
+- a bounded planner-shaped structured response.
+
+The qualification harness is inference-only. It does not execute tools or Kernel
+capabilities and does not receive user authority.
+
+## What is deliberately absent
+
+Runtime 1.0 currently does **not** claim the following old architecture is active:
+
+- a global `/api/models` catalog as Agent Runtime authority;
+- automatic role pools built from model cards;
+- provider discovery deciding runtime permissions;
+- `model.invoke` as a built-in capability;
+- model/provider metadata granting tool or coding authority.
+
+If richer model discovery returns later, it should be discovery data only. Admission,
+budgets, authority, and capability execution must remain separate boundaries.
