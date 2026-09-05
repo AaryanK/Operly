@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from packages.agent_runtime.context import ContextItem, ContextKind
-from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute
+from packages.agent_runtime.inference import (
+    AgentInferenceError,
+    InferenceRoute,
+    OpenAICompatibleAgentModel,
+)
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeSettings
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
+from packages.workspace_modules.integrations.discord.bot import _discordify
 
 
 class FakeModel:
@@ -140,6 +146,85 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
         agent = Runtime1Agent(model=model, settings=AgentRuntimeSettings(enabled=True))
         payload = agent._decode_decision({"move": "finish", "message": "Nothing else is needed."})
         self.assertEqual(payload["move"], "finish")
+
+    def test_next_move_normalizes_harmless_model_metadata(self):
+        model = FakeModel({})
+        agent = Runtime1Agent(model=model, settings=AgentRuntimeSettings(enabled=True))
+        payload = agent._decode_decision(
+            {
+                "move": "call",
+                "capability_id": "tasks.create",
+                "arguments": {"title": "Test Operly Runtime 1.0"},
+                "rationale": "The user explicitly asked to create a task.",
+                "confidence": 0.99,
+            }
+        )
+        self.assertEqual(
+            payload,
+            {
+                "move": "call",
+                "capability_id": "tasks.create",
+                "arguments": {"title": "Test Operly Runtime 1.0"},
+            },
+        )
+
+    def test_next_move_accepts_single_json_fence_but_still_normalizes(self):
+        model = FakeModel({})
+        agent = Runtime1Agent(model=model, settings=AgentRuntimeSettings(enabled=True))
+        payload = agent._decode_decision(
+            "```json\n"
+            '{"move":"discover","query":"personal task creation","note":"search first"}'
+            "\n```"
+        )
+        self.assertEqual(payload, {"move": "discover", "query": "personal task creation"})
+
+    async def test_user_facing_model_identity_is_operly_not_provider_identity(self):
+        model = OpenAICompatibleAgentModel(
+            route=InferenceRoute(
+                provider="groq",
+                base_url="https://api.groq.com/openai/v1",
+                api_key=None,
+                model_id="openai/gpt-oss-120b",
+            )
+        )
+        chat = AsyncMock(return_value="I’m Operly.")
+        model._chat = chat
+        answer = await model.respond(
+            objective="Tell the user who they are speaking with",
+            user_message="Are you ChatGPT or Operly?",
+        )
+        self.assertEqual(answer, "I’m Operly.")
+        system = chat.await_args.kwargs["system"]
+        self.assertIn("You are Operly", system)
+        self.assertIn("Always identify yourself as Operly", system)
+        self.assertIn("never as ChatGPT", system)
+
+    def test_discord_formatter_converts_markdown_tables_to_native_friendly_bullets(self):
+        rendered = _discordify(
+            "## Capabilities\n\n"
+            "| Tool | Purpose |\n"
+            "| --- | --- |\n"
+            "| Tasks | Create work |\n"
+            "| Calendar | Find meetings |\n"
+        )
+        self.assertIn("## Capabilities", rendered)
+        self.assertIn("- **Tasks**", rendered)
+        self.assertIn("**Purpose:** Create work", rendered)
+        self.assertIn("- **Calendar**", rendered)
+        self.assertNotIn("| --- | --- |", rendered)
+
+    def test_discord_formatter_preserves_normal_discord_markdown(self):
+        source = "## Short answer\n\n- one\n- two\n\n```python\nprint('ok')\n```"
+        self.assertEqual(_discordify(source), source)
+
+    def test_personal_and_workspace_web_surfaces_mount_runtime_1_chat(self):
+        source = Path("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx").read_text(encoding="utf-8")
+        self.assertIn('import("../account/PersonalHome")', source)
+        self.assertIn('import("../workspace/WorkspaceOperly")', source)
+        self.assertIn('"operly"', source)
+        self.assertIn("<PersonalHome profile={null} />", source)
+        self.assertIn('<WorkspaceControlLink workspaceId={selected.id} section="operly"', source)
+        self.assertIn('case "operly": return <WorkspaceOperly workspace={workspace} />;', source)
 
 
 if __name__ == "__main__":

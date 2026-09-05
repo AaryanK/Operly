@@ -101,30 +101,35 @@ class Runtime1Agent:
         if isinstance(raw, str):
             if len(raw.encode("utf-8")) > 24 * 1024:
                 raise ValueError("decision output too large")
-            raw = json.loads(raw)
+            text = raw.strip()
+            if text.startswith("```") and text.endswith("```"):
+                lines = text.splitlines()
+                if len(lines) >= 3 and lines[0].strip().lower() in {"```", "```json"} and lines[-1].strip() == "```":
+                    text = "\n".join(lines[1:-1]).strip()
+            raw = json.loads(text)
         if not isinstance(raw, Mapping):
             raise ValueError("decision must be a JSON object")
         if set(raw) & self._AUTHORITY_FIELDS:
             raise ValueError("decision contains authority-shaped fields")
+
         move = str(raw.get("move") or "").strip().lower()
         if move == "call":
-            if set(raw) != {"move", "capability_id", "arguments"} or not isinstance(raw.get("arguments"), dict):
+            capability_id = str(raw.get("capability_id") or "").strip().lower()
+            arguments = raw.get("arguments")
+            if not capability_id or len(capability_id) > 300 or not isinstance(arguments, dict):
                 raise ValueError("call decision fields are invalid")
-        elif move == "discover":
-            if set(raw) != {"move", "query"}:
-                raise ValueError("discover decision fields are invalid")
+            return {"move": "call", "capability_id": capability_id, "arguments": dict(arguments)}
+        if move == "discover":
             query = " ".join(str(raw.get("query") or "").split())
             if not query or len(query) > 500:
                 raise ValueError("discover query is invalid")
-        elif move == "finish":
-            if set(raw) != {"move", "message"}:
-                raise ValueError("finish decision fields are invalid")
+            return {"move": "discover", "query": query}
+        if move == "finish":
             message = str(raw.get("message") or "").strip()
             if not message or len(message) > 20_000:
                 raise ValueError("finish message is invalid")
-        else:
-            raise ValueError("unsupported next move")
-        return dict(raw)
+            return {"move": "finish", "message": message}
+        raise ValueError("unsupported next move")
 
     def _bounded_observation(self, *, capability_id: str, result: Mapping[str, Any] | None, error_code: str | None = None, error: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {"capability_id": capability_id, "ok": error_code is None}
@@ -221,7 +226,25 @@ class Runtime1Agent:
             try:
                 decision = self._decode_decision(raw_decision)
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
-                runtime_trace("decision.rejected", run_id=run_id, cycle=cycle, error_type=type(error).__name__)
+                if isinstance(raw_decision, Mapping):
+                    diagnostic = json.dumps(dict(raw_decision), ensure_ascii=False, sort_keys=True, default=str)
+                    top_level_keys = sorted(str(key) for key in raw_decision.keys())[:30]
+                elif isinstance(raw_decision, bytes):
+                    diagnostic = raw_decision.decode("utf-8", errors="replace")
+                    top_level_keys = []
+                else:
+                    diagnostic = str(raw_decision)
+                    top_level_keys = []
+                runtime_trace(
+                    "decision.rejected",
+                    run_id=run_id,
+                    cycle=cycle,
+                    error_type=type(error).__name__,
+                    raw_type=type(raw_decision).__name__,
+                    top_level_keys=top_level_keys,
+                    output_bytes=len(diagnostic.encode("utf-8")),
+                    output_sha256_16=fingerprint(diagnostic),
+                )
                 return Runtime1Result(message="I could not safely interpret the model's next action.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="invalid_agent_decision")
 
             move = str(decision["move"])
