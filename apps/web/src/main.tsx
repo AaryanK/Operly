@@ -15,6 +15,8 @@ import "./ui/integration-workbench.css";
 import "./ui/agent-computer.css";
 import "./ui/mobile.css";
 import "./ui/surface-polish.css";
+import "./ui/personal-operly.css";
+import "./ui/personal-operly-state.css";
 import "./ui/public.css";
 import "./ui/react-public-admin-palette.css";
 import "./ui/auth-public-consistency.css";

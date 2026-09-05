@@ -1,0 +1,42 @@
+/* Root-state corrections for PersonalHome: its scope and mobile state live on
+   the same element as .personal-layout, not on a nested wrapper. */
+.workspace-lite-personal-stage.personal-layout {
+  min-height: calc(100dvh - 70px);
+  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
+}
+
+.workspace-lite-personal-short { display: inline; }
+.workspace-lite-personal-long { display: none; }
+
+@media (max-width: 760px), (pointer: coarse) {
+  .workspace-lite-personal-stage.personal-layout {
+    display: block;
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+  }
+  .workspace-lite-personal-stage.personal-layout.history-collapsed { grid-template-columns: 1fr; }
+
+  .workspace-lite-personal-stage.mobile-personal-list .personal-history {
+    display: flex;
+    width: 100%;
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+    border-right: 0;
+  }
+  .workspace-lite-personal-stage.mobile-personal-list .personal-surface { display: none; }
+  .workspace-lite-personal-stage.mobile-personal-thread .personal-history { display: none; }
+  .workspace-lite-personal-stage.mobile-personal-thread .personal-surface { display: grid; }
+
+  /* "ME" was too cryptic on the bottom scope rail. Make the personal-AI route
+     self-describing on touch devices while keeping the compact desktop rail. */
+  .workspace-lite-personal {
+    width: auto;
+    min-width: 86px;
+    padding: 0 11px;
+    flex-basis: auto;
+    font-size: 0;
+  }
+  .workspace-lite-personal::after {
+    content: "Personal AI";
+    font-size: 11px;
+    white-space: nowrap;
+  }
+}

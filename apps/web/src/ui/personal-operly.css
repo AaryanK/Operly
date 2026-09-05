@@ -1,0 +1,270 @@
+/* Personal Operly lives inside the same authenticated shell as workspace AI.
+   Keep its scope visibly personal without reviving the legacy light app theme. */
+.workspace-lite-personal-stage {
+  min-width: 0;
+  min-height: calc(100dvh - 70px);
+  --ui-canvas: #0b0f18;
+  --ui-panel: #15111e;
+  --ui-panel-muted: #1b1627;
+  --ui-ink: #f7f3ff;
+  --ui-muted: #aaa2b7;
+  --ui-line: rgba(212,190,255,.12);
+  --ui-accent: #9b72ff;
+  --ui-accent-strong: #c4a7ff;
+  --ui-danger: #ff9eab;
+  color: var(--ui-ink);
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at 78% -8%, rgba(155,114,255,.12), transparent 30rem),
+    linear-gradient(180deg, #0f0b17 0%, #09070e 100%);
+}
+
+.workspace-lite-personal-stage .personal-layout {
+  min-height: calc(100dvh - 70px);
+  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
+  background: transparent;
+}
+
+.workspace-lite-personal-stage .personal-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 18px 12px;
+  border-right: 1px solid var(--ui-line);
+  background: rgba(12,9,18,.94);
+  color: var(--ui-ink);
+}
+
+.workspace-lite-personal-stage .history-head small,
+.workspace-lite-personal-stage .history-list small,
+.workspace-lite-personal-stage .history-account small,
+.workspace-lite-personal-stage .empty-copy {
+  color: #8f879d;
+}
+
+.workspace-lite-personal-stage .history-head-actions button {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.045);
+  color: #cfc6dc;
+}
+
+.workspace-lite-personal-stage .personal-conversation-search {
+  min-height: 40px;
+  margin: 0 4px 12px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+  color: #81788e;
+}
+.workspace-lite-personal-stage .personal-conversation-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ui-ink);
+}
+.workspace-lite-personal-stage .personal-conversation-search input::placeholder { color: #746b81; }
+
+.workspace-lite-personal-stage .history-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+.workspace-lite-personal-stage .history-list > button {
+  color: #ddd5e8;
+}
+.workspace-lite-personal-stage .history-list > button:hover,
+.workspace-lite-personal-stage .history-list > button.active {
+  background: rgba(155,114,255,.12);
+  box-shadow: inset 0 0 0 1px rgba(196,167,255,.09);
+}
+.workspace-lite-personal-stage .history-account {
+  margin-top: auto;
+  border-color: var(--ui-line);
+}
+.workspace-lite-personal-stage .history-account > span {
+  background: linear-gradient(135deg, #5b48c7, #9d68ef);
+}
+
+.workspace-lite-personal-stage .personal-surface {
+  min-width: 0;
+  min-height: calc(100dvh - 70px);
+  max-height: calc(100dvh - 70px);
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  background: transparent;
+  color: var(--ui-ink);
+}
+.workspace-lite-personal-stage .personal-surface-header {
+  padding: 22px 28px;
+  border-color: var(--ui-line);
+  background: rgba(17,12,25,.76);
+  backdrop-filter: blur(18px);
+}
+.workspace-lite-personal-stage .personal-surface-header h1 { color: #fff; }
+.workspace-lite-personal-stage .personal-surface-header p { color: var(--ui-muted); }
+.workspace-lite-personal-stage .privacy-pill {
+  border: 1px solid rgba(196,167,255,.13);
+  background: rgba(155,114,255,.12);
+  color: #d2c4ff;
+}
+.workspace-lite-personal-stage .conversation-stage {
+  min-height: 0;
+  padding: 28px clamp(18px, 4vw, 48px);
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 55% 0%, rgba(155,114,255,.055), transparent 24rem),
+    transparent;
+}
+.workspace-lite-personal-stage .assistant-message,
+.workspace-lite-personal-stage .chat-message {
+  max-width: 880px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.workspace-lite-personal-stage .assistant-message p,
+.workspace-lite-personal-stage .chat-message p,
+.workspace-lite-personal-stage .message-content {
+  color: #d6cedf;
+}
+.workspace-lite-personal-stage .assistant-avatar {
+  background: linear-gradient(145deg, #7257df, #a36bf1);
+  box-shadow: 0 8px 24px rgba(112,80,212,.22);
+}
+.workspace-lite-personal-stage .chat-message.user .assistant-avatar { background: #34303d; }
+
+.workspace-lite-personal-stage .personal-boundary-note {
+  max-width: 880px;
+  margin: 10px auto 26px;
+  padding: 13px 14px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--ui-line);
+  border-radius: 12px;
+  background: rgba(255,255,255,.028);
+  color: #9d94aa;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.workspace-lite-personal-stage .personal-boundary-note strong { color: #d6c9ff; }
+
+.workspace-lite-personal-stage .inline-error {
+  max-width: 880px;
+  margin-left: auto;
+  margin-right: auto;
+  border-color: rgba(255,118,136,.30);
+  background: rgba(115,33,47,.22);
+  color: #ffabb6;
+}
+
+.workspace-lite-personal-stage .composer {
+  width: min(900px, calc(100% - 40px));
+  margin: 10px auto 20px;
+  border-color: rgba(212,190,255,.16);
+  background: rgba(19,14,28,.96);
+  box-shadow: 0 20px 52px rgba(0,0,0,.28);
+}
+.workspace-lite-personal-stage .composer textarea {
+  color: var(--ui-ink);
+  background: transparent;
+}
+.workspace-lite-personal-stage .composer textarea::placeholder { color: #71687c; }
+.workspace-lite-personal-stage .composer-actions { color: #8d8499; }
+.workspace-lite-personal-stage .composer-actions > button {
+  background: linear-gradient(135deg, #6d5dfc, #9d68ef);
+}
+.workspace-lite-personal-stage .attach-button {
+  border: 1px solid rgba(196,167,255,.12) !important;
+  background: rgba(155,114,255,.11) !important;
+  color: #d1c2ff !important;
+}
+.workspace-lite-personal-stage .attachment-strip > span {
+  background: rgba(255,255,255,.055);
+  color: #d8d0e2;
+}
+.workspace-lite-personal-stage .artifact-chip {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.035);
+  color: var(--ui-ink);
+}
+
+.personal-mobile-content-header { display: none; }
+.workspace-lite-personal-long { display: none; }
+
+/* A touch device can expose a desktop-like layout viewport. Personal Operly must
+   therefore respond to coarse input as well as CSS width, just like the shell. */
+@media (max-width: 760px), (pointer: coarse) {
+  .workspace-lite-personal-stage {
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+  }
+  .workspace-lite-personal-stage .personal-layout {
+    display: block;
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+  }
+  .workspace-lite-personal-stage .personal-layout.history-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .workspace-lite-personal-stage .personal-surface {
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+  }
+  .workspace-lite-personal-stage .mobile-personal-list .personal-history {
+    display: flex;
+    width: 100%;
+    min-height: calc(100dvh - 62px - 78px - env(safe-area-inset-bottom));
+    border-right: 0;
+  }
+  .workspace-lite-personal-stage .mobile-personal-list .personal-surface { display: none; }
+  .workspace-lite-personal-stage .mobile-personal-thread .personal-history { display: none; }
+  .workspace-lite-personal-stage .mobile-personal-thread .personal-surface { display: grid; }
+  .workspace-lite-personal-stage .history-collapse { display: none; }
+  .workspace-lite-personal-stage .personal-surface-header { display: none; }
+  .workspace-lite-personal-stage .personal-mobile-content-header {
+    min-height: 58px;
+    padding: 9px 12px;
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr) auto;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--ui-line);
+    background: rgba(15,11,22,.92);
+  }
+  .workspace-lite-personal-stage .personal-mobile-content-header > div { min-width: 0; }
+  .workspace-lite-personal-stage .personal-mobile-content-header small,
+  .workspace-lite-personal-stage .personal-mobile-content-header strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .workspace-lite-personal-stage .personal-mobile-content-header small { color: #9a90a6; font-size: 10px; }
+  .workspace-lite-personal-stage .personal-mobile-content-header strong { margin-top: 2px; font-size: 13px; }
+  .workspace-lite-personal-stage .personal-mobile-chats {
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--ui-line);
+    border-radius: 10px;
+    background: rgba(255,255,255,.045);
+    color: #ece5f4;
+  }
+  .workspace-lite-personal-stage .conversation-stage { padding: 18px 14px; }
+  .workspace-lite-personal-stage .assistant-message,
+  .workspace-lite-personal-stage .chat-message { grid-template-columns: 34px minmax(0,1fr); gap: 10px; }
+  .workspace-lite-personal-stage .assistant-avatar { width: 34px; height: 34px; }
+  .workspace-lite-personal-stage .composer {
+    width: calc(100% - 20px);
+    margin: 8px 10px 10px;
+    border-radius: 14px;
+  }
+  .workspace-lite-personal-stage .composer textarea { padding: 12px 13px 6px; }
+  .workspace-lite-personal-stage .composer-actions { padding: 6px 8px 8px 10px; }
+  .workspace-lite-personal-stage .composer-actions > div > span { display: none; }
+
+  .workspace-lite-personal { width: auto; min-width: 82px; padding: 0 11px; flex-basis: auto; }
+  .workspace-lite-personal-short { display: none; }
+  .workspace-lite-personal-long { display: inline; white-space: nowrap; font-size: 11px; }
+}
