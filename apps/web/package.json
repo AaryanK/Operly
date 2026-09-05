@@ -15,10 +15,10 @@
     "test:bundle": "node scripts/bundle-contract.mjs"
   },
   "dependencies": {
-    "react": "18.2.0",
-    "react-dom": "18.2.0"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "vite": "8.2.1"
+    "vite": "8.2.2"
   }
 }
