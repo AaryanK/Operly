@@ -68,6 +68,15 @@ for (const mobileDestination of ["Workspace home", "Workflows", "Activity", "Wor
   assert(safeShell.includes(`>${mobileDestination}<`), `Mobile workspace menu must expose ${mobileDestination}`);
 }
 
+assert(safeShell.includes('function closeWorkspaceMenus(except?: HTMLDetailsElement | null)'), "Workspace menus need one shared dismissal boundary");
+assert(safeShell.includes('document.querySelectorAll<HTMLDetailsElement>("details.workspace-lite-menu[open]")'), "Workspace menu dismissal must cover every open shell menu");
+assert(safeShell.includes('function prepareWorkspaceMenu(target: HTMLElement)'), "Opening one workspace menu must close its siblings");
+assert(safeShell.includes('onClick={(event) => prepareWorkspaceMenu(event.currentTarget)}>Tools</summary>'), "Tools menu must use exclusive-open behavior");
+assert(safeShell.includes('onClick={(event) => prepareWorkspaceMenu(event.currentTarget)}>Account</summary>'), "Account menu must use exclusive-open behavior");
+assert(safeShell.includes('document.addEventListener("pointerdown", onPointerDown)'), "Workspace menus must dismiss on outside pointer interaction");
+assert(safeShell.includes('event.key === "Escape"'), "Workspace menus must dismiss on Escape");
+assert(safeShell.includes('useEffect(() => { closeWorkspaceMenus(); }, [pathname]);'), "Workspace menus must reset after SPA navigation");
+
 for (const chatContract of ["/agent/conversations", "/agent/chat", "/agent/chat-with-attachments"]) {
   assert(assistantPanel.includes(chatContract), `Integrated workspace assistant is missing ${chatContract}`);
 }
