@@ -18,6 +18,8 @@ on:
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
+      - "apps/web/scripts/workspace-safe-contract.mjs"
+      - "apps/web/src/api.ts"
       - "apps/web/src/app/App.tsx"
       - "apps/web/src/app/routes.ts"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
@@ -71,6 +73,8 @@ on:
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
       - "apps/web/scripts/workflow-frontend-contract.mjs"
+      - "apps/web/scripts/workspace-safe-contract.mjs"
+      - "apps/web/src/api.ts"
       - "apps/web/src/app/App.tsx"
       - "apps/web/src/app/routes.ts"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
@@ -265,6 +269,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/web
         run: npm ci
+
+      - name: Verify authenticated frontend interaction contracts
+        working-directory: apps/web
+        run: npm run test:workspace-safe
 
       - name: Verify Workflow frontend capability coverage
         working-directory: apps/web

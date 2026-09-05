@@ -62,22 +62,27 @@ function AdvancedWorkspacePage({ workspace, section }: { workspace: Workspace; s
   }
 }
 
-function WorkspaceControlLink({ workspaceId, section, active, children }: { workspaceId: string; section: AdvancedSection; active: boolean; children: string }) {
+function WorkspaceControlLink({ workspaceId, section, active, prominent = false, children }: { workspaceId: string; section: AdvancedSection; active: boolean; prominent?: boolean; children: string }) {
   const path = workspaceControlPath(workspaceId, section);
-  return <a className={active ? "active" : undefined} href={path} onClick={(event) => { event.preventDefault(); navigate(path); }}>{children}</a>;
+  const className = [active ? "active" : "", prominent ? "workspace-lite-button workspace-lite-button-primary" : ""].filter(Boolean).join(" ") || undefined;
+  return <a className={className} href={path} onClick={(event) => { event.preventDefault(); navigate(path); }}>{children}</a>;
 }
 
 export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
   const [error, setError] = useState("");
   const selectedId = useMemo(() => routeWorkspaceId(pathname), [pathname]);
   const selected = useMemo(() => workspaces.find((workspace) => workspace.id === selectedId) || null, [selectedId, workspaces]);
+  const currentWorkspace = useMemo(() => workspaces.find((workspace) => workspace.current) || null, [workspaces]);
   const advancedSection = useMemo(
     () => selected ? advancedWorkspaceSection(pathname, selected.id) : null,
     [pathname, selected],
   );
+  const operlyWorkspace = selected || currentWorkspace;
+  const operlyPath = operlyWorkspace ? workspaceControlPath(operlyWorkspace.id, "operly") : "/personal";
 
   const load = useCallback(async () => {
     try {
@@ -118,9 +123,13 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
     }
   };
 
+  const openOperly = () => {
+    navigate(operlyPath);
+  };
+
   const logout = async () => {
-    if (busy) return;
-    setBusy(true);
+    if (logoutBusy) return;
+    setLogoutBusy(true);
     setError("");
     try {
       await api("/auth/logout", { method: "POST" });
@@ -131,7 +140,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
         return;
       }
       setError(caught instanceof Error ? `Could not sign out: ${caught.message}` : "Could not sign out. Please try again.");
-      setBusy(false);
+      setLogoutBusy(false);
     }
   };
 
@@ -139,20 +148,22 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
 
   const accountView = pathname === "/account" || pathname === "/channels" || pathname === "/app";
   const personalView = pathname === "/personal" || pathname === "/channels/@me";
+  const operlyView = advancedSection === "operly" || personalView;
 
   return <div className="workspace-lite-shell">
     <nav className="workspace-lite-rail" aria-label="Operly spaces">
-      <button className={`workspace-lite-mark workspace-lite-personal ${personalView ? "active" : ""}`} onClick={() => void personal()} disabled={busy}><OperlyMark label="Personal" /></button>
+      <button className={`workspace-lite-mark ${operlyView ? "active" : ""}`} onClick={openOperly} disabled={busy} title={operlyWorkspace ? `Ask Operly in ${operlyWorkspace.name}` : "Open Personal Operly"} aria-label={operlyWorkspace ? `Ask Operly in ${operlyWorkspace.name}` : "Open Personal Operly"}><OperlyMark label="Operly AI" /></button>
+      <button className={`workspace-lite-mark workspace-lite-personal ${personalView ? "active" : ""}`} onClick={() => void personal()} disabled={busy} title="Personal Operly" aria-label="Switch to Personal Operly">ME</button>
       <span className="workspace-lite-divider" />
       <div className="workspace-lite-rail-list">{workspaces.map((workspace) => <button key={workspace.id} className={`workspace-lite-mark ${selectedId === workspace.id ? "active" : ""}`} title={workspace.name} disabled={busy} onClick={() => void switchWorkspace(workspace.id)}>{workspace.name.trim().slice(0, 2).toUpperCase()}</button>)}</div>
-      <button className="workspace-lite-mark workspace-lite-account" onClick={() => go("/account")}>A</button>
+      <button className="workspace-lite-mark workspace-lite-account" onClick={() => go("/account")} title="Account & workspaces" aria-label="Account and workspaces">A</button>
     </nav>
     <div className="workspace-lite-content">
       <header className="workspace-lite-topbar">
-        <a className="workspace-lite-brand" href="/account"><OperlyMark /><span>OPERLY</span></a>
+        <a className="workspace-lite-brand" href={operlyPath} onClick={(event) => { event.preventDefault(); openOperly(); }}><OperlyMark /><span>OPERLY</span></a>
         <div className="workspace-lite-topbar-actions">
           {selected && selected.current && <>
-            <WorkspaceControlLink workspaceId={selected.id} section="operly" active={advancedSection === "operly"}>Operly</WorkspaceControlLink>
+            <WorkspaceControlLink workspaceId={selected.id} section="operly" active={advancedSection === "operly"} prominent>Ask Operly</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="workflows" active={advancedSection === "workflows"}>Workflows</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="activity" active={advancedSection === "activity"}>Activity</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="agent-computer" active={advancedSection === "agent-computer"}>Computer</WorkspaceControlLink>
@@ -162,7 +173,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
           </>}
           <a href="/account">Workspaces</a>
           <button className="workspace-lite-button" onClick={() => void load()}>Refresh</button>
-          <button className="workspace-lite-button" onClick={() => void logout()} disabled={busy}>{busy ? "Working…" : "Sign out"}</button>
+          <button className="workspace-lite-button" onClick={() => void logout()} disabled={logoutBusy}>{logoutBusy ? "Signing out…" : "Sign out"}</button>
         </div>
       </header>
       {error && <div className="workspace-lite-error">{error}</div>}
