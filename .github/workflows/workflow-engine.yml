@@ -272,7 +272,7 @@ jobs:
 
       - name: Verify authenticated frontend interaction contracts
         working-directory: apps/web
-        run: npm run test:contracts
+        run: npm run test:workspace-safe
 
       - name: Verify Workflow frontend capability coverage
         working-directory: apps/web
