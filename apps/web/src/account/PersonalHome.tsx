@@ -9,7 +9,14 @@ type Conversation = { id: string; title?: string | null; updated_at?: string | n
 type Artifact = { artifact_id: string; filename: string; content_type?: string | null; size_bytes?: number | null };
 type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null; artifacts?: Artifact[] };
 type ChatResult = { message: string; conversation_id?: string | null; artifacts?: Artifact[] };
-type Approval = { id: string; action: string; status: string; details?: Record<string, unknown>; payload?: Record<string, unknown>; created_at?: string | null };
+type KernelApproval = {
+  id: string;
+  capability_id: string;
+  status: string;
+  arguments?: Record<string, unknown>;
+  created_at?: string | null;
+};
+type KernelApprovalResponse = { approvals: KernelApproval[] };
 
 type Props = { profile: PersonalProfile | null };
 
@@ -42,30 +49,31 @@ function ArtifactCards({ artifacts }: { artifacts?: Artifact[] }) {
   </div>;
 }
 
-function approvalText(value: unknown, fallback = "") {
-  return typeof value === "string" ? value : value == null ? fallback : String(value);
-}
-
 function approvalStatus(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function ApprovalSubstance({ item }: { item: Approval }) {
-  const details = item.details || {};
-  const argumentsValue = details.arguments && typeof details.arguments === "object" ? details.arguments : {};
-  return <div className="approval-substance">
-    <div className="approval-substance-grid">
-      <span><small>Objective</small><strong>{approvalText(details.objective, item.action)}</strong></span>
-      <span><small>Expected outcome</small><strong>{approvalText(details.expected_outcome, "Complete the requested action")}</strong></span>
-      <span><small>Risk</small><strong>{approvalText(details.risk_level, "Review required")}</strong></span>
-      <span><small>Capability</small><strong>{approvalText(details.capability, item.action)}</strong></span>
+function ApprovalCard({ item, busy, onDecision }: { item: KernelApproval; busy: boolean; onDecision: (approved: boolean) => void }) {
+  return <article className="personal-approval-card">
+    <div className="personal-approval-title">
+      <div><span className={`status-chip status-${item.status.toLowerCase().replaceAll("_", "-")}`}>{approvalStatus(item.status)}</span><strong>{item.capability_id}</strong></div>
+      <small>{formatDate(item.created_at)}</small>
     </div>
-    {details.rationale && <p className="approval-rationale"><strong>Why Operly wants to do this:</strong> {approvalText(details.rationale)}</p>}
-    <details open={item.status === "pending"}>
-      <summary>Full action payload</summary>
-      <code>{JSON.stringify({ ...details, arguments: argumentsValue }, null, 2)}</code>
-    </details>
-  </div>;
+    <div className="approval-substance">
+      <div className="approval-substance-grid">
+        <span><small>Capability</small><strong>{item.capability_id}</strong></span>
+        <span><small>Scope</small><strong>Personal account</strong></span>
+      </div>
+      <details>
+        <summary>Review arguments</summary>
+        <code>{JSON.stringify(item.arguments || {}, null, 2)}</code>
+      </details>
+    </div>
+    {item.status === "pending" && <div className="row-actions">
+      <button disabled={busy} onClick={() => onDecision(false)}>Reject</button>
+      <button className="primary-button" disabled={busy} onClick={() => onDecision(true)}>{busy ? "Working…" : "Approve"}</button>
+    </div>}
+  </article>;
 }
 
 export function PersonalHome({ profile }: Props) {
@@ -74,7 +82,7 @@ export function PersonalHome({ profile }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationSearch, setConversationSearch] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [approvals, setApprovals] = useState<KernelApproval[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
@@ -99,19 +107,22 @@ export function PersonalHome({ profile }: Props) {
 
   async function loadApprovals() {
     try {
-      const rows = await api<Approval[]>("/approvals/personal");
-      setApprovals(rows);
+      const response = await api<KernelApprovalResponse>("/kernel/personal/approvals?limit=12");
+      setApprovals(Array.isArray(response.approvals) ? response.approvals : []);
       setApprovalError(null);
     } catch (caught) {
       setApprovalError(caught instanceof Error ? caught.message : "Personal approvals are unavailable");
     }
   }
 
-  async function decideApproval(id: string, status: "approved" | "rejected") {
+  async function decideApproval(id: string, approved: boolean) {
     setApprovalBusy(id);
     setApprovalError(null);
     try {
-      await api(`/approvals/personal/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await api(`/kernel/personal/approvals/${encodeURIComponent(id)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ approved }),
+      });
       await loadApprovals();
     } catch (caught) {
       setApprovalError(caught instanceof Error ? caught.message : "Approval decision could not be saved");
@@ -141,7 +152,7 @@ export function PersonalHome({ profile }: Props) {
 
   useEffect(() => {
     loadConversations().catch((caught) => setError(caught instanceof Error ? caught.message : "Conversation history is unavailable"));
-    loadApprovals();
+    void loadApprovals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -204,15 +215,12 @@ export function PersonalHome({ profile }: Props) {
         return index >= 0 ? current.filter((_, itemIndex) => itemIndex !== index) : current;
       });
       setError(caught instanceof Error ? caught.message : "Personal Operly could not complete that request");
-      // Do not silently restore failed files. Restoring them made repeated retries
-      // re-upload the same bytes and accumulate duplicate synthetic transcript turns.
     } finally {
       setBusy(false);
     }
   }
 
   const pendingApprovals = approvals.filter((item) => item.status === "pending");
-  const recentApprovals = approvals.slice(0, 12);
   const normalizedSearch = conversationSearch.trim().toLowerCase();
   const filteredConversations = useMemo(
     () => conversations.filter((item) => !normalizedSearch || (item.title || "Conversation").toLowerCase().includes(normalizedSearch)),
@@ -247,19 +255,17 @@ export function PersonalHome({ profile }: Props) {
           <div><small>Personal Operly</small><strong>{activeConversation?.title || "New conversation"}</strong></div>
           <span className="privacy-pill">Private</span>
         </header>
-        <header className="surface-header personal-surface-header"><div><span className="eyebrow">@me · private</span><h1>Operly</h1><p>Your account-level AI. This transcript stays personal; workspace tools are reached only through permission-checked account capabilities.</p></div><div className="personal-header-actions"><span className="privacy-pill">Private</span></div></header>
+        <header className="surface-header personal-surface-header compact-header page-header">
+          <div><span className="eyebrow">@me · private</span><h1>Personal Operly</h1><p>One private AI for your account. It discovers only the context and capabilities needed for the task.</p></div>
+          <div className="personal-header-actions"><span className="privacy-pill">Private</span>{pendingApprovals.length > 0 && <span className="status-chip status-pending">{pendingApprovals.length} approval{pendingApprovals.length === 1 ? "" : "s"}</span>}</div>
+        </header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
-          <section className="personal-approval-stack" aria-label="Personal approvals">
-            <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>Approvals</h2><small>{pendingApprovals.length} pending</small></div><button className="text-button" type="button" onClick={loadApprovals}>Refresh</button></div>
-            {recentApprovals.length === 0 && <p className="empty-copy">No approvals yet.</p>}
-            {recentApprovals.map((item) => <article className="personal-approval-card" key={item.id}>
-              <div className="personal-approval-title"><div><span className={`status-chip status-${item.status.toLowerCase().replaceAll("_", "-")}`}>{approvalStatus(item.status)}</span><strong>{item.action}</strong></div><small>{formatDate(item.created_at)}</small></div>
-              <ApprovalSubstance item={item} />
-              {item.status === "pending" && <div className="row-actions"><button disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "rejected")}>Reject</button><button className="primary-button" disabled={approvalBusy === item.id} onClick={() => decideApproval(item.id, "approved")}>{approvalBusy === item.id ? "Working…" : "Approve"}</button></div>}
-            </article>)}
-          </section>
+          {pendingApprovals.length > 0 && <section className="personal-approval-stack" aria-label="Pending Personal approvals">
+            <div className="personal-approval-heading"><div><span className="eyebrow">Human control</span><h2>Needs your approval</h2></div><button className="text-button" type="button" onClick={() => { void loadApprovals(); }}>Refresh</button></div>
+            {pendingApprovals.map((item) => <ApprovalCard key={item.id} item={item} busy={approvalBusy === item.id} onDecision={(approved) => { void decideApproval(item.id, approved); }} />)}
+          </section>}
           {approvalError && <div className="inline-error">{approvalError}</div>}
-          {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your private Operly. Ask across your account, attach a file, or tell me which workspace you want me to work with.</p></div></article>}
+          {messages.length === 0 && <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>What would you like to get done?</p></div></article>}
           {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <><MessageContent content={item.content} /><ArtifactCards artifacts={item.artifacts} /></> : <p>{item.content}</p>}</div></article>)}
           {busy && <div className="working-state"><span></span>Operly is working…</div>}
           {error && <div className="inline-error">{error}</div>}
