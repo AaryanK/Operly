@@ -33,9 +33,20 @@ function go(path: string) {
   window.location.assign(path);
 }
 
+function closeWorkspaceMenus(except?: HTMLDetailsElement | null) {
+  document.querySelectorAll<HTMLDetailsElement>("details.workspace-lite-menu[open]").forEach((menu) => {
+    if (menu !== except) menu.open = false;
+  });
+}
+
 function closeParentMenu(target: HTMLElement) {
   const menu = target.closest("details");
   if (menu instanceof HTMLDetailsElement) menu.open = false;
+}
+
+function prepareWorkspaceMenu(target: HTMLElement) {
+  const menu = target.closest("details");
+  closeWorkspaceMenus(menu instanceof HTMLDetailsElement ? menu : null);
 }
 
 function routeWorkspaceId(pathname: string): string | null {
@@ -108,6 +119,23 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".workspace-lite-menu")) closeWorkspaceMenus();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeWorkspaceMenus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  useEffect(() => { closeWorkspaceMenus(); }, [pathname]);
 
   const switchWorkspace = useCallback(async (workspaceId: string, destination?: string) => {
     setBusy(true); setError("");
@@ -187,7 +215,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
             <WorkspaceControlLink workspaceId={selected.id} section="workflows" active={advancedSection === "workflows"}>Workflows</WorkspaceControlLink>
             <WorkspaceControlLink workspaceId={selected.id} section="activity" active={advancedSection === "activity"}>Activity</WorkspaceControlLink>
             <details className="workspace-lite-menu workspace-lite-tools-menu">
-              <summary>Tools</summary>
+              <summary onClick={(event) => prepareWorkspaceMenu(event.currentTarget)}>Tools</summary>
               <div className="workspace-lite-menu-panel">
                 <div className="workspace-lite-mobile-menu-links">
                   <a href={workspacePagePath(selected.id, "dashboard")} onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate(workspacePagePath(selected.id, "dashboard")); }}>Workspace home</a>
@@ -204,7 +232,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
             </details>
           </>}
           <details className="workspace-lite-menu workspace-lite-account-menu">
-            <summary>Account</summary>
+            <summary onClick={(event) => prepareWorkspaceMenu(event.currentTarget)}>Account</summary>
             <div className="workspace-lite-menu-panel">
               <a href="/account" onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate("/account"); }}>Workspaces</a>
               <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); void load(); }}>Refresh workspace list</button>
