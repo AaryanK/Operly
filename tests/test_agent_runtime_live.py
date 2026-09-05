@@ -218,13 +218,18 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_discordify(source), source)
 
     def test_personal_and_workspace_web_surfaces_mount_runtime_1_chat(self):
-        source = Path("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx").read_text(encoding="utf-8")
-        self.assertIn('import("../account/PersonalHome")', source)
-        self.assertIn('import("../workspace/WorkspaceOperly")', source)
-        self.assertIn('"operly"', source)
-        self.assertIn("<PersonalHome profile={null} />", source)
-        self.assertIn('<WorkspaceControlLink workspaceId={selected.id} section="operly"', source)
-        self.assertIn('case "operly": return <WorkspaceOperly workspace={workspace} />;', source)
+        shell = Path("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx").read_text(encoding="utf-8")
+        assistant = Path("apps/web/src/workspace/WorkspaceAssistantPanel.tsx").read_text(encoding="utf-8")
+
+        self.assertIn('import("../account/PersonalHome")', shell)
+        self.assertIn('import("../workspace/WorkspaceOperly")', shell)
+        self.assertIn('import("../workspace/WorkspaceAssistantPanel")', shell)
+        self.assertIn("<PersonalHome profile={null} />", shell)
+        self.assertIn('case "operly": return <WorkspaceOperly workspace={workspace} />;', shell)
+        self.assertIn("<WorkspaceAssistantPanel workspace={selected}", shell)
+        self.assertIn('"/agent/conversations"', assistant)
+        self.assertIn('"/agent/chat"', assistant)
+        self.assertIn('"/agent/chat-with-attachments"', assistant)
 
 
 if __name__ == "__main__":
