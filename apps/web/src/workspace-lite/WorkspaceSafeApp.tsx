@@ -110,7 +110,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   const personal = async () => {
     setBusy(true); setError("");
     try {
-      await api("/auth/personal-scope", { method: "POST" });
+      await api("/auth/personal-scope", { method: "POST", body: "{}" });
       go("/personal");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not switch to personal scope");
@@ -123,7 +123,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
     setBusy(true);
     setError("");
     try {
-      await api("/auth/logout", { method: "POST" });
+      await api("/auth/logout", { method: "POST", body: "{}" });
       go("/login");
     } catch (caught) {
       if (caught instanceof ApiError && (caught.status === 401 || caught.status === 409)) {
