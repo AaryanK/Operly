@@ -1,0 +1,63 @@
+name: Workspace Frontend
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/workspace-frontend.yml"
+      - "apps/api/csrf.py"
+      - "apps/web/package.json"
+      - "apps/web/package-lock.json"
+      - "apps/web/scripts/workspace-safe-contract.mjs"
+      - "apps/web/src/api.ts"
+      - "apps/web/src/main.tsx"
+      - "apps/web/src/workspace/**"
+      - "apps/web/src/workspace-lite/**"
+      - "apps/web/src/ui/workspace-assistant-shell.css"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/workspace-frontend.yml"
+      - "apps/api/csrf.py"
+      - "apps/web/package.json"
+      - "apps/web/package-lock.json"
+      - "apps/web/scripts/workspace-safe-contract.mjs"
+      - "apps/web/src/api.ts"
+      - "apps/web/src/main.tsx"
+      - "apps/web/src/workspace/**"
+      - "apps/web/src/workspace-lite/**"
+      - "apps/web/src/ui/workspace-assistant-shell.css"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Verify workspace interaction chain
+        working-directory: apps/web
+        run: npm run test:workspace-safe
+
+      - name: Build frontend
+        working-directory: apps/web
+        run: npm run build
