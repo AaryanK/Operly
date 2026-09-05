@@ -91,6 +91,7 @@
 .workspace-lite-menu-panel a.active,
 .workspace-lite-menu-panel button:hover { background: rgba(255,255,255,.065); color: #fff; }
 .workspace-lite-menu-panel button:disabled { opacity: .58; }
+.workspace-lite-mobile-menu-links { display: none; }
 
 .workspace-assistant-slot {
   position: sticky;
@@ -314,7 +315,8 @@
     overflow: visible;
   }
   .workspace-lite-topbar-actions > a { display: none; }
-  .workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }
+  .workspace-lite-tools-menu > summary { min-width: 54px; padding: 0 10px; justify-content: center; }
+  .workspace-lite-mobile-menu-links { display: contents; }
   .workspace-lite-account-menu > summary { width: 40px; padding: 0; justify-content: center; font-size: 0; }
   .workspace-lite-account-menu > summary::before { content: "A"; font-size: 12px; }
   .workspace-lite-account-menu > summary::after { display: none; }
