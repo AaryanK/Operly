@@ -33,6 +33,11 @@ function go(path: string) {
   window.location.assign(path);
 }
 
+function closeParentMenu(target: HTMLElement) {
+  const menu = target.closest("details");
+  if (menu instanceof HTMLDetailsElement) menu.open = false;
+}
+
 function routeWorkspaceId(pathname: string): string | null {
   if (!pathname.startsWith("/channels/")) return null;
   const raw = pathname.slice("/channels/".length).split("/", 1)[0];
@@ -66,7 +71,7 @@ function AdvancedWorkspacePage({ workspace, section }: { workspace: Workspace; s
 function WorkspaceControlLink({ workspaceId, section, active, prominent = false, children }: { workspaceId: string; section: AdvancedSection; active: boolean; prominent?: boolean; children: string }) {
   const path = workspaceControlPath(workspaceId, section);
   const className = [active ? "active" : "", prominent ? "workspace-lite-button workspace-lite-button-primary" : ""].filter(Boolean).join(" ") || undefined;
-  return <a className={className} href={path} onClick={(event) => { event.preventDefault(); navigate(path); }}>{children}</a>;
+  return <a className={className} href={path} onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate(path); }}>{children}</a>;
 }
 
 export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
@@ -184,16 +189,16 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
                 <WorkspaceControlLink workspaceId={selected.id} section="connections" active={advancedSection === "connections"}>Integrations</WorkspaceControlLink>
                 <WorkspaceControlLink workspaceId={selected.id} section="capabilities" active={advancedSection === "capabilities"}>All tools</WorkspaceControlLink>
                 <WorkspaceControlLink workspaceId={selected.id} section="access" active={advancedSection === "access"}>AI & MCP</WorkspaceControlLink>
-                <a href={workspaceControlPath(selected.id, "operly")} onClick={(event) => { event.preventDefault(); navigate(workspaceControlPath(selected.id, "operly")); }}>Open Operly full page</a>
+                <a href={workspaceControlPath(selected.id, "operly")} onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate(workspaceControlPath(selected.id, "operly")); }}>Open Operly full page</a>
               </div>
             </details>
           </>}
           <details className="workspace-lite-menu workspace-lite-account-menu">
             <summary>Account</summary>
             <div className="workspace-lite-menu-panel">
-              <a href="/account" onClick={(event) => { event.preventDefault(); navigate("/account"); }}>Workspaces</a>
-              <button type="button" onClick={() => void load()}>Refresh workspace list</button>
-              <button type="button" onClick={() => void logout()} disabled={logoutBusy}>{logoutBusy ? "Signing out…" : "Sign out"}</button>
+              <a href="/account" onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate("/account"); }}>Workspaces</a>
+              <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); void load(); }}>Refresh workspace list</button>
+              <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); void logout(); }} disabled={logoutBusy}>{logoutBusy ? "Signing out…" : "Sign out"}</button>
             </div>
           </details>
         </div>
