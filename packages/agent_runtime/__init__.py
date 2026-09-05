@@ -1,3 +1,4 @@
+from .context import ContextAssembler, ContextBudget, ContextItem, ContextKind, ContextSlice
 from .contracts import (
     AgentBudget,
     AgentPlan,
@@ -8,7 +9,28 @@ from .contracts import (
     AgentStepStatus,
     stable_step_request_id,
 )
+from .objective import (
+    ObjectiveComplexity,
+    ObjectiveIR,
+    ObjectiveInterpretationError,
+    ObjectiveInterpreter,
+    ObjectiveInterpreterLimits,
+    ObjectiveInterpreterModel,
+    ObjectiveInterpreterRequest,
+    ObjectiveKind,
+    ObjectiveOperation,
+    RuntimeDispatchPath,
+)
 from .orchestrator import AgentLeaseLost, DurableAgentOrchestrator
+from .planning import (
+    AgentPlannerLimits,
+    AgentPlannerModel,
+    AgentPlannerRequest,
+    AgentPlanningError,
+    AuthorizedCapabilityRetriever,
+    GovernedAgentPlanner,
+    PlannerCapability,
+)
 from .runtime import (
     AgentCancellation,
     AgentRuntimeDisabled,
@@ -22,6 +44,10 @@ __all__ = [
     "AgentCancellation",
     "AgentLeaseLost",
     "AgentPlan",
+    "AgentPlannerLimits",
+    "AgentPlannerModel",
+    "AgentPlannerRequest",
+    "AgentPlanningError",
     "AgentPlanStep",
     "AgentRunResult",
     "AgentRunStateError",
@@ -30,7 +56,25 @@ __all__ = [
     "AgentRuntimeSettings",
     "AgentStepResult",
     "AgentStepStatus",
+    "AuthorizedCapabilityRetriever",
+    "ContextAssembler",
+    "ContextBudget",
+    "ContextItem",
+    "ContextKind",
+    "ContextSlice",
     "DurableAgentOrchestrator",
+    "GovernedAgentPlanner",
     "GovernedAgentRuntime",
+    "ObjectiveComplexity",
+    "ObjectiveIR",
+    "ObjectiveInterpretationError",
+    "ObjectiveInterpreter",
+    "ObjectiveInterpreterLimits",
+    "ObjectiveInterpreterModel",
+    "ObjectiveInterpreterRequest",
+    "ObjectiveKind",
+    "ObjectiveOperation",
+    "PlannerCapability",
+    "RuntimeDispatchPath",
     "stable_step_request_id",
 ]

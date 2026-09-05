@@ -289,7 +289,6 @@ class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
             index.write_text("index", encoding="utf-8")
             asset.write_text("app", encoding="utf-8")
 
-            # First lookup builds/caches the confined manifest.
             self.assertEqual(_published_candidate(artifact, "assets/app.js"), asset.resolve())
             self.assertEqual(
                 _published_candidate(artifact, "client/side/route"), index.resolve()
@@ -305,12 +304,9 @@ class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
             except (OSError, NotImplementedError):
                 pass
             else:
-                # A new symlink is not in the cached manifest.
                 with self.assertRaises(HTTPException):
                     _published_candidate(artifact, "escape.txt")
 
-                # More importantly, replacing a previously cached safe entry with a
-                # symlink must be caught by response-time re-resolution.
                 asset.unlink()
                 asset.symlink_to(outside)
                 with self.assertRaises(HTTPException):
@@ -322,15 +318,25 @@ class PreAgentRuntimeStaticRegressionTests(unittest.TestCase):
         self.assertNotIn("artifact / relative", source)
         self.assertIn("files.get(relative)", source)
 
-    def test_production_boot_requires_separate_studio_cookie_site(self):
-        source = open("apps/api/main.py", encoding="utf-8").read()
-        self.assertIn("OPERLY_STUDIO_PUBLIC_HOST", source)
-        self.assertIn("_site_suffix_hint(STUDIO_PUBLIC_HOST)", source)
+    def test_production_boot_requires_separate_studio_cookie_site_and_explicit_agent_gate(self):
+        main = Path("apps/api/main.py").read_text(encoding="utf-8")
+        runtime = Path("packages/agent_runtime/runtime.py").read_text(encoding="utf-8")
+        self.assertIn("OPERLY_STUDIO_PUBLIC_HOST", main)
+        self.assertIn("_site_suffix_hint(STUDIO_PUBLIC_HOST)", main)
         self.assertIn(
             "Studio published content must use a separate registrable-style origin",
-            source,
+            main,
         )
-        self.assertIn('"ai_runtime_enabled": False', source)
+        self.assertIn(
+            'os.getenv("OPERLY_AGENT_RUNTIME_ENABLED", "0").strip() == "1"',
+            runtime,
+        )
+        self.assertIn(
+            '"ai_runtime_enabled": bool(agent["enabled"] and agent["configured"])',
+            main,
+        )
+        self.assertIn('"ai_runtime_gate_enabled": agent["enabled"]', main)
+        self.assertNotIn('"ai_runtime_enabled": True', main)
 
 
 if __name__ == "__main__":

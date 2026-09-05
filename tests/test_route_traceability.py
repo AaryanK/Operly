@@ -2,8 +2,10 @@ import unittest
 from collections import Counter
 
 from packages.kernel.route_traceability import (
+    EXPECTED_AGENT_RUNTIME_ROUTE_COUNT,
+    EXPECTED_BASE_ROUTE_COUNT,
+    EXPECTED_BASE_ROUTE_DIGEST,
     EXPECTED_ROUTE_COUNT,
-    EXPECTED_ROUTE_DIGEST,
     classify_route,
     validate_route_traceability,
 )
@@ -18,15 +20,34 @@ class RouteTraceabilityTests(unittest.TestCase):
 
     def test_exact_mounted_surface_is_pinned_and_fully_classified(self):
         self.assertEqual(len(self.rows), EXPECTED_ROUTE_COUNT)
-        self.assertEqual(self.digest, EXPECTED_ROUTE_DIGEST)
         errors = validate_route_traceability(self.rows, digest=self.digest)
         self.assertEqual(errors, [], "\n" + "\n".join(errors))
+
+    def test_pre_agent_surface_remains_cryptographically_pinned(self):
+        agent_sources = {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
+        base_rows = [row for row in self.rows if row["source"] not in agent_sources]
+        self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
+        self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
+
+    def test_runtime_1_ingress_is_exact_and_not_mislabeled_as_direct_kernel_transport(self):
+        agent_sources = {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
+        rows = [row for row in self.rows if row["source"] in agent_sources]
+        self.assertEqual(len(rows), EXPECTED_AGENT_RUNTIME_ROUTE_COUNT)
+        for row in rows:
+            with self.subTest(operation=row["operation"]):
+                classification = classify_route(row)
+                self.assertIsNotNone(classification)
+                self.assertEqual(classification.category, "agent_ingress")
+                self.assertFalse(classification.kernel_governed)
+                self.assertFalse(classification.semantic_event_source)
+                self.assertFalse(classification.workflow_trigger_identity)
 
     def test_classification_covers_every_current_operation_and_exposes_legacy_debt(self):
         classifications = [classify_route(row) for row in self.rows]
         self.assertTrue(all(item is not None for item in classifications))
         categories = Counter(item.category for item in classifications if item is not None)
         self.assertGreater(categories["kernel_governed"], 0)
+        self.assertEqual(categories["agent_ingress"], EXPECTED_AGENT_RUNTIME_ROUTE_COUNT)
         self.assertGreater(categories["semantic_event_ingress"], 0)
         self.assertGreater(categories["legacy_direct"], 0)
         self.assertGreater(categories["control_plane"], 0)

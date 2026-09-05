@@ -51,15 +51,26 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
                     f"Duplicate active plugin capability has conflicting versions: {spec.id}"
                 )
 
+    async def request_runtime(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+    ) -> "WorkspaceRuntime":
+        """Build the exact request-local runtime used for AI/plugin discovery and execution."""
+        runtime = _compose_workspace_runtime()
+        await runtime._load_active_plugins(db, context=context)
+        return runtime
+
     async def _request_runtime(
         self,
         db: AsyncSession,
         *,
         context: ExecutionContext,
     ) -> "WorkspaceRuntime":
-        runtime = _compose_workspace_runtime()
-        await runtime._load_active_plugins(db, context=context)
-        return runtime
+        # Compatibility alias for callers predating the public request-local composition
+        # API. New Runtime 1.0 ingress should call request_runtime().
+        return await self.request_runtime(db, context=context)
 
     async def available_capabilities(
         self,
@@ -69,7 +80,7 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
         query: str | None = None,
         limit: int = 50,
     ):
-        runtime = await self._request_runtime(db, context=context)
+        runtime = await self.request_runtime(db, context=context)
         return await AvailabilityAwareKernelRuntime.available_capabilities(
             runtime,
             db,
@@ -85,7 +96,7 @@ class WorkspaceRuntime(AvailabilityAwareKernelRuntime):
         context: ExecutionContext,
         request: RuntimeRequest,
     ) -> RuntimeResponse:
-        runtime = await self._request_runtime(db, context=context)
+        runtime = await self.request_runtime(db, context=context)
         return await AvailabilityAwareKernelRuntime.execute(
             runtime,
             db,
