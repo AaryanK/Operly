@@ -20,18 +20,32 @@ const initialState: ScopeState = {
   workspaces: [],
 };
 
+function accountScope(workspaces: WorkspaceSummary[], previous: PersonalProfile | null): PersonalProfile {
+  const current = workspaces.find((workspace) => workspace.current);
+  // The mounted session API is the authority for current scope. Keep the lightweight
+  // profile object here only for shell presentation; agent/tool authority never comes
+  // from these client fields.
+  return {
+    id: previous?.id,
+    email: previous?.email || "",
+    display_name: previous?.display_name || "Operly user",
+    current_workspace_id: current?.id || null,
+  };
+}
+
 export function useScope() {
   const [state, setState] = useState<ScopeState>(initialState);
 
   const refresh = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [profile, workspaces] = await Promise.all([
-        api<PersonalProfile>("/personal-agent/me"),
-        api<WorkspaceSummary[]>("/personal-agent/workspaces"),
-      ]);
-      setState((current) => ({ ...current, loading: false, error: null, profile, workspaces }));
-      return { profile, workspaces };
+      const workspaces = await api<WorkspaceSummary[]>("/auth/workspaces");
+      let profile: PersonalProfile | null = null;
+      setState((current) => {
+        profile = accountScope(workspaces, current.profile);
+        return { ...current, loading: false, error: null, profile, workspaces };
+      });
+      return { profile: profile as PersonalProfile, workspaces };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not load account scope";
       setState((current) => ({ ...current, loading: false, error: message }));
