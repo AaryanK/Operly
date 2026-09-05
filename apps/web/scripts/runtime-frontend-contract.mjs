@@ -26,6 +26,13 @@ assert(rootApp.includes('pathname === "/personal"'), "Legacy /personal must conv
 assert(rootApp.includes('pathname === "/channels/@me"'), "Canonical Personal route must use ProductApp");
 assert(rootApp.includes('pathname.startsWith("/channels/")'), "Workspace channel routes must use ProductApp");
 
+// Bootstrap only from mounted authenticated routes. These checks exist because the
+// previous ProductApp referenced unmounted /personal-agent/workspaces and never made
+// it through a real browser journey.
+assert(useScope.includes('api<WorkspaceSummary[]>("/auth/workspaces")'), "Canonical shell must bootstrap membership from /auth/workspaces");
+assert(!useScope.includes("/personal-agent/workspaces"), "Canonical shell must not depend on the unmounted /personal-agent/workspaces route");
+assert(!useScope.includes("/api/me"), "Canonical shell must not depend on the retired /api/me bootstrap");
+
 // Scope transitions are mutating requests and must satisfy the JSON request-safety contract.
 assert(useScope.includes('api("/auth/personal-scope", { method: "POST", body: "{}" })'), "Personal scope switch must send an explicit JSON body");
 assert(useScope.includes('body: JSON.stringify({ tenant_id: workspaceId })'), "Workspace switch must send an explicit JSON body");
