@@ -5,6 +5,9 @@ on:
     paths:
       - "apps/api/agent_runtime_router.py"
       - "apps/api/main.py"
+      - "apps/web/src/account/PersonalHome.tsx"
+      - "apps/web/src/workspace/WorkspaceOperly.tsx"
+      - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
       - "packages/agent_runtime/**"
       - "packages/database/agent_runtime_models.py"
       - "packages/database/agent_chat_models.py"
