@@ -11,13 +11,14 @@ type Props = {
   onWorkspace: (workspaceId: string) => void;
   onAccount: () => void;
   onCreateWorkspace: () => void;
+  onSignOut: () => void;
 };
 
 function initials(value: string): string {
   return value.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "O";
 }
 
-export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal, transitioning = false, onPersonal, onWorkspace, onAccount, onCreateWorkspace }: Props) {
+export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal, transitioning = false, onPersonal, onWorkspace, onAccount, onCreateWorkspace, onSignOut }: Props) {
   return <nav className="scope-rail" aria-label="Operly spaces" aria-busy={transitioning}>
     <button className={`scope-mark scope-brand ${personal ? "active" : ""}`} aria-label="Personal Operly" title="Personal Operly" disabled={transitioning} onClick={onPersonal}><OperlyMark label="Personal Operly" /></button>
     <span className="scope-divider" aria-hidden="true" />
@@ -26,5 +27,6 @@ export function ScopeRail({ profile, workspaces, activeWorkspaceId, personal, tr
       <button className="scope-mark scope-add" aria-label="Create workspace" title="Create workspace" disabled={transitioning} onClick={onCreateWorkspace}>+</button>
     </div>
     <button className="scope-account" title={profile?.email || "Account settings"} aria-label="Account settings" onClick={onAccount}>{initials(profile?.display_name || profile?.email || "Me")}</button>
+    <button className="scope-mark scope-signout" type="button" title="Sign out" aria-label="Sign out" disabled={transitioning} onClick={onSignOut}>↪</button>
   </nav>;
 }
