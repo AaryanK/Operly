@@ -8,11 +8,12 @@ const webRoot = resolve(here, "..");
 async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, useScope, scopeRail, personalHome, workspaceShell, workspaceHome, routes] = await Promise.all([
+const [rootApp, productApp, useScope, scopeRail, accountSettings, personalHome, workspaceShell, workspaceHome, routes] = await Promise.all([
   text("src/app/App.tsx"),
   text("src/app/ProductApp.tsx"),
   text("src/app/useScope.ts"),
   text("src/account/ScopeRail.tsx"),
+  text("src/account/AccountSettings.tsx"),
   text("src/account/PersonalHome.tsx"),
   text("src/workspace/WorkspaceShell.tsx"),
   text("src/workspace/WorkspaceHome.tsx"),
@@ -37,10 +38,13 @@ assert(!useScope.includes("/api/me"), "Canonical shell must not depend on the re
 assert(useScope.includes('api("/auth/personal-scope", { method: "POST", body: "{}" })'), "Personal scope switch must send an explicit JSON body");
 assert(useScope.includes('body: JSON.stringify({ tenant_id: workspaceId })'), "Workspace switch must send an explicit JSON body");
 
-// Sign out must be a real reachable action from the shared shell and hard-clear in-memory state.
+// Sign out and workspace creation must be real reachable actions from the shared shell.
 assert(scopeRail.includes("onSignOut"), "Canonical scope rail must expose sign out");
 assert(productApp.includes('api("/auth/logout", { method: "POST", body: "{}" })'), "Product shell sign out must call the authenticated logout endpoint with JSON");
 assert(productApp.includes('window.location.assign("/login")'), "Product shell sign out must hard-navigate to login after clearing session state");
+assert(accountSettings.includes('>("/auth/workspaces", {'), "Create workspace must use the mounted authenticated workspace endpoint");
+assert(!accountSettings.includes('>("/workspaces", {'), "Account settings must not call the retired /workspaces endpoint");
+assert(!accountSettings.includes('/personal-agent/me'), "Account settings must not show a profile-save action backed by an unmounted endpoint");
 
 // Personal human control must use Kernel v3 approvals, not the retired legacy approvals router.
 assert(personalHome.includes('"/kernel/personal/approvals?limit=12"'), "Personal Operly must read canonical Kernel approvals");
