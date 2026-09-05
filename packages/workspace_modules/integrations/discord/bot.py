@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import discord
 from sqlalchemy import select
@@ -221,8 +222,68 @@ def _prompt(message: discord.Message) -> str:
     return clean
 
 
+def _table_cells(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_table_separator(line: str) -> bool:
+    cells = _table_cells(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+
+
+def _discordify(text: str) -> str:
+    """Convert portable model Markdown into Discord-friendly Markdown.
+
+    Discord does not render GitHub-style tables. Preserve ordinary headings, bullets,
+    code fences and emphasis while rewriting table blocks into compact labeled bullets.
+    """
+
+    source = str(text or "Done.").replace("\r\n", "\n").replace("\r", "\n")
+    lines = source.split("\n")
+    output: list[str] = []
+    index = 0
+    converted_tables = 0
+    while index < len(lines):
+        if index + 1 < len(lines) and "|" in lines[index] and _is_table_separator(lines[index + 1]):
+            headers = _table_cells(lines[index])
+            index += 2
+            rows: list[list[str]] = []
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                row = _table_cells(lines[index])
+                if len(row) >= 2:
+                    rows.append(row)
+                    index += 1
+                    continue
+                break
+            if rows:
+                converted_tables += 1
+                for row in rows:
+                    first = row[0] if row else "Item"
+                    details = []
+                    for cell_index, cell in enumerate(row[1:], 1):
+                        if not cell:
+                            continue
+                        label = headers[cell_index] if cell_index < len(headers) and headers[cell_index] else f"Field {cell_index + 1}"
+                        details.append(f"**{label}:** {cell}")
+                    output.append(f"- **{first}**" + (f" — {' · '.join(details)}" if details else ""))
+                continue
+        output.append(lines[index])
+        index += 1
+
+    rendered = "\n".join(output).strip() or "Done."
+    if converted_tables:
+        runtime_trace(
+            "discord.output_formatted",
+            table_blocks=converted_tables,
+            original_chars=len(source),
+            rendered_chars=len(rendered),
+        )
+    return rendered
+
+
 async def _reply_chunks(message: discord.Message, text: str) -> None:
-    remaining = str(text or "Done.")
+    remaining = _discordify(text)
     first = True
     while remaining:
         if len(remaining) <= 1900:
