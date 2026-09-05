@@ -9,6 +9,7 @@ import "./ui/theme.css";
 import "./ui/brand.css";
 import "./ui/workspace-lite.css";
 import "./ui/workspace-assistant-shell.css";
+import "./ui/personal-operly.css";
 import "./ui/workspace-os.css";
 import "./ui/workspace-human.css";
 import "./ui/integration-workbench.css";
