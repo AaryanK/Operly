@@ -74,9 +74,17 @@ function authorizedHeaders(path: string, options: RequestInit): Headers {
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = authorizedHeaders(path, options);
-  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+  const method = (options.method || "GET").toUpperCase();
+  const mutates = !["GET", "HEAD", "OPTIONS"].includes(method);
+
+  // Operly's authenticated mutation contract is JSON-first, including actions
+  // that do not need a payload (logout, personal-scope, etc.). Keep this at the
+  // shared request boundary so UI controls cannot accidentally leak a raw
+  // "Send this request as JSON" API error back to the user.
+  if (mutates && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+
   const response = await fetch(`/api${path}`, { ...options, headers, credentials: "same-origin" });
   return readResponse<T>(response);
 }
