@@ -10,10 +10,13 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, assistantPanel, assistantStyles, main, apiClient, csrfMiddleware] = await Promise.all([
+const [safeShell, assistantPanel, assistantStyles, personalHome, personalStyles, personalStateStyles, main, apiClient, csrfMiddleware] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/workspace/WorkspaceAssistantPanel.tsx"),
   text("src/ui/workspace-assistant-shell.css"),
+  text("src/account/PersonalHome.tsx"),
+  text("src/ui/personal-operly.css"),
+  text("src/ui/personal-operly-state.css"),
   text("src/main.tsx"),
   text("src/api.ts"),
   repoText("apps/api/csrf.py"),
@@ -28,12 +31,20 @@ assert(
   "Shared API client must identify mutation methods",
 );
 assert(
-  apiClient.includes('if (mutates && !(options.body instanceof FormData) && !headers.has("Content-Type"))'),
-  "Bodyless JSON mutations must still receive the application/json content type",
+  apiClient.includes('if (mutates && !isFormData)'),
+  "Shared API client must normalize non-form mutations through the JSON boundary",
 );
 assert(
   apiClient.includes('headers.set("Content-Type", "application/json")'),
-  "Shared API client must enforce the JSON mutation contract",
+  "Shared API client must enforce the JSON mutation content type",
+);
+assert(
+  apiClient.includes('if (body == null) body = "{}";'),
+  "Payload-free JSON mutations must send a syntactically valid empty JSON object",
+);
+assert(
+  apiClient.includes('{ ...options, body, headers, credentials: "same-origin" }'),
+  "Normalized empty JSON bodies must reach fetch instead of the original empty request",
 );
 
 for (const bodylessAuthAction of ["/auth/personal-scope", "/auth/logout"]) {
@@ -52,7 +63,8 @@ assert(
   "Operly brand navigation must resolve to the active AI scope",
 );
 assert(safeShell.includes('label="Operly AI"'), "Scope rail must expose Operly AI explicitly");
-assert(safeShell.includes('aria-label="Switch to Personal Operly">ME</button>'), "Personal scope switching must be a separate explicit control");
+assert(safeShell.includes('aria-label="Switch to Personal Operly">ME</button>'), "Personal scope switching must remain a separate explicit control");
+assert(personalStateStyles.includes('content: "Personal AI"'), "Touch scope rail must spell out Personal AI instead of exposing only the cryptic ME label");
 assert(safeShell.includes('case "operly": return <WorkspaceOperly workspace={workspace} />;'), "Workspace Operly full-page route must remain available");
 
 assert(safeShell.includes("const [assistantOpen, setAssistantOpen]"), "Workspace shell must own assistant drawer state");
@@ -92,5 +104,16 @@ assert(assistantStyles.includes("z-index: 130"), "Workspace header menus must st
 assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: none; }"), "Mobile-only navigation must stay hidden on desktop");
 assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: contents; }"), "Touch workspace menu must reveal mobile-only navigation");
 assert(!assistantStyles.includes(".workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }"), "Touch layout must not hide the workspace tools menu");
+
+assert(main.includes('import "./ui/personal-operly.css"') && main.includes('import "./ui/personal-operly-state.css"'), "Personal Operly dark/touch styles must load with the authenticated shell");
+assert(personalHome.includes("workspace-lite-personal-stage personal-layout"), "Personal Operly must own a dedicated authenticated dark-theme boundary");
+assert(personalHome.includes("const [mobileListOpen, setMobileListOpen] = useState(false)"), "Personal Operly should open directly to the chat on phones instead of the legacy list pane");
+assert(personalHome.includes('>← Chats</button>'), "Personal chat must expose an explicit mobile route back to conversations");
+assert(!personalHome.includes('"/approvals/personal"'), "Personal Operly must not call the retired unmounted approvals endpoint");
+assert(personalHome.includes("canonical human-control checkpoint"), "Personal Operly must describe the Agent Runtime approval boundary instead of reviving legacy approval routing");
+assert(personalStyles.includes("color-scheme: dark"), "Personal Operly must use the current dark authenticated theme");
+assert(personalStyles.includes("@media (max-width: 760px), (pointer: coarse)"), "Personal Operly must handle touch devices that report desktop-like layout viewports");
+assert(personalStateStyles.includes(".workspace-lite-personal-stage.mobile-personal-list .personal-history"), "Personal conversation list needs an explicit full-screen touch state");
+assert(personalStateStyles.includes(".workspace-lite-personal-stage.mobile-personal-thread .personal-history { display: none; }"), "Personal chat touch state must not leak the desktop sidebar into the thread");
 
 console.log("Workspace safe-shell interaction contracts passed.");
