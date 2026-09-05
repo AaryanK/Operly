@@ -49,7 +49,7 @@ export function WorkspaceAssistantPanel({ workspace, onClose }: Props) {
   async function refreshHistory(prefer?: string | null) {
     const rows = await api<Conversation[]>("/agent/conversations");
     setConversations(rows);
-    const next = prefer || conversationId || rows[0]?.id;
+    const next = prefer || rows[0]?.id;
     if (next) await openConversation(next);
   }
 
