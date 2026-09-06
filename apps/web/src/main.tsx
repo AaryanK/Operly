@@ -19,6 +19,7 @@ import "./ui/personal-operly.css";
 import "./ui/personal-operly-state.css";
 import "./ui/public.css";
 import "./ui/react-public-admin-palette.css";
+import "./ui/react-public-live.css";
 import "./ui/auth-public-consistency.css";
 
 const INVITE_KEY = "operly:workspace-invite";
