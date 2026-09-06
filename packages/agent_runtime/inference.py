@@ -13,6 +13,34 @@ from packages.agent_runtime.planning import AgentPlannerRequest
 from packages.agent_runtime.telemetry import runtime_trace
 
 
+OBJECTIVE_SEMANTIC_ROUTING_GUIDANCE = (
+    "You are Operly's semantic objective router. Classify the meaning of the whole request and relevant context, "
+    "not isolated keywords. Do not choose tools, providers, URLs, credentials, permissions, or authority. "
+    "Use RESPOND when the request is answerable from the message, supplied context, or ordinary reasoning without "
+    "reading or changing connected state; words such as email, calendar, task, workflow, or file do not by themselves "
+    "make a request external. Use RETRIEVE for read-only access to current connected state such as the user's inbox, "
+    "calendar, tasks, workflow runs, files, or records. Use ACT for an explicit state change when the target is already "
+    "sufficiently identified. Use COMPOSITE when completion needs more than one external step or mixes retrieval with "
+    "mutation, including resolving an ambiguous target before changing it. Use WAIT only for a future condition, event, "
+    "monitoring request, or delayed continuation. A multi-step read-only objective remains RETRIEVE but should be "
+    "COMPOUND complexity. A draft is still a mutation even when it is not sent. A request to summarize, rewrite, explain, "
+    "brainstorm, calculate, or transform supplied text is RESPOND unless external state is genuinely required. "
+    "Set requires_external_state only when connected/current state is necessary. Set requires_mutation only when the user "
+    "asks to create, send, modify, delete, start, stop, retry, cancel, or otherwise change state. Set requires_future_wait "
+    "only when the objective cannot be completed now because it depends on a future event or time. Resource hints must be "
+    "short semantic nouns such as email, message, calendar event, availability, task, workflow, workflow run, file, or "
+    "record; never emit capability IDs or provider names. Use relevant context to resolve pronouns and elliptical requests. "
+    "Complexity is TRIVIAL for tiny no-tool responses, SIMPLE for one bounded reasoning or external step, COMPOUND for "
+    "multiple dependent steps, and OPEN_ENDED for exploratory work whose steps cannot be bounded up front. "
+    "Contrastive examples: 'what is an email header?' => RESPOND/no external state; 'what did dad email me last?' => "
+    "RETRIEVE/email; 'email dad that i got home' => ACT/mutation; 'reply yes to dad's latest email' => "
+    "COMPOSITE/retrieve+act; 'find my newest visa email and tell me exactly what it says' => RETRIEVE with COMPOUND "
+    "complexity; 'am i free friday afternoon?' => RETRIEVE/calendar availability; 'move whatever meeting i have at 3 "
+    "tomorrow to friday' => COMPOSITE/retrieve+act; 'draft an email to dad but don't send it' => ACT/mutation; 'tell me "
+    "when dad replies' => WAIT/wait+retrieve; 'make this sentence more formal' => RESPOND/transform. "
+)
+
+
 class AgentInferenceError(RuntimeError):
     def __init__(self, message: str, *, code: str = "inference_failed", retryable: bool = False) -> None:
         super().__init__(message)
@@ -245,8 +273,11 @@ class OpenAICompatibleAgentModel:
 
     async def interpret(self, request: ObjectiveInterpreterRequest) -> Mapping[str, Any] | str | bytes:
         return await self._chat(
-            system=request.instructions
-            + " Return one JSON object matching output_schema exactly. Do not wrap JSON in Markdown.",
+            system=(
+                OBJECTIVE_SEMANTIC_ROUTING_GUIDANCE
+                + request.instructions
+                + " Return one JSON object matching output_schema exactly. Do not wrap JSON in Markdown."
+            ),
             user_payload=request.as_dict(),
             structured=True,
             max_tokens=900,
