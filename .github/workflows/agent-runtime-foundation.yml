@@ -23,6 +23,7 @@ on:
       - "tests/test_agent_runtime_objective_repair.py"
       - "tests/test_agent_runtime_planning.py"
       - "tests/test_agent_runtime_live.py"
+      - "tests/test_agent_runtime_query_scorecard.py"
       - "tests/test_agent_runtime_retrieval_health.py"
       - "tests/test_agent_runtime_objective_eval.py"
       - "tests/test_kernel_capability_search.py"
@@ -89,6 +90,7 @@ jobs:
             tests/test_agent_runtime_objective_repair.py \
             tests/test_agent_runtime_planning.py \
             tests/test_agent_runtime_live.py \
+            tests/test_agent_runtime_query_scorecard.py \
             tests/test_agent_runtime_retrieval_health.py \
             tests/test_agent_runtime_objective_eval.py \
             tests/test_kernel_capability_search.py \
@@ -103,6 +105,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_objective_repair -v
           python -m unittest tests.test_agent_runtime_planning -v
           python -m unittest tests.test_agent_runtime_live -v
+          python -m unittest tests.test_agent_runtime_query_scorecard -v
           python -m unittest tests.test_agent_runtime_retrieval_health -v
           python -m unittest tests.test_agent_runtime_objective_eval -v
           python -m unittest tests.test_kernel_capability_search -v
