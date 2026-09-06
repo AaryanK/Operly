@@ -2,6 +2,7 @@ import unittest
 from collections import Counter
 
 from packages.kernel.route_traceability import (
+    EXPECTED_ADMIN_ROUTE_COUNT,
     EXPECTED_AGENT_RUNTIME_ROUTE_COUNT,
     EXPECTED_BASE_ROUTE_COUNT,
     EXPECTED_BASE_ROUTE_DIGEST,
@@ -23,9 +24,13 @@ class RouteTraceabilityTests(unittest.TestCase):
         errors = validate_route_traceability(self.rows, digest=self.digest)
         self.assertEqual(errors, [], "\n" + "\n".join(errors))
 
-    def test_pre_agent_surface_remains_cryptographically_pinned(self):
-        agent_sources = {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
-        base_rows = [row for row in self.rows if row["source"] not in agent_sources]
+    def test_pre_agent_and_admin_surface_remains_cryptographically_pinned(self):
+        isolated_sources = {
+            "personal_agent_runtime_router",
+            "workspace_agent_runtime_router",
+            "admin_router",
+        }
+        base_rows = [row for row in self.rows if row["source"] not in isolated_sources]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
 
@@ -38,6 +43,29 @@ class RouteTraceabilityTests(unittest.TestCase):
                 classification = classify_route(row)
                 self.assertIsNotNone(classification)
                 self.assertEqual(classification.category, "agent_ingress")
+                self.assertFalse(classification.kernel_governed)
+                self.assertFalse(classification.semantic_event_source)
+                self.assertFalse(classification.workflow_trigger_identity)
+
+    def test_restored_platform_admin_surface_is_exact_control_plane(self):
+        rows = [row for row in self.rows if row["source"] == "admin_router"]
+        self.assertEqual(len(rows), EXPECTED_ADMIN_ROUTE_COUNT)
+        self.assertEqual(
+            {row["operation"] for row in rows},
+            {
+                "GET /api/admin/session",
+                "GET /api/admin/overview",
+                "GET /api/admin/users",
+                "GET /api/admin/workspaces",
+                "GET /api/admin/geography",
+                "GET /api/admin/ai-usage",
+            },
+        )
+        for row in rows:
+            with self.subTest(operation=row["operation"]):
+                classification = classify_route(row)
+                self.assertIsNotNone(classification)
+                self.assertEqual(classification.category, "control_plane")
                 self.assertFalse(classification.kernel_governed)
                 self.assertFalse(classification.semantic_event_source)
                 self.assertFalse(classification.workflow_trigger_identity)
