@@ -133,7 +133,7 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"OPERLY_AGENT_OBJECTIVE_EVAL_ON_START": "0"}, clear=False):
             self.assertIsNone(await run_startup_objective_eval_if_enabled())
 
-    async def test_interpreter_uses_semantic_contrastive_guidance(self):
+    async def test_interpreter_uses_scope_aware_semantic_guidance(self):
         model = OpenAICompatibleAgentModel(
             route=InferenceRoute(
                 provider="groq",
@@ -152,11 +152,15 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
         await model.interpret(request)
         system = model._chat.await_args.kwargs["system"]
         self.assertIn(OBJECTIVE_SEMANTIC_ROUTING_GUIDANCE, system)
-        self.assertIn("Classify the meaning of the whole request", system)
-        self.assertIn("what did dad email me last?", system)
-        self.assertIn("reply yes to dad's latest email", system)
-        self.assertIn("move whatever meeting", system)
-        self.assertIn("tell me when dad replies", system)
+        self.assertIn("meaning and pragmatics of the whole request", system)
+        self.assertIn("scope_kind", system)
+        self.assertIn("interpretive grounding", system)
+        self.assertIn("current Workspace state", system)
+        self.assertIn("Personal state", system)
+        self.assertIn("not an additional external retrieval step", system)
+        self.assertIn("specific, provider-neutral canonical concepts", system)
+        self.assertIn("not a closed dictionary", system)
+        self.assertIn("every language", system)
 
 
 if __name__ == "__main__":
