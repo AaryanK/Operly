@@ -4,9 +4,12 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from packages.agent_runtime.context import ContextSlice
 from packages.agent_runtime.evaluation import (
     OBJECTIVE_EVAL_CASES,
     _evaluate_case,
+    _interpret_with_backoff,
+    _personal_context,
     run_startup_objective_eval_if_enabled,
 )
 from packages.agent_runtime.inference import (
@@ -17,11 +20,11 @@ from packages.agent_runtime.inference import (
 from packages.agent_runtime.objective import (
     ObjectiveComplexity,
     ObjectiveIR,
+    ObjectiveInterpretationError,
+    ObjectiveInterpreterRequest,
     ObjectiveKind,
     ObjectiveOperation,
-    ObjectiveInterpreterRequest,
 )
-from packages.agent_runtime.context import ContextSlice
 
 
 class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
@@ -58,6 +61,54 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
         ok, mismatches = _evaluate_case(case, objective, ["google.gmail.send_email"])
         self.assertFalse(ok)
         self.assertIn("tool_missing:google.gmail.search", mismatches)
+
+    async def test_model_failure_retries_with_bounded_backoff(self):
+        case = OBJECTIVE_EVAL_CASES[0]
+        expected = ObjectiveIR(
+            objective="Explain recursion",
+            kind=ObjectiveKind.RESPOND,
+            operations=(ObjectiveOperation.RESPOND,),
+            resource_hints=(),
+            requires_external_state=False,
+            requires_mutation=False,
+            requires_future_wait=False,
+            complexity=ObjectiveComplexity.SIMPLE,
+        )
+        interpreter = AsyncMock()
+        interpreter.interpret.side_effect = [
+            ObjectiveInterpretationError("provider unavailable", code="objective_model_failed"),
+            expected,
+        ]
+        with patch("packages.agent_runtime.evaluation.asyncio.sleep", new=AsyncMock()) as sleep:
+            result = await _interpret_with_backoff(
+                interpreter,
+                case=case,
+                context=_personal_context(),
+                max_attempts=3,
+                retry_delay_seconds=7.0,
+            )
+        self.assertIs(result, expected)
+        self.assertEqual(interpreter.interpret.await_count, 2)
+        sleep.assert_awaited_once_with(7.0)
+
+    async def test_semantic_contract_error_is_not_retried(self):
+        case = OBJECTIVE_EVAL_CASES[0]
+        interpreter = AsyncMock()
+        interpreter.interpret.side_effect = ObjectiveInterpretationError(
+            "invalid semantic output",
+            code="inconsistent_objective_output",
+        )
+        with patch("packages.agent_runtime.evaluation.asyncio.sleep", new=AsyncMock()) as sleep:
+            with self.assertRaises(ObjectiveInterpretationError):
+                await _interpret_with_backoff(
+                    interpreter,
+                    case=case,
+                    context=_personal_context(),
+                    max_attempts=3,
+                    retry_delay_seconds=7.0,
+                )
+        self.assertEqual(interpreter.interpret.await_count, 1)
+        sleep.assert_not_awaited()
 
     async def test_startup_eval_is_strictly_opt_in(self):
         with patch.dict(os.environ, {"OPERLY_AGENT_OBJECTIVE_EVAL_ON_START": "0"}, clear=False):

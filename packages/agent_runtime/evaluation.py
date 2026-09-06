@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any
 
 from packages.agent_runtime.context import ContextItem, ContextKind
 from packages.agent_runtime.inference import OpenAICompatibleAgentModel
-from packages.agent_runtime.objective import ObjectiveInterpreter, RuntimeDispatchPath
+from packages.agent_runtime.objective import ObjectiveInterpretationError, ObjectiveInterpreter
 from packages.agent_runtime.runtime import AgentRuntimeSettings
 from packages.agent_runtime.telemetry import runtime_trace
 from packages.personal_modules.runtime import build_personal_runtime
@@ -66,10 +67,9 @@ def _case(
 
 
 # Synthetic, non-sensitive prompts deliberately include fragments, typos, slang,
-# indirect phrasing, contrastive no-tool cases, and compound objectives. They are
-# an operator scorecard for the exact model-backed ObjectiveInterpreter used by Operly.
+# indirect phrasing, contrastive no-tool cases, compound objectives and context turns.
+# This is an operator scorecard for the exact model-backed interpreter used by Operly.
 OBJECTIVE_EVAL_CASES: tuple[ObjectiveEvalCase, ...] = (
-    # No-tool / response negatives: words like email/calendar must not force tools.
     _case("respond.recursion", "explain recursion like im 12", kind="respond", external=False, dispatch="respond", ops=("respond",)),
     _case("respond.rewrite", "make this sound less awkward: hey prof i got back yesterday", kind="respond", external=False, dispatch="respond", ops=("transform",)),
     _case("respond.email_concept", "what even is an email header?", kind="respond", external=False, dispatch="respond", ops=("respond",)),
@@ -79,7 +79,6 @@ OBJECTIVE_EVAL_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("respond.math", "whats 17*23", kind="respond", external=False, dispatch="respond", ops=("respond",)),
     _case("respond.brainstorm", "give me 5 names for a personal ai memory layer", kind="respond", external=False, dispatch="respond", ops=("respond",)),
 
-    # Gmail retrieval: natural, fragmentary, typo-heavy and indirect wording.
     _case("gmail.search.dad", "search my emails for dad's emails", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search"),
     _case("gmail.search.casual", "yo what did dad email me about the flight", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search"),
     _case("gmail.search.typo", "find dads emial abt my ticket", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search"),
@@ -91,14 +90,12 @@ OBJECTIVE_EVAL_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("gmail.read.id", "read gmail message 18d3abc for me", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.read_message"),
     _case("gmail.search.then_read", "find my most recent visa email and tell me exactly what it says", kind="retrieve", external=True, dispatch="agent_loop", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search", complexity="compound"),
 
-    # Gmail mutations and retrieve+act distinction.
     _case("gmail.send.simple", "email dad that i got home safe", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.send_email"),
     _case("gmail.send.typo", "send dad an emial saying im back in wichita", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.send_email"),
     _case("gmail.draft", "draft an email to dad saying ill call tonight dont send it", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "gmail", "draft", "message"), capability="google.gmail.create_draft"),
     _case("gmail.reply.latest", "reply yes sounds good to dads latest email", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search", complexity="compound"),
     _case("gmail.forwardish", "find the workshop email then email dad the date and time from it", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search", complexity="compound"),
 
-    # Calendar reads with colloquial and abbreviated language.
     _case("calendar.tomorrow", "whats on my calendar tomorrow", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events"),
     _case("calendar.typo", "wht meetings do i have tmrw", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events"),
     _case("calendar.fragment", "tomorrow calendar", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events"),
@@ -107,20 +104,17 @@ OBJECTIVE_EVAL_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("calendar.free.casual", "check if im booked around 3ish friday", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "availability", "schedule", "meeting"), capability="google.calendar.freebusy"),
     _case("calendar.list", "what calendars do i have connected", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar",), capability="google.calendar.list_calendars"),
 
-    # Calendar mutations. If the target must first be resolved, classify composite.
     _case("calendar.create", "put dentist on my calendar friday 2 to 3", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("calendar", "event", "meeting"), capability="google.calendar.create_event"),
     _case("calendar.create.casual", "book me a study block tmrw 6-8pm", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.create_event"),
     _case("calendar.move.semantic", "move whatever meeting i have at 3 tomorrow to friday", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events", complexity="compound"),
     _case("calendar.cancel.semantic", "cancel my meeting with jeffrey tomorrow", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events", complexity="compound"),
     _case("calendar.update.context", "move that to 4pm", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("calendar", "event", "meeting"), capability="google.calendar.update_event", context=("assistant: The selected calendar event is event_id evt-123, currently Friday at 3 PM.",)),
 
-    # Personal tasks.
     _case("tasks.list", "what tasks do i still have open", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("task", "tasks", "todo"), capability="tasks.list"),
     _case("tasks.fragment", "my todos", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("task", "tasks", "todo"), capability="tasks.list"),
     _case("tasks.create", "add a task to submit my report tomorrow", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("task", "tasks", "todo"), capability="tasks.create"),
     _case("tasks.done", "mark the report task done", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("task", "tasks", "todo"), capability="tasks.list", complexity="compound"),
 
-    # Workflows and runtime state.
     _case("workflow.list", "show my workflows", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("workflow",), capability="workflow.list"),
     _case("workflow.runs", "what workflow runs happened recently", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("workflow", "run"), capability="workflow.run.list"),
     _case("workflow.trace", "why did that workflow fail show me the trace", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("workflow", "trace", "run"), capability="workflow.trace"),
@@ -129,19 +123,16 @@ OBJECTIVE_EVAL_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("workflow.retry", "retry the failed workflow run", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("workflow", "run"), capability="workflow.run.retry"),
     _case("runtime.status", "is operly runtime healthy rn", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("runtime", "system", "health"), capability="system.runtime.status"),
 
-    # Compound cross-resource objectives should enter the agent loop.
     _case("compound.calendar_email", "check when im free friday and email dad the open times", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("calendar", "email", "mail", "schedule"), complexity="compound"),
     _case("compound.email_task", "find the deadline in professors last email and make me a task for it", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("email", "mail", "task"), complexity="compound"),
     _case("compound.calendar_create", "see if im free friday at 3 and if i am put gym on my calendar", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("calendar", "availability", "event"), complexity="compound"),
     _case("compound.email_calendar", "find the meeting time from jeffreys email and add it to my calendar", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("email", "mail", "calendar", "event"), complexity="compound"),
 
-    # Future/event-driven objectives.
     _case("wait.email", "tell me when dad replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("email", "mail", "message")),
     _case("wait.email.casual", "keep an eye on my inbox and ping me if professor replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("email", "mail", "inbox", "message")),
     _case("wait.calendar", "let me know if anything gets added to my calendar tomorrow", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("calendar", "event")),
     _case("wait.workflow", "tell me when that workflow finishes", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("workflow", "run")),
 
-    # Relevant-context pronoun / elliptical cases.
     _case("context.email.reply", "reply saying yes that works", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "message"), capability="google.gmail.send_email", context=("assistant: Dad's selected email is from dad@example.test and asks whether 7 PM works.",)),
     _case("context.calendar.read", "what time is that again", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "event", "meeting"), capability="google.calendar.list_events", context=("user: I was asking about my meeting with Jeffrey tomorrow.",)),
 )
@@ -203,36 +194,85 @@ def _evaluate_case(case: ObjectiveEvalCase, objective, tool_ids: list[str]) -> t
     return not mismatches, mismatches
 
 
-async def run_live_objective_eval(*, limit: int | None = None) -> dict[str, Any]:
-    """Run synthetic raw prompts through Operly's real production objective model.
+async def _interpret_with_backoff(
+    interpreter: ObjectiveInterpreter,
+    *,
+    case: ObjectiveEvalCase,
+    context: ExecutionContext,
+    max_attempts: int,
+    retry_delay_seconds: float,
+):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await interpreter.interpret(
+                message=case.prompt,
+                context=context,
+                context_items=_context_items(case),
+            )
+        except ObjectiveInterpretationError as error:
+            if error.code != "objective_model_failed" or attempt >= max_attempts:
+                raise
+            delay = retry_delay_seconds * attempt
+            runtime_trace(
+                "objective_eval.model_retry",
+                case_id=case.case_id,
+                attempt=attempt,
+                delay_seconds=delay,
+            )
+            await asyncio.sleep(delay)
+    raise RuntimeError("objective evaluation retry loop exhausted")
 
-    No user records, connector data, capabilities, or mutations are executed. The only
-    external calls are inference requests used by ObjectiveInterpreter. Capability
-    retrieval is then evaluated locally against the effective Personal registry.
+
+async def run_live_objective_eval(
+    *,
+    limit: int | None = None,
+    interval_seconds: float = 9.0,
+    max_model_attempts: int = 3,
+    retry_delay_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Measure the real Operly objective model without touching user/provider state.
+
+    Calls are intentionally paced because this scorecard exercises the same configured
+    production inference route as interactive Operly. Provider failures are tracked as
+    infrastructure errors and are excluded from semantic accuracy rather than being
+    falsely reported as classifier misses.
     """
 
     context = _personal_context()
-    model = OpenAICompatibleAgentModel()
     interpreter = ObjectiveInterpreter(
-        model=model,
+        model=OpenAICompatibleAgentModel(),
         settings=AgentRuntimeSettings(enabled=True),
     )
     registry = build_personal_runtime().registry
     cases = OBJECTIVE_EVAL_CASES[: limit or len(OBJECTIVE_EVAL_CASES)]
     passed = 0
+    scored_total = 0
     classifier_passed = 0
     retrieval_passed = 0
     retrieval_total = 0
+    model_errors = 0
     failures: list[dict[str, Any]] = []
 
-    runtime_trace("objective_eval.started", total=len(cases))
-    for case in cases:
+    interval_seconds = max(0.0, min(float(interval_seconds), 60.0))
+    max_model_attempts = max(1, min(int(max_model_attempts), 5))
+    retry_delay_seconds = max(1.0, min(float(retry_delay_seconds), 60.0))
+    runtime_trace(
+        "objective_eval.started",
+        total=len(cases),
+        interval_seconds=interval_seconds,
+        max_model_attempts=max_model_attempts,
+    )
+
+    for index, case in enumerate(cases):
         try:
-            objective = await interpreter.interpret(
-                message=case.prompt,
+            objective = await _interpret_with_backoff(
+                interpreter,
+                case=case,
                 context=context,
-                context_items=_context_items(case),
+                max_attempts=max_model_attempts,
+                retry_delay_seconds=retry_delay_seconds,
             )
+            scored_total += 1
             tool_ids: list[str] = []
             if objective.requires_external_state:
                 tool_ids = [
@@ -244,14 +284,17 @@ async def run_live_objective_eval(*, limit: int | None = None) -> dict[str, Any]
                         limit=12,
                     )
                 ]
+
             ok, mismatches = _evaluate_case(case, objective, tool_ids)
             classifier_mismatches = [item for item in mismatches if not item.startswith("tool_missing:")]
             retrieval_mismatches = [item for item in mismatches if item.startswith("tool_missing:")]
-            if not classifier_mismatches:
+            classifier_ok = not classifier_mismatches
+            retrieval_ok = not retrieval_mismatches
+            if classifier_ok:
                 classifier_passed += 1
             if case.expected_capability:
                 retrieval_total += 1
-                if not retrieval_mismatches:
+                if retrieval_ok:
                     retrieval_passed += 1
             if ok:
                 passed += 1
@@ -272,7 +315,33 @@ async def run_live_objective_eval(*, limit: int | None = None) -> dict[str, Any]
                 }
                 failures.append(failure)
                 runtime_trace("objective_eval.case_failed", **failure)
-        except Exception as error:  # operator-only scorecard must continue across cases
+            runtime_trace(
+                "objective_eval.case_scored",
+                case_id=case.case_id,
+                ordinal=index + 1,
+                total=len(cases),
+                classifier_ok=classifier_ok,
+                retrieval_ok=retrieval_ok if case.expected_capability else None,
+            )
+        except ObjectiveInterpretationError as error:
+            is_model_error = error.code == "objective_model_failed"
+            if is_model_error:
+                model_errors += 1
+            failure = {
+                "case_id": case.case_id,
+                "prompt": case.prompt,
+                "mismatches": [f"exception:{error.code}"],
+            }
+            failures.append(failure)
+            runtime_trace(
+                "objective_eval.case_unscored" if is_model_error else "objective_eval.case_failed",
+                case_id=case.case_id,
+                prompt=case.prompt,
+                error_code=error.code,
+                error=str(error)[:500],
+            )
+        except Exception as error:  # keep an operator scorecard from aborting the app
+            model_errors += 1
             failure = {
                 "case_id": case.case_id,
                 "prompt": case.prompt,
@@ -280,23 +349,28 @@ async def run_live_objective_eval(*, limit: int | None = None) -> dict[str, Any]
             }
             failures.append(failure)
             runtime_trace(
-                "objective_eval.case_failed",
+                "objective_eval.case_unscored",
                 case_id=case.case_id,
                 prompt=case.prompt,
-                mismatches=failure["mismatches"],
                 error_type=type(error).__name__,
                 error=str(error)[:500],
             )
 
+        if index + 1 < len(cases) and interval_seconds:
+            await asyncio.sleep(interval_seconds)
+
+    semantic_failures = max(0, scored_total - passed)
     summary = {
         "total": len(cases),
+        "scored_total": scored_total,
         "passed": passed,
-        "failed": len(cases) - passed,
+        "semantic_failures": semantic_failures,
+        "model_errors": model_errors,
         "classifier_passed": classifier_passed,
-        "classifier_accuracy": round(classifier_passed / len(cases), 4) if cases else 0.0,
+        "classifier_accuracy": round(classifier_passed / scored_total, 4) if scored_total else None,
         "retrieval_total": retrieval_total,
         "retrieval_passed": retrieval_passed,
-        "retrieval_hit_rate": round(retrieval_passed / retrieval_total, 4) if retrieval_total else 1.0,
+        "retrieval_hit_rate": round(retrieval_passed / retrieval_total, 4) if retrieval_total else None,
         "failure_case_ids": [failure["case_id"] for failure in failures],
     }
     runtime_trace("objective_eval.completed", **summary)
@@ -306,15 +380,30 @@ async def run_live_objective_eval(*, limit: int | None = None) -> dict[str, Any]
 async def run_startup_objective_eval_if_enabled() -> dict[str, Any] | None:
     if os.getenv("OPERLY_AGENT_OBJECTIVE_EVAL_ON_START", "0").strip() != "1":
         return None
-    raw_limit = os.getenv("OPERLY_AGENT_OBJECTIVE_EVAL_LIMIT", "").strip()
-    limit = None
-    if raw_limit:
+
+    def _int_env(name: str, default: int, low: int, high: int) -> int:
         try:
-            limit = max(1, min(int(raw_limit), len(OBJECTIVE_EVAL_CASES)))
+            return max(low, min(int(os.getenv(name, str(default)) or str(default)), high))
         except ValueError:
-            limit = None
+            return default
+
+    def _float_env(name: str, default: float, low: float, high: float) -> float:
+        try:
+            return max(low, min(float(os.getenv(name, str(default)) or str(default)), high))
+        except ValueError:
+            return default
+
+    limit = _int_env("OPERLY_AGENT_OBJECTIVE_EVAL_LIMIT", len(OBJECTIVE_EVAL_CASES), 1, len(OBJECTIVE_EVAL_CASES))
+    interval = _float_env("OPERLY_AGENT_OBJECTIVE_EVAL_INTERVAL_SECONDS", 9.0, 0.0, 60.0)
+    attempts = _int_env("OPERLY_AGENT_OBJECTIVE_EVAL_MAX_ATTEMPTS", 3, 1, 5)
+    retry_delay = _float_env("OPERLY_AGENT_OBJECTIVE_EVAL_RETRY_DELAY_SECONDS", 15.0, 1.0, 60.0)
     try:
-        return await run_live_objective_eval(limit=limit)
+        return await run_live_objective_eval(
+            limit=limit,
+            interval_seconds=interval,
+            max_model_attempts=attempts,
+            retry_delay_seconds=retry_delay,
+        )
     except Exception as error:
         runtime_trace(
             "objective_eval.failed",
