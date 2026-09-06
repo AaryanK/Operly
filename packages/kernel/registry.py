@@ -58,6 +58,11 @@ _OPERATION_CONCEPTS = {
     "get": "read",
     "inspect": "read",
     "show": "read",
+    "look": "read",
+    "browse": "read",
+    "scan": "read",
+    "review": "read",
+    "check": "read",
     "create": "create",
     "add": "create",
     "draft": "draft",
@@ -73,6 +78,14 @@ _OPERATION_CONCEPTS = {
     "watch": "wait",
     "monitor": "wait",
 }
+
+
+def _concept_values(value: str, concepts: dict[str, str]) -> set[str]:
+    return {
+        concept
+        for token in _tokens(value)
+        if (concept := concepts.get(token)) is not None
+    }
 
 
 def _semantic_tokens(value: str) -> set[str]:
@@ -104,8 +117,10 @@ def _query_sections(query_text: str) -> tuple[str, set[str], set[str]]:
     for part in parts[1:]:
         lowered = part.lower()
         if lowered.startswith("resources "):
+            resources.update(_concept_values(part[len("resources ") :], _RESOURCE_CONCEPTS))
             resources.update(_semantic_tokens(part[len("resources ") :]))
         elif lowered.startswith("operations "):
+            operations.update(_concept_values(part[len("operations ") :], _OPERATION_CONCEPTS))
             operations.update(_semantic_tokens(part[len("operations ") :]))
     return objective, resources, operations
 
@@ -169,6 +184,14 @@ class CapabilityRegistry:
         query_tokens = _tokens(query_text)
         semantic_query_tokens = _semantic_tokens(query_text)
         objective_tokens = _tokens(objective_text)
+
+        # Ordinary user wording must benefit from the same concept-level weighting as
+        # Runtime 1.0's compact ObjectiveIR query. Otherwise a phrase such as
+        # "look through my inbox" only receives a weak generic semantic match and can
+        # lose Gmail search to unrelated tools with incidental lexical overlap.
+        resource_tokens.update(_concept_values(query_text, _RESOURCE_CONCEPTS))
+        operation_tokens.update(_concept_values(query_text, _OPERATION_CONCEPTS))
+
         ranked: list[tuple[int, str, CapabilitySpec]] = []
 
         for spec in candidates:
