@@ -3,7 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
+
+# Direct `python scripts/...` execution puts only scripts/ on sys.path. Add the repo root
+# explicitly so the benchmark behaves the same in CI, a checkout, and an operator shell.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from packages.agent_runtime.real_world_evaluation import (
     CURATED_CASES,
