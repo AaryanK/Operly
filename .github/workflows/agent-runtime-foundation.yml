@@ -9,6 +9,8 @@ on:
       - "apps/web/src/workspace/WorkspaceOperly.tsx"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
       - "packages/agent_runtime/**"
+      - "packages/kernel/capability_search.py"
+      - "packages/kernel/registry.py"
       - "packages/database/agent_runtime_models.py"
       - "packages/database/agent_chat_models.py"
       - "packages/database/schema.py"
@@ -18,10 +20,12 @@ on:
       - "alembic/versions/0058_agent_chat_history.py"
       - "tests/test_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_objective.py"
+      - "tests/test_agent_runtime_objective_repair.py"
       - "tests/test_agent_runtime_planning.py"
       - "tests/test_agent_runtime_live.py"
       - "tests/test_agent_runtime_retrieval_health.py"
       - "tests/test_agent_runtime_objective_eval.py"
+      - "tests/test_kernel_capability_search.py"
       - "tests/test_agent_runtime_store.py"
       - "tests/test_agent_runtime_orchestrator.py"
       - "tests/test_agent_runtime_races.py"
@@ -71,6 +75,8 @@ jobs:
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
             packages/agent_runtime/telemetry.py \
+            packages/kernel/capability_search.py \
+            packages/kernel/registry.py \
             packages/database/agent_runtime_models.py \
             packages/database/agent_chat_models.py \
             packages/database/schema.py \
@@ -80,10 +86,12 @@ jobs:
             alembic/versions/0058_agent_chat_history.py \
             tests/test_agent_runtime_foundation.py \
             tests/test_agent_runtime_objective.py \
+            tests/test_agent_runtime_objective_repair.py \
             tests/test_agent_runtime_planning.py \
             tests/test_agent_runtime_live.py \
             tests/test_agent_runtime_retrieval_health.py \
             tests/test_agent_runtime_objective_eval.py \
+            tests/test_kernel_capability_search.py \
             tests/test_agent_runtime_store.py \
             tests/test_agent_runtime_orchestrator.py \
             tests/test_agent_runtime_races.py \
@@ -92,10 +100,12 @@ jobs:
         run: |
           python -m unittest tests.test_agent_runtime_foundation -v
           python -m unittest tests.test_agent_runtime_objective -v
+          python -m unittest tests.test_agent_runtime_objective_repair -v
           python -m unittest tests.test_agent_runtime_planning -v
           python -m unittest tests.test_agent_runtime_live -v
           python -m unittest tests.test_agent_runtime_retrieval_health -v
           python -m unittest tests.test_agent_runtime_objective_eval -v
+          python -m unittest tests.test_kernel_capability_search -v
           python -m unittest tests.test_agent_runtime_store -v
           python -m unittest tests.test_agent_runtime_orchestrator -v
           python -m unittest tests.test_agent_runtime_races -v
