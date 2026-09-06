@@ -16,6 +16,9 @@ OBJECTIVE_INTERPRETER_INSTRUCTIONS = (
     "If the request can be satisfied from the current message, supplied relevant context, or ordinary "
     "model reasoning, classify it as a response path with no external state. Use external-state paths "
     "only when connected Personal/Workspace data or a state-changing action is genuinely required. "
+    "Every requested mutation necessarily requires external state. Every future wait necessarily requires "
+    "external state. ACT must include act + mutation + external state; RETRIEVE must include retrieve + "
+    "external state and no mutation; WAIT must include wait + future wait + external state. "
     "Trusted scope/surface metadata describes where the request arrived; never output or invent "
     "workspace IDs, principals, roles, permissions, approvals, credentials, or provider routes. "
     "Return only the exact JSON fields requested by the schema."
@@ -85,6 +88,7 @@ class ObjectiveInterpreterLimits:
     max_resource_hint_chars: int = 80
     max_request_bytes: int = 24 * 1024
     max_output_bytes: int = 12 * 1024
+    max_semantic_repairs: int = 1
     context_budget: ContextBudget = field(
         default_factory=lambda: ContextBudget(
             max_items=5,
@@ -104,6 +108,8 @@ class ObjectiveInterpreterLimits:
             raise ValueError("max_resource_hint_chars must be between 8 and 160")
         if self.max_request_bytes <= 0 or self.max_output_bytes <= 0:
             raise ValueError("request/output byte limits must be positive")
+        if not 0 <= self.max_semantic_repairs <= 2:
+            raise ValueError("max_semantic_repairs must be between 0 and 2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +222,9 @@ class ObjectiveInterpreter:
 
     The model decides meaning, not authority. Only trusted scope/surface labels are
     provided, and the output cannot contain authority-shaped fields. Context is selected
-    through a strict relevance/byte budget before model inference.
+    through a strict relevance/byte budget before model inference. Internally inconsistent
+    semantic output gets at most one bounded model repair; malformed or authority-shaped
+    output always fails closed without repair.
     """
 
     _EXPECTED_FIELDS = frozenset(
@@ -278,6 +286,32 @@ class ObjectiveInterpreter:
             surface=context.surface.value,
             relevant_context=selected,
         )
+        self._ensure_request_budget(request)
+        raw = await self._call_model(request)
+        payload = self._decode(raw)
+        try:
+            return self._validate(payload)
+        except ObjectiveInterpretationError as error:
+            if error.code != "inconsistent_objective_output" or self.limits.max_semantic_repairs <= 0:
+                raise
+            repair_request = ObjectiveInterpreterRequest(
+                message=clean_message,
+                scope_kind=context.scope_kind.value,
+                surface=context.surface.value,
+                relevant_context=selected,
+                instructions=(
+                    OBJECTIVE_INTERPRETER_INSTRUCTIONS
+                    + " Your previous semantic classification was rejected because: "
+                    + str(error)
+                    + ". Reclassify the original request from scratch and return one internally consistent object. "
+                    + "Do not add fields and do not emit authority or capability information."
+                ),
+            )
+            self._ensure_request_budget(repair_request)
+            repaired = await self._call_model(repair_request)
+            return self._validate(self._decode(repaired))
+
+    def _ensure_request_budget(self, request: ObjectiveInterpreterRequest) -> None:
         try:
             encoded_request = json.dumps(
                 request.as_dict(),
@@ -296,15 +330,17 @@ class ObjectiveInterpreter:
                 code="objective_input_too_large",
             )
 
+    async def _call_model(
+        self,
+        request: ObjectiveInterpreterRequest,
+    ) -> Mapping[str, Any] | str | bytes:
         try:
-            raw = await self.model.interpret(request)
+            return await self.model.interpret(request)
         except Exception as error:
             raise ObjectiveInterpretationError(
                 "objective interpreter model failed",
                 code="objective_model_failed",
             ) from error
-
-        return self._validate(self._decode(raw))
 
     def _decode(self, raw: Mapping[str, Any] | str | bytes) -> Mapping[str, Any]:
         if isinstance(raw, bytes):
