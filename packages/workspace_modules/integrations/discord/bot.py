@@ -23,6 +23,7 @@ from packages.security.execution_context import (
 from packages.security.permissions import resolve_workspace_permissions
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.integrations.discord.client import bot
+from packages.workspace_modules.integrations.discord.runtime_test import evaluate_discord_request
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -167,6 +168,128 @@ async def _bind_workspace(message: discord.Message, reference: str) -> None:
     )
 
 
+async def _runtime_test(message: discord.Message, prompt: str) -> None:
+    clean_prompt = " ".join(str(prompt or "").split()).strip()
+    if not clean_prompt:
+        await message.reply(
+            "Use `!operly test REQUEST`, for example `!operly test what is on my calendar tomorrow`."
+        )
+        return
+
+    ready, detail = _runtime_status()
+    if not ready:
+        await message.reply(detail)
+        return
+
+    user_id = await _linked_operly_user_id(message.author.id)
+    run_id = f"discord-test-{message.id}"
+    runtime_trace(
+        "discord.test_received",
+        run_id=run_id,
+        guild_id=str(message.guild.id) if message.guild else None,
+        channel_id=str(message.channel.id),
+        discord_user_id=str(message.author.id),
+        linked_user=bool(user_id),
+        message_chars=len(clean_prompt),
+        message_sha256_16=fingerprint(clean_prompt),
+    )
+
+    try:
+        async with message.channel.typing():
+            async with session_scope() as db:
+                if message.guild is None:
+                    if not user_id:
+                        await _reply_chunks(
+                            message,
+                            "Link your Discord identity to Operly first using `!operly link`.",
+                        )
+                        return
+                    context = await resolve_personal_execution_context(
+                        db,
+                        user_id=user_id,
+                        channel="discord",
+                        surface=SurfaceKind.DISCORD_DM,
+                        conversation_id=f"discord-dm:{message.author.id}",
+                        metadata={"is_direct": True, "dry_run": True},
+                    )
+                    kernel = build_personal_runtime()
+                else:
+                    installation = await db.scalar(
+                        select(ChannelInstallation).where(
+                            ChannelInstallation.provider == "discord",
+                            ChannelInstallation.external_space_id == str(message.guild.id),
+                            ChannelInstallation.status == "connected",
+                        )
+                    )
+                    if installation is None:
+                        await _reply_chunks(
+                            message,
+                            "This server is not bound to an Operly workspace. "
+                            "A server manager can use `!operly bind WORKSPACE`.",
+                        )
+                        return
+                    metadata = {
+                        "external_space_id": str(message.guild.id),
+                        "discord_guild_id": str(message.guild.id),
+                        "_guest_principal_id": f"discord:{message.author.id}",
+                        "is_direct": False,
+                        "dry_run": True,
+                    }
+                    context = await resolve_execution_context(
+                        db,
+                        workspace_id=installation.tenant_id,
+                        user_id=user_id,
+                        channel="discord",
+                        surface=SurfaceKind.DISCORD_GUILD,
+                        conversation_id=f"discord:{message.guild.id}:{message.channel.id}",
+                        metadata=metadata,
+                        require_membership=False,
+                    )
+                    facade = build_workspace_runtime()
+                    kernel = await facade.request_runtime(db, context=context)
+
+                result = await evaluate_discord_request(
+                    db,
+                    context=context,
+                    kernel=kernel,
+                    prompt=clean_prompt,
+                    limit=12,
+                )
+        runtime_trace(
+            "discord.test_completed",
+            run_id=run_id,
+            scope_kind=context.scope_kind.value,
+            result_chars=len(result),
+            capabilities_executed=0,
+        )
+        await _reply_chunks(message, result)
+    except AgentRuntimeDisabled:
+        runtime_trace("discord.test_failed", run_id=run_id, error_code="agent_runtime_disabled")
+        await _reply_chunks(message, "Operly Agent Runtime 1.0 is disabled for this deployment.")
+    except (AgentInferenceError, ExecutionContextError) as error:
+        runtime_trace(
+            "discord.test_failed",
+            run_id=run_id,
+            error_code=getattr(error, "code", type(error).__name__),
+            error_type=type(error).__name__,
+        )
+        await _reply_chunks(
+            message,
+            "The dry-run could not complete safely. The failure is recorded in the Railway runtime trace.",
+        )
+    except Exception as error:
+        runtime_trace(
+            "discord.test_failed",
+            run_id=run_id,
+            error_code="unexpected",
+            error_type=type(error).__name__,
+        )
+        await _reply_chunks(
+            message,
+            "The dry-run hit an unexpected runtime failure. The failure type is recorded in Railway.",
+        )
+
+
 async def _handle_command(message: discord.Message) -> bool:
     raw = (message.content or "").strip()
     if not raw.lower().startswith("!operly"):
@@ -175,8 +298,10 @@ async def _handle_command(message: discord.Message) -> bool:
     command = parts[1].lower() if len(parts) > 1 else "help"
     if command == "help":
         await message.reply(
-            "Operly commands: `!operly status`, `!operly link`, `!operly bind WORKSPACE`, `!operly help`. "
-            "Mention Operly in a bound server, or DM it, to use Agent Runtime 1.0."
+            "Operly commands: `!operly status`, `!operly test REQUEST`, `!operly link`, "
+            "`!operly bind WORKSPACE`, `!operly help`. `!operly test` is a dry-run: it shows "
+            "semantic routing and authorized capability candidates without executing anything. "
+            "Mention Operly in a bound server, or DM it normally, for the end-to-end Runtime 1.0 path."
         )
         return True
     if command == "status":
@@ -188,6 +313,10 @@ async def _handle_command(message: discord.Message) -> bool:
             else "This server is not bound to a workspace."
         )
         await message.reply(f"{binding} {detail} Ready={str(ready).lower()}.")
+        return True
+    if command == "test":
+        prompt = raw.split(None, 2)[2] if len(parts) >= 3 else ""
+        await _runtime_test(message, prompt)
         return True
     if command == "link":
         linked = await _linked_operly_user_id(message.author.id)
