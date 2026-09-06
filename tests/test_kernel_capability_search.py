@@ -146,6 +146,53 @@ class WorkspaceCapabilityRetrievalTests(unittest.TestCase):
 
 
 class ScalableCapabilityIndexTests(unittest.TestCase):
+    def test_exact_semantic_read_action_beats_same_resource_siblings(self):
+        registry = CapabilityRegistry(
+            (
+                _spec(
+                    "future.orion.search",
+                    description="Search orion records by arbitrary criteria",
+                    tags=("search", "orion", "record"),
+                ),
+                _spec(
+                    "future.orion.list",
+                    description="List orion records as a collection",
+                    tags=("list", "orion", "record"),
+                ),
+                _spec(
+                    "future.orion.read",
+                    description="Read one selected orion record",
+                    tags=("read", "orion", "record"),
+                ),
+            )
+        )
+        cases = (
+            (
+                "Search orion records | resources orion record | operations retrieve",
+                "future.orion.search",
+            ),
+            (
+                "List orion records | resources orion record | operations retrieve",
+                "future.orion.list",
+            ),
+            (
+                "Read selected orion record | resources orion record | operations retrieve",
+                "future.orion.read",
+            ),
+        )
+        for query, expected in cases:
+            with self.subTest(query=query):
+                ids = [
+                    spec.id
+                    for spec in registry.search(
+                        query,
+                        context=owner_context(),
+                        effective_only=True,
+                        limit=12,
+                    )
+                ]
+                self.assertEqual(ids[0], expected, msg=f"{query!r}: {ids}")
+
     def test_related_actions_surface_from_capability_family_without_domain_synonyms(self):
         registry = CapabilityRegistry(
             (
