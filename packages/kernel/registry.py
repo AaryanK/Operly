@@ -7,7 +7,7 @@ from packages.kernel.capability_search import (
     CapabilitySearchQuery,
     SemanticCapabilityCandidateProvider,
 )
-from packages.kernel.contracts import CapabilitySpec
+from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 from packages.security.surfaces import capability_surface_allowed
 
@@ -161,6 +161,7 @@ class CapabilityRegistry:
 
         ranked: list[tuple[float, str, CapabilitySpec]] = []
         seen: set[str] = set()
+        pure_retrieval = parsed.wants_retrieval and not parsed.wants_mutation
         for capability_id in candidate_ids:
             if capability_id in seen:
                 continue
@@ -171,6 +172,11 @@ class CapabilityRegistry:
                 context=context,
                 effective_only=effective_only,
             ):
+                continue
+            # A request classified as read-only should not expose mutating contracts to
+            # the next-move model at all. Compound retrieve+act objectives are unaffected.
+            # This is both better relevance and least-privilege discovery.
+            if pure_retrieval and spec.risk is not CapabilityRisk.READ_ONLY:
                 continue
             score = self._search_index.score(parsed, spec)
             # ANN/vector providers are candidate generators, not authorities or final
