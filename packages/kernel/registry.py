@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from packages.kernel.contracts import CapabilitySpec
+from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 from packages.security.surfaces import capability_surface_allowed
 
@@ -18,6 +18,96 @@ def _tokens(value: str) -> set[str]:
         for token in re.split(r"[^a-z0-9]+", str(value or "").lower())
         if len(token) > 1
     }
+
+
+_RESOURCE_CONCEPTS = {
+    "email": "mail",
+    "emails": "mail",
+    "mail": "mail",
+    "gmail": "mail",
+    "mailbox": "mail",
+    "inbox": "mail",
+    "calendar": "calendar",
+    "calendars": "calendar",
+    "event": "calendar",
+    "events": "calendar",
+    "meeting": "calendar",
+    "meetings": "calendar",
+    "schedule": "calendar",
+    "schedules": "calendar",
+    "file": "file",
+    "files": "file",
+    "document": "file",
+    "documents": "file",
+    "attachment": "file",
+    "attachments": "file",
+    "artifact": "file",
+    "artifacts": "file",
+    "workflow": "workflow",
+    "workflows": "workflow",
+}
+
+_OPERATION_CONCEPTS = {
+    "retrieve": "read",
+    "retrieval": "read",
+    "read": "read",
+    "search": "read",
+    "find": "read",
+    "lookup": "read",
+    "list": "read",
+    "get": "read",
+    "inspect": "read",
+    "show": "read",
+    "create": "create",
+    "add": "create",
+    "draft": "draft",
+    "send": "send",
+    "update": "update",
+    "edit": "update",
+    "modify": "update",
+    "delete": "delete",
+    "remove": "delete",
+    "execute": "execute",
+    "run": "execute",
+    "wait": "wait",
+    "watch": "wait",
+    "monitor": "wait",
+}
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    raw = _tokens(value)
+    expanded = set(raw)
+    for token in raw:
+        resource = _RESOURCE_CONCEPTS.get(token)
+        if resource:
+            expanded.add(resource)
+        operation = _OPERATION_CONCEPTS.get(token)
+        if operation:
+            expanded.add(operation)
+    return expanded
+
+
+def _query_sections(query_text: str) -> tuple[str, set[str], set[str]]:
+    """Parse the compact ObjectiveIR capability query without requiring it.
+
+    Runtime 1.0 emits `objective | resources ... | operations ...`. Other callers may
+    pass ordinary text, which still uses the normal lexical/semantic ranking path.
+    """
+
+    objective = query_text
+    resources: set[str] = set()
+    operations: set[str] = set()
+    parts = [part.strip() for part in query_text.split("|") if part.strip()]
+    if parts:
+        objective = parts[0]
+    for part in parts[1:]:
+        lowered = part.lower()
+        if lowered.startswith("resources "):
+            resources.update(_semantic_tokens(part[len("resources ") :]))
+        elif lowered.startswith("operations "):
+            operations.update(_semantic_tokens(part[len("operations ") :]))
+    return objective, resources, operations
 
 
 class CapabilityRegistry:
@@ -74,25 +164,48 @@ class CapabilityRegistry:
         query_text = str(query or "").strip().lower()
         if not query_text:
             return candidates[: max(1, min(limit, 50))]
+
+        objective_text, resource_tokens, operation_tokens = _query_sections(query_text)
         query_tokens = _tokens(query_text)
+        semantic_query_tokens = _semantic_tokens(query_text)
+        objective_tokens = _tokens(objective_text)
         ranked: list[tuple[int, str, CapabilitySpec]] = []
+
         for spec in candidates:
-            haystacks = [
-                spec.id,
-                spec.display_name,
-                spec.description,
-                *spec.aliases,
-                *spec.tags,
-            ]
-            joined = " ".join(haystacks).lower()
+            identity_text = " ".join((spec.id, spec.display_name, *spec.aliases, *spec.tags)).lower()
+            joined = f"{identity_text} {spec.description}".lower()
+            identity_tokens = _tokens(identity_text)
+            description_tokens = _tokens(spec.description)
+            semantic_spec_tokens = _semantic_tokens(joined)
+
             score = 0
             if query_text == spec.id:
-                score += 100
-            if query_text in joined:
+                score += 1000
+            if objective_text and objective_text in joined:
+                score += 30
+            elif query_text in joined:
                 score += 20
-            spec_tokens = _tokens(joined)
-            score += 5 * len(query_tokens & spec_tokens)
-            if score:
+
+            # Exact lexical matches still matter most for specific action/tool names.
+            score += 10 * len(objective_tokens & identity_tokens)
+            score += 6 * len((query_tokens - objective_tokens) & identity_tokens)
+            score += 3 * len(query_tokens & description_tokens)
+
+            # Small deterministic semantic normalization closes obvious vocabulary gaps
+            # such as email/emails/Gmail/mailbox and retrieve/search/read. It is ranking
+            # only: authority filtering has already happened above and Kernel rechecks it
+            # again at execution.
+            score += 4 * len(semantic_query_tokens & semantic_spec_tokens)
+
+            if resource_tokens:
+                score += 40 * len(resource_tokens & semantic_spec_tokens)
+            if operation_tokens:
+                score += 25 * len(operation_tokens & semantic_spec_tokens)
+                if "read" in operation_tokens:
+                    score += 15 if spec.risk is CapabilityRisk.READ_ONLY else -10
+
+            if score > 0:
                 ranked.append((score, spec.id, spec))
+
         ranked.sort(key=lambda row: (-row[0], row[1]))
         return tuple(row[2] for row in ranked[: max(1, min(limit, 50))])
