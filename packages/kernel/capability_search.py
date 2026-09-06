@@ -73,6 +73,9 @@ _ACTION_ALIASES = {
     "show": "read",
     "view": "read",
     "check": "read",
+    "look": "read",
+    "review": "read",
+    "scan": "read",
     "status": "read",
     "snapshot": "read",
     "preview": "read",
@@ -145,9 +148,21 @@ class CapabilitySearchQuery:
 
         objective_terms = frozenset(tokens(objective))
         all_actions = action_facets(objective)
-        wants_retrieval = bool(operation_terms & {"retrieve", "read"})
-        wants_mutation = bool(
+        explicit_retrieval = bool(operation_terms & {"retrieve", "read"})
+        explicit_mutation = bool(
             operation_terms & {"act", "create", "update", "delete", "send", "execute"}
+        )
+        action_mutation = bool(all_actions & _MUTATION_ACTIONS)
+        wants_mutation = explicit_mutation or action_mutation
+        # Normal Runtime 1.0 queries carry ObjectiveIR operations. Raw-text search is a
+        # compatibility surface; when it has no explicit operation and no mutation/wait
+        # action, treat it as retrieval because calling registry.search itself implies
+        # discovery rather than a no-tool response. The semantic classifier remains the
+        # authority for deciding whether discovery should happen at all.
+        wants_retrieval = explicit_retrieval or (
+            not operation_terms
+            and not wants_mutation
+            and "wait" not in all_actions
         )
         return cls(
             raw=raw,
@@ -264,26 +279,30 @@ class CapabilitySearchIndex:
             (term for term in terms if term in self._postings),
             key=lambda term: (self.document_frequency(term), term),
         )
-        candidates: set[str] = set()
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add_postings(postings: Sequence[str] | set[str]) -> None:
+            for capability_id in sorted(postings):
+                if capability_id in seen:
+                    continue
+                seen.add(capability_id)
+                candidates.append(capability_id)
+                if len(candidates) >= budget:
+                    return
+
         for term in ranked_terms:
-            postings = self._postings[term]
-            remaining = budget - len(candidates)
-            if remaining <= 0:
+            if len(candidates) >= budget:
                 break
-            if len(postings) <= remaining:
-                candidates.update(postings)
-            else:
-                candidates.update(sorted(postings)[:remaining])
+            add_postings(self._postings[term])
 
         # Specific action facets are cheap high-value postings. They are merged rather
         # than treated as a hard filter because a capability may use unconventional
         # naming while still being semantically relevant through its description.
         for action in sorted(query.action_facets):
-            postings = self._action_postings.get(action, ())
-            remaining = budget - len(candidates)
-            if remaining <= 0:
+            if len(candidates) >= budget:
                 break
-            candidates.update(list(sorted(postings))[:remaining])
+            add_postings(self._action_postings.get(action, ()))
 
         return tuple(candidates)
 
