@@ -178,13 +178,10 @@ class ScalableCapabilityIndexTests(unittest.TestCase):
         ]
         self.assertIn("future.messaging.search", ids)
         self.assertIn("future.messaging.read_message", ids)
-        self.assertLess(
-            ids.index("future.messaging.search"),
-            ids.index("future.messaging.send_message"),
-        )
-        self.assertLess(
-            ids.index("future.messaging.read_message"),
-            ids.index("future.messaging.send_message"),
+        self.assertNotIn(
+            "future.messaging.send_message",
+            ids,
+            "pure retrieval should not expose a mutating sibling contract",
         )
 
     def test_large_catalog_does_not_score_every_capability(self):
