@@ -13,7 +13,12 @@ from packages.agent_runtime.inference import (
 )
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeSettings
-from packages.security.execution_context import ExecutionContext, ScopeKind
+from packages.personal_modules.runtime import build_personal_runtime
+from packages.security.execution_context import (
+    ExecutionContext,
+    PERSONAL_EXECUTION_PERMISSIONS,
+    ScopeKind,
+)
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.integrations.discord.bot import _discordify
 
@@ -39,13 +44,17 @@ class FakeModel:
         return {"move": "finish", "message": "done"}
 
 
-def personal_context() -> ExecutionContext:
+def personal_context(*, full_permissions: bool = False) -> ExecutionContext:
     return ExecutionContext(
         workspace_id=None,
         user_id="user-1",
         membership_id=None,
         role="personal_owner",
-        permissions=frozenset({"workspace:read"}),
+        permissions=(
+            PERSONAL_EXECUTION_PERMISSIONS
+            if full_permissions
+            else frozenset({"workspace:read"})
+        ),
         channel="web",
         surface=SurfaceKind.PERSONAL_PRIVATE,
         conversation_id="conversation-1",
@@ -101,6 +110,34 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
         supplied = model.respond_calls[0]["context_items"]
         self.assertEqual(len(supplied), 1)
         self.assertIn("recursion", supplied[0]["text"].lower())
+
+    def test_email_retrieval_query_surfaces_read_tools_before_email_mutations(self):
+        registry = build_personal_runtime().registry
+        results = registry.search(
+            "Search Dad's emails | resources emails | operations retrieve",
+            context=personal_context(full_permissions=True),
+            effective_only=True,
+            limit=12,
+        )
+        ids = [spec.id for spec in results]
+
+        self.assertIn("google.gmail.search", ids)
+        self.assertIn("google.gmail.read_message", ids)
+        self.assertLess(ids.index("google.gmail.search"), ids.index("google.gmail.send_email"))
+        self.assertLess(ids.index("google.gmail.read_message"), ids.index("google.gmail.send_email"))
+
+    def test_plain_email_wording_still_finds_gmail_search(self):
+        registry = build_personal_runtime().registry
+        ids = [
+            spec.id
+            for spec in registry.search(
+                "search my emails for dad's emails",
+                context=personal_context(full_permissions=True),
+                effective_only=True,
+                limit=12,
+            )
+        ]
+        self.assertIn("google.gmail.search", ids)
 
     def test_inference_route_uses_fixed_provider_destinations(self):
         with patch.dict(
