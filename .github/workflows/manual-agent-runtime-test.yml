@@ -34,6 +34,8 @@ jobs:
       OPERLY_AGENT_MODEL_ID: openai/gpt-oss-120b
       OPERLY_AGENT_INFERENCE_TIMEOUT_SECONDS: "45"
       OPERLY_AGENT_INFERENCE_MAX_ATTEMPTS: "2"
+      TEST_PROMPT: ${{ inputs.prompt }}
+      TEST_SCOPE: ${{ inputs.scope }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -58,6 +60,4 @@ jobs:
 
       - name: Test request
         run: |
-          python scripts/test_agent_request.py \
-            "${{ inputs.prompt }}" \
-            --scope "${{ inputs.scope }}"
+          python scripts/test_agent_request.py "$TEST_PROMPT" --scope "$TEST_SCOPE"
