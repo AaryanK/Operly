@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AdminPage } from "../admin/AdminPage";
 import { ProviderAuthPage } from "../auth/ProviderAuthPage";
 import { LegalPage } from "../legal/LegalPage";
 import { MinimalApp } from "../minimal/MinimalApp";
@@ -21,6 +22,7 @@ export function App() {
 
   if (pathname === "/") return <PublicApp pathname={pathname} />;
   if (pathname === "/login" || pathname === "/signup") return <ProviderAuthPage pathname={pathname} />;
+  if (pathname === "/admin") return <AdminPage />;
   if (pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (pathname === "/terms") return <LegalPage kind="terms" />;
   if (
