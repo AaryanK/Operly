@@ -12,16 +12,25 @@ from packages.security.execution_context import ExecutionContext
 
 
 OBJECTIVE_INTERPRETER_INSTRUCTIONS = (
-    "Interpret the user's objective; do not choose a provider or capability. Tool use is optional. "
-    "If the request can be satisfied from the current message, supplied relevant context, or ordinary "
-    "model reasoning, classify it as a response path with no external state. Use external-state paths "
-    "only when connected Personal/Workspace data or a state-changing action is genuinely required. "
-    "Every requested mutation necessarily requires external state. Every future wait necessarily requires "
-    "external state. ACT must include act + mutation + external state; RETRIEVE must include retrieve + "
-    "external state and no mutation; WAIT must include wait + future wait + external state. "
-    "Trusted scope/surface metadata describes where the request arrived; never output or invent "
-    "workspace IDs, principals, roles, permissions, approvals, credentials, or provider routes. "
-    "Return only the exact JSON fields requested by the schema."
+    "Interpret the user's objective semantically; do not choose a provider or capability. Tool use is optional. "
+    "The request may be written in any language, script, dialect, slang, typo-heavy text, or code-switched language. "
+    "Understand it directly rather than relying on English keywords or language-specific routing rules. For internal "
+    "routing only, normalize the objective into a concise canonical English semantic description while preserving the "
+    "meaning of names, identifiers, quoted text, dates, amounts, and other user-supplied entities. For external-state "
+    "objectives, begin that canonical objective with the most specific generic action that describes the requested "
+    "operation when possible: Search, List, Read, Create, Draft, Send, Update, Enable, Disable, Delete, Execute, Retry, "
+    "Cancel, or Wait. This is a small action ontology for retrieval, not hard routing and not a capability ID. "
+    "Resource hints must likewise be short canonical English semantic nouns describing the resource type, such as mail "
+    "message, calendar event, availability, task, workflow, workflow run, invoice, customer, project, file, or record; "
+    "resource types are open-ended and must not be forced into a fixed domain dictionary. Never put provider names or "
+    "capability IDs in the objective or resource hints. If the request can be satisfied from the current message, "
+    "supplied relevant context, or ordinary model reasoning, classify it as a response path with no external state. "
+    "Use external-state paths only when connected Personal/Workspace data or a state-changing action is genuinely "
+    "required. Every requested mutation necessarily requires external state. Every future wait necessarily requires "
+    "external state. ACT must include act + mutation + external state; RETRIEVE must include retrieve + external state "
+    "and no mutation; WAIT must include wait + future wait + external state. Trusted scope/surface metadata describes "
+    "where the request arrived; never output or invent workspace IDs, principals, roles, permissions, approvals, "
+    "credentials, or provider routes. Return only the exact JSON fields requested by the schema."
 )
 
 _AUTHORITY_SHAPED_FIELDS = frozenset(
@@ -130,10 +139,10 @@ class ObjectiveInterpreterRequest:
             },
             "relevant_context": self.relevant_context.as_prompt_items(),
             "output_schema": {
-                "objective": "concise string",
+                "objective": "concise canonical English semantic description; preserve user entities verbatim when relevant",
                 "kind": [kind.value for kind in ObjectiveKind],
                 "operations": [operation.value for operation in ObjectiveOperation],
-                "resource_hints": ["short semantic resource labels; empty when none are needed"],
+                "resource_hints": ["short canonical English semantic resource labels; empty when none are needed"],
                 "requires_external_state": "boolean",
                 "requires_mutation": "boolean",
                 "requires_future_wait": "boolean",
@@ -170,7 +179,9 @@ class ObjectiveIR:
         """Return the smallest semantic query needed for capability retrieval.
 
         The raw user message, conversation history, memory payloads and observations
-        deliberately do not flow into capability discovery.
+        deliberately do not flow into capability discovery. The objective/resource hints
+        are model-compiled canonical semantics, so the retrieval layer does not need to
+        understand every human language or accumulate language-specific synonym tables.
         """
         if not self.requires_external_state:
             return ""
@@ -221,10 +232,12 @@ class ObjectiveInterpreter:
     """Front-door semantic classifier for Runtime 1.0.
 
     The model decides meaning, not authority. Only trusted scope/surface labels are
-    provided, and the output cannot contain authority-shaped fields. Context is selected
-    through a strict relevance/byte budget before model inference. Internally inconsistent
-    semantic output gets at most one bounded model repair; malformed or authority-shaped
-    output always fails closed without repair.
+    provided, and the output cannot contain authority-shaped fields. Human-language
+    requests are compiled into canonical semantic ObjectiveIR before capability search,
+    keeping language understanding out of the deterministic Kernel index. Context is
+    selected through a strict relevance/byte budget before model inference. Internally
+    inconsistent semantic output gets at most one bounded model repair; malformed or
+    authority-shaped output always fails closed without repair.
     """
 
     _EXPECTED_FIELDS = frozenset(
