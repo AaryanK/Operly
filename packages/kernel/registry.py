@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
-from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
+from packages.kernel.capability_search import (
+    CapabilitySearchIndex,
+    CapabilitySearchQuery,
+    SemanticCapabilityCandidateProvider,
+)
+from packages.kernel.contracts import CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 from packages.security.surfaces import capability_surface_allowed
 
@@ -12,126 +16,36 @@ class CapabilityRegistryError(RuntimeError):
     pass
 
 
-def _tokens(value: str) -> set[str]:
-    return {
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").lower())
-        if len(token) > 1
-    }
+class CapabilityRegistry:
+    """Single source of truth for model/API visible capability contracts.
 
+    Capability search is deliberately two-stage:
+      1. a bounded candidate index (plus an optional ANN/vector candidate provider),
+      2. trusted scope/surface/permission filtering followed by deterministic reranking.
 
-_RESOURCE_CONCEPTS = {
-    "email": "mail",
-    "emails": "mail",
-    "mail": "mail",
-    "gmail": "mail",
-    "mailbox": "mail",
-    "inbox": "mail",
-    "calendar": "calendar",
-    "calendars": "calendar",
-    "event": "calendar",
-    "events": "calendar",
-    "meeting": "calendar",
-    "meetings": "calendar",
-    "schedule": "calendar",
-    "schedules": "calendar",
-    "file": "file",
-    "files": "file",
-    "document": "file",
-    "documents": "file",
-    "attachment": "file",
-    "attachments": "file",
-    "artifact": "file",
-    "artifacts": "file",
-    "workflow": "workflow",
-    "workflows": "workflow",
-}
-
-_OPERATION_CONCEPTS = {
-    "retrieve": "read",
-    "retrieval": "read",
-    "read": "read",
-    "search": "read",
-    "find": "read",
-    "lookup": "read",
-    "list": "read",
-    "get": "read",
-    "inspect": "read",
-    "show": "read",
-    "look": "read",
-    "browse": "read",
-    "scan": "read",
-    "review": "read",
-    "check": "read",
-    "create": "create",
-    "add": "create",
-    "draft": "draft",
-    "send": "send",
-    "update": "update",
-    "edit": "update",
-    "modify": "update",
-    "delete": "delete",
-    "remove": "delete",
-    "execute": "execute",
-    "run": "execute",
-    "wait": "wait",
-    "watch": "wait",
-    "monitor": "wait",
-}
-
-
-def _concept_values(value: str, concepts: dict[str, str]) -> set[str]:
-    return {
-        concept
-        for token in _tokens(value)
-        if (concept := concepts.get(token)) is not None
-    }
-
-
-def _semantic_tokens(value: str) -> set[str]:
-    raw = _tokens(value)
-    expanded = set(raw)
-    for token in raw:
-        resource = _RESOURCE_CONCEPTS.get(token)
-        if resource:
-            expanded.add(resource)
-        operation = _OPERATION_CONCEPTS.get(token)
-        if operation:
-            expanded.add(operation)
-    return expanded
-
-
-def _query_sections(query_text: str) -> tuple[str, set[str], set[str]]:
-    """Parse the compact ObjectiveIR capability query without requiring it.
-
-    Runtime 1.0 emits `objective | resources ... | operations ...`. Other callers may
-    pass ordinary text, which still uses the normal lexical/semantic ranking path.
+    This prevents the model from seeing unauthorized contracts and avoids scoring every
+    registered capability on each request as the catalog grows.
     """
 
-    objective = query_text
-    resources: set[str] = set()
-    operations: set[str] = set()
-    parts = [part.strip() for part in query_text.split("|") if part.strip()]
-    if parts:
-        objective = parts[0]
-    for part in parts[1:]:
-        lowered = part.lower()
-        if lowered.startswith("resources "):
-            resources.update(_concept_values(part[len("resources ") :], _RESOURCE_CONCEPTS))
-            resources.update(_semantic_tokens(part[len("resources ") :]))
-        elif lowered.startswith("operations "):
-            operations.update(_concept_values(part[len("operations ") :], _OPERATION_CONCEPTS))
-            operations.update(_semantic_tokens(part[len("operations ") :]))
-    return objective, resources, operations
-
-
-class CapabilityRegistry:
-    """Single source of truth for model/API visible capability contracts."""
-
-    def __init__(self, specs: Iterable[CapabilitySpec] = ()) -> None:
+    def __init__(
+        self,
+        specs: Iterable[CapabilitySpec] = (),
+        *,
+        semantic_candidate_provider: SemanticCapabilityCandidateProvider | None = None,
+    ) -> None:
         self._specs: dict[str, CapabilitySpec] = {}
+        self._search_index = CapabilitySearchIndex()
+        self._semantic_candidate_provider = semantic_candidate_provider
         for spec in specs:
             self.register(spec)
+
+    def set_semantic_candidate_provider(
+        self,
+        provider: SemanticCapabilityCandidateProvider | None,
+    ) -> None:
+        """Attach an optional vector/ANN candidate source without changing Kernel policy."""
+
+        self._semantic_candidate_provider = provider
 
     def register(self, spec: CapabilitySpec) -> None:
         capability_id = spec.id.strip().lower()
@@ -140,6 +54,7 @@ class CapabilityRegistry:
         if capability_id in self._specs:
             raise CapabilityRegistryError(f"Duplicate capability: {capability_id}")
         self._specs[capability_id] = spec
+        self._search_index.register(spec)
 
     def get(self, capability_id: str) -> CapabilitySpec:
         key = str(capability_id or "").strip().lower()
@@ -151,21 +66,35 @@ class CapabilityRegistry:
     def all(self) -> tuple[CapabilitySpec, ...]:
         return tuple(self._specs[key] for key in sorted(self._specs))
 
-    def visible(self, context: ExecutionContext) -> tuple[CapabilitySpec, ...]:
-        scope = context.scope_kind.value
-        return tuple(
-            spec
-            for spec in self.all()
-            if scope in spec.scopes
+    @staticmethod
+    def _surface_allowed(spec: CapabilitySpec, context: ExecutionContext) -> bool:
+        return (
+            context.scope_kind.value in spec.scopes
             and capability_surface_allowed(spec.id, context.surface)
         )
 
-    def effective(self, context: ExecutionContext) -> tuple[CapabilitySpec, ...]:
-        return tuple(
-            spec
-            for spec in self.visible(context)
-            if all(context.can(permission) for permission in spec.permissions)
+    @classmethod
+    def _effective_allowed(cls, spec: CapabilitySpec, context: ExecutionContext) -> bool:
+        return cls._surface_allowed(spec, context) and all(
+            context.can(permission) for permission in spec.permissions
         )
+
+    def visible(self, context: ExecutionContext) -> tuple[CapabilitySpec, ...]:
+        return tuple(spec for spec in self.all() if self._surface_allowed(spec, context))
+
+    def effective(self, context: ExecutionContext) -> tuple[CapabilitySpec, ...]:
+        return tuple(spec for spec in self.visible(context) if all(context.can(permission) for permission in spec.permissions))
+
+    def _allowed(
+        self,
+        spec: CapabilitySpec,
+        *,
+        context: ExecutionContext,
+        effective_only: bool,
+    ) -> bool:
+        if effective_only:
+            return self._effective_allowed(spec, context)
+        return self._surface_allowed(spec, context)
 
     def search(
         self,
@@ -175,60 +104,52 @@ class CapabilityRegistry:
         effective_only: bool = False,
         limit: int = 10,
     ) -> tuple[CapabilitySpec, ...]:
-        candidates = self.effective(context) if effective_only else self.visible(context)
+        bounded_limit = max(1, min(limit, 50))
         query_text = str(query or "").strip().lower()
         if not query_text:
-            return candidates[: max(1, min(limit, 50))]
+            candidates = self.effective(context) if effective_only else self.visible(context)
+            return candidates[:bounded_limit]
 
-        objective_text, resource_tokens, operation_tokens = _query_sections(query_text)
-        query_tokens = _tokens(query_text)
-        semantic_query_tokens = _semantic_tokens(query_text)
-        objective_tokens = _tokens(objective_text)
+        # Exact IDs are still deterministic, but authorization/surface filtering remains
+        # mandatory before the capability can be returned.
+        exact = self._specs.get(query_text)
+        if exact is not None and self._allowed(exact, context=context, effective_only=effective_only):
+            return (exact,)
 
-        # Ordinary user wording must benefit from the same concept-level weighting as
-        # Runtime 1.0's compact ObjectiveIR query. Otherwise a phrase such as
-        # "look through my inbox" only receives a weak generic semantic match and can
-        # lose Gmail search to unrelated tools with incidental lexical overlap.
-        resource_tokens.update(_concept_values(query_text, _RESOURCE_CONCEPTS))
-        operation_tokens.update(_concept_values(query_text, _OPERATION_CONCEPTS))
+        parsed = CapabilitySearchQuery.parse(query_text)
+        candidate_ids: list[str] = list(
+            self._search_index.candidate_ids(parsed, limit=bounded_limit)
+        )
 
-        ranked: list[tuple[int, str, CapabilitySpec]] = []
+        # Future large catalogs can add ANN/vector candidates here. Candidate IDs are
+        # never trusted: unknown IDs are ignored and every known candidate is filtered by
+        # the same trusted scope/surface/permission rules before reranking or exposure.
+        if self._semantic_candidate_provider is not None:
+            semantic_limit = max(64, min(2048, bounded_limit * 32))
+            for capability_id in self._semantic_candidate_provider.candidate_ids(
+                query_text,
+                limit=semantic_limit,
+            ):
+                normalized = str(capability_id or "").strip().lower()
+                if normalized and normalized not in candidate_ids:
+                    candidate_ids.append(normalized)
 
-        for spec in candidates:
-            identity_text = " ".join((spec.id, spec.display_name, *spec.aliases, *spec.tags)).lower()
-            joined = f"{identity_text} {spec.description}".lower()
-            identity_tokens = _tokens(identity_text)
-            description_tokens = _tokens(spec.description)
-            semantic_spec_tokens = _semantic_tokens(joined)
-
-            score = 0
-            if query_text == spec.id:
-                score += 1000
-            if objective_text and objective_text in joined:
-                score += 30
-            elif query_text in joined:
-                score += 20
-
-            # Exact lexical matches still matter most for specific action/tool names.
-            score += 10 * len(objective_tokens & identity_tokens)
-            score += 6 * len((query_tokens - objective_tokens) & identity_tokens)
-            score += 3 * len(query_tokens & description_tokens)
-
-            # Small deterministic semantic normalization closes obvious vocabulary gaps
-            # such as email/emails/Gmail/mailbox and retrieve/search/read. It is ranking
-            # only: authority filtering has already happened above and Kernel rechecks it
-            # again at execution.
-            score += 4 * len(semantic_query_tokens & semantic_spec_tokens)
-
-            if resource_tokens:
-                score += 40 * len(resource_tokens & semantic_spec_tokens)
-            if operation_tokens:
-                score += 25 * len(operation_tokens & semantic_spec_tokens)
-                if "read" in operation_tokens:
-                    score += 15 if spec.risk is CapabilityRisk.READ_ONLY else -10
-
+        ranked: list[tuple[float, str, CapabilitySpec]] = []
+        seen: set[str] = set()
+        for capability_id in candidate_ids:
+            if capability_id in seen:
+                continue
+            seen.add(capability_id)
+            spec = self._specs.get(capability_id)
+            if spec is None or not self._allowed(
+                spec,
+                context=context,
+                effective_only=effective_only,
+            ):
+                continue
+            score = self._search_index.score(parsed, spec)
             if score > 0:
                 ranked.append((score, spec.id, spec))
 
         ranked.sort(key=lambda row: (-row[0], row[1]))
-        return tuple(row[2] for row in ranked[: max(1, min(limit, 50))])
+        return tuple(row[2] for row in ranked[:bounded_limit])
