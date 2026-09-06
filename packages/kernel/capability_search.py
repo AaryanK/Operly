@@ -12,6 +12,14 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
+def _raw_tokens(value: str) -> tuple[str, ...]:
+    return tuple(
+        match.group(0).lower()
+        for match in _TOKEN_RE.finditer(str(value or "").lower())
+        if len(match.group(0)) > 1
+    )
+
+
 def _stem(token: str) -> str:
     """Apply small morphological normalization without domain dictionaries."""
 
@@ -26,12 +34,22 @@ def _stem(token: str) -> str:
 
 
 def tokens(value: str) -> tuple[str, ...]:
-    return tuple(
-        dict.fromkeys(
-            _stem(match.group(0))
-            for match in _TOKEN_RE.finditer(str(value or "").lower())
-            if len(match.group(0)) > 1
-        )
+    return tuple(dict.fromkeys(_stem(token) for token in _raw_tokens(value)))
+
+
+def _looks_collection(value: str) -> bool:
+    """Retain generic plurality signal after stemming for LIST-vs-GET ranking.
+
+    This deliberately does not know anything about customers, invoices, workflow runs,
+    or any other resource type. It only preserves the grammatical fact that the user
+    referred to a collection (for example ``versions`` or ``runs``).
+    """
+
+    return any(
+        len(token) > 3
+        and token.endswith("s")
+        and not token.endswith(("ss", "us", "is"))
+        for token in _raw_tokens(value)
     )
 
 
@@ -93,6 +111,10 @@ _ACTION_ALIASES = {
     "move": "update",
     "set": "update",
     "mark": "update",
+    "enable": "update",
+    "disable": "update",
+    "activate": "update",
+    "deactivate": "update",
     "delete": "delete",
     "remove": "delete",
     "archive": "delete",
@@ -111,6 +133,7 @@ _READ_ACTIONS = frozenset({"search", "list", "read"})
 _MUTATION_ACTIONS = frozenset(
     {"create", "draft", "send", "update", "delete", "execute", "retry", "cancel"}
 )
+_STRONG_MUTATION_ACTIONS = _MUTATION_ACTIONS - {"execute"}
 
 
 def action_facets(value: str) -> frozenset[str]:
@@ -131,6 +154,7 @@ class CapabilitySearchQuery:
     action_facets: frozenset[str]
     wants_retrieval: bool
     wants_mutation: bool
+    wants_collection: bool
 
     @classmethod
     def parse(cls, value: str) -> "CapabilitySearchQuery":
@@ -152,16 +176,18 @@ class CapabilitySearchQuery:
         explicit_mutation = bool(
             operation_terms & {"act", "create", "update", "delete", "send", "execute"}
         )
-        action_mutation = bool(all_actions & _MUTATION_ACTIONS)
-        wants_mutation = explicit_mutation or action_mutation
-        # Normal Runtime 1.0 queries carry ObjectiveIR operations. Raw-text search is a
-        # compatibility surface; when it has no explicit operation and no mutation/wait
-        # action, treat it as retrieval because calling registry.search itself implies
-        # discovery rather than a no-tool response. The semantic classifier remains the
-        # authority for deciding whether discovery should happen at all.
+        has_read_action = bool(all_actions & _READ_ACTIONS)
+        strong_mutation = bool(all_actions & _STRONG_MUTATION_ACTIONS)
+        # ``run`` is linguistically ambiguous: it can be the mutation verb in
+        # "run this workflow" or a noun in "show recent workflow runs". A simultaneous
+        # read facet resolves that ambiguity toward retrieval for raw compatibility
+        # queries. ObjectiveIR operation labels remain authoritative on the normal path.
+        ambiguous_execute_mutation = "execute" in all_actions and not has_read_action
+        wants_mutation = explicit_mutation or strong_mutation or ambiguous_execute_mutation
         wants_retrieval = explicit_retrieval or (
             not operation_terms
-            and not wants_mutation
+            and not strong_mutation
+            and not ambiguous_execute_mutation
             and "wait" not in all_actions
         )
         return cls(
@@ -173,6 +199,7 @@ class CapabilitySearchQuery:
             action_facets=all_actions,
             wants_retrieval=wants_retrieval,
             wants_mutation=wants_mutation,
+            wants_collection=_looks_collection(objective),
         )
 
 
@@ -273,8 +300,6 @@ class CapabilitySearchIndex:
 
         budget = max(128, min(4096, max(1, limit) * 64))
         terms = set(query.objective_terms) | set(query.resource_terms)
-        # Rare terms carry far more routing information than generic words like
-        # "workspace" or "show". Consume rare postings first and stop at a bounded pool.
         ranked_terms = sorted(
             (term for term in terms if term in self._postings),
             key=lambda term: (self.document_frequency(term), term),
@@ -296,9 +321,6 @@ class CapabilitySearchIndex:
                 break
             add_postings(self._postings[term])
 
-        # Specific action facets are cheap high-value postings. They are merged rather
-        # than treated as a hard filter because a capability may use unconventional
-        # naming while still being semantically relevant through its description.
         for action in sorted(query.action_facets):
             if len(candidates) >= budget:
                 break
@@ -320,8 +342,6 @@ class CapabilitySearchIndex:
         for seed_id in seed_ids:
             for namespace in _namespace_keys(seed_id):
                 siblings = self._namespace_postings.get(namespace, ())
-                # Skip pathological broad families and fall through to a more specific
-                # seed/ANN path instead of flooding the candidate pool.
                 if len(siblings) > budget * 4:
                     continue
                 for sibling_id in sorted(siblings):
@@ -331,8 +351,6 @@ class CapabilitySearchIndex:
                     related.append(sibling_id)
                     if len(related) >= budget:
                         return tuple(related)
-                # The most-specific useful namespace is enough for this seed. This avoids
-                # walking upward into broad provider families such as workspace.finance.
                 if siblings:
                     break
         return tuple(related)
@@ -375,9 +393,6 @@ class CapabilitySearchIndex:
             if overlap:
                 score += 75.0 + 20.0 * len(overlap)
             else:
-                # Preserve the broader read-family relationship without equating
-                # SEARCH/LIST/READ. A search request may still consider a list/read tool,
-                # but exact action semantics should win decisively.
                 query_read = bool(query.action_facets & _READ_ACTIONS)
                 doc_read = bool(doc.action_facets & _READ_ACTIONS)
                 query_write = bool(query.action_facets & _MUTATION_ACTIONS)
@@ -386,6 +401,15 @@ class CapabilitySearchIndex:
                     score += 18.0
                 if query_write and doc_write:
                     score += 12.0
+
+        # Collection wording is a generic semantic clue that LIST is usually a better
+        # action than GET/READ. It works equally for messages, versions, runs, invoices,
+        # customers, or capabilities that do not exist yet.
+        if query.wants_collection:
+            if "list" in doc.action_facets:
+                score += 45.0
+            elif "read" in doc.action_facets:
+                score -= 8.0
 
         if query.wants_retrieval:
             score += 24.0 if spec.risk is CapabilityRisk.READ_ONLY else -20.0
