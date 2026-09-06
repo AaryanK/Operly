@@ -5,7 +5,8 @@ from packages.agent_runtime.real_world_evaluation import RawPromptCase, _c
 
 # Exactly 100 deliberately implicit prompts. These avoid obvious capability nouns where
 # practical and force the model to infer the user's meaning before capability retrieval.
-# They are synthetic and never execute tools or read connected provider data.
+# They are synthetic and never execute tools or read connected provider data. Failures
+# should improve semantic compilation/retrieval, not create phrase-specific hard routes.
 IMPLICIT_SEMANTIC_CASES: tuple[RawPromptCase, ...] = (
     # Personal communications: infer mailbox/message retrieval without saying email/Gmail/inbox.
     _c("implicit.p.mail.01", "implicit_personal_mail", "personal", "did dad ever say what gate hes landing at", kind="retrieve", external=True, caps=("google.gmail.search",), styles=("implicit", "casual")),
