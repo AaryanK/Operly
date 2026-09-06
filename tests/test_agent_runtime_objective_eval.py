@@ -6,10 +6,11 @@ from unittest.mock import AsyncMock, patch
 
 from packages.agent_runtime.context import ContextSlice
 from packages.agent_runtime.evaluation import (
+    NO_TOOL_AND_SCOPE_CASES,
     OBJECTIVE_EVAL_CASES,
     _evaluate_case,
+    _execution_context,
     _interpret_with_backoff,
-    _personal_context,
     run_startup_objective_eval_if_enabled,
 )
 from packages.agent_runtime.inference import (
@@ -38,6 +39,24 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
         kinds = {case.kind for case in OBJECTIVE_EVAL_CASES}
         self.assertTrue({"respond", "retrieve", "act", "composite", "wait"}.issubset(kinds))
 
+    def test_fast_slice_covers_no_tool_behavior_in_both_scopes(self):
+        personal_no_tool = [case for case in NO_TOOL_AND_SCOPE_CASES if case.scope == "personal" and not case.external_state]
+        workspace_no_tool = [case for case in NO_TOOL_AND_SCOPE_CASES if case.scope == "workspace" and not case.external_state]
+        self.assertGreaterEqual(len(personal_no_tool), 6)
+        self.assertGreaterEqual(len(workspace_no_tool), 8)
+        self.assertTrue(all(case.kind == "respond" and case.dispatch == "respond" for case in personal_no_tool + workspace_no_tool))
+        prompts = "\n".join(case.prompt.lower() for case in workspace_no_tool)
+        for smb_term in ("cash flow", "gross margin", "pricing", "customer", "saas", "inventory"):
+            self.assertIn(smb_term, prompts)
+
+    def test_workspace_boundary_cases_expect_workspace_capabilities(self):
+        cases = [case for case in NO_TOOL_AND_SCOPE_CASES if case.scope == "workspace" and case.external_state]
+        expected = {case.expected_capability for case in cases}
+        self.assertIn("workspace.search", expected)
+        self.assertIn("workspace.attention.list", expected)
+        self.assertIn("workspace.finance.invoice.create_simple", expected)
+        self.assertIn("workspace.customer.snapshot", expected)
+
     def test_scorecard_checks_classifier_and_tool_hit(self):
         case = next(case for case in OBJECTIVE_EVAL_CASES if case.case_id == "gmail.search.dad")
         objective = ObjectiveIR(
@@ -65,7 +84,7 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_failure_retries_with_bounded_backoff(self):
         case = OBJECTIVE_EVAL_CASES[0]
         expected = ObjectiveIR(
-            objective="Explain recursion",
+            objective="Explain invoices and receipts",
             kind=ObjectiveKind.RESPOND,
             operations=(ObjectiveOperation.RESPOND,),
             resource_hints=(),
@@ -83,7 +102,7 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
             result = await _interpret_with_backoff(
                 interpreter,
                 case=case,
-                context=_personal_context(),
+                context=_execution_context("personal"),
                 max_attempts=3,
                 retry_delay_seconds=7.0,
             )
@@ -103,7 +122,7 @@ class ObjectiveEvaluationHarnessTests(unittest.IsolatedAsyncioTestCase):
                 await _interpret_with_backoff(
                     interpreter,
                     case=case,
-                    context=_personal_context(),
+                    context=_execution_context("personal"),
                     max_attempts=3,
                     retry_delay_seconds=7.0,
                 )
