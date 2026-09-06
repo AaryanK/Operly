@@ -72,10 +72,11 @@ def _namespace_keys(capability_id: str) -> tuple[str, ...]:
     )
 
 
-# This is an operation ontology, not a capability/domain synonym table. It preserves
-# distinctions such as SEARCH vs LIST vs READ while allowing natural verb variants to
-# share one action facet. The normal production path receives model-compiled canonical
-# semantics; aliases below mainly keep direct registry use backwards-compatible.
+# This is a small operation ontology, not a capability/domain synonym table. It lets a
+# model-compiled action such as UPDATE or EXECUTE align with capability-native verbs
+# such as adjust or deploy without teaching the Kernel what inventory, Studio, CRM, or
+# any future domain means. Resource/domain meaning stays in the model and capability
+# metadata; this table describes only generic state-transition semantics.
 _ACTION_ALIASES = {
     "search": "search",
     "find": "search",
@@ -100,7 +101,12 @@ _ACTION_ALIASES = {
     "create": "create",
     "add": "create",
     "book": "create",
+    "reserve": "create",
+    "invite": "create",
     "record": "create",
+    "export": "create",
+    "upload": "create",
+    "download": "create",
     "draft": "draft",
     "send": "send",
     "reply": "send",
@@ -109,18 +115,27 @@ _ACTION_ALIASES = {
     "edit": "update",
     "modify": "update",
     "move": "update",
+    "reschedule": "update",
     "set": "update",
     "mark": "update",
+    "adjust": "update",
+    "assign": "update",
+    "grant": "update",
     "enable": "update",
     "disable": "update",
     "activate": "update",
     "deactivate": "update",
+    "rollback": "update",
+    "restore": "update",
     "delete": "delete",
     "remove": "delete",
     "archive": "delete",
+    "revoke": "delete",
     "run": "execute",
     "execute": "execute",
     "start": "execute",
+    "deploy": "execute",
+    "publish": "execute",
     "retry": "retry",
     "cancel": "cancel",
     "stop": "cancel",
