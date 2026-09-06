@@ -33,6 +33,17 @@ class ImplicitSemanticCorpusTests(unittest.TestCase):
             for capability_id in case.expected_any:
                 self.assertNotIn(capability_id, case.prompt)
 
+    def test_expected_capabilities_exist_in_the_current_scope_registry(self):
+        from packages.personal_modules.runtime import build_personal_runtime
+        from packages.workspace_modules.tools.runtime import build_workspace_runtime
+
+        personal = {spec.id for spec in build_personal_runtime().registry.all()}
+        workspace = {spec.id for spec in build_workspace_runtime().registry.all()}
+        for case in IMPLICIT_SEMANTIC_CASES:
+            available = workspace if case.scope == "workspace" else personal
+            for capability_id in case.expected_any:
+                self.assertIn(capability_id, available, f"{case.case_id}: unknown {capability_id}")
+
     def test_multilingual_implicit_cases_are_present(self):
         tagged = {
             style
