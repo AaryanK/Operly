@@ -20,7 +20,7 @@ class CapabilityRegistry:
     """Single source of truth for model/API visible capability contracts.
 
     Capability search is deliberately two-stage:
-      1. a bounded candidate index (plus an optional ANN/vector candidate provider),
+      1. bounded sparse/semantic candidate generation plus local family expansion,
       2. trusted scope/surface/permission filtering followed by deterministic reranking.
 
     This prevents the model from seeing unauthorized contracts and avoids scoring every
@@ -83,7 +83,11 @@ class CapabilityRegistry:
         return tuple(spec for spec in self.all() if self._surface_allowed(spec, context))
 
     def effective(self, context: ExecutionContext) -> tuple[CapabilitySpec, ...]:
-        return tuple(spec for spec in self.visible(context) if all(context.can(permission) for permission in spec.permissions))
+        return tuple(
+            spec
+            for spec in self.visible(context)
+            if all(context.can(permission) for permission in spec.permissions)
+        )
 
     def _allowed(
         self,
@@ -113,7 +117,11 @@ class CapabilityRegistry:
         # Exact IDs are still deterministic, but authorization/surface filtering remains
         # mandatory before the capability can be returned.
         exact = self._specs.get(query_text)
-        if exact is not None and self._allowed(exact, context=context, effective_only=effective_only):
+        if exact is not None and self._allowed(
+            exact,
+            context=context,
+            effective_only=effective_only,
+        ):
             return (exact,)
 
         parsed = CapabilitySearchQuery.parse(query_text)
@@ -121,6 +129,20 @@ class CapabilityRegistry:
             self._search_index.candidate_ids(parsed, limit=bounded_limit)
         )
 
+        # A strong sparse hit can reveal a useful local capability family even when the
+        # sibling uses different wording. Example: google.gmail.search should make
+        # google.gmail.read_message eligible for reranking without teaching the registry
+        # that "email" means "gmail". Expansion is indexed, namespace-derived and hard
+        # bounded; one-segment roots are never expanded.
+        family_limit = max(32, min(512, bounded_limit * 16))
+        for capability_id in self._search_index.related_candidate_ids(
+            candidate_ids,
+            limit=family_limit,
+        ):
+            if capability_id not in candidate_ids:
+                candidate_ids.append(capability_id)
+
+        semantic_ids: set[str] = set()
         # Future large catalogs can add ANN/vector candidates here. Candidate IDs are
         # never trusted: unknown IDs are ignored and every known candidate is filtered by
         # the same trusted scope/surface/permission rules before reranking or exposure.
@@ -131,7 +153,10 @@ class CapabilityRegistry:
                 limit=semantic_limit,
             ):
                 normalized = str(capability_id or "").strip().lower()
-                if normalized and normalized not in candidate_ids:
+                if not normalized:
+                    continue
+                semantic_ids.add(normalized)
+                if normalized not in candidate_ids:
                     candidate_ids.append(normalized)
 
         ranked: list[tuple[float, str, CapabilitySpec]] = []
@@ -148,6 +173,11 @@ class CapabilityRegistry:
             ):
                 continue
             score = self._search_index.score(parsed, spec)
+            # ANN/vector providers are candidate generators, not authorities or final
+            # rankers. A semantically retrieved candidate with zero lexical score remains
+            # eligible at a tiny floor so true vocabulary-gap results are not discarded.
+            if capability_id in semantic_ids and score <= 0:
+                score = 1.0
             if score > 0:
                 ranked.append((score, spec.id, spec))
 
