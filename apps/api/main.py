@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 
 from apps.api.access_router import router as access_router
+from apps.api.admin_router import router as admin_router
 from apps.api.agent_runtime_router import (
     personal_router as personal_agent_runtime_router,
     workspace_router as workspace_agent_runtime_router,
@@ -246,6 +247,7 @@ app.add_middleware(
 )
 
 app.include_router(session_router)
+app.include_router(admin_router)
 app.include_router(discord_auth_router)
 app.include_router(personal_agent_runtime_router)
 app.include_router(workspace_agent_runtime_router)
@@ -388,7 +390,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 WEB_DIST = WEB_ROOT / "dist"
 KNOWN_REACT_ROUTES = {
     "", "login", "signup", "join", "verify-email", "forgot-password", "reset-password",
-    "onboarding", "account", "personal", "app", "privacy", "terms",
+    "onboarding", "account", "personal", "app", "admin", "privacy", "terms",
 }
 
 
