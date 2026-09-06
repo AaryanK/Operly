@@ -5,8 +5,10 @@ on:
     paths:
       - "packages/agent_runtime/real_world_evaluation.py"
       - "packages/agent_runtime/real_world_evaluation_extra.py"
+      - "packages/agent_runtime/real_world_implicit_cases.py"
       - "scripts/evaluate_real_world_objectives.py"
       - "tests/test_agent_runtime_real_world_evaluation.py"
+      - "tests/test_agent_runtime_implicit_semantic_evaluation.py"
       - ".github/workflows/real-world-objective-eval.yml"
   workflow_dispatch:
 
@@ -40,11 +42,15 @@ jobs:
           python -m py_compile \
             packages/agent_runtime/real_world_evaluation.py \
             packages/agent_runtime/real_world_evaluation_extra.py \
+            packages/agent_runtime/real_world_implicit_cases.py \
             scripts/evaluate_real_world_objectives.py \
-            tests/test_agent_runtime_real_world_evaluation.py
+            tests/test_agent_runtime_real_world_evaluation.py \
+            tests/test_agent_runtime_implicit_semantic_evaluation.py
       - name: Validate corpus coverage
         run: |
-          python -m unittest tests.test_agent_runtime_real_world_evaluation -v
+          python -m unittest \
+            tests.test_agent_runtime_real_world_evaluation \
+            tests.test_agent_runtime_implicit_semantic_evaluation -v
           python scripts/evaluate_real_world_objectives.py --inventory-only
 
   live-model:
