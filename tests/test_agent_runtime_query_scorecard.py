@@ -43,12 +43,13 @@ def workspace_owner_context() -> ExecutionContext:
     )
 
 
-class RuntimeQueryGeneralizationScorecard(unittest.TestCase):
-    """Natural-language capability discovery scorecard over current real registries.
+class RuntimeCompiledObjectiveRetrievalScorecard(unittest.TestCase):
+    """Capability discovery scorecard over model-compiled semantic ObjectiveIR queries.
 
-    This deliberately mixes previously troublesome phrasings with unseen paraphrases.
-    Every case prints the actual rank and top candidates before the aggregate assertion,
-    so CI is also a diagnostic report instead of only a red/green gate.
+    Raw human language is the ObjectiveInterpreter's responsibility. The Kernel search
+    contract intentionally receives a concise canonical semantic query so it does not
+    grow language-specific synonym tables. The separate live objective evaluator covers
+    raw slang, typos, multilingual input and code switching end-to-end.
     """
 
     @classmethod
@@ -72,7 +73,7 @@ class RuntimeQueryGeneralizationScorecard(unittest.TestCase):
         ]
         rank = ids.index(expected) + 1 if expected in ids else None
         print(
-            "QUERY_SCORECARD"
+            "COMPILED_QUERY_SCORECARD"
             f" scope={scope} expected={expected} rank={rank} top={top}"
             f" query={query!r} candidates={ids[:8]}"
         )
@@ -82,32 +83,32 @@ class RuntimeQueryGeneralizationScorecard(unittest.TestCase):
             return f"{scope}: {expected} rank {rank} > {top} for {query!r}; got {ids}"
         return None
 
-    def test_previous_and_unseen_queries(self):
+    def test_model_compiled_semantics_retrieve_expected_capabilities(self):
         cases = (
-            # Previously troublesome/raw compatibility cases.
-            ("personal", "look through my inbox for the tuition receipt", "google.gmail.search", 5),
-            ("personal", "show me the versions of this workflow", "workflow.version.list", 5),
-            ("personal", "show recent workflow runs", "workflow.run.list", 5),
-            ("personal", "disable this workflow", "workflow.disable", 5),
-            ("personal", "enable this workflow", "workflow.enable", 5),
-            # New personal paraphrases intended to probe generalization.
-            ("personal", "pull up the email where the bursar sent my receipt", "google.gmail.search", 5),
-            ("personal", "what appointments do I have tomorrow morning", "google.calendar.list_events", 5),
-            ("personal", "show the last few workflow executions", "workflow.run.list", 5),
-            ("personal", "list older revisions of this workflow", "workflow.version.list", 5),
-            ("personal", "what is on my task list", "tasks.list", 4),
-            ("personal", "turn this workflow off", "workflow.disable", 5),
-            ("personal", "switch this workflow back on", "workflow.enable", 5),
-            ("personal", "write an email draft to Dad", "google.gmail.create_draft", 4),
-            ("personal", "schedule a calendar meeting tomorrow", "google.calendar.create_event", 4),
-            # Existing Workspace precision cases plus unseen paraphrases.
-            ("workspace", "Find Acme in this workspace | resources customer workspace contact | operations retrieve", "workspace.search", 4),
-            ("workspace", "Create a 500 dollar invoice for design work due in 14 days | resources invoice finance | operations act", "workspace.finance.invoice.create_simple", 5),
-            ("workspace", "find Northstar supplier in this workspace | resources supplier workspace | operations retrieve", "workspace.search", 4),
-            ("workspace", "show the selected customer's complete profile | resources customer crm contact | operations retrieve", "workspace.customer.snapshot", 5),
-            ("workspace", "make an invoice for 750 dollars due next Friday | resources invoice finance | operations act", "workspace.finance.invoice.create_simple", 5),
-            ("workspace", "record the payment for invoice INV-1042 | resources payment invoice finance | operations act", "workspace.finance.payment.record", 5),
-            ("workspace", "what needs my attention right now | resources task appointment support inventory | operations retrieve", "workspace.attention.list", 5),
+            # Personal mail/calendar/tasks/workflow semantics. These are the canonical
+            # representations the model should produce from any human language.
+            ("personal", "Search mail messages for tuition receipt | resources email message | operations retrieve", "google.gmail.search", 4),
+            ("personal", "Search mail messages from bursar for receipt | resources email message | operations retrieve", "google.gmail.search", 4),
+            ("personal", "Read selected mail message | resources email message | operations retrieve", "google.gmail.read_message", 4),
+            ("personal", "Draft mail message to Dad | resources email message draft | operations act", "google.gmail.create_draft", 4),
+            ("personal", "Send mail message to Dad | resources email message | operations act", "google.gmail.send_email", 4),
+            ("personal", "List calendar events tomorrow morning | resources calendar event | operations retrieve", "google.calendar.list_events", 4),
+            ("personal", "Read calendar availability Friday afternoon | resources calendar availability | operations retrieve", "google.calendar.freebusy", 4),
+            ("personal", "Create calendar event tomorrow | resources calendar event | operations act", "google.calendar.create_event", 4),
+            ("personal", "List personal tasks | resources task | operations retrieve", "tasks.list", 4),
+            ("personal", "Create personal task | resources task | operations act", "tasks.create", 4),
+            ("personal", "List workflow runs | resources workflow run | operations retrieve", "workflow.run.list", 5),
+            ("personal", "List workflow versions | resources workflow version | operations retrieve", "workflow.version.list", 5),
+            ("personal", "Disable workflow | resources workflow | operations act", "workflow.disable", 5),
+            ("personal", "Enable workflow | resources workflow | operations act", "workflow.enable", 5),
+            # Workspace/SMB capability precision.
+            ("workspace", "Search workspace for Acme customer | resources customer workspace contact | operations retrieve", "workspace.search", 4),
+            ("workspace", "Search workspace for invoice INV-1042 | resources invoice workspace | operations retrieve", "workspace.search", 4),
+            ("workspace", "Search workspace for supplier Northstar | resources supplier workspace | operations retrieve", "workspace.search", 4),
+            ("workspace", "Read selected customer complete snapshot | resources customer crm contact | operations retrieve", "workspace.customer.snapshot", 5),
+            ("workspace", "List business attention items | resources task appointment support inventory | operations retrieve", "workspace.attention.list", 5),
+            ("workspace", "Create invoice for 500 dollars due in 14 days | resources invoice finance | operations act", "workspace.finance.invoice.create_simple", 5),
+            ("workspace", "Record payment against invoice INV-1042 | resources payment invoice finance | operations act", "workspace.finance.payment.record", 5),
         )
         failures: list[str] = []
         for scope, query, expected, top in cases:
