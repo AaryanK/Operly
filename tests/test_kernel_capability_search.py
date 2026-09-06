@@ -87,8 +87,16 @@ class WorkspaceCapabilityRetrievalTests(unittest.TestCase):
 
     def _assert_near_top(self, query: str, capability_id: str, *, top: int = 5) -> None:
         ids = self._ids(query)
-        self.assertIn(capability_id, ids, msg=f"{capability_id!r} missing for {query!r}; got {ids}")
-        self.assertLess(ids.index(capability_id), top, msg=f"{capability_id!r} ranked too low: {ids}")
+        self.assertIn(
+            capability_id,
+            ids,
+            msg=f"{capability_id!r} missing for {query!r}; got {ids}",
+        )
+        self.assertLess(
+            ids.index(capability_id),
+            top,
+            msg=f"{capability_id!r} ranked too low: {ids}",
+        )
 
     def test_workspace_search_is_distinct_from_generic_list_and_file_reads(self):
         cases = (
@@ -138,6 +146,47 @@ class WorkspaceCapabilityRetrievalTests(unittest.TestCase):
 
 
 class ScalableCapabilityIndexTests(unittest.TestCase):
+    def test_related_actions_surface_from_capability_family_without_domain_synonyms(self):
+        registry = CapabilityRegistry(
+            (
+                _spec(
+                    "future.messaging.search",
+                    description="Search nebula messages across this account",
+                    tags=("search", "nebula"),
+                ),
+                _spec(
+                    "future.messaging.read_message",
+                    description="Read one selected message by identifier",
+                    tags=("read",),
+                ),
+                _spec(
+                    "future.messaging.send_message",
+                    description="Send one selected message",
+                    tags=("send",),
+                    risk=CapabilityRisk.MEDIUM,
+                ),
+            )
+        )
+        ids = [
+            spec.id
+            for spec in registry.search(
+                "Find nebula | resources nebula | operations retrieve",
+                context=owner_context(),
+                effective_only=True,
+                limit=12,
+            )
+        ]
+        self.assertIn("future.messaging.search", ids)
+        self.assertIn("future.messaging.read_message", ids)
+        self.assertLess(
+            ids.index("future.messaging.search"),
+            ids.index("future.messaging.send_message"),
+        )
+        self.assertLess(
+            ids.index("future.messaging.read_message"),
+            ids.index("future.messaging.send_message"),
+        )
+
     def test_large_catalog_does_not_score_every_capability(self):
         registry = CapabilityRegistry()
         for index in range(20_000):
@@ -165,7 +214,11 @@ class ScalableCapabilityIndexTests(unittest.TestCase):
                 limit=12,
             )
         self.assertEqual(results[0].id, "future.needle.search")
-        self.assertLess(score.call_count, 100, "search regressed to near-full catalog scoring")
+        self.assertLess(
+            score.call_count,
+            100,
+            "search regressed to near-full catalog scoring",
+        )
 
     def test_semantic_candidate_provider_is_untrusted_and_policy_filtered(self):
         secret = _spec(
@@ -182,7 +235,11 @@ class ScalableCapabilityIndexTests(unittest.TestCase):
 
         class Provider:
             def candidate_ids(self, query: str, *, limit: int):
-                return ("future.secret.search", "future.public.search", "made.up.capability")
+                return (
+                    "future.secret.search",
+                    "future.public.search",
+                    "made.up.capability",
+                )
 
         registry = CapabilityRegistry(
             (secret, allowed),
