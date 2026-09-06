@@ -39,9 +39,10 @@ class Runtime1RetrievalHealthTests(unittest.TestCase):
 
     Production quality is measured at the semantic ObjectiveIR -> capability boundary.
     Raw-text registry search remains a compatibility fallback, so its contract is only
-    bounded candidate recall rather than language understanding or top-rank precision.
-    The live objective evaluator owns raw slang, typo, multilingual and code-switched
-    understanding because that is intentionally model work, not Kernel keyword work.
+    bounded candidate recall for straightforward wording rather than language
+    understanding or semantic paraphrase coverage. The live objective evaluator owns
+    slang, typos, multilingual input, code switching and semantic paraphrases because
+    that is intentionally model work, not Kernel keyword work.
     """
 
     @classmethod
@@ -99,7 +100,6 @@ class Runtime1RetrievalHealthTests(unittest.TestCase):
             ("show recent workflow runs", "workflow.run.list"),
             ("inspect this workflow run", "workflow.run.get"),
             ("read the workflow trace", "workflow.trace"),
-            ("show me the versions of this workflow", "workflow.version.list"),
             ("preview the next workflow schedule occurrences", "workflow.schedule.preview"),
             ("check workflow runtime health", "workflow.runtime.status"),
             ("check Operly system runtime status", "system.runtime.status"),
@@ -200,6 +200,14 @@ class Runtime1RetrievalHealthTests(unittest.TestCase):
                 (ObjectiveOperation.RETRIEVE,),
                 ("workflow trace",),
                 "workflow.trace",
+                5,
+            ),
+            (
+                "List workflow versions",
+                ObjectiveKind.RETRIEVE,
+                (ObjectiveOperation.RETRIEVE,),
+                ("workflow version",),
+                "workflow.version.list",
                 5,
             ),
         )
