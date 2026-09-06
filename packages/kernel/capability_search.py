@@ -13,12 +13,12 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 def _stem(token: str) -> str:
-    """Apply tiny language-agnostic-ish normalization without domain dictionaries."""
+    """Apply small morphological normalization without domain dictionaries."""
 
     token = token.lower()
     if len(token) > 5 and token.endswith("ies"):
         return token[:-3] + "y"
-    if len(token) > 4 and token.endswith("es") and not token.endswith(("ses", "xes")):
+    if len(token) > 5 and token.endswith(("sses", "xes", "zes", "ches", "shes")):
         return token[:-2]
     if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
         return token[:-1]
@@ -26,7 +26,13 @@ def _stem(token: str) -> str:
 
 
 def tokens(value: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(_stem(match.group(0)) for match in _TOKEN_RE.finditer(str(value or "").lower()) if len(match.group(0)) > 1))
+    return tuple(
+        dict.fromkeys(
+            _stem(match.group(0))
+            for match in _TOKEN_RE.finditer(str(value or "").lower())
+            if len(match.group(0)) > 1
+        )
+    )
 
 
 # This is an operation ontology, not a capability/domain synonym table. It preserves
@@ -80,7 +86,9 @@ _ACTION_ALIASES = {
 }
 
 _READ_ACTIONS = frozenset({"search", "list", "read"})
-_MUTATION_ACTIONS = frozenset({"create", "draft", "send", "update", "delete", "execute", "retry", "cancel"})
+_MUTATION_ACTIONS = frozenset(
+    {"create", "draft", "send", "update", "delete", "execute", "retry", "cancel"}
+)
 
 
 def action_facets(value: str) -> frozenset[str]:
@@ -118,11 +126,10 @@ class CapabilitySearchQuery:
 
         objective_terms = frozenset(tokens(objective))
         all_actions = action_facets(objective)
-        # ObjectiveIR operation labels are broad intent classes. Preserve them as
-        # compatibility signals while deriving specific SEARCH/LIST/READ/etc. from the
-        # semantic objective itself instead of collapsing every retrieval verb to READ.
         wants_retrieval = bool(operation_terms & {"retrieve", "read"})
-        wants_mutation = bool(operation_terms & {"act", "create", "update", "delete", "send", "execute"})
+        wants_mutation = bool(
+            operation_terms & {"act", "create", "update", "delete", "send", "execute"}
+        )
         return cls(
             raw=raw,
             objective=objective,
@@ -174,7 +181,9 @@ class CapabilitySearchIndex:
         self._action_postings: dict[str, set[str]] = defaultdict(set)
 
     def register(self, spec: CapabilitySpec) -> None:
-        identity_text = " ".join((spec.id, spec.display_name, *spec.aliases, *sorted(spec.tags))).lower()
+        identity_text = " ".join(
+            (spec.id, spec.display_name, *spec.aliases, *sorted(spec.tags))
+        ).lower()
         description_text = str(spec.description or "").lower()
         schema_text = " ".join(
             (
@@ -215,7 +224,12 @@ class CapabilitySearchIndex:
     def size(self) -> int:
         return len(self._documents)
 
-    def candidate_ids(self, query: CapabilitySearchQuery, *, limit: int) -> tuple[str, ...]:
+    def candidate_ids(
+        self,
+        query: CapabilitySearchQuery,
+        *,
+        limit: int,
+    ) -> tuple[str, ...]:
         if not query.raw:
             return ()
 
@@ -255,7 +269,9 @@ class CapabilitySearchIndex:
         total_docs = max(1, self.size)
 
         def idf(term: str) -> float:
-            return math.log((total_docs + 1.0) / (self.document_frequency(term) + 1.0)) + 1.0
+            return math.log(
+                (total_docs + 1.0) / (self.document_frequency(term) + 1.0)
+            ) + 1.0
 
         score = 0.0
         if query.raw == spec.id:
