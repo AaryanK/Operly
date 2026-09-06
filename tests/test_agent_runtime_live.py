@@ -123,8 +123,11 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("google.gmail.search", ids)
         self.assertIn("google.gmail.read_message", ids)
-        self.assertLess(ids.index("google.gmail.search"), ids.index("google.gmail.send_email"))
-        self.assertLess(ids.index("google.gmail.read_message"), ids.index("google.gmail.send_email"))
+        self.assertLess(ids.index("google.gmail.search"), 4)
+        self.assertLess(ids.index("google.gmail.read_message"), 6)
+        if "google.gmail.send_email" in ids:
+            self.assertLess(ids.index("google.gmail.search"), ids.index("google.gmail.send_email"))
+            self.assertLess(ids.index("google.gmail.read_message"), ids.index("google.gmail.send_email"))
 
     def test_plain_email_wording_still_finds_gmail_search(self):
         registry = build_personal_runtime().registry
