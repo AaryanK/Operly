@@ -74,8 +74,8 @@ def _namespace_keys(capability_id: str) -> tuple[str, ...]:
 
 # This is an operation ontology, not a capability/domain synonym table. It preserves
 # distinctions such as SEARCH vs LIST vs READ while allowing natural verb variants to
-# share one action facet. New capabilities inherit these facets from their own metadata;
-# they do not require code changes here for every resource/domain they introduce.
+# share one action facet. The normal production path receives model-compiled canonical
+# semantics; aliases below mainly keep direct registry use backwards-compatible.
 _ACTION_ALIASES = {
     "search": "search",
     "find": "search",
@@ -142,6 +142,43 @@ def action_facets(value: str) -> frozenset[str]:
         for token in tokens(value)
         if (facet := _ACTION_ALIASES.get(token)) is not None
     )
+
+
+def _action_alignment_score(
+    query_actions: frozenset[str],
+    capability_actions: frozenset[str],
+) -> float:
+    """Score operation compatibility independently from resource/domain relevance.
+
+    Exact semantic operations are intentionally much stronger than same-family fallbacks:
+    SEARCH must not lose to a pile of LIST tools merely because they mention the same
+    resource many times. This table is domain-agnostic and small by design; it describes
+    operation compatibility only, never which product/tool/domain to route to.
+    """
+
+    if not query_actions:
+        return 0.0
+
+    overlap = query_actions & capability_actions
+    if overlap:
+        return 165.0 + 25.0 * len(overlap)
+
+    query_read = query_actions & _READ_ACTIONS
+    capability_read = capability_actions & _READ_ACTIONS
+    if query_read and capability_read:
+        # Preserve useful siblings for recovery while keeping SEARCH/LIST/READ distinct.
+        if "search" in query_read:
+            return 4.0 if "read" in capability_read else -10.0
+        if "list" in query_read:
+            return 14.0 if "read" in capability_read else 8.0
+        return 16.0
+
+    query_write = query_actions & _MUTATION_ACTIONS
+    capability_write = capability_actions & _MUTATION_ACTIONS
+    if query_write and capability_write:
+        return 8.0
+
+    return 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,19 +425,7 @@ class CapabilitySearchIndex:
             elif term in doc.schema_terms:
                 score += 5.0 * weight
 
-        if query.action_facets:
-            overlap = query.action_facets & doc.action_facets
-            if overlap:
-                score += 75.0 + 20.0 * len(overlap)
-            else:
-                query_read = bool(query.action_facets & _READ_ACTIONS)
-                doc_read = bool(doc.action_facets & _READ_ACTIONS)
-                query_write = bool(query.action_facets & _MUTATION_ACTIONS)
-                doc_write = bool(doc.action_facets & _MUTATION_ACTIONS)
-                if query_read and doc_read:
-                    score += 18.0
-                if query_write and doc_write:
-                    score += 12.0
+        score += _action_alignment_score(query.action_facets, doc.action_facets)
 
         # Collection wording is a generic semantic clue that LIST is usually a better
         # action than GET/READ. It works equally for messages, versions, runs, invoices,
