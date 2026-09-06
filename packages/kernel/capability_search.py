@@ -35,6 +35,25 @@ def tokens(value: str) -> tuple[str, ...]:
     )
 
 
+def _namespace_keys(capability_id: str) -> tuple[str, ...]:
+    """Return bounded hierarchical capability-family prefixes, most-specific first.
+
+    Capability IDs already encode useful provider/resource hierarchy. For example,
+    ``google.gmail.search`` and ``google.gmail.read_message`` share ``google.gmail``.
+    Expanding a strong seed to its local family lets discovery surface sibling actions
+    without hard-coding domain synonyms. One-segment roots such as ``workspace`` are
+    deliberately excluded because they can become enormous catalogs.
+    """
+
+    parts = [part for part in str(capability_id or "").split(".") if part]
+    if len(parts) < 3:
+        return ()
+    return tuple(
+        ".".join(parts[:depth])
+        for depth in range(len(parts) - 1, 1, -1)
+    )
+
+
 # This is an operation ontology, not a capability/domain synonym table. It preserves
 # distinctions such as SEARCH vs LIST vs READ while allowing natural verb variants to
 # share one action facet. New capabilities inherit these facets from their own metadata;
@@ -167,18 +186,20 @@ class SemanticCapabilityCandidateProvider(Protocol):
 
 
 class CapabilitySearchIndex:
-    """Incremental sparse index used for sublinear candidate generation.
+    """Incremental sparse index used for bounded candidate generation.
 
     Search never needs to score every registered capability. Query terms hit inverted
-    postings first, then only a bounded candidate pool is reranked. This keeps the
-    in-process path useful for hundreds/thousands of capabilities while leaving a clean
-    seam for ANN/vector candidate generation when catalogs become much larger.
+    postings first, strong seeds can expand into a bounded local capability family, and
+    only that candidate pool is reranked. This keeps the in-process path useful for
+    thousands of capabilities while leaving a clean seam for ANN/vector generation when
+    catalogs become much larger.
     """
 
     def __init__(self) -> None:
         self._documents: dict[str, IndexedCapability] = {}
         self._postings: dict[str, set[str]] = defaultdict(set)
         self._action_postings: dict[str, set[str]] = defaultdict(set)
+        self._namespace_postings: dict[str, set[str]] = defaultdict(set)
 
     def register(self, spec: CapabilitySpec) -> None:
         identity_text = " ".join(
@@ -213,6 +234,8 @@ class CapabilitySearchIndex:
             self._postings[term].add(spec.id)
         for action in actions:
             self._action_postings[action].add(spec.id)
+        for namespace in _namespace_keys(spec.id):
+            self._namespace_postings[namespace].add(spec.id)
 
     def document(self, capability_id: str) -> IndexedCapability:
         return self._documents[capability_id]
@@ -263,6 +286,37 @@ class CapabilitySearchIndex:
             candidates.update(list(sorted(postings))[:remaining])
 
         return tuple(candidates)
+
+    def related_candidate_ids(
+        self,
+        seed_ids: Sequence[str],
+        *,
+        limit: int,
+    ) -> tuple[str, ...]:
+        """Expand seed hits into their nearest capability family, with a hard budget."""
+
+        budget = max(16, min(1024, int(limit)))
+        related: list[str] = []
+        seen = set(seed_ids)
+        for seed_id in seed_ids:
+            for namespace in _namespace_keys(seed_id):
+                siblings = self._namespace_postings.get(namespace, ())
+                # Skip pathological broad families and fall through to a more specific
+                # seed/ANN path instead of flooding the candidate pool.
+                if len(siblings) > budget * 4:
+                    continue
+                for sibling_id in sorted(siblings):
+                    if sibling_id in seen:
+                        continue
+                    seen.add(sibling_id)
+                    related.append(sibling_id)
+                    if len(related) >= budget:
+                        return tuple(related)
+                # The most-specific useful namespace is enough for this seed. This avoids
+                # walking upward into broad provider families such as workspace.finance.
+                if siblings:
+                    break
+        return tuple(related)
 
     def score(self, query: CapabilitySearchQuery, spec: CapabilitySpec) -> float:
         doc = self._documents[spec.id]
