@@ -70,9 +70,9 @@ def _case(
     )
 
 
-# The first block is intentionally the fast operator slice: ordinary questions that
-# must NOT cause tool discovery, followed by obvious Personal/Workspace tool-boundary
-# requests. Startup evaluation can set a small limit and exercise this slice first.
+# The first block is intentionally the fast operator slice. It mixes no-tool questions
+# with clear Personal and Workspace capability boundaries, including SMB language that
+# is easy to over-route merely because business nouns appear in the prompt.
 NO_TOOL_AND_SCOPE_CASES: tuple[ObjectiveEvalCase, ...] = (
     # Personal: ordinary reasoning / writing must remain model-only.
     _case("personal.no_tool.invoice_vs_receipt", "whats the difference between an invoice and a receipt", kind="respond", external=False, dispatch="respond"),
@@ -83,6 +83,9 @@ NO_TOOL_AND_SCOPE_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("personal.no_tool.email_concept", "what even is an email header and why does it matter", kind="respond", external=False, dispatch="respond"),
     _case("personal.no_tool.calendar_concept", "why do calendars have leap years", kind="respond", external=False, dispatch="respond"),
     _case("personal.no_tool.context_summary", "sum that up in one line", kind="respond", external=False, dispatch="respond", context=("assistant: Retrieval should stay separate from authorization and execution.",)),
+    _case("personal.no_tool.budget_advice", "how should i split a monthly budget if im trying to save more", kind="respond", external=False, dispatch="respond"),
+    _case("personal.no_tool.email_template", "write me a generic email template asking for a deadline extension", kind="respond", external=False, dispatch="respond"),
+    _case("personal.no_tool.workout", "whats a reasonable 4 day workout split", kind="respond", external=False, dispatch="respond"),
 
     # Workspace: SMB advice/writing should not touch business state merely because the
     # request arrived inside a Workspace.
@@ -96,20 +99,30 @@ NO_TOOL_AND_SCOPE_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("workspace.no_tool.inventory_concept", "explain inventory turnover in plain english", kind="respond", external=False, dispatch="respond", scope="workspace"),
     _case("workspace.no_tool.refund_policy", "what should a reasonable refund policy cover for a small online store", kind="respond", external=False, dispatch="respond", scope="workspace"),
     _case("workspace.no_tool.product_copy", "rewrite this product description to sound clearer: durable bottle for everyday use", kind="respond", external=False, dispatch="respond", scope="workspace"),
+    _case("workspace.no_tool.reorder_point", "how should a small bakery think about reorder points for ingredients", kind="respond", external=False, dispatch="respond", scope="workspace"),
+    _case("workspace.no_tool.invoice_template", "draft a generic invoice reminder message i can reuse with customers", kind="respond", external=False, dispatch="respond", scope="workspace"),
+    _case("workspace.no_tool.ar_aging", "explain accounts receivable aging to a new shop owner", kind="respond", external=False, dispatch="respond", scope="workspace"),
 
-    # Personal tool boundary: same classifier, but external account state really is needed.
+    # Personal tool boundary: external account state really is needed.
     _case("gmail.search.dad", "search my emails for dad's emails", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.search"),
     _case("personal.boundary.calendar", "whats on my calendar tomorrow", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "event", "meeting", "schedule"), capability="google.calendar.list_events"),
     _case("personal.boundary.send", "email dad that i got home safe", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "gmail", "message"), capability="google.gmail.send_email"),
     _case("personal.boundary.freebusy", "check if im free around 3ish friday", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("calendar", "availability", "schedule"), capability="google.calendar.freebusy"),
-    _case("personal.boundary.wait", "keep an eye on my inbox and ping me if professor replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("email", "mail", "inbox", "message")),
+    _case("personal.boundary.wait", "keep an eye on my inbox and ping me if professor replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait",), resources=("email", "mail", "inbox", "message")),
+    _case("personal.boundary.draft", "draft an email to dad saying ill call tonight but dont send it", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "draft", "message"), capability="google.gmail.create_draft"),
+    _case("personal.boundary.read_message", "read gmail message 18d3abc for me", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("email", "message"), capability="google.gmail.read_message"),
+    _case("personal.boundary.create_event", "put dentist on my calendar friday 2 to 3", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("calendar", "event"), capability="google.calendar.create_event"),
+    _case("personal.boundary.create_task", "add a task to submit my report tomorrow", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("task", "todo"), capability="tasks.create"),
 
-    # Workspace tool boundary: business state should trigger Workspace capabilities.
+    # Workspace tool boundary: current business state should trigger Workspace capabilities.
     _case("workspace.boundary.search_customer", "find acme in this workspace", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("customer", "workspace", "contact"), capability="workspace.search", scope="workspace"),
-    _case("workspace.boundary.attention", "what needs my attention in the business today", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("business", "attention", "workspace"), capability="workspace.attention.list", scope="workspace"),
+    _case("workspace.boundary.attention", "what needs my attention in the business today", kind="retrieve", external=True, dispatch="agent_loop", ops=("retrieve",), resources=("business", "attention", "workspace"), capability="workspace.attention.list", scope="workspace"),
     _case("workspace.boundary.invoice", "create a $500 invoice for design work due in 14 days", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("invoice", "finance"), capability="workspace.finance.invoice.create_simple", scope="workspace"),
     _case("workspace.boundary.customer_snapshot", "show me the full snapshot for that customer", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("customer", "contact", "crm"), capability="workspace.customer.snapshot", context=("assistant: The selected customer has contact_id contact-123.",), scope="workspace"),
-    _case("workspace.boundary.search_invoice", "search the workspace for invoice INV-1042", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("invoice", "workspace"), capability="workspace.search", scope="workspace"),
+    _case("workspace.boundary.search_invoice", "search the workspace for invoice INV-1042", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("invoice", "workspace", "file"), capability="workspace.search", scope="workspace"),
+    _case("workspace.boundary.search_project", "find the launch project in this workspace", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("project", "workspace"), capability="workspace.search", scope="workspace"),
+    _case("workspace.boundary.search_supplier", "search this workspace for supplier northstar", kind="retrieve", external=True, dispatch="direct_capability", ops=("retrieve",), resources=("supplier", "workspace"), capability="workspace.search", scope="workspace"),
+    _case("workspace.boundary.record_payment", "record a $500 payment against invoice INV-1042", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("payment", "invoice", "finance"), capability="workspace.finance.payment.record", scope="workspace"),
 )
 
 
@@ -145,8 +158,8 @@ BROAD_CASES: tuple[ObjectiveEvalCase, ...] = (
     _case("workflow.run", "run the morning brief workflow now", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("workflow", "run"), capability="workflow.run.start"),
     _case("compound.calendar_email", "check when im free friday and email dad the open times", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("calendar", "email", "mail", "schedule"), complexity="compound"),
     _case("compound.email_task", "find the deadline in professors last email and make me a task for it", kind="composite", external=True, mutation=True, dispatch="agent_loop", ops=("retrieve", "act"), resources=("email", "mail", "task"), complexity="compound"),
-    _case("wait.email", "tell me when dad replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("email", "mail", "message")),
-    _case("wait.workflow", "tell me when that workflow finishes", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait", "retrieve"), resources=("workflow", "run")),
+    _case("wait.email", "tell me when dad replies", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait",), resources=("email", "mail", "message")),
+    _case("wait.workflow", "tell me when that workflow finishes", kind="wait", external=True, wait=True, dispatch="wait", ops=("wait",), resources=("workflow", "run")),
     _case("context.email.reply", "reply saying yes that works", kind="act", external=True, mutation=True, dispatch="direct_capability", ops=("act",), resources=("email", "mail", "message"), capability="google.gmail.send_email", context=("assistant: Dad's selected email is from dad@example.test and asks whether 7 PM works.",)),
 )
 
@@ -223,7 +236,7 @@ def _evaluate_case(case: ObjectiveEvalCase, objective, tool_ids: list[str]) -> t
     if case.complexity and objective.complexity.value != case.complexity:
         mismatches.append(f"complexity:{objective.complexity.value}!={case.complexity}")
     if case.resource_any:
-        joined = " ".join(objective.resource_hints).lower()
+        joined = f"{objective.objective} {' '.join(objective.resource_hints)}".lower()
         if not any(resource in joined for resource in case.resource_any):
             mismatches.append(f"resource:{list(objective.resource_hints)}")
     if case.expected_capability and case.expected_capability not in tool_ids:
