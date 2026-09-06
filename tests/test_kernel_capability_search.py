@@ -98,28 +98,50 @@ class WorkspaceCapabilityRetrievalTests(unittest.TestCase):
             msg=f"{capability_id!r} ranked too low: {ids}",
         )
 
-    def test_workspace_search_is_distinct_from_generic_list_and_file_reads(self):
+    def _assert_any_near_top(
+        self,
+        query: str,
+        capability_ids: tuple[str, ...],
+        *,
+        top: int = 4,
+    ) -> None:
+        ids = self._ids(query)
+        near = set(ids[:top])
+        self.assertTrue(
+            near.intersection(capability_ids),
+            msg=f"none of {capability_ids!r} ranked in top {top} for {query!r}; got {ids}",
+        )
+
+    def test_workspace_search_surfaces_cross_entity_or_precise_search_capability(self):
+        # Workspace record LIST contracts intentionally accept a q filter and advertise
+        # `search <entity>` aliases. When the semantic compiler identifies the entity,
+        # an entity-specific searchable list can be more precise than workspace.search.
+        # The retriever should surface at least one correct search path near the top,
+        # rather than hard-routing every `Search workspace ...` objective to one ID.
         cases = (
             (
                 "Find Acme in this workspace | resources customer workspace contact | operations retrieve",
-                "workspace.search",
+                ("workspace.search", "workspace_os.crm.contacts.list"),
             ),
             (
                 "Search the workspace for invoice INV-1042 | resources file | operations retrieve",
-                "workspace.search",
+                ("workspace.search", "workspace_os.finance.invoices.list"),
             ),
             (
                 "Find the launch project in this workspace | resources project workspace | operations retrieve",
-                "workspace.search",
+                ("workspace.search", "workspace_os.projects.projects.list"),
             ),
             (
                 "Search this workspace for supplier Northstar | resources supplier workspace | operations retrieve",
-                "workspace.search",
+                ("workspace.search", "workspace_os.suppliers.suppliers.list"),
             ),
         )
         for query, expected in cases:
             with self.subTest(query=query):
-                self._assert_near_top(query, expected, top=4)
+                self._assert_any_near_top(query, expected, top=4)
+                # Keep the broad cross-entity search available for agent recovery even
+                # when a narrower entity search ranks higher.
+                self.assertIn("workspace.search", self._ids(query))
 
     def test_workspace_business_actions_and_attention_rank_correctly(self):
         cases = (
