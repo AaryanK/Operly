@@ -1,5 +1,6 @@
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -29,6 +30,7 @@ from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
+from packages.agent_runtime.evaluation import run_startup_objective_eval_if_enabled
 from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute
 from packages.agent_runtime.runtime import AgentRuntimeSettings
 from packages.database.db import init_db, session_scope
@@ -191,9 +193,14 @@ async def lifespan(app: FastAPI):
     await discord_bot_lifecycle.start()
     await workflow_scheduler.start()
     await workflow_event_dispatcher.start()
+    objective_eval_task = asyncio.create_task(run_startup_objective_eval_if_enabled())
     try:
         yield
     finally:
+        if not objective_eval_task.done():
+            objective_eval_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await objective_eval_task
         await workflow_event_dispatcher.stop()
         await workflow_scheduler.stop()
         await discord_bot_lifecycle.stop()
