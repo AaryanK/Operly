@@ -17,6 +17,26 @@ if (
         public_base_url + "/api/connectors/google/callback"
     )
 
+# OAuth client IDs are public identifiers, but keep diagnostics compact and avoid
+# logging any secret, state, authorization code, or token. This lets production
+# incidents prove which Google client and callback the running container is using.
+google_oauth_client_id = (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+client_stem = google_oauth_client_id.removesuffix(".apps.googleusercontent.com")
+if client_stem:
+    client_hint = (
+        client_stem
+        if len(client_stem) <= 24
+        else f"{client_stem[:12]}...{client_stem[-8:]}"
+    )
+else:
+    client_hint = "missing"
+print(
+    "OPERLY_GOOGLE_OAUTH_CONFIG "
+    f"client_id_hint={client_hint} "
+    f"redirect_uri={os.getenv('GOOGLE_OAUTH_REDIRECT_URI', '')}",
+    flush=True,
+)
+
 from apps.api.account_compat_router import router as account_compat_router
 from apps.api.main import app
 
