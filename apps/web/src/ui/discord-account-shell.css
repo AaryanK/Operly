@@ -1,0 +1,435 @@
+.discord-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: stretch;
+  color: #f2f3f5;
+  background: #313338;
+  isolation: isolate;
+}
+
+.discord-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border: 0;
+  background: #313338;
+  cursor: default;
+}
+
+.discord-settings {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(220px, 34vw) minmax(0, 1fr);
+  background: #313338;
+  overflow: hidden;
+}
+
+.discord-settings-sidebar {
+  min-width: 0;
+  padding: 52px 12px 40px max(20px, calc((100vw - 1180px) / 2));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: #2b2d31;
+  border-right: 1px solid rgba(0,0,0,.16);
+}
+
+.discord-settings-profile-mini {
+  min-width: 0;
+  margin: 0 8px 24px;
+  display: grid;
+  grid-template-columns: 40px minmax(0,1fr);
+  gap: 10px;
+  align-items: center;
+}
+.discord-settings-profile-mini > div { min-width: 0; }
+.discord-settings-profile-mini strong,
+.discord-settings-profile-mini small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-settings-profile-mini strong { color: #f2f3f5; font-size: 14px; }
+.discord-settings-profile-mini small { margin-top: 2px; color: #949ba4; font-size: 11px; }
+.discord-settings-avatar {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #5865f2, #7c5cff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.discord-settings-group-label {
+  padding: 0 10px 6px;
+  color: #949ba4;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.discord-settings-sidebar > button {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #b5bac1;
+  text-align: left;
+  font-weight: 550;
+}
+.discord-settings-sidebar > button:hover { color: #dbdee1; background: #35373c; }
+.discord-settings-sidebar > button.active { color: #fff; background: #404249; }
+.discord-settings-sidebar > button.discord-settings-signout { color: #f23f42; }
+.discord-settings-sidebar > button.discord-settings-signout:hover { color: #ff6b6e; background: rgba(242,63,66,.08); }
+.discord-settings-separator { height: 1px; margin: 8px 10px; background: #3f4147; }
+
+.discord-settings-main {
+  min-width: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  padding: 52px max(24px, calc((100vw - 1180px) / 2)) 70px 40px;
+  background: #313338;
+}
+.discord-settings-header {
+  position: sticky;
+  top: -52px;
+  z-index: 4;
+  min-height: 74px;
+  margin: -52px 0 28px;
+  padding: 52px 0 12px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  background: linear-gradient(180deg, #313338 75%, rgba(49,51,56,.94));
+}
+.discord-settings-header small { display: block; color: #949ba4; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.discord-settings-header h2 { margin: 4px 0 0; color: #f2f3f5; font-size: 22px; }
+.discord-settings-close {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #949ba4;
+  border-radius: 50%;
+  background: transparent;
+  color: #b5bac1;
+  font-size: 25px;
+  line-height: 1;
+}
+.discord-settings-close:hover { color: #fff; border-color: #dbdee1; }
+
+.discord-settings-section { width: min(720px, 100%); }
+.discord-settings-section h3 { margin: 0; color: #f2f3f5; font-size: 17px; }
+.discord-settings-copy,
+.discord-settings-section-head p { color: #b5bac1; line-height: 1.55; }
+.discord-settings-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.discord-settings-section-head p { max-width: 520px; margin: 5px 0 0; font-size: 13px; }
+.discord-settings-section-head > div:last-child { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.discord-settings-alert {
+  width: min(720px, 100%);
+  margin: 0 0 18px;
+  padding: 11px 13px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.discord-settings-alert.error { color: #ffb8ba; background: rgba(242,63,66,.15); border: 1px solid rgba(242,63,66,.3); }
+.discord-settings-alert.success { color: #b9f3c9; background: rgba(35,165,90,.13); border: 1px solid rgba(35,165,90,.28); }
+
+.discord-profile-card {
+  overflow: hidden;
+  margin-bottom: 28px;
+  border-radius: 8px;
+  background: #232428;
+  box-shadow: 0 1px 0 rgba(0,0,0,.18);
+}
+.discord-profile-banner { height: 96px; background: linear-gradient(135deg, #5865f2, #6c4dd8 52%, #3f2f6f); }
+.discord-profile-body {
+  min-height: 106px;
+  padding: 16px 18px 18px;
+  display: grid;
+  grid-template-columns: 84px minmax(0,1fr);
+  gap: 16px;
+  align-items: center;
+}
+.discord-profile-avatar {
+  width: 84px;
+  height: 84px;
+  margin-top: -44px;
+  display: grid;
+  place-items: center;
+  border: 6px solid #232428;
+  border-radius: 50%;
+  background: #5865f2;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 850;
+}
+.discord-profile-copy { min-width: 0; }
+.discord-profile-copy strong,
+.discord-profile-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-profile-copy strong { color: #fff; font-size: 21px; }
+.discord-profile-copy small { margin-top: 4px; color: #b5bac1; }
+
+.discord-settings-form { display: grid; gap: 16px; }
+.discord-settings-form > h3 { margin-bottom: -5px; }
+.discord-settings-form label { display: grid; gap: 7px; color: #b5bac1; font-size: 11px; font-weight: 800; letter-spacing: .03em; }
+.discord-settings-form input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  outline: 0;
+  background: #1e1f22;
+  color: #dbdee1;
+}
+.discord-settings-form input:focus { box-shadow: 0 0 0 2px #5865f2; }
+.discord-settings-form input:disabled { color: #949ba4; opacity: 1; }
+.discord-settings-form label small { color: #949ba4; font-size: 11px; font-weight: 500; letter-spacing: 0; }
+.discord-settings-primary,
+.discord-settings-secondary {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 4px;
+  font-weight: 700;
+}
+.discord-settings-primary { justify-self: start; color: #fff; background: #5865f2; }
+.discord-settings-primary:hover { background: #4752c4; }
+.discord-settings-secondary { color: #fff; background: #4e5058; }
+.discord-settings-secondary:hover { background: #5d6069; }
+.discord-settings-primary:disabled,
+.discord-settings-secondary:disabled { opacity: .6; }
+
+.discord-appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.discord-appearance-grid > button {
+  min-width: 0;
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #2b2d31;
+  color: #dbdee1;
+  text-align: left;
+}
+.discord-appearance-grid > button:hover { background: #35373c; }
+.discord-appearance-grid > button.active { border-color: #5865f2; background: #35373c; }
+.discord-appearance-grid strong,
+.discord-appearance-grid small { display: block; }
+.discord-appearance-grid small { color: #949ba4; line-height: 1.35; }
+.discord-appearance-preview { height: 86px; display: grid; grid-template-columns: 26px 1fr; overflow: hidden; border-radius: 4px; background: #1e1f22; }
+.discord-appearance-preview i { background: #2b2d31; }
+.discord-appearance-preview b { background: #313338; }
+.discord-appearance-preview.light i { background: #e3e5e8; }
+.discord-appearance-preview.light b { background: #f2f3f5; }
+.discord-appearance-preview.system { background: linear-gradient(90deg, #e3e5e8 0 50%, #1e1f22 50%); }
+.discord-appearance-preview.system i { background: linear-gradient(90deg, #d6d9dc 0 50%, #2b2d31 50%); }
+.discord-appearance-preview.system b { background: linear-gradient(90deg, #f2f3f5 0 50%, #313338 50%); }
+
+.discord-create-workspace {
+  margin-bottom: 26px;
+  padding: 18px;
+  border-radius: 6px;
+  background: #2b2d31;
+}
+.discord-workspace-list,
+.discord-connector-list { display: grid; gap: 8px; }
+.discord-workspace-list > button {
+  min-height: 62px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 42px minmax(0,1fr) auto;
+  gap: 11px;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: #2b2d31;
+  color: #dbdee1;
+  text-align: left;
+}
+.discord-workspace-list > button:hover { background: #35373c; }
+.discord-workspace-list > button > span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #5865f2;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+.discord-workspace-list strong,
+.discord-workspace-list small { display: block; }
+.discord-workspace-list small { margin-top: 3px; color: #949ba4; }
+
+.discord-connector-row {
+  min-width: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 44px minmax(0,1fr) auto;
+  gap: 11px;
+  align-items: center;
+  border-radius: 6px;
+  background: #2b2d31;
+}
+.discord-settings-connector-avatar {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #4e5058;
+  color: #fff;
+  font-weight: 800;
+}
+.discord-settings-connector-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.discord-connector-row > div:nth-child(2) { min-width: 0; }
+.discord-connector-row strong,
+.discord-connector-row small,
+.discord-connector-row > div:nth-child(2) > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-connector-row small { margin-top: 2px; color: #949ba4; }
+.discord-connector-row > div:nth-child(2) > span { margin-top: 4px; color: #f23f42; font-size: 11px; }
+.discord-connector-row em { color: #23a55a; font-size: 11px; font-style: normal; text-transform: capitalize; }
+.discord-connector-actions { grid-column: 2 / -1; display: flex; gap: 8px; }
+.discord-connector-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #4e5058;
+  color: #dbdee1;
+}
+.discord-connector-actions button:last-child { color: #ffb8ba; background: rgba(242,63,66,.12); }
+.discord-settings-empty { padding: 20px; border-radius: 6px; background: #2b2d31; color: #949ba4; }
+
+.discord-danger-zone {
+  margin-top: 30px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(242,63,66,.45);
+  border-radius: 6px;
+}
+.discord-danger-zone strong,
+.discord-danger-zone small { display: block; }
+.discord-danger-zone small { margin-top: 4px; color: #949ba4; }
+.discord-danger-zone button { min-height: 34px; padding: 0 12px; border: 0; border-radius: 4px; background: #da373c; color: #fff; font-weight: 700; }
+
+/* Personal Operly user controls intentionally live in the conversation sidebar,
+   like Discord's user panel, not as an avatar on the far-left server rail. */
+.workspace-lite-personal-stage .history-account.discord-user-panel {
+  margin: 10px -4px -8px;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 6px;
+  align-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: #232428;
+}
+.discord-user-profile {
+  min-width: 0;
+  padding: 3px 5px;
+  display: grid;
+  grid-template-columns: 34px minmax(0,1fr);
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #f2f3f5;
+  text-align: left;
+}
+.discord-user-profile:hover,
+.discord-user-settings:hover { background: #35373c; }
+.discord-user-profile > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #5865f2, #7c5cff);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+.discord-user-profile > div { min-width: 0; }
+.discord-user-profile strong,
+.discord-user-profile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-user-profile strong { color: #f2f3f5; font-size: 12px; }
+.discord-user-profile small { margin-top: 1px; color: #949ba4 !important; font-size: 10px; }
+.discord-user-settings {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #b5bac1;
+  font-size: 17px;
+}
+
+.workspace-lite-personal-stage .history-list > button.personal-new-draft {
+  color: #fff;
+  background: rgba(88,101,242,.18);
+  box-shadow: inset 0 0 0 1px rgba(88,101,242,.34);
+}
+.workspace-lite-personal-stage .history-list > button.personal-new-draft > span:first-child { color: #aeb7ff; }
+
+@media (max-width: 760px), (pointer: coarse) {
+  .discord-settings { display: block; overflow-y: auto; }
+  .discord-settings-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    padding: 10px;
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid #3f4147;
+  }
+  .discord-settings-profile-mini,
+  .discord-settings-group-label,
+  .discord-settings-separator,
+  .discord-settings-sidebar > .discord-settings-signout { display: none; }
+  .discord-settings-sidebar > button { width: auto; flex: 0 0 auto; white-space: nowrap; }
+  .discord-settings-main { height: auto; min-height: calc(100dvh - 55px); padding: 18px 14px 40px; overflow: visible; }
+  .discord-settings-header { top: 55px; margin: -18px -14px 20px; padding: 18px 14px 10px; }
+  .discord-settings-close { width: 34px; height: 34px; flex-basis: 34px; }
+  .discord-profile-banner { height: 72px; }
+  .discord-profile-body { grid-template-columns: 68px minmax(0,1fr); }
+  .discord-profile-avatar { width: 68px; height: 68px; margin-top: -35px; }
+  .discord-appearance-grid { grid-template-columns: 1fr; }
+  .discord-settings-section-head { flex-direction: column; }
+  .discord-settings-section-head > div:last-child { justify-content: flex-start; }
+  .discord-danger-zone { align-items: flex-start; flex-direction: column; }
+}
