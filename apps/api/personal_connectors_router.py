@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -60,11 +60,33 @@ def canva_serializer():
 
 
 def redirect_uri():
-    return os.getenv(
-        "GOOGLE_OAUTH_REDIRECT_URI",
-        os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-        + "/api/personal-connectors/google/callback",
+    configured = (os.getenv("GOOGLE_OAUTH_REDIRECT_URI") or "").strip()
+    if configured:
+        return configured
+    return (
+        (os.getenv("PUBLIC_BASE_URL") or "http://localhost:8000").rstrip("/")
+        + "/api/personal-connectors/google/callback"
     )
+
+
+def google_oauth_configuration() -> tuple[str, str, str]:
+    client_id = (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
+    callback = redirect_uri().strip()
+    missing = []
+    if not client_id:
+        missing.append("GOOGLE_OAUTH_CLIENT_ID")
+    if not client_secret:
+        missing.append("GOOGLE_OAUTH_CLIENT_SECRET")
+    parsed = urlparse(callback)
+    if not callback or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        missing.append("GOOGLE_OAUTH_REDIRECT_URI")
+    if missing:
+        raise HTTPException(
+            503,
+            "Google tools are not configured correctly. Missing or invalid: " + ", ".join(missing),
+        )
+    return client_id, client_secret, callback
 
 
 def google_capabilities(scopes: set[str]) -> list[str]:
@@ -141,6 +163,8 @@ async def upsert_google_connector(db, user_id: str, profile: dict, tokens: dict,
             previous = {}
         if previous.get("refresh_token"):
             tokens["refresh_token"] = previous["refresh_token"]
+    if not row and not tokens.get("refresh_token"):
+        raise ValueError("Google did not return offline access. Reconnect and approve Google access again.")
     ref = await store_account_secret(db, user_id, tokens)
     if row:
         row.connector_type = "google_account"
@@ -283,12 +307,13 @@ async def personal_google_connect(
     tier: str = Query("basic", pattern="^(basic|assistant)$"),
     auth: AccountAuthContext = Depends(get_account_auth_context),
 ):
+    client_id, _client_secret, callback = google_oauth_configuration()
     scopes = GOOGLE_ASSISTANT_SCOPES if tier == "assistant" else GOOGLE_BASIC_SCOPES
     state = serializer().dumps({"user_id": auth.user.id, "tier": tier, "ownership": "personal"})
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
         {
-            "client_id": os.environ.get("GOOGLE_OAUTH_CLIENT_ID", ""),
-            "redirect_uri": redirect_uri(),
+            "client_id": client_id,
+            "redirect_uri": callback,
             "response_type": "code",
             "scope": " ".join(scopes),
             "access_type": "offline",
@@ -297,7 +322,12 @@ async def personal_google_connect(
             "include_granted_scopes": "true",
         }
     )
-    return {"authorization_url": url, "permission_tier": tier, "ownership": "personal"}
+    return {
+        "authorization_url": url,
+        "permission_tier": tier,
+        "ownership": "personal",
+        "redirect_uri": callback,
+    }
 
 
 @router.post("/api/personal-connectors/canva/connect")
@@ -337,29 +367,54 @@ async def personal_canva_connect(
 
 
 @router.get("/api/personal-connectors/google/callback")
-async def personal_google_callback(code: str = Query(...), state: str = Query(...), db: AsyncSession = Depends(get_db)):
+async def personal_google_callback(
+    state: str = Query(...),
+    code: str | None = Query(None),
+    error: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    if error:
+        return RedirectResponse("/personal?connector=google_denied", 303)
+    if not code:
+        raise HTTPException(400, "Google authorization code was not returned")
     try:
         data = serializer().loads(state, max_age=600)
-    except (BadSignature, SignatureExpired) as error:
-        raise HTTPException(400, "OAuth state is invalid or expired") from error
+    except (BadSignature, SignatureExpired) as auth_error:
+        raise HTTPException(400, "OAuth state is invalid or expired") from auth_error
+    client_id, client_secret, callback = google_oauth_configuration()
     form = {
         "code": code,
-        "client_id": os.environ["GOOGLE_OAUTH_CLIENT_ID"],
-        "client_secret": os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],
-        "redirect_uri": redirect_uri(),
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": callback,
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession() as session:
         async with session.post("https://oauth2.googleapis.com/token", data=form) as response:
             tokens = await response.json()
-    if response.status != 200:
-        raise HTTPException(400, "Google authorization failed")
+            token_status = response.status
+    if token_status != 200:
+        detail = str(tokens.get("error_description") or tokens.get("error") or "Google token exchange failed")[:300]
+        raise HTTPException(400, detail)
+    access_token = str(tokens.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(400, "Google did not return an access token")
     async with aiohttp.ClientSession() as session:
-        async with session.get("https://openidconnect.googleapis.com/v1/userinfo", headers={"Authorization": f"Bearer {tokens['access_token']}"}) as response:
+        async with session.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        ) as response:
             profile = await response.json()
+            profile_status = response.status
+    if profile_status != 200 or not isinstance(profile, dict):
+        raise HTTPException(400, "Google account profile could not be verified")
     tokens["expires_at"] = datetime.now(timezone.utc).timestamp() + int(tokens.get("expires_in", 3600))
     scopes = str(tokens.get("scope", "")).split()
-    await upsert_google_connector(db, data["user_id"], profile, tokens, scopes)
+    try:
+        await upsert_google_connector(db, data["user_id"], profile, tokens, scopes)
+    except ValueError as connector_error:
+        await db.rollback()
+        raise HTTPException(400, str(connector_error)) from connector_error
     await db.commit()
     return RedirectResponse("/personal?connector=connected", 303)
 
@@ -389,7 +444,6 @@ async def disconnect_personal_connector(
     if not row:
         raise HTTPException(404, "Personal connector not found")
     secret = await db.get(AccountConnectorSecret, row.credential_reference) if row.credential_reference else None
-    # Revoke grants tied to this personal connector before deleting credentials.
     grants = list((await db.scalars(select(PersonalWorkspaceDelegation).where(PersonalWorkspaceDelegation.user_id == auth.user.id, PersonalWorkspaceDelegation.connector_reference == row.id, PersonalWorkspaceDelegation.status == "active"))).all())
     for grant in grants:
         await revoke_delegation(db, user_id=auth.user.id, delegation_id=grant.id)
@@ -424,9 +478,9 @@ async def test_personal_connector(
             raise RuntimeError(f"Connector health test is not implemented for {row.provider}")
         row.health_status = "healthy"
         row.last_error = None
-    except Exception as error:
+    except Exception as connector_error:
         row.health_status = "failed"
-        row.last_error = str(error)[:500]
+        row.last_error = str(connector_error)[:500]
     row.last_health_check = datetime.utcnow()
     await db.commit()
     return {"ok": row.health_status == "healthy", "healthStatus": row.health_status, "error": row.last_error}
@@ -486,10 +540,10 @@ async def create_delegation(
             action_id=payload.action_id,
             expires_at=payload.expires_at,
         )
-    except DelegationError as error:
-        raise HTTPException(403, str(error)) from error
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
+    except DelegationError as delegation_error:
+        raise HTTPException(403, str(delegation_error)) from delegation_error
+    except ValueError as value_error:
+        raise HTTPException(422, str(value_error)) from value_error
     await db.commit()
     return {"id": row.id, "status": row.status, "grantType": row.grant_type}
 
@@ -502,7 +556,7 @@ async def delete_delegation(
 ):
     try:
         row = await revoke_delegation(db, user_id=auth.user.id, delegation_id=delegation_id)
-    except LookupError as error:
-        raise HTTPException(404, str(error)) from error
+    except LookupError as delegation_error:
+        raise HTTPException(404, str(delegation_error)) from delegation_error
     await db.commit()
     return {"ok": True, "id": row.id, "status": row.status}
