@@ -5,7 +5,7 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.agent_runtime.inference import OpenAICompatibleAgentModel
-from packages.agent_runtime.interactive import Runtime1Agent
+from packages.agent_runtime.interactive import Runtime1Agent, resolve_runtime_dispatch
 from packages.security.execution_context import ExecutionContext
 
 
@@ -26,7 +26,7 @@ async def evaluate_discord_request(
     context: ExecutionContext,
     kernel: CapabilityDiscoveryRuntime,
     prompt: str,
-    limit: int = 12,
+    limit: int = 6,
 ) -> str:
     """Dry-run one Discord request through Runtime 1.0 without executing capabilities."""
 
@@ -44,17 +44,24 @@ async def evaluate_discord_request(
             db,
             context=context,
             query=objective.capability_query(),
-            limit=max(1, min(int(limit), 25)),
+            limit=max(1, min(int(limit), agent.limits.max_capabilities)),
         )
+
+    base_dispatch = objective.dispatch_path()
+    dispatch = resolve_runtime_dispatch(objective, capabilities)
 
     operations = ", ".join(operation.value for operation in objective.operations) or "none"
     resources = ", ".join(objective.resource_hints) or "none"
+    dispatch_text = dispatch.value
+    if dispatch is not base_dispatch:
+        dispatch_text += f" (promoted from {base_dispatch.value}: resource resolution required)"
+
     lines = [
         "**Operly Runtime dry-run**",
         f"Provider/model: `{model.route.provider}/{model.route.model_id}`",
         f"Scope: `{context.scope_kind.value}` · Surface: `{context.surface.value}`",
         f"Objective: {objective.objective}",
-        f"Kind: `{objective.kind.value}` · Dispatch: `{objective.dispatch_path().value}` · Complexity: `{objective.complexity.value}`",
+        f"Kind: `{objective.kind.value}` · Dispatch: `{dispatch_text}` · Complexity: `{objective.complexity.value}`",
         f"Operations: `{operations}`",
         f"Resources: `{resources}`",
         (
