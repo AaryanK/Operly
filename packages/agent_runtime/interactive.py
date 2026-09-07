@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.agent_runtime.context import ContextAssembler, ContextBudget, ContextItem
 from packages.agent_runtime.contracts import AgentPlanStep, AgentStepStatus
-from packages.agent_runtime.objective import ObjectiveInterpreter, RuntimeDispatchPath
+from packages.agent_runtime.objective import ObjectiveIR, ObjectiveInterpreter, RuntimeDispatchPath
 from packages.agent_runtime.runtime import AgentRuntimeSettings, GovernedAgentRuntime
 from packages.agent_runtime.telemetry import fingerprint, runtime_trace
+from packages.kernel.capability_search import action_facets
 from packages.kernel.contracts import CapabilityRisk, CapabilitySpec
 from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
 from packages.kernel.schema_validation import SchemaValidationError, validate_schema
@@ -21,20 +22,39 @@ from packages.security.execution_context import ExecutionContext
 
 class Runtime1Model(Protocol):
     async def interpret(self, request): ...
-    async def respond(self, *, objective: str, user_message: str, context_items: Sequence[Mapping[str, str]] = (), observations: Sequence[Mapping[str, Any]] = ()) -> str: ...
-    async def decide(self, *, objective: str, user_message: str, context_items: Sequence[Mapping[str, str]], observations: Sequence[Mapping[str, Any]], capabilities: Sequence[Mapping[str, Any]], remaining_steps: int, remaining_mutations: int): ...
+    async def respond(
+        self,
+        *,
+        objective: str,
+        user_message: str,
+        context_items: Sequence[Mapping[str, str]] = (),
+        observations: Sequence[Mapping[str, Any]] = (),
+    ) -> str: ...
+    async def decide(
+        self,
+        *,
+        objective: str,
+        user_message: str,
+        context_items: Sequence[Mapping[str, str]],
+        observations: Sequence[Mapping[str, Any]],
+        capabilities: Sequence[Mapping[str, Any]],
+        remaining_steps: int,
+        remaining_mutations: int,
+    ): ...
 
 
 @dataclass(frozen=True, slots=True)
 class Runtime1Limits:
     max_cycles: int = 10
-    max_capabilities: int = 12
+    max_capabilities: int = 6
     max_discoveries: int = 4
     max_mutations: int = 4
     max_failures: int = 3
     max_observation_bytes: int = 4 * 1024
     max_observations: int = 6
-    context_budget: ContextBudget = ContextBudget(max_items=6, max_bytes=12 * 1024, max_item_bytes=4 * 1024)
+    context_budget: ContextBudget = ContextBudget(
+        max_items=6, max_bytes=12 * 1024, max_item_bytes=4 * 1024
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,24 +81,107 @@ class Runtime1Result:
         }
 
 
-class Runtime1Agent:
-    """Interactive Runtime 1.0 loop shared by web, Personal AI and Discord.
+def _capability_family(capability_id: str) -> str:
+    parts = [part for part in str(capability_id or "").split(".") if part]
+    if len(parts) <= 1:
+        return str(capability_id or "")
+    return ".".join(parts[:-1])
 
-    Model intelligence chooses meaning and strategy. Kernel remains the only executor.
-    Every inference phase receives a freshly selected, byte-bounded context slice.
+
+def _required_fields(spec: CapabilitySpec) -> frozenset[str]:
+    raw = spec.input_schema.get("required", ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(item).strip().lower() for item in raw if str(item).strip())
+
+
+def _needs_opaque_resource_id(spec: CapabilitySpec) -> bool:
+    return any(
+        field == "id" or field.endswith("_id") or field.endswith("_ids")
+        for field in _required_fields(spec)
+    )
+
+
+def _is_resolver(spec: CapabilitySpec) -> bool:
+    if spec.risk is not CapabilityRisk.READ_ONLY or _needs_opaque_resource_id(spec):
+        return False
+    actions = action_facets(
+        " ".join(
+            (
+                spec.id,
+                str(spec.display_name or ""),
+                str(spec.description or ""),
+                *sorted(spec.tags),
+            )
+        )
+    )
+    return bool(actions & {"search", "list"})
+
+
+def resolve_runtime_dispatch(
+    objective: ObjectiveIR,
+    capabilities: Sequence[CapabilitySpec],
+) -> RuntimeDispatchPath:
+    """Promote one-shot retrievals when contracts reveal a lookup/read dependency.
+
+    Objective interpretation intentionally does not know tool schemas. Once authorized
+    capability contracts are available, the runtime can safely detect a generic pattern:
+    a read/get capability needs an opaque resource identifier, while a read-only search
+    or list capability in the same capability family can resolve that identifier.
+
+    This is capability-contract reasoning rather than domain/phrase routing. It applies
+    equally to mail messages, workflow runs, records, files, or future resources.
     """
+
+    base = objective.dispatch_path()
+    if base is not RuntimeDispatchPath.DIRECT_CAPABILITY:
+        return base
+    if objective.requires_mutation or objective.requires_future_wait:
+        return base
+
+    resolvers_by_family = {
+        _capability_family(spec.id)
+        for spec in capabilities
+        if _is_resolver(spec)
+    }
+    if not resolvers_by_family:
+        return base
+
+    for spec in capabilities:
+        if (
+            spec.risk is CapabilityRisk.READ_ONLY
+            and _needs_opaque_resource_id(spec)
+            and _capability_family(spec.id) in resolvers_by_family
+        ):
+            return RuntimeDispatchPath.AGENT_LOOP
+    return base
+
+
+class Runtime1Agent:
+    """Interactive Runtime 1.0 loop shared by web, Personal AI and Discord."""
 
     _AUTHORITY_FIELDS = {
         "workspace_id", "user_id", "principal_id", "membership_id", "permissions", "role",
         "approval_id", "provider_id", "provider_url", "credentials", "request_id", "step_id",
     }
 
-    def __init__(self, *, model: Runtime1Model, settings: AgentRuntimeSettings | None = None, limits: Runtime1Limits | None = None, context_assembler: ContextAssembler | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: Runtime1Model,
+        settings: AgentRuntimeSettings | None = None,
+        limits: Runtime1Limits | None = None,
+        context_assembler: ContextAssembler | None = None,
+    ) -> None:
         self.model = model
         self.settings = settings or AgentRuntimeSettings.from_environment()
         self.limits = limits or Runtime1Limits()
         self.context_assembler = context_assembler or ContextAssembler()
-        self.interpreter = ObjectiveInterpreter(model=model, settings=self.settings, context_assembler=self.context_assembler)
+        self.interpreter = ObjectiveInterpreter(
+            model=model,
+            settings=self.settings,
+            context_assembler=self.context_assembler,
+        )
 
     def _cards(self, specs: Sequence[CapabilitySpec]) -> list[dict[str, Any]]:
         return [
@@ -104,7 +207,11 @@ class Runtime1Agent:
             text = raw.strip()
             if text.startswith("```") and text.endswith("```"):
                 lines = text.splitlines()
-                if len(lines) >= 3 and lines[0].strip().lower() in {"```", "```json"} and lines[-1].strip() == "```":
+                if (
+                    len(lines) >= 3
+                    and lines[0].strip().lower() in {"```", "```json"}
+                    and lines[-1].strip() == "```"
+                ):
                     text = "\n".join(lines[1:-1]).strip()
             raw = json.loads(text)
         if not isinstance(raw, Mapping):
@@ -131,7 +238,14 @@ class Runtime1Agent:
             return {"move": "finish", "message": message}
         raise ValueError("unsupported next move")
 
-    def _bounded_observation(self, *, capability_id: str, result: Mapping[str, Any] | None, error_code: str | None = None, error: str | None = None) -> dict[str, Any]:
+    def _bounded_observation(
+        self,
+        *,
+        capability_id: str,
+        result: Mapping[str, Any] | None,
+        error_code: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {"capability_id": capability_id, "ok": error_code is None}
         if result is not None:
             payload["result"] = dict(result)
@@ -146,15 +260,29 @@ class Runtime1Agent:
                 "result_summary": {
                     "bytes": len(encoded.encode("utf-8")),
                     "sha256_16": fingerprint(encoded),
-                    "top_level_keys": sorted(result.keys())[:30] if isinstance(result, Mapping) else [],
+                    "top_level_keys": sorted(result.keys())[:30]
+                    if isinstance(result, Mapping)
+                    else [],
                 },
             }
             if error_code:
                 payload["error_code"] = error_code
         return payload
 
-    async def _discover(self, db: AsyncSession, *, kernel: AvailabilityAwareKernelRuntime, context: ExecutionContext, query: str) -> tuple[CapabilitySpec, ...]:
-        specs = await kernel.available_capabilities(db, context=context, query=query, limit=self.limits.max_capabilities)
+    async def _discover(
+        self,
+        db: AsyncSession,
+        *,
+        kernel: AvailabilityAwareKernelRuntime,
+        context: ExecutionContext,
+        query: str,
+    ) -> tuple[CapabilitySpec, ...]:
+        specs = await kernel.available_capabilities(
+            db,
+            context=context,
+            query=query,
+            limit=self.limits.max_capabilities,
+        )
         runtime_trace(
             "capabilities.discovered",
             scope_kind=context.scope_kind.value,
@@ -166,46 +294,131 @@ class Runtime1Agent:
         )
         return specs
 
-    async def run(self, db: AsyncSession, *, context: ExecutionContext, message: str, kernel: AvailabilityAwareKernelRuntime, context_items: Sequence[ContextItem] = (), run_id: str) -> Runtime1Result:
+    async def run(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        message: str,
+        kernel: AvailabilityAwareKernelRuntime,
+        context_items: Sequence[ContextItem] = (),
+        run_id: str,
+    ) -> Runtime1Result:
         if not self.settings.enabled:
             from packages.agent_runtime.runtime import AgentRuntimeDisabled
             raise AgentRuntimeDisabled("Agent runtime is disabled")
 
         runtime_trace(
-            "request.received", run_id=run_id, scope_kind=context.scope_kind.value,
-            surface=context.surface.value, channel=context.channel, message_chars=len(message),
-            message_sha256_16=fingerprint(message), offered_context_items=len(context_items),
+            "request.received",
+            run_id=run_id,
+            scope_kind=context.scope_kind.value,
+            surface=context.surface.value,
+            channel=context.channel,
+            message_chars=len(message),
+            message_sha256_16=fingerprint(message),
+            offered_context_items=len(context_items),
         )
-        objective = await self.interpreter.interpret(message=message, context=context, context_items=context_items)
+        objective = await self.interpreter.interpret(
+            message=message,
+            context=context,
+            context_items=context_items,
+        )
         dispatch = objective.dispatch_path()
         runtime_trace(
-            "objective.interpreted", run_id=run_id, kind=objective.kind.value,
-            operations=[op.value for op in objective.operations], resources=list(objective.resource_hints),
-            complexity=objective.complexity.value, dispatch=dispatch.value,
-            external_state=objective.requires_external_state, mutation=objective.requires_mutation,
+            "objective.interpreted",
+            run_id=run_id,
+            kind=objective.kind.value,
+            operations=[op.value for op in objective.operations],
+            resources=list(objective.resource_hints),
+            complexity=objective.complexity.value,
+            dispatch=dispatch.value,
+            external_state=objective.requires_external_state,
+            mutation=objective.requires_mutation,
             future_wait=objective.requires_future_wait,
         )
 
-        selected = self.context_assembler.select(objective.objective, context_items, budget=self.limits.context_budget)
+        selected = self.context_assembler.select(
+            objective.objective,
+            context_items,
+            budget=self.limits.context_budget,
+        )
         runtime_trace(
-            "context.selected", run_id=run_id, phase="reason", selected_count=len(selected.items),
-            selected_bytes=selected.total_bytes, omitted_count=selected.omitted_count,
+            "context.selected",
+            run_id=run_id,
+            phase="reason",
+            selected_count=len(selected.items),
+            selected_bytes=selected.total_bytes,
+            omitted_count=selected.omitted_count,
             kinds=[item.kind.value for item in selected.items],
         )
 
         if dispatch is RuntimeDispatchPath.RESPOND:
-            answer = await self.model.respond(objective=objective.objective, user_message=message, context_items=selected.as_prompt_items())
-            runtime_trace("request.completed", run_id=run_id, dispatch=dispatch.value, cycles=0, capability_calls=0, answer_chars=len(answer))
-            return Runtime1Result(message=answer, run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=0)
+            answer = await self.model.respond(
+                objective=objective.objective,
+                user_message=message,
+                context_items=selected.as_prompt_items(),
+            )
+            runtime_trace(
+                "request.completed",
+                run_id=run_id,
+                dispatch=dispatch.value,
+                cycles=0,
+                capability_calls=0,
+                answer_chars=len(answer),
+            )
+            return Runtime1Result(
+                message=answer,
+                run_id=run_id,
+                dispatch=dispatch.value,
+                objective_kind=objective.kind.value,
+                cycles=0,
+            )
 
-        capabilities = await self._discover(db, kernel=kernel, context=context, query=objective.capability_query())
+        capabilities = await self._discover(
+            db,
+            kernel=kernel,
+            context=context,
+            query=objective.capability_query(),
+        )
         if not capabilities:
             answer = await self.model.respond(
-                objective=objective.objective, user_message=message, context_items=selected.as_prompt_items(),
-                observations=[{"ok": False, "error_code": "no_authorized_capabilities", "message": "No currently authorized and available capability matched this objective."}],
+                objective=objective.objective,
+                user_message=message,
+                context_items=selected.as_prompt_items(),
+                observations=[{
+                    "ok": False,
+                    "error_code": "no_authorized_capabilities",
+                    "message": "No currently authorized and available capability matched this objective.",
+                }],
             )
-            runtime_trace("request.completed", run_id=run_id, dispatch=dispatch.value, cycles=0, capability_calls=0, error_code="no_authorized_capabilities")
-            return Runtime1Result(message=answer, run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=0, error_code="no_authorized_capabilities")
+            runtime_trace(
+                "request.completed",
+                run_id=run_id,
+                dispatch=dispatch.value,
+                cycles=0,
+                capability_calls=0,
+                error_code="no_authorized_capabilities",
+            )
+            return Runtime1Result(
+                message=answer,
+                run_id=run_id,
+                dispatch=dispatch.value,
+                objective_kind=objective.kind.value,
+                cycles=0,
+                error_code="no_authorized_capabilities",
+            )
+
+        resolved_dispatch = resolve_runtime_dispatch(objective, capabilities)
+        if resolved_dispatch is not dispatch:
+            runtime_trace(
+                "dispatch.promoted",
+                run_id=run_id,
+                from_dispatch=dispatch.value,
+                to_dispatch=resolved_dispatch.value,
+                reason="resource_resolution_dependency",
+                capability_ids=[spec.id for spec in capabilities],
+            )
+            dispatch = resolved_dispatch
 
         governed = GovernedAgentRuntime(kernel=kernel, settings=self.settings)
         observations: list[dict[str, Any]] = []
@@ -214,20 +427,32 @@ class Runtime1Agent:
         mutation_count = 0
         discovery_count = 1
         failure_count = 0
-        max_cycles = 1 if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY else self.limits.max_cycles
+        max_cycles = (
+            1
+            if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY
+            else self.limits.max_cycles
+        )
 
         for cycle in range(1, max_cycles + 1):
             raw_decision = await self.model.decide(
-                objective=objective.objective, user_message=message,
-                context_items=selected.as_prompt_items(), observations=observations[-self.limits.max_observations:],
-                capabilities=self._cards(capabilities), remaining_steps=max_cycles - cycle + 1,
+                objective=objective.objective,
+                user_message=message,
+                context_items=selected.as_prompt_items(),
+                observations=observations[-self.limits.max_observations :],
+                capabilities=self._cards(capabilities),
+                remaining_steps=max_cycles - cycle + 1,
                 remaining_mutations=max(0, self.limits.max_mutations - mutation_count),
             )
             try:
                 decision = self._decode_decision(raw_decision)
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
                 if isinstance(raw_decision, Mapping):
-                    diagnostic = json.dumps(dict(raw_decision), ensure_ascii=False, sort_keys=True, default=str)
+                    diagnostic = json.dumps(
+                        dict(raw_decision),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
                     top_level_keys = sorted(str(key) for key in raw_decision.keys())[:30]
                 elif isinstance(raw_decision, bytes):
                     diagnostic = raw_decision.decode("utf-8", errors="replace")
@@ -245,85 +470,275 @@ class Runtime1Agent:
                     output_bytes=len(diagnostic.encode("utf-8")),
                     output_sha256_16=fingerprint(diagnostic),
                 )
-                return Runtime1Result(message="I could not safely interpret the model's next action.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="invalid_agent_decision")
+                return Runtime1Result(
+                    message="I could not safely interpret the model's next action.",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                    error_code="invalid_agent_decision",
+                )
 
             move = str(decision["move"])
-            runtime_trace("decision.accepted", run_id=run_id, cycle=cycle, move=move, candidate_count=len(capabilities))
+            runtime_trace(
+                "decision.accepted",
+                run_id=run_id,
+                cycle=cycle,
+                move=move,
+                candidate_count=len(capabilities),
+            )
             if move == "finish":
                 answer = str(decision["message"]).strip()
-                runtime_trace("request.completed", run_id=run_id, dispatch=dispatch.value, cycles=cycle, capability_calls=len(calls), answer_chars=len(answer))
-                return Runtime1Result(message=answer, run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls))
+                runtime_trace(
+                    "request.completed",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    cycles=cycle,
+                    capability_calls=len(calls),
+                    answer_chars=len(answer),
+                )
+                return Runtime1Result(
+                    message=answer,
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                )
 
             if move == "discover":
-                if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY or discovery_count >= self.limits.max_discoveries:
-                    return Runtime1Result(message="I reached the capability-discovery limit before completing this request.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="capability_discovery_budget_exhausted")
+                if (
+                    dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY
+                    or discovery_count >= self.limits.max_discoveries
+                ):
+                    return Runtime1Result(
+                        message="I reached the capability-discovery limit before completing this request.",
+                        run_id=run_id,
+                        dispatch=dispatch.value,
+                        objective_kind=objective.kind.value,
+                        cycles=cycle,
+                        capability_calls=tuple(calls),
+                        error_code="capability_discovery_budget_exhausted",
+                    )
                 query = " ".join(str(decision["query"]).split())
-                capabilities = await self._discover(db, kernel=kernel, context=context, query=query)
+                capabilities = await self._discover(
+                    db,
+                    kernel=kernel,
+                    context=context,
+                    query=query,
+                )
                 discovery_count += 1
                 if not capabilities:
-                    observations.append({"ok": False, "error_code": "no_capability_match", "query_sha256_16": fingerprint(query)})
+                    observations.append({
+                        "ok": False,
+                        "error_code": "no_capability_match",
+                        "query_sha256_16": fingerprint(query),
+                    })
                 continue
 
             capability_id = str(decision["capability_id"]).strip().lower()
             allowed = {spec.id: spec for spec in capabilities}
             spec = allowed.get(capability_id)
             if spec is None:
-                runtime_trace("capability.rejected", run_id=run_id, cycle=cycle, capability_id=capability_id, reason="outside_candidate_set")
-                return Runtime1Result(message="The model selected a capability outside the authorized candidate set.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="capability_not_authorized_for_decision")
+                runtime_trace(
+                    "capability.rejected",
+                    run_id=run_id,
+                    cycle=cycle,
+                    capability_id=capability_id,
+                    reason="outside_candidate_set",
+                )
+                return Runtime1Result(
+                    message="The model selected a capability outside the authorized candidate set.",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                    error_code="capability_not_authorized_for_decision",
+                )
+
             arguments = dict(decision["arguments"])
             try:
                 validate_schema(arguments, spec.input_schema)
             except SchemaValidationError:
-                observations.append({"capability_id": capability_id, "ok": False, "error_code": "invalid_arguments"})
+                observations.append({
+                    "capability_id": capability_id,
+                    "ok": False,
+                    "error_code": "invalid_arguments",
+                })
                 failure_count += 1
-                runtime_trace("capability.arguments_rejected", run_id=run_id, cycle=cycle, capability_id=capability_id, argument_keys=sorted(arguments))
-                if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY or failure_count >= self.limits.max_failures:
+                runtime_trace(
+                    "capability.arguments_rejected",
+                    run_id=run_id,
+                    cycle=cycle,
+                    capability_id=capability_id,
+                    argument_keys=sorted(arguments),
+                )
+                if (
+                    dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY
+                    or failure_count >= self.limits.max_failures
+                ):
                     break
                 continue
 
-            signature = hashlib.sha256((capability_id + "\0" + json.dumps(arguments, sort_keys=True, separators=(",", ":"))).encode("utf-8")).hexdigest()
+            signature = hashlib.sha256(
+                (
+                    capability_id
+                    + "\0"
+                    + json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+                ).encode("utf-8")
+            ).hexdigest()
             signatures[signature] += 1
             if signatures[signature] > 2:
-                runtime_trace("loop.detected", run_id=run_id, cycle=cycle, capability_id=capability_id)
-                return Runtime1Result(message="I stopped because the agent began repeating the same action.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="agent_loop_detected")
+                runtime_trace(
+                    "loop.detected",
+                    run_id=run_id,
+                    cycle=cycle,
+                    capability_id=capability_id,
+                )
+                return Runtime1Result(
+                    message="I stopped because the agent began repeating the same action.",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                    error_code="agent_loop_detected",
+                )
 
             if spec.risk is not CapabilityRisk.READ_ONLY:
                 if mutation_count >= self.limits.max_mutations:
-                    return Runtime1Result(message="I reached the mutation budget before completing this request.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="mutation_budget_exhausted")
+                    return Runtime1Result(
+                        message="I reached the mutation budget before completing this request.",
+                        run_id=run_id,
+                        dispatch=dispatch.value,
+                        objective_kind=objective.kind.value,
+                        cycles=cycle,
+                        capability_calls=tuple(calls),
+                        error_code="mutation_budget_exhausted",
+                    )
                 mutation_count += 1
 
             runtime_trace(
-                "capability.started", run_id=run_id, cycle=cycle, capability_id=capability_id,
-                risk=spec.risk.value, approval_required=spec.approval_required,
-                argument_keys=sorted(arguments), arguments_sha256_16=fingerprint(json.dumps(arguments, sort_keys=True, default=str)),
+                "capability.started",
+                run_id=run_id,
+                cycle=cycle,
+                capability_id=capability_id,
+                risk=spec.risk.value,
+                approval_required=spec.approval_required,
+                argument_keys=sorted(arguments),
+                arguments_sha256_16=fingerprint(
+                    json.dumps(arguments, sort_keys=True, default=str)
+                ),
             )
             result = await governed.execute_step(
-                db, context=context, run_id=run_id, goal=objective.objective,
-                step=AgentPlanStep(step_id=f"interactive-{cycle:03d}", capability_id=capability_id, arguments=arguments),
+                db,
+                context=context,
+                run_id=run_id,
+                goal=objective.objective,
+                step=AgentPlanStep(
+                    step_id=f"interactive-{cycle:03d}",
+                    capability_id=capability_id,
+                    arguments=arguments,
+                ),
             )
             calls.append(capability_id)
             runtime_trace(
-                "capability.completed", run_id=run_id, cycle=cycle, capability_id=capability_id,
-                status=result.status.value, kernel_run_id=result.kernel_run_id, error_code=result.error_code,
+                "capability.completed",
+                run_id=run_id,
+                cycle=cycle,
+                capability_id=capability_id,
+                status=result.status.value,
+                kernel_run_id=result.kernel_run_id,
+                error_code=result.error_code,
                 result_keys=sorted((result.result or {}).keys()),
             )
 
             if result.status is AgentStepStatus.WAITING_APPROVAL:
-                return Runtime1Result(message="This action requires approval before I can continue.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), approval_id=result.approval_id, error_code="approval_required")
+                return Runtime1Result(
+                    message="This action requires approval before I can continue.",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                    approval_id=result.approval_id,
+                    error_code="approval_required",
+                )
             if result.status is AgentStepStatus.EXECUTION_UNCERTAIN:
-                return Runtime1Result(message="I stopped because the outcome of a mutating action is uncertain and must be reconciled before retrying.", run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls), error_code="execution_outcome_uncertain")
+                return Runtime1Result(
+                    message="I stopped because the outcome of a mutating action is uncertain and must be reconciled before retrying.",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                    error_code="execution_outcome_uncertain",
+                )
 
-            observations.append(self._bounded_observation(capability_id=capability_id, result=result.result, error_code=result.error_code if result.status is AgentStepStatus.FAILED else None, error=result.error))
+            observations.append(
+                self._bounded_observation(
+                    capability_id=capability_id,
+                    result=result.result,
+                    error_code=(
+                        result.error_code
+                        if result.status is AgentStepStatus.FAILED
+                        else None
+                    ),
+                    error=result.error,
+                )
+            )
             if result.status is AgentStepStatus.FAILED:
                 failure_count += 1
                 if failure_count >= self.limits.max_failures:
                     break
 
             if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY:
-                answer = await self.model.respond(objective=objective.objective, user_message=message, context_items=selected.as_prompt_items(), observations=observations[-self.limits.max_observations:])
-                runtime_trace("request.completed", run_id=run_id, dispatch=dispatch.value, cycles=cycle, capability_calls=len(calls), answer_chars=len(answer))
-                return Runtime1Result(message=answer, run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=cycle, capability_calls=tuple(calls))
+                answer = await self.model.respond(
+                    objective=objective.objective,
+                    user_message=message,
+                    context_items=selected.as_prompt_items(),
+                    observations=observations[-self.limits.max_observations :],
+                )
+                runtime_trace(
+                    "request.completed",
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    cycles=cycle,
+                    capability_calls=len(calls),
+                    answer_chars=len(answer),
+                )
+                return Runtime1Result(
+                    message=answer,
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=cycle,
+                    capability_calls=tuple(calls),
+                )
 
-        answer = await self.model.respond(objective=objective.objective, user_message=message, context_items=selected.as_prompt_items(), observations=observations[-self.limits.max_observations:])
-        runtime_trace("request.completed", run_id=run_id, dispatch=dispatch.value, cycles=max_cycles, capability_calls=len(calls), error_code="agent_budget_exhausted", answer_chars=len(answer))
-        return Runtime1Result(message=answer, run_id=run_id, dispatch=dispatch.value, objective_kind=objective.kind.value, cycles=max_cycles, capability_calls=tuple(calls), error_code="agent_budget_exhausted")
+        answer = await self.model.respond(
+            objective=objective.objective,
+            user_message=message,
+            context_items=selected.as_prompt_items(),
+            observations=observations[-self.limits.max_observations :],
+        )
+        runtime_trace(
+            "request.completed",
+            run_id=run_id,
+            dispatch=dispatch.value,
+            cycles=max_cycles,
+            capability_calls=len(calls),
+            error_code="agent_budget_exhausted",
+            answer_chars=len(answer),
+        )
+        return Runtime1Result(
+            message=answer,
+            run_id=run_id,
+            dispatch=dispatch.value,
+            objective_kind=objective.kind.value,
+            cycles=max_cycles,
+            capability_calls=tuple(calls),
+            error_code="agent_budget_exhausted",
+        )

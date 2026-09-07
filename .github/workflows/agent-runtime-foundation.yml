@@ -11,6 +11,7 @@ on:
       - "packages/agent_runtime/**"
       - "packages/kernel/capability_search.py"
       - "packages/kernel/registry.py"
+      - "packages/kernel/runtime_availability.py"
       - "packages/database/agent_runtime_models.py"
       - "packages/database/agent_chat_models.py"
       - "packages/database/schema.py"
@@ -26,6 +27,7 @@ on:
       - "tests/test_agent_runtime_live.py"
       - "tests/test_agent_runtime_query_scorecard.py"
       - "tests/test_agent_runtime_retrieval_health.py"
+      - "tests/test_agent_runtime_resource_resolution.py"
       - "tests/test_agent_runtime_objective_eval.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
@@ -80,6 +82,7 @@ jobs:
             packages/agent_runtime/telemetry.py \
             packages/kernel/capability_search.py \
             packages/kernel/registry.py \
+            packages/kernel/runtime_availability.py \
             packages/database/agent_runtime_models.py \
             packages/database/agent_chat_models.py \
             packages/database/schema.py \
@@ -95,6 +98,7 @@ jobs:
             tests/test_agent_runtime_live.py \
             tests/test_agent_runtime_query_scorecard.py \
             tests/test_agent_runtime_retrieval_health.py \
+            tests/test_agent_runtime_resource_resolution.py \
             tests/test_agent_runtime_objective_eval.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
@@ -112,6 +116,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_live -v
           python -m unittest tests.test_agent_runtime_query_scorecard -v
           python -m unittest tests.test_agent_runtime_retrieval_health -v
+          python -m unittest tests.test_agent_runtime_resource_resolution -v
           python -m unittest tests.test_agent_runtime_objective_eval -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
