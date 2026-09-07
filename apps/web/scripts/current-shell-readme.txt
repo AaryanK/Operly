@@ -1,0 +1,1 @@
+This file intentionally keeps the current account-shell regression work grouped with the frontend contracts. The active shell must not call retired identity APIs, must keep profile controls in the Personal Operly sidebar, and must expose a visible new-conversation draft state.
