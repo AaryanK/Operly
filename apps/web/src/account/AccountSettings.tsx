@@ -33,7 +33,7 @@ type Props = {
 
 const APPEARANCE_OPTIONS: Array<{ value: ThemePreference; title: string; description: string }> = [
   { value: "dark", title: "Dark", description: "The native Operly workspace theme." },
-  { value: "light", title: "Light", description: "Bright surfaces for daylight work." },
+  { value: "light", title: "Light", description: "Bright Operly surfaces for daylight work." },
   { value: "system", title: "System", description: "Follow this device automatically." },
 ];
 
@@ -167,6 +167,9 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
   const title = tab === "account" ? "My Account" : tab === "appearance" ? "Appearance" : tab === "connections" ? "Connections" : tab === "workspaces" ? "Workspaces" : "Password & Security";
   const accountName = profile?.display_name || "Operly user";
   const accountEmail = profile?.email || "Private account";
+  const googleIdentity = profile?.auth_identities?.find((identity) => identity.provider === "google") || null;
+  const googleConnector = connectors.find((connector) => connector.provider === "google") || null;
+  const otherConnectors = connectors.filter((connector) => connector.provider !== "google");
 
   return <div className="account-settings-overlay discord-settings-overlay" role="presentation">
     <button className="discord-settings-backdrop" type="button" onClick={onClose} aria-label="Close user settings" />
@@ -202,13 +205,13 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
           </div>
           <form className="discord-settings-form" onSubmit={saveProfile}>
             <label>DISPLAY NAME<input name="display_name" defaultValue={profile?.display_name || ""} required maxLength={200} /></label>
-            <label>EMAIL<input value={accountEmail} disabled readOnly /><small>Your verified sign-in email is managed by authentication.</small></label>
+            <label>EMAIL<input value={accountEmail} disabled readOnly /><small>This is the verified email attached to your Operly account.</small></label>
             <button className="discord-settings-primary" disabled={busy}>{busy ? "Saving…" : "Save Changes"}</button>
           </form>
         </section>}
 
         {tab === "appearance" && <section className="discord-settings-section">
-          <p className="discord-settings-copy">Choose how Operly is rendered on this device. This does not change workspace permissions or agent behavior.</p>
+          <p className="discord-settings-copy">Choose your Operly appearance. The settings layout stays familiar, while the colors and surfaces always come from Operly.</p>
           <div className="discord-appearance-grid" role="radiogroup" aria-label="Appearance">
             {APPEARANCE_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={themePreference === option.value} className={themePreference === option.value ? "active" : ""} onClick={() => onThemePreference(option.value)}>
               <span className={`discord-appearance-preview ${option.value}`}><i /><b /></span><strong>{option.title}</strong><small>{option.description}</small>
@@ -218,12 +221,30 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
         </section>}
 
         {tab === "connections" && <section className="discord-settings-section">
-          <div className="discord-settings-section-head"><div><h3>Connected Apps</h3><p>Only current Personal Operly connectors are shown here. Legacy identity routes are intentionally not used by this screen.</p></div><div><button className="discord-settings-secondary" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button><button className="discord-settings-secondary" disabled={busy} onClick={() => void connectCanva()}>Connect Canva</button></div></div>
+          <div className="discord-settings-section-head"><div><h3>Connected Apps</h3><p>See how you sign in and which apps you have allowed Operly to use on your behalf.</p></div><div>{!googleIdentity && !googleConnector && <button className="discord-settings-secondary" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button>}<button className="discord-settings-secondary" disabled={busy} onClick={() => void connectCanva()}>Connect Canva</button></div></div>
           <div className="discord-connector-list">
-            {connectionsLoaded && connectors.length === 0 && <div className="discord-settings-empty">No personal connectors yet.</div>}
-            {connectors.map((connector) => <article className="discord-connector-row" key={connector.id}>
+            {(googleIdentity || googleConnector) && <article className="discord-connector-row discord-google-account-row" data-provider="google">
+              <ConnectionAvatar url={googleConnector?.avatarUrl} fallback="G" label="Google account" />
+              <div>
+                <strong>Google</strong>
+                <small>{googleConnector?.account || googleIdentity?.account || accountEmail}</small>
+                <div className="discord-connection-badges">
+                  {googleIdentity && <span className="identity-linked">Sign-in linked</span>}
+                  <span className={googleConnector ? "tools-enabled" : "sign-in-only"}>{googleConnector ? "Google tools enabled" : "Sign-in only"}</span>
+                </div>
+                {!googleConnector && <p className="discord-connector-explainer">Google currently verifies your identity only. Gmail and Calendar remain private until you grant Operly access.</p>}
+                {googleConnector?.lastError && <span className="discord-connector-error">{googleConnector.lastError}</span>}
+              </div>
+              <em>{googleConnector ? googleConnector.healthStatus || googleConnector.status : "linked"}</em>
+              <div className="discord-connector-actions">
+                {!googleConnector && <button disabled={busy} onClick={() => void connectGoogle()}>Enable Google tools</button>}
+                {googleConnector && <><button disabled={busy} onClick={() => void connectorAction(() => api(`/personal-connectors/${googleConnector.id}/test`, { method: "POST", body: "{}" }), "Google connection tested.")}>Test</button><button disabled={busy} onClick={() => void connectorAction(() => api(`/personal-connectors/${googleConnector.id}`, { method: "DELETE" }), "Google tool access disconnected.")}>Disconnect tools</button></>}
+              </div>
+            </article>}
+            {connectionsLoaded && otherConnectors.length === 0 && !googleIdentity && !googleConnector && <div className="discord-settings-empty">No connected apps yet.</div>}
+            {otherConnectors.map((connector) => <article className="discord-connector-row" data-provider={connector.provider} key={connector.id}>
               <ConnectionAvatar url={connector.avatarUrl} fallback={connector.provider.slice(0, 1).toUpperCase()} label={`${connector.displayName} profile`} />
-              <div><strong>{connector.displayName}</strong><small>{connector.account || connector.provider}</small>{connector.lastError && <span>{connector.lastError}</span>}</div>
+              <div><strong>{connector.displayName}</strong><small>{connector.account || connector.provider}</small>{connector.lastError && <span className="discord-connector-error">{connector.lastError}</span>}</div>
               <em>{connector.healthStatus || connector.status}</em>
               <div className="discord-connector-actions"><button disabled={busy} onClick={() => void connectorAction(() => api(`/personal-connectors/${connector.id}/test`, { method: "POST", body: "{}" }), `${connector.displayName} connection tested.`)}>Test</button><button disabled={busy} onClick={() => void connectorAction(() => api(`/personal-connectors/${connector.id}`, { method: "DELETE" }), `${connector.displayName} disconnected.`)}>Disconnect</button></div>
             </article>)}
@@ -231,7 +252,7 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
         </section>}
 
         {tab === "workspaces" && <section className="discord-settings-section">
-          <div className="discord-settings-section-head"><div><h3>Your Workspaces</h3><p>Workspaces are shared authorization boundaries. Personal Operly stays private above them.</p></div></div>
+          <div className="discord-settings-section-head"><div><h3>Your Workspaces</h3><p>Keep each team, project, or community in its own shared Operly space.</p></div></div>
           <form className="discord-settings-form discord-create-workspace" onSubmit={createWorkspace}>
             <label>WORKSPACE NAME<input name="name" required maxLength={200} placeholder="New workspace" /></label>
             <label>TIMEZONE<input name="timezone" required maxLength={100} defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"} /></label>
@@ -243,7 +264,7 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
         {tab === "security" && <section className="discord-settings-section">
           <form className="discord-settings-form" onSubmit={changePassword}>
             <h3>Change Password</h3>
-            <p className="discord-settings-copy">Password fields go directly to authentication and never through a model conversation.</p>
+            <p className="discord-settings-copy">Your password is handled directly by Operly authentication.</p>
             <label>CURRENT PASSWORD<input name="current_password" type="password" autoComplete="current-password" /></label>
             <label>NEW PASSWORD<input name="new_password" type="password" minLength={12} required autoComplete="new-password" /></label>
             <label>CONFIRM NEW PASSWORD<input name="confirm_password" type="password" minLength={12} required autoComplete="new-password" /></label>
