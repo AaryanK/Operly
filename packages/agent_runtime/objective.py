@@ -28,9 +28,13 @@ OBJECTIVE_INTERPRETER_INSTRUCTIONS = (
     "Use external-state paths only when connected Personal/Workspace data or a state-changing action is genuinely "
     "required. Every requested mutation necessarily requires external state. Every future wait necessarily requires "
     "external state. ACT must include act + mutation + external state; RETRIEVE must include retrieve + external state "
-    "and no mutation; WAIT must include wait + future wait + external state. Trusted scope/surface metadata describes "
-    "where the request arrived; never output or invent workspace IDs, principals, roles, permissions, approvals, "
-    "credentials, or provider routes. Return only the exact JSON fields requested by the schema."
+    "and no mutation; WAIT must include wait + future wait + external state. Complexity describes execution shape, not "
+    "linguistic difficulty: use SIMPLE only when one external invocation can satisfy the objective directly. If a "
+    "resource must first be searched, listed, selected, or resolved to obtain a handle/identifier and then another "
+    "operation must use that result, classify the objective as COMPOUND even when the user asked in one short sentence. "
+    "Trusted scope/surface metadata describes where the request arrived; never output or invent workspace IDs, "
+    "principals, roles, permissions, approvals, credentials, or provider routes. Return only the exact JSON fields "
+    "requested by the schema."
 )
 
 _AUTHORITY_SHAPED_FIELDS = frozenset(
@@ -53,7 +57,12 @@ _AUTHORITY_SHAPED_FIELDS = frozenset(
 
 
 class ObjectiveInterpretationError(RuntimeError):
-    def __init__(self, message: str, *, code: str = "objective_interpretation_failed") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "objective_interpretation_failed",
+    ) -> None:
         super().__init__(message)
         self.code = code
 
@@ -130,8 +139,9 @@ class ObjectiveInterpreterRequest:
     instructions: str = OBJECTIVE_INTERPRETER_INSTRUCTIONS
 
     def as_dict(self) -> dict[str, Any]:
+        # Instructions are sent in the system message by the inference adapter.
+        # Do not duplicate them in the user JSON payload.
         return {
-            "instructions": self.instructions,
             "request": self.message,
             "trusted_runtime_context": {
                 "scope_kind": self.scope_kind,
@@ -139,10 +149,15 @@ class ObjectiveInterpreterRequest:
             },
             "relevant_context": self.relevant_context.as_prompt_items(),
             "output_schema": {
-                "objective": "concise canonical English semantic description; preserve user entities verbatim when relevant",
+                "objective": (
+                    "concise canonical English semantic description; "
+                    "preserve user entities verbatim when relevant"
+                ),
                 "kind": [kind.value for kind in ObjectiveKind],
                 "operations": [operation.value for operation in ObjectiveOperation],
-                "resource_hints": ["short canonical English semantic resource labels; empty when none are needed"],
+                "resource_hints": [
+                    "short canonical English semantic resource labels; empty when none are needed"
+                ],
                 "requires_external_state": "boolean",
                 "requires_mutation": "boolean",
                 "requires_future_wait": "boolean",
@@ -176,13 +191,7 @@ class ObjectiveIR:
         return self.requires_external_state
 
     def capability_query(self) -> str:
-        """Return the smallest semantic query needed for capability retrieval.
-
-        The raw user message, conversation history, memory payloads and observations
-        deliberately do not flow into capability discovery. The objective/resource hints
-        are model-compiled canonical semantics, so the retrieval layer does not need to
-        understand every human language or accumulate language-specific synonym tables.
-        """
+        """Return the smallest semantic query needed for capability retrieval."""
         if not self.requires_external_state:
             return ""
         operations = [
@@ -209,7 +218,8 @@ class ObjectiveIR:
             return RuntimeDispatchPath.RESPOND
         if (
             self.kind is ObjectiveKind.COMPOSITE
-            or self.complexity in {ObjectiveComplexity.COMPOUND, ObjectiveComplexity.OPEN_ENDED}
+            or self.complexity
+            in {ObjectiveComplexity.COMPOUND, ObjectiveComplexity.OPEN_ENDED}
             or len(
                 {
                     operation
@@ -229,16 +239,7 @@ class ObjectiveIR:
 
 
 class ObjectiveInterpreter:
-    """Front-door semantic classifier for Runtime 1.0.
-
-    The model decides meaning, not authority. Only trusted scope/surface labels are
-    provided, and the output cannot contain authority-shaped fields. Human-language
-    requests are compiled into canonical semantic ObjectiveIR before capability search,
-    keeping language understanding out of the deterministic Kernel index. Context is
-    selected through a strict relevance/byte budget before model inference. Internally
-    inconsistent semantic output gets at most one bounded model repair; malformed or
-    authority-shaped output always fails closed without repair.
-    """
+    """Front-door semantic classifier for Runtime 1.0."""
 
     _EXPECTED_FIELDS = frozenset(
         {
@@ -276,7 +277,9 @@ class ObjectiveInterpreter:
         if not self.settings.enabled:
             raise AgentRuntimeDisabled("Agent runtime is disabled")
 
-        clean_message = " ".join(str(message or "").replace("\x00", " ").split())
+        clean_message = " ".join(
+            str(message or "").replace("\x00", " ").split()
+        )
         if not clean_message:
             raise ObjectiveInterpretationError(
                 "message is required",
@@ -305,7 +308,10 @@ class ObjectiveInterpreter:
         try:
             return self._validate(payload)
         except ObjectiveInterpretationError as error:
-            if error.code != "inconsistent_objective_output" or self.limits.max_semantic_repairs <= 0:
+            if (
+                error.code != "inconsistent_objective_output"
+                or self.limits.max_semantic_repairs <= 0
+            ):
                 raise
             repair_request = ObjectiveInterpreterRequest(
                 message=clean_message,
@@ -355,7 +361,10 @@ class ObjectiveInterpreter:
                 code="objective_model_failed",
             ) from error
 
-    def _decode(self, raw: Mapping[str, Any] | str | bytes) -> Mapping[str, Any]:
+    def _decode(
+        self,
+        raw: Mapping[str, Any] | str | bytes,
+    ) -> Mapping[str, Any]:
         if isinstance(raw, bytes):
             if len(raw) > self.limits.max_output_bytes:
                 raise ObjectiveInterpretationError(
@@ -505,7 +514,9 @@ class ObjectiveInterpreter:
         requires_mutation = payload["requires_mutation"]
         requires_future_wait = payload["requires_future_wait"]
 
-        if (requires_mutation or requires_future_wait) and not requires_external_state:
+        if (
+            requires_mutation or requires_future_wait
+        ) and not requires_external_state:
             raise ObjectiveInterpretationError(
                 "mutation/future wait cannot exist without external state",
                 code="inconsistent_objective_output",
