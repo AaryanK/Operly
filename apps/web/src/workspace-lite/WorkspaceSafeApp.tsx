@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
+import { AccountSettings } from "../account/AccountSettings";
 import { api, ApiError } from "../api";
 import { navigate } from "../app/routes";
 import { PersonalProfile, WorkspaceSummary } from "../app/types";
@@ -7,7 +8,6 @@ import { OperlyMark } from "../ui/OperlyMark";
 import { useThemePreference } from "../ui/theme";
 import { WorkspaceOSPanel } from "./WorkspaceOSPanel";
 
-const AccountSettings = lazy(() => import("../account/AccountSettings").then((module) => ({ default: module.AccountSettings })));
 const PersonalHome = lazy(() => import("../account/PersonalHome").then((module) => ({ default: module.PersonalHome })));
 const WorkspaceOperly = lazy(() => import("../workspace/WorkspaceOperly").then((module) => ({ default: module.WorkspaceOperly })));
 const WorkspaceAssistantPanel = lazy(() => import("../workspace/WorkspaceAssistantPanel").then((module) => ({ default: module.WorkspaceAssistantPanel })));
@@ -34,10 +34,6 @@ const ADVANCED_WORKSPACE_SECTIONS = new Set<AdvancedSection>([
 
 function go(path: string) {
   window.location.assign(path);
-}
-
-function initials(value: string): string {
-  return value.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "A";
 }
 
 function closeWorkspaceMenus(except?: HTMLDetailsElement | null) {
@@ -140,7 +136,10 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
       if (!(event.target instanceof Element) || !event.target.closest(".workspace-lite-menu")) closeWorkspaceMenus();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeWorkspaceMenus();
+      if (event.key === "Escape") {
+        closeWorkspaceMenus();
+        setAccountSettingsTab(null);
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -227,7 +226,6 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
         {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-lite-mark ${selectedId === workspace.id ? "active" : ""}`} title={workspace.name} disabled={busy} onClick={() => void switchWorkspace(workspace.id)}>{workspace.name.trim().slice(0, 2).toUpperCase()}</button>)}
         <button className="workspace-lite-mark workspace-lite-add" type="button" onClick={() => openAccountSettings("workspaces")} disabled={busy} title="Create workspace" aria-label="Create workspace">+</button>
       </div>
-      <button className="workspace-lite-mark workspace-lite-account" type="button" onClick={() => openAccountSettings("account")} title={profile?.email || "Account settings"} aria-label="Account settings">{initials(profile?.display_name || profile?.email || "Account")}</button>
     </nav>
     <div className="workspace-lite-content">
       <header className="workspace-lite-topbar">
@@ -257,7 +255,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
           <details className="workspace-lite-menu workspace-lite-account-menu">
             <summary onClick={(event) => prepareWorkspaceMenu(event.currentTarget)}>Account</summary>
             <div className="workspace-lite-menu-panel">
-              <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); openAccountSettings("account"); }}>Account settings</button>
+              <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); openAccountSettings("account"); }}>User settings</button>
               <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); openAccountSettings("workspaces"); }}>Create workspace</button>
               <a href="/account" onClick={(event) => { event.preventDefault(); closeParentMenu(event.currentTarget); navigate("/account"); }}>All workspaces</a>
               <button type="button" onClick={(event) => { closeParentMenu(event.currentTarget); void load(); }}>Refresh workspace list</button>
@@ -281,7 +279,7 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
               <button className="workspace-lite-card workspace-lite-create-card" type="button" disabled={busy} onClick={() => openAccountSettings("workspaces")}><span className="workspace-lite-card-icon workspace-lite-initials">+</span><span><strong>Create workspace</strong><small>Start a new shared space</small></span></button>
             </div>
           </main>}
-          {personalView && <Suspense fallback={<div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening Personal Operly…</span></div>}><PersonalHome profile={profile} /></Suspense>}
+          {personalView && <Suspense fallback={<div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening Personal Operly…</span></div>}><PersonalHome profile={profile} onOpenSettings={() => openAccountSettings("account")} /></Suspense>}
           {!accountView && !personalView && selected && selected.current && (advancedSection
             ? <div className="workspace-lite-advanced"><Suspense fallback={<div className="workspace-lite-boot"><OperlyMark /><strong>OPERLY</strong><span>Opening workspace tool…</span></div>}><AdvancedWorkspacePage workspace={selected} section={advancedSection} /></Suspense></div>
             : <WorkspaceOSPanel workspaceId={selected.id} pathname={pathname} />)}
@@ -291,6 +289,6 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
         {showAssistant && selected && <aside className="workspace-assistant-slot"><Suspense fallback={<div className="workspace-assistant-loading"><OperlyMark /><span>Opening Operly…</span></div>}><WorkspaceAssistantPanel workspace={selected} onClose={() => setAssistantOpen(false)} /></Suspense></aside>}
       </div>
     </div>
-    {accountSettingsTab && <Suspense fallback={null}><AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemePreference={setThemePreference} onClose={() => setAccountSettingsTab(null)} onRefresh={load} onWorkspace={(workspaceId) => switchWorkspace(workspaceId)} /></Suspense>}
+    {accountSettingsTab && <AccountSettings profile={profile} workspaces={workspaces} initialTab={accountSettingsTab} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemePreference={setThemePreference} onClose={() => setAccountSettingsTab(null)} onRefresh={load} onWorkspace={(workspaceId) => switchWorkspace(workspaceId)} />}
   </div>;
 }
