@@ -117,8 +117,8 @@ export function WorkspaceSafeApp({ pathname }: { pathname: string }) {
   const load = useCallback(async () => {
     try {
       const [nextProfile, nextWorkspaces] = await Promise.all([
-        api<PersonalProfile>("/personal-agent/me"),
-        api<Workspace[]>("/personal-agent/workspaces"),
+        api<PersonalProfile>("/auth/me"),
+        api<Workspace[]>("/auth/workspaces"),
       ]);
       setProfile(nextProfile);
       setWorkspaces(nextWorkspaces);
