@@ -24,6 +24,7 @@ import "./ui/react-public-admin-palette.css";
 import "./ui/react-public-live.css";
 import "./ui/auth-public-consistency.css";
 import "./ui/discord-account-shell.css";
+import "./ui/operly-settings-theme.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
