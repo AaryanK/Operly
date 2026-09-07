@@ -10,12 +10,14 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, accountSettings, personalHome, main, discordCss, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
+const [safeShell, accountSettings, personalHome, main, discordCss, operlyThemeCss, appTypes, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/account/AccountSettings.tsx"),
   text("src/account/PersonalHome.tsx"),
   text("src/main.tsx"),
   text("src/ui/discord-account-shell.css"),
+  text("src/ui/operly-settings-theme.css"),
+  text("src/app/types.ts"),
   repoText("apps/api/account_compat_router.py"),
   repoText("apps/api/runtime_entry.py"),
   repoText("apps/api/session.py"),
@@ -58,6 +60,17 @@ assert(
   accountSettings.includes('api("/auth/change-password"') && accountSettings.includes('api("/auth/logout"'),
   "Current account settings must retain canonical authentication actions",
 );
+assert(
+  accountSettings.includes('profile?.auth_identities?.find((identity) => identity.provider === "google")') &&
+  accountSettings.includes('Google currently verifies your identity only') &&
+  accountSettings.includes('Enable Google tools') &&
+  accountSettings.includes('Disconnect tools'),
+  "Google sign-in identity and separately-consented Google tool access must render as one clear account state",
+);
+assert(
+  !accountSettings.includes('Legacy identity routes') && !accountSettings.includes('authorization boundaries'),
+  "User settings must not expose internal implementation jargon",
+);
 
 assert(
   personalHome.includes('const [draftConversation, setDraftConversation] = useState(false)') &&
@@ -74,8 +87,14 @@ assert(
 
 assert(
   accountCompatRouter.includes('@router.get("/api/auth/me")') &&
-  accountCompatRouter.includes('@router.patch("/api/auth/me")'),
-  "The account compatibility router must expose the authenticated profile boundary used by the current shell",
+  accountCompatRouter.includes('@router.patch("/api/auth/me")') &&
+  accountCompatRouter.includes('select(AuthIdentity)') &&
+  accountCompatRouter.includes('"auth_identities"'),
+  "The authenticated profile boundary must expose the account's linked sign-in methods without reviving legacy identity routes",
+);
+assert(
+  appTypes.includes('export type AuthIdentitySummary') && appTypes.includes('auth_identities?: AuthIdentitySummary[]'),
+  "Frontend account profile typing must include linked authentication methods",
 );
 assert(
   authSession.includes('@router.get("/api/auth/workspaces")') &&
@@ -91,14 +110,23 @@ assert(
 );
 assert(
   main.includes('import "./ui/discord-account-shell.css"') &&
-  main.lastIndexOf('./ui/discord-account-shell.css') > main.lastIndexOf('./ui/auth-public-consistency.css'),
-  "The current Discord-style account shell must be the final CSS override layer",
+  main.includes('import "./ui/operly-settings-theme.css"') &&
+  main.lastIndexOf('./ui/operly-settings-theme.css') > main.lastIndexOf('./ui/discord-account-shell.css'),
+  "Discord settings structure must be followed by Operly's visual theme layer",
 );
 assert(
   discordCss.includes('.discord-settings-overlay') &&
   discordCss.includes('.discord-user-panel') &&
   discordCss.includes('.personal-new-draft'),
-  "The current account shell must own settings, user-panel, and new-conversation presentation",
+  "The structural account shell must still own settings, user-panel, and new-conversation layout",
+);
+assert(
+  operlyThemeCss.includes('var(--ui-accent') &&
+  operlyThemeCss.includes('var(--ui-panel') &&
+  operlyThemeCss.includes('var(--ui-nav') &&
+  !operlyThemeCss.includes('#5865f2') &&
+  !operlyThemeCss.includes('#313338'),
+  "The final settings presentation must use Operly theme tokens instead of Discord colors",
 );
 
-console.log("Current account, workspace, and Personal Operly shell contracts passed.");
+console.log("Current account, workspace, Personal Operly, Google identity, and settings-theme contracts passed.");
