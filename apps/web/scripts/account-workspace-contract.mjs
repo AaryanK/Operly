@@ -10,7 +10,7 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, accountSettings, personalHome, main, discordCss, accountCompatRouter, runtimeEntry] = await Promise.all([
+const [safeShell, accountSettings, personalHome, main, discordCss, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/account/AccountSettings.tsx"),
   text("src/account/PersonalHome.tsx"),
@@ -18,6 +18,7 @@ const [safeShell, accountSettings, personalHome, main, discordCss, accountCompat
   text("src/ui/discord-account-shell.css"),
   repoText("apps/api/account_compat_router.py"),
   repoText("apps/api/runtime_entry.py"),
+  repoText("apps/api/session.py"),
 ]);
 
 assert(
@@ -25,8 +26,12 @@ assert(
   "Account settings must ship with the current authenticated shell instead of loading as a legacy lazy UI island",
 );
 assert(
-  safeShell.includes('api<PersonalProfile>("/personal-agent/me")') && safeShell.includes('api<Workspace[]>("/personal-agent/workspaces")'),
-  "The active shell must load account identity and account-scoped workspaces",
+  safeShell.includes('api<PersonalProfile>("/auth/me")') && safeShell.includes('api<Workspace[]>("/auth/workspaces")'),
+  "The active shell must bootstrap identity and workspaces from the authenticated account/session namespace",
+);
+assert(
+  !safeShell.includes('"/personal-agent/me"') && !safeShell.includes('"/personal-agent/workspaces"'),
+  "The active workspace shell must not depend on Personal Agent account bootstrap aliases",
 );
 assert(
   safeShell.includes('className="workspace-lite-mark workspace-lite-add"') && safeShell.includes('aria-label="Create workspace"'),
@@ -42,12 +47,12 @@ assert(
 );
 
 assert(
-  accountSettings.includes('api<Connector[]>("/personal-connectors")') && !accountSettings.includes('api<ExternalIdentity[]>("/identities")') && !accountSettings.includes('/api/identities'),
+  accountSettings.includes('api<Connector[]>("/personal-connectors")') && !accountSettings.includes('/identities'),
   "Current account settings must use registered Personal Operly connector APIs and never call the retired identities surface",
 );
 assert(
-  accountSettings.includes('await api("/personal-agent/me", { method: "PATCH"') && accountSettings.includes('api<WorkspaceSummary>("/workspaces"'),
-  "Current account settings must use the registered profile and workspace compatibility endpoints",
+  accountSettings.includes('await api("/auth/me", { method: "PATCH"') && accountSettings.includes('api<WorkspaceCreateResult>("/auth/workspaces"'),
+  "Current account settings must use authenticated profile and workspace endpoints",
 );
 assert(
   accountSettings.includes('api("/auth/change-password"') && accountSettings.includes('api("/auth/logout"'),
@@ -68,21 +73,26 @@ assert(
 );
 
 assert(
-  accountCompatRouter.includes('@router.get("/api/personal-agent/me")') &&
-  accountCompatRouter.includes('@router.get("/api/personal-agent/workspaces")') &&
-  accountCompatRouter.includes('@router.post("/api/workspaces", status_code=201)') &&
-  accountCompatRouter.includes('workspace["current"] = True'),
-  "The production account compatibility router must expose the shell profile/workspace contract",
+  accountCompatRouter.includes('@router.get("/api/auth/me")') &&
+  accountCompatRouter.includes('@router.patch("/api/auth/me")'),
+  "The account compatibility router must expose the authenticated profile boundary used by the current shell",
+);
+assert(
+  authSession.includes('@router.get("/api/auth/workspaces")') &&
+  authSession.includes('@router.post("/api/auth/workspaces", status_code=201)') &&
+  authSession.includes('role="owner"'),
+  "Workspace listing and creation must remain canonical auth/session operations",
 );
 assert(
   runtimeEntry.includes('app.include_router(account_compat_router)') &&
   runtimeEntry.includes('app.router.routes.remove(frontend_catch_all)') &&
   runtimeEntry.includes('app.router.routes.append(frontend_catch_all)'),
-  "The production entrypoint must register account compatibility routes ahead of the React catch-all",
+  "The production entrypoint must register the account profile boundary ahead of the React catch-all",
 );
 assert(
-  main.includes('import "./ui/discord-account-shell.css"'),
-  "The active frontend bundle must load the current Discord-style account shell layer",
+  main.includes('import "./ui/discord-account-shell.css"') &&
+  main.lastIndexOf('./ui/discord-account-shell.css') > main.lastIndexOf('./ui/auth-public-consistency.css'),
+  "The current Discord-style account shell must be the final CSS override layer",
 );
 assert(
   discordCss.includes('.discord-settings-overlay') &&
