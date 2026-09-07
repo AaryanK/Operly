@@ -17,6 +17,7 @@ type Connector = {
   lastError?: string | null;
 };
 
+type WorkspaceCreateResult = { ok: boolean; workspace: WorkspaceSummary };
 type SettingsTab = "account" | "appearance" | "connections" | "security" | "workspaces";
 type Props = {
   profile: PersonalProfile | null;
@@ -77,7 +78,7 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
     const form = new FormData(event.currentTarget);
     setBusy(true); setError(null); setMessage(null);
     try {
-      await api("/personal-agent/me", { method: "PATCH", body: JSON.stringify({ display_name: form.get("display_name") }) });
+      await api("/auth/me", { method: "PATCH", body: JSON.stringify({ display_name: form.get("display_name") }) });
       await onRefresh();
       setMessage("Profile updated.");
     } catch (caught) {
@@ -118,13 +119,13 @@ export function AccountSettings({ profile, workspaces, initialTab = "account", t
     const form = new FormData(event.currentTarget);
     setBusy(true); setError(null); setMessage(null);
     try {
-      const created = await api<WorkspaceSummary>("/workspaces", {
+      const created = await api<WorkspaceCreateResult>("/auth/workspaces", {
         method: "POST",
         body: JSON.stringify({ name: form.get("name"), timezone: form.get("timezone") || "UTC" }),
       });
       await onRefresh();
       onClose();
-      await onWorkspace(created.id);
+      await onWorkspace(created.workspace.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Workspace could not be created");
     } finally { setBusy(false); }
