@@ -4,12 +4,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from apps.api.session import create_workspace as create_auth_workspace
 from apps.api.session import workspaces as auth_workspaces
-from packages.database.models import AppUser
+from packages.database.models import AppUser, AuthIdentity
 
 
 router = APIRouter(tags=["account-shell-compat"])
@@ -24,15 +25,40 @@ def _clean_name(value: str) -> str:
     return " ".join(str(value or "").replace("\x00", "").split()).strip()[:200]
 
 
+async def _profile_payload(db: AsyncSession, user: AppUser, current_workspace_id: str | None) -> dict:
+    identities = list(
+        (
+            await db.scalars(
+                select(AuthIdentity)
+                .where(AuthIdentity.user_id == user.id)
+                .order_by(AuthIdentity.provider, AuthIdentity.created_at)
+            )
+        ).all()
+    )
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "current_workspace_id": current_workspace_id,
+        # Sign-in identities are authentication metadata only. They intentionally
+        # do not imply Gmail/Calendar/Drive authorization or connector credentials.
+        "auth_identities": [
+            {
+                "provider": identity.provider,
+                "account": identity.provider_email or (user.email if identity.provider == "password" else None),
+            }
+            for identity in identities
+        ],
+    }
+
+
 @router.get("/api/auth/me")
 @router.get("/api/personal-agent/me", include_in_schema=False)
-async def account_me(auth: AccountAuthContext = Depends(get_account_auth_context)):
-    return {
-        "id": auth.user.id,
-        "email": auth.user.email,
-        "display_name": auth.user.display_name,
-        "current_workspace_id": auth.session.tenant_id,
-    }
+async def account_me(
+    auth: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _profile_payload(db, auth.user, auth.session.tenant_id)
 
 
 @router.patch("/api/auth/me")
@@ -51,12 +77,7 @@ async def update_account_me(
     user.display_name = name
     user.updated_at = datetime.utcnow()
     await db.commit()
-    return {
-        "id": user.id,
-        "email": user.email,
-        "display_name": user.display_name,
-        "current_workspace_id": auth.session.tenant_id,
-    }
+    return await _profile_payload(db, user, auth.session.tenant_id)
 
 
 @router.get("/api/personal-agent/workspaces", include_in_schema=False)

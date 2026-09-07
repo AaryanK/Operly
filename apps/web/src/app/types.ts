@@ -8,9 +8,15 @@ export type WorkspaceSummary = {
   timezone?: string | null;
 };
 
+export type AuthIdentitySummary = {
+  provider: string;
+  account?: string | null;
+};
+
 export type PersonalProfile = {
   id?: string;
   email: string;
   display_name: string;
   current_workspace_id?: string | null;
+  auth_identities?: AuthIdentitySummary[];
 };
