@@ -18,6 +18,10 @@ class SignupInput(StrictInput):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class AccountProfileInput(StrictInput):
+    display_name: str = Field(min_length=1, max_length=200)
+
+
 class ChallengeInput(StrictInput):
     challenge_id: str | None = Field(default=None, min_length=32, max_length=64)
     email: str | None = Field(default=None, min_length=3, max_length=320)
