@@ -28,6 +28,10 @@ from packages.database.channel_models import ChannelInstallation
 from packages.database.connector_models import ConnectorSecret, TenantConnector
 from packages.database.db import session_scope
 from packages.database.models import TenantMember
+from packages.personal_modules.connectors import (
+    _serializer as _personal_google_serializer,
+    _upsert_google_connector as _upsert_personal_google_connector,
+)
 from packages.workspace_modules.integrations.common import (
     connector_configuration,
     connector_public_json,
@@ -87,6 +91,33 @@ def _load_state(provider: str, state: str) -> dict:
     ):
         raise HTTPException(400, "OAuth state is invalid or expired")
     return data
+
+
+def _load_google_state(state: str) -> tuple[str, dict]:
+    """Resolve the shared Google callback to its signed credential owner."""
+    try:
+        data = _serializer("google").loads(state, max_age=600)
+    except (BadSignature, SignatureExpired):
+        try:
+            data = _personal_google_serializer().loads(state, max_age=600)
+        except (BadSignature, SignatureExpired) as error:
+            raise HTTPException(400, "OAuth state is invalid or expired") from error
+        if (
+            not isinstance(data, dict)
+            or data.get("ownership") != "personal"
+            or not data.get("user_id")
+        ):
+            raise HTTPException(400, "OAuth state is invalid or expired")
+        return "personal", data
+
+    if (
+        not isinstance(data, dict)
+        or data.get("ownership") != "workspace"
+        or not data.get("tenant_id")
+        or not data.get("user_id")
+    ):
+        raise HTTPException(400, "OAuth state is invalid or expired")
+    return "workspace", data
 
 
 async def _require_callback_owner(db: AsyncSession, data: dict) -> TenantMember:
@@ -383,21 +414,30 @@ async def canva_connect(
 
 @router.get("/google/callback")
 async def google_callback(code: str = Query(...), state: str = Query(...)):
-    data = _load_state("google", state)
-    async with session_scope() as authority_db:
-        await _require_callback_owner(authority_db, data)
+    ownership, data = _load_google_state(state)
+    if ownership == "workspace":
+        async with session_scope() as authority_db:
+            await _require_callback_owner(authority_db, data)
 
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(503, "Google OAuth is not configured")
     form = {
         "code": code,
-        "client_id": os.environ["GOOGLE_OAUTH_CLIENT_ID"],
-        "client_secret": os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],
+        "client_id": client_id,
+        "client_secret": client_secret,
         "redirect_uri": _google_redirect_uri(),
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
         async with session.post("https://oauth2.googleapis.com/token", data=form) as response:
             tokens = await response.json(content_type=None)
-        if response.status != 200 or not isinstance(tokens, dict):
+        if (
+            response.status != 200
+            or not isinstance(tokens, dict)
+            or not tokens.get("access_token")
+        ):
             raise HTTPException(400, "Google authorization failed")
         async with session.get(
             "https://openidconnect.googleapis.com/v1/userinfo",
@@ -411,6 +451,23 @@ async def google_callback(code: str = Query(...), state: str = Query(...)):
         tokens.get("expires_in", 3600)
     )
     scopes = [item for item in str(tokens.get("scope") or "").split() if item]
+
+    if ownership == "personal":
+        async with session_scope() as db:
+            try:
+                await _upsert_personal_google_connector(
+                    db,
+                    user_id=str(data["user_id"]),
+                    profile=profile,
+                    tokens=tokens,
+                    scopes=scopes,
+                )
+            except ValueError as error:
+                await db.rollback()
+                raise HTTPException(400, str(error)) from error
+            await db.commit()
+        return RedirectResponse("/personal?connector=connected", status_code=303)
+
     async with session_scope() as db:
         await _require_callback_owner(db, data)
         await _upsert_google(

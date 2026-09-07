@@ -59,12 +59,15 @@ def _serializer() -> URLSafeTimedSerializer:
 
 
 def _redirect_uri() -> str:
-    configured = os.getenv("PERSONAL_GOOGLE_OAUTH_REDIRECT_URI", "").strip()
+    # Personal and workspace Google OAuth intentionally share the one callback URI
+    # registered with Google. Ownership remains isolated in the signed state and in
+    # the connector tables after the callback.
+    configured = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
     if configured:
         return configured
     return (
         os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-        + "/api/personal-connectors/google/callback"
+        + "/api/connectors/google/callback"
     )
 
 
@@ -114,6 +117,10 @@ async def _upsert_google_connector(
             previous = {}
         if previous.get("refresh_token"):
             tokens["refresh_token"] = previous["refresh_token"]
+    if row is None and not tokens.get("refresh_token"):
+        raise ValueError(
+            "Google did not return offline access. Reconnect and approve Google access again."
+        )
     ref = await store_account_secret(db, user_id, tokens)
     if row is None:
         row = AccountConnector(
@@ -215,7 +222,8 @@ async def personal_google_connect(
     auth: AccountAuthContext = Depends(get_account_auth_context),
 ):
     client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
-    if not client_id:
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
         raise HTTPException(503, "Personal Google OAuth is not configured")
     scopes = GOOGLE_ASSISTANT_SCOPES if tier == "assistant" else GOOGLE_BASIC_SCOPES
     state = _serializer().dumps(
@@ -225,10 +233,11 @@ async def personal_google_connect(
             "ownership": "personal",
         }
     )
+    callback = _redirect_uri()
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
         {
             "client_id": client_id,
-            "redirect_uri": _redirect_uri(),
+            "redirect_uri": callback,
             "response_type": "code",
             "scope": " ".join(scopes),
             "access_type": "offline",
@@ -241,6 +250,7 @@ async def personal_google_connect(
         "authorization_url": url,
         "permission_tier": tier,
         "ownership": "personal",
+        "redirect_uri": callback,
     }
 
 
@@ -250,6 +260,8 @@ async def personal_google_callback(
     state: str = Query(..., min_length=20, max_length=4096),
     db: AsyncSession = Depends(get_db),
 ):
+    # Backward-compatible direct callback. New authorization requests use the shared
+    # /api/connectors/google/callback route.
     try:
         data = _serializer().loads(state, max_age=600)
     except (BadSignature, SignatureExpired) as error:
@@ -281,13 +293,17 @@ async def personal_google_callback(
         datetime.now(timezone.utc).timestamp() + int(tokens.get("expires_in", 3600))
     )
     scopes = str(tokens.get("scope", "")).split()
-    await _upsert_google_connector(
-        db,
-        user_id=str(data["user_id"]),
-        profile=profile,
-        tokens=tokens,
-        scopes=scopes,
-    )
+    try:
+        await _upsert_google_connector(
+            db,
+            user_id=str(data["user_id"]),
+            profile=profile,
+            tokens=tokens,
+            scopes=scopes,
+        )
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(400, str(error)) from error
     await db.commit()
     return RedirectResponse("/personal?connector=connected", 303)
 
