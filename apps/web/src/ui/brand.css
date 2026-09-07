@@ -1,12 +1,25 @@
+:root,
+html[data-theme="dark"] {
+  /* Operly's brand accent is purple in every appearance. Theme switching may
+     change surfaces and contrast, but it must never replace the brand palette. */
+  --ui-accent: #9b72ff;
+  --ui-accent-strong: #c4a7ff;
+  --ui-accent-soft: rgba(155, 114, 255, .14);
+  --ui-accent-cyan: #e88bdc;
+  --ui-accent-pink: #e88bdc;
+  --ui-accent-gradient: linear-gradient(135deg, #8d63f4 0%, #ac83ff 66%, #e88bdc 100%);
+  --ui-glow: 0 0 0 1px rgba(155, 114, 255, .10), 0 18px 55px rgba(120, 77, 214, .16);
+}
+
 .operly-mark { display: inline-grid; place-items: center; overflow: hidden; flex: 0 0 auto; }
 .operly-mark img { width: 100%; height: 100%; display: block; object-fit: cover; }
 
 .scope-brand { padding: 0; overflow: hidden; background: #080b12; border-color: rgba(255,255,255,.08); }
 .scope-brand .operly-mark { width: 100%; height: 100%; border-radius: inherit; }
-.scope-brand.active { background: #080b12; box-shadow: 0 0 0 1px rgba(121,201,157,.35), 0 10px 30px rgba(24,93,67,.30); }
-.scope-brand:hover { background: #080b12; border-color: rgba(185,238,114,.58); }
+.scope-brand.active { background: #080b12; box-shadow: 0 0 0 1px rgba(155,114,255,.42), 0 10px 30px rgba(120,77,214,.30); }
+.scope-brand:hover { background: #080b12; border-color: rgba(196,167,255,.62); }
 
-.assistant-avatar.brand-avatar { padding: 0; overflow: hidden; background: #080b12; border-color: rgba(121,201,157,.30); }
+.assistant-avatar.brand-avatar { padding: 0; overflow: hidden; background: #080b12; border-color: rgba(155,114,255,.34); }
 .assistant-avatar.brand-avatar .operly-mark { width: 100%; height: 100%; border-radius: inherit; }
 
 .branded-boot {
@@ -16,8 +29,8 @@
   min-height: 100vh;
   min-height: 100dvh;
   background:
-    radial-gradient(circle at 50% 42%, rgba(24,93,67,.13), transparent 20%),
-    radial-gradient(circle at 56% 42%, rgba(185,238,114,.09), transparent 34%),
+    radial-gradient(circle at 50% 42%, rgba(120,77,214,.15), transparent 20%),
+    radial-gradient(circle at 56% 42%, rgba(232,139,220,.09), transparent 34%),
     var(--ui-canvas);
 }
 .branded-boot::before, .branded-boot::after {
@@ -32,8 +45,8 @@
   filter: blur(2px);
   pointer-events: none;
 }
-.branded-boot::before { top: -30vw; right: -14vw; background: radial-gradient(circle, rgba(24,93,67,.16), transparent 68%); }
-.branded-boot::after { bottom: -34vw; left: -13vw; background: radial-gradient(circle, rgba(185,238,114,.10), transparent 68%); }
+.branded-boot::before { top: -30vw; right: -14vw; background: radial-gradient(circle, rgba(120,77,214,.18), transparent 68%); }
+.branded-boot::after { bottom: -34vw; left: -13vw; background: radial-gradient(circle, rgba(232,139,220,.11), transparent 68%); }
 .boot-mark {
   position: relative;
   z-index: 2;
@@ -42,7 +55,7 @@
   border-radius: 28px;
   border: 1px solid rgba(255,255,255,.10);
   background: #080b12;
-  box-shadow: 0 26px 70px rgba(24,93,67,.22), 0 0 0 9px rgba(185,238,114,.045);
+  box-shadow: 0 26px 70px rgba(120,77,214,.24), 0 0 0 9px rgba(196,167,255,.05);
 }
 .branded-boot > strong {
   margin-top: 14px;
@@ -59,7 +72,7 @@
   width: 230px;
   height: 230px;
   transform: translate(-50%, -58%) rotate(-18deg);
-  border: 1px solid rgba(24,93,67,.14);
+  border: 1px solid rgba(155,114,255,.18);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -67,7 +80,7 @@
   content: "";
   position: absolute;
   inset: 29px -22px;
-  border: 1px solid rgba(185,238,114,.10);
+  border: 1px solid rgba(232,139,220,.12);
   border-radius: 50%;
 }
 .boot-orbit span:first-child {
@@ -77,8 +90,8 @@
   right: 25px;
   top: 33px;
   border-radius: 50%;
-  background: #79c99d;
-  box-shadow: 0 0 18px rgba(121,201,157,.72);
+  background: #9b72ff;
+  box-shadow: 0 0 18px rgba(155,114,255,.72);
   animation: operly-orbit-pulse 1.5s ease-in-out infinite alternate;
 }
 .boot-orbit span:last-child {
@@ -88,19 +101,19 @@
   left: 18px;
   bottom: 56px;
   border-radius: 50%;
-  background: #b9ee72;
-  box-shadow: 0 0 16px rgba(185,238,114,.68);
+  background: #e88bdc;
+  box-shadow: 0 0 16px rgba(232,139,220,.68);
   animation: operly-orbit-pulse 1.5s .35s ease-in-out infinite alternate;
 }
 @keyframes operly-orbit-pulse { to { opacity: .35; transform: scale(.72); } }
 
 html[data-theme="dark"] .branded-boot {
   background:
-    radial-gradient(circle at 50% 42%, rgba(121,201,157,.16), transparent 21%),
-    radial-gradient(circle at 56% 42%, rgba(185,238,114,.08), transparent 35%),
+    radial-gradient(circle at 50% 42%, rgba(155,114,255,.17), transparent 21%),
+    radial-gradient(circle at 56% 42%, rgba(232,139,220,.09), transparent 35%),
     #080c14;
 }
-html[data-theme="dark"] .boot-mark { box-shadow: 0 30px 90px rgba(24,93,67,.32), 0 0 0 10px rgba(185,238,114,.05); }
+html[data-theme="dark"] .boot-mark { box-shadow: 0 30px 90px rgba(120,77,214,.34), 0 0 0 10px rgba(196,167,255,.055); }
 
 @media (prefers-reduced-motion: reduce) {
   .boot-orbit span { animation: none !important; }
