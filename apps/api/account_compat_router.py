@@ -24,7 +24,8 @@ def _clean_name(value: str) -> str:
     return " ".join(str(value or "").replace("\x00", "").split()).strip()[:200]
 
 
-@router.get("/api/personal-agent/me")
+@router.get("/api/auth/me")
+@router.get("/api/personal-agent/me", include_in_schema=False)
 async def account_me(auth: AccountAuthContext = Depends(get_account_auth_context)):
     return {
         "id": auth.user.id,
@@ -34,7 +35,8 @@ async def account_me(auth: AccountAuthContext = Depends(get_account_auth_context
     }
 
 
-@router.patch("/api/personal-agent/me")
+@router.patch("/api/auth/me")
+@router.patch("/api/personal-agent/me", include_in_schema=False)
 async def update_account_me(
     payload: AccountProfilePatch,
     auth: AccountAuthContext = Depends(get_account_auth_context),
@@ -57,7 +59,7 @@ async def update_account_me(
     }
 
 
-@router.get("/api/personal-agent/workspaces")
+@router.get("/api/personal-agent/workspaces", include_in_schema=False)
 async def account_workspaces(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
@@ -65,7 +67,7 @@ async def account_workspaces(
     return await auth_workspaces(auth, db)
 
 
-@router.post("/api/workspaces", status_code=201)
+@router.post("/api/workspaces", status_code=201, include_in_schema=False)
 async def create_workspace_compat(
     payload: dict,
     request: Request,
@@ -73,8 +75,8 @@ async def create_workspace_compat(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    # Delegate to the canonical auth endpoint so workspace creation keeps the
-    # existing session rotation, CSRF rotation, audit event, and owner membership.
+    # Legacy alias only. The current frontend uses /api/auth/workspaces directly.
+    # Delegate so any old client still gets canonical session/CSRF rotation.
     result = await create_auth_workspace(payload, request, response, auth, db)
     workspace = dict(result["workspace"])
     workspace["current"] = True

@@ -10,7 +10,7 @@ type Artifact = { artifact_id: string; filename: string; content_type?: string |
 type Message = { id?: string; role: "user" | "assistant"; content: string; created_at?: string | null; artifacts?: Artifact[] };
 type ChatResult = { message: string; conversation_id?: string | null; artifacts?: Artifact[] };
 
-type Props = { profile: PersonalProfile | null };
+type Props = { profile: PersonalProfile | null; onOpenSettings?: () => void };
 
 function formatDate(value?: string | null) {
   if (!value) return "";
@@ -41,9 +41,10 @@ function ArtifactCards({ artifacts }: { artifacts?: Artifact[] }) {
   </div>;
 }
 
-export function PersonalHome({ profile }: Props) {
+export function PersonalHome({ profile, onOpenSettings }: Props) {
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [draftConversation, setDraftConversation] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationSearch, setConversationSearch] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -56,18 +57,20 @@ export function PersonalHome({ profile }: Props) {
     catch { return false; }
   });
   const fileInput = useRef<HTMLInputElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const stage = useRef<HTMLDivElement>(null);
 
   async function loadConversations(prefer?: string | null) {
     const rows = await api<Conversation[]>("/personal-agent/conversations");
     setConversations(rows);
-    const next = prefer || conversationId || rows[0]?.id || null;
+    const next = prefer || (!draftConversation ? (conversationId || rows[0]?.id || null) : null);
     if (next && next !== conversationId) await openConversation(next, Boolean(prefer));
     else if (prefer && next) setMobileListOpen(false);
-    if (!next) setMessages([]);
+    if (!next && !draftConversation) setMessages([]);
   }
 
   async function openConversation(id: string, revealOnMobile = true) {
+    setDraftConversation(false);
     setConversationId(id);
     setError(null);
     if (revealOnMobile) setMobileListOpen(false);
@@ -80,17 +83,18 @@ export function PersonalHome({ profile }: Props) {
   }
 
   function newConversation() {
+    setDraftConversation(true);
     setConversationId(null);
     setMessages([]);
+    setFiles([]);
+    setMessage("");
     setError(null);
     setMobileListOpen(false);
+    window.requestAnimationFrame(() => composerInput.current?.focus());
   }
 
   useEffect(() => {
     loadConversations().catch((caught) => setError(caught instanceof Error ? caught.message : "Conversation history is unavailable"));
-    // The retired /approvals/personal surface is intentionally not queried here.
-    // Personal approvals will return through the canonical Agent Runtime checkpoint
-    // contract instead of reviving the pre-Kernel approvals router.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -140,6 +144,7 @@ export function PersonalHome({ profile }: Props) {
         });
       }
       const nextId = result.conversation_id || conversationId;
+      setDraftConversation(false);
       setConversationId(nextId || null);
       setMessages((current) => [...current, {
         role: "assistant",
@@ -153,8 +158,6 @@ export function PersonalHome({ profile }: Props) {
         return index >= 0 ? current.filter((_, itemIndex) => itemIndex !== index) : current;
       });
       setError(caught instanceof Error ? caught.message : "Personal Operly could not complete that request");
-      // Do not silently restore failed files. Restoring them made repeated retries
-      // re-upload the same bytes and accumulate duplicate synthetic transcript turns.
     } finally {
       setBusy(false);
     }
@@ -166,6 +169,8 @@ export function PersonalHome({ profile }: Props) {
     [conversations, normalizedSearch],
   );
   const activeConversation = conversations.find((item) => item.id === conversationId);
+  const accountName = profile?.display_name || "Your account";
+  const accountEmail = profile?.email || "Private account scope";
 
   return (
     <div className={`workspace-lite-personal-stage personal-layout ${historyCollapsed ? "history-collapsed" : ""} ${mobileListOpen ? "mobile-personal-list" : "mobile-personal-thread"}`}>
@@ -173,8 +178,8 @@ export function PersonalHome({ profile }: Props) {
         <div className="history-head personal-message-list-head">
           <div><small>PERSONAL OPERLY</small><strong>Conversations</strong></div>
           <div className="history-head-actions">
-            <button onClick={newConversation} aria-label="New conversation" title="New conversation">＋</button>
-            <button className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button>
+            <button type="button" onClick={newConversation} aria-label="New conversation" title="New conversation">＋</button>
+            <button type="button" className="history-collapse" onClick={toggleHistory} aria-label={historyCollapsed ? "Expand conversation history" : "Collapse conversation history"} title={historyCollapsed ? "Expand conversations" : "Collapse conversations"}>{historyCollapsed ? "›" : "‹"}</button>
           </div>
         </div>
         <label className="personal-conversation-search">
@@ -182,23 +187,29 @@ export function PersonalHome({ profile }: Props) {
           <input value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} type="search" placeholder="Search conversations" aria-label="Search Personal Operly conversations" />
         </label>
         <div className="history-list">
-          {filteredConversations.length === 0 && <p className="empty-copy">{conversations.length ? "No conversations match your search." : "Your private conversations will appear here."}</p>}
-          {filteredConversations.map((item) => <button key={item.id} className={conversationId === item.id ? "active" : ""} onClick={() => openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
+          {draftConversation && <button type="button" className="active personal-new-draft" onClick={() => { setMobileListOpen(false); window.requestAnimationFrame(() => composerInput.current?.focus()); }}><span>＋</span><span><strong>New conversation</strong><small>Draft · starts when you send</small></span></button>}
+          {filteredConversations.length === 0 && !draftConversation && <p className="empty-copy">{conversations.length ? "No conversations match your search." : "Your private conversations will appear here."}</p>}
+          {filteredConversations.map((item) => <button type="button" key={item.id} className={!draftConversation && conversationId === item.id ? "active" : ""} onClick={() => void openConversation(item.id)}><span>✦</span><span><strong>{item.title || "Conversation"}</strong><small>{formatDate(item.updated_at)}</small></span></button>)}
         </div>
-        <div className="history-account"><span>{(profile?.display_name || profile?.email || "Me").slice(0, 1).toUpperCase()}</span><div><strong>{profile?.display_name || "Your account"}</strong><small>{profile?.email || "Private account scope"}</small></div></div>
+        <div className="history-account discord-user-panel">
+          <button type="button" className="discord-user-profile" onClick={onOpenSettings} aria-label="Open user settings">
+            <span>{accountName.slice(0, 1).toUpperCase()}</span><div><strong>{accountName}</strong><small>{accountEmail}</small></div>
+          </button>
+          <button type="button" className="discord-user-settings" onClick={onOpenSettings} aria-label="User settings" title="User settings">⚙</button>
+        </div>
       </aside>
 
       <main className="personal-surface">
         <header className="mobile-content-header personal-mobile-content-header">
           <button type="button" className="personal-mobile-chats" onClick={() => setMobileListOpen(true)} aria-label="Open Personal Operly conversations">← Chats</button>
-          <div><small>Personal Operly</small><strong>{activeConversation?.title || "New conversation"}</strong></div>
+          <div><small>Personal Operly</small><strong>{draftConversation ? "New conversation" : (activeConversation?.title || "New conversation")}</strong></div>
           <span className="privacy-pill">Private</span>
         </header>
-        <header className="surface-header personal-surface-header"><div><span className="eyebrow">PERSONAL · PRIVATE</span><h1>Personal Operly</h1><p>Your account-level AI. This conversation stays personal; access to a workspace still crosses that workspace’s permission boundary.</p></div><div className="personal-header-actions"><span className="privacy-pill">Private</span></div></header>
+        <header className="surface-header personal-surface-header"><div><span className="eyebrow">PERSONAL · PRIVATE</span><h1>{draftConversation ? "New conversation" : "Personal Operly"}</h1><p>{draftConversation ? "Start a fresh private conversation. It will be saved when you send the first message." : "Your account-level AI. This conversation stays personal; access to a workspace still crosses that workspace’s permission boundary."}</p></div><div className="personal-header-actions"><span className="privacy-pill">Private</span></div></header>
         <div className="conversation-stage" ref={stage} aria-live="polite">
           {messages.length === 0 && <>
-            <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>I’m your personal Operly. Ask across your account, attach a file, or tell me which workspace you want to work with.</p></div></article>
-            <div className="personal-boundary-note"><strong>Personal scope</strong><span>Workspace actions remain permission checked. Sensitive actions will use the Agent Runtime’s canonical human-control checkpoint rather than the retired legacy approvals page.</span></div>
+            <article className="assistant-message"><span className="assistant-avatar brand-avatar"><OperlyMark /></span><div><strong>Operly</strong><p>{draftConversation ? "Fresh conversation ready. What do you want to work on?" : "I’m your personal Operly. Ask across your account, attach a file, or tell me which workspace you want to work with."}</p></div></article>
+            <div className="personal-boundary-note"><strong>Personal scope</strong><span>Workspace actions remain permission checked. Sensitive actions use the Agent Runtime’s canonical human-control checkpoint.</span></div>
           </>}
           {messages.map((item, index) => <article className={`chat-message ${item.role}`} key={item.id || `${item.role}-${index}`}><span className={`assistant-avatar ${item.role === "assistant" ? "brand-avatar" : ""}`}>{item.role === "assistant" ? <OperlyMark /> : "Y"}</span><div><strong>{item.role === "assistant" ? "Operly" : "You"}</strong>{item.role === "assistant" ? <><MessageContent content={item.content} /><ArtifactCards artifacts={item.artifacts} /></> : <p>{item.content}</p>}</div></article>)}
           {busy && <div className="working-state"><span></span>Operly is working…</div>}
@@ -207,7 +218,7 @@ export function PersonalHome({ profile }: Props) {
         <form className="composer" onSubmit={submit}>
           {files.length > 0 && <div className="attachment-strip">{files.map((file, index) => <span key={`${file.name}-${index}`}>{file.name}<button type="button" onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>×</button></span>)}</div>}
           <input ref={fileInput} type="file" multiple hidden onChange={addFiles} accept="image/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.docx,.pptx,.xlsx,.odt,.ods,.html,.log,.css,.sql,.py,.js,.ts,.tsx,.jsx,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.sh" />
-          <textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Message Personal Operly…" rows={3} aria-label="Message Personal Operly" />
+          <textarea ref={composerInput} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={draftConversation ? "Start a new conversation…" : "Message Personal Operly…"} rows={3} aria-label="Message Personal Operly" />
           <div className="composer-actions"><div><button type="button" className="attach-button" onClick={() => fileInput.current?.click()}>＋ Attach</button><span>Private account scope</span></div><button disabled={busy || (!message.trim() && !files.length)}>{busy ? "Working…" : "Send"}</button></div>
         </form>
       </main>
