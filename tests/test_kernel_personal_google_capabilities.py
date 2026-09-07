@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from packages.kernel.contracts import CapabilityRisk
 from packages.personal_modules.connectors import (
@@ -96,6 +97,19 @@ class PersonalGoogleCapabilityTests(unittest.TestCase):
         self.assertIn("google.calendar.create_event", capabilities)
         self.assertIn("google.calendar.update_event", capabilities)
         self.assertIn("google.calendar.delete_event", capabilities)
+
+    def test_active_oauth_uses_one_registered_google_callback(self):
+        personal_source = Path("packages/personal_modules/connectors.py").read_text()
+        workspace_source = Path(
+            "packages/workspace_modules/integrations/router.py"
+        ).read_text()
+        self.assertIn('os.getenv("GOOGLE_OAUTH_REDIRECT_URI"', personal_source)
+        self.assertNotIn("PERSONAL_GOOGLE_OAUTH_REDIRECT_URI", personal_source)
+        self.assertIn('/api/connectors/google/callback', personal_source)
+        self.assertIn("def _load_google_state", workspace_source)
+        self.assertIn('data.get("ownership") != "personal"', workspace_source)
+        self.assertIn('if ownership == "personal":', workspace_source)
+        self.assertIn("_upsert_personal_google_connector", workspace_source)
 
     def test_discovery_summary_is_schema_light(self):
         summary = _tool_summary(self.by_id["google.gmail.search"])
