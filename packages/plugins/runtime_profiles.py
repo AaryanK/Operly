@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from packages.plugins.contracts import NetworkPolicy, ResourcePolicy
-from packages.plugins.runtime_support import MODE_BY_RUNTIME_KIND, runtime_mode_support
+from packages.plugins.runtime_support import runtime_profile_support
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,17 +25,18 @@ class RuntimeProfile:
     allowed_dependency_managers: frozenset[str] = frozenset()
 
     def public_dict(self) -> dict:
+        support = runtime_profile_support(self.id, self.kind)
         return {
             "id": self.id,
             "display_name": self.display_name,
             "description": self.description,
             "kind": self.kind,
-            "runtime_support": runtime_mode_support(MODE_BY_RUNTIME_KIND[self.kind]),
+            "runtime_support": support,
             "languages": sorted(self.languages),
             "source_markers": list(self.source_markers),
-            "supports_preview": self.supports_preview,
-            "supports_deploy": self.supports_deploy,
-            "supports_service_bindings": self.supports_service_bindings,
+            "supports_preview": self.supports_preview and support["supported"],
+            "supports_deploy": self.supports_deploy and support["supported"],
+            "supports_service_bindings": self.supports_service_bindings and support["supported"],
             "default_network": {
                 "mode": self.default_network.mode,
                 "allowed_hosts": list(self.default_network.allowed_hosts),

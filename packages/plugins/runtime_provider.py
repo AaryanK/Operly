@@ -195,13 +195,13 @@ class PluginRuntimeProvider:
         capability: CapabilitySpec,
     ) -> bool:
         try:
-            await self._resolve(
-                db,
-                context=context,
-                capability=capability,
-                require_fresh=True,
+            _, _, manifest, instance = await self._resolve(
+                db, context=context, capability=capability, require_fresh=False,
             )
-            return True
+            adapter = require_supported_runtime(manifest)
+            if adapter.requires_fresh_health:
+                await self._resolve(db, context=context, capability=capability, require_fresh=True)
+            return adapter.instance_available(instance)
         except (LookupError, PermissionError, RuntimeError, ValueError):
             return False
 
@@ -248,7 +248,26 @@ class PluginRuntimeProvider:
             except Exception:
                 await identity_db.rollback()
 
+    def _sandbox_backend(self):
+        # Deferred dependency: registration/import never constructs a runner or
+        # imports API types. The Workspace subclass retains its injected runner.
+        from packages.plugins.sandbox_job_runtime import sandbox_job_plugin_runtime_provider
+        return sandbox_job_plugin_runtime_provider
+
     async def execute(
+        self, db: AsyncSession, *, context: ExecutionContext, capability: CapabilitySpec,
+        arguments: dict[str, Any], minimum_context: dict[str, Any],
+    ) -> CapabilityExecutionResult:
+        _, _, manifest, _ = await self._resolve(
+            db, context=context, capability=capability, require_fresh=False,
+        )
+        adapter = require_supported_runtime(manifest)
+        return await adapter.execute(
+            self, db, context=context, capability=capability,
+            arguments=arguments, minimum_context=minimum_context,
+        )
+
+    async def _execute_remote_http(
         self,
         db: AsyncSession,
         *,

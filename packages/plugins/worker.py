@@ -24,10 +24,11 @@ from packages.database.plugin_platform_models import (
     PluginVersionRecord,
 )
 from packages.plugins.builds import IsolatedPluginValidationError, sandbox_plugin_validator
-from packages.plugins.contracts import PluginExecutionMode, PluginManifest
+from packages.plugins.contracts import PluginManifest
 from packages.plugins.deliveries import EventDeliveryError, digital_event_deliveries
 from packages.plugins.events import digital_events
 from packages.plugins.jobs import digital_platform_jobs
+from packages.plugins.runtime_registry import RuntimeAdapter
 from packages.plugins.runtime_profiles import default_runtime_profiles
 from packages.plugins.runtime_support import (
     UnsupportedPluginRuntime, manifest_runtime_support, require_supported_runtime,
@@ -99,11 +100,11 @@ async def _plugin_version_context(
     return version, package, manifest
 
 
-def _require_supported_version(version: PluginVersionRecord, manifest: PluginManifest) -> None:
+def _require_supported_version(version: PluginVersionRecord, manifest: PluginManifest) -> RuntimeAdapter:
     # Old queued jobs may predate the publish/install preflight. Do not build or
     # promote unsupported runtimes even if historical validation had passed.
     try:
-        require_supported_runtime(manifest)
+        return require_supported_runtime(manifest)
     except UnsupportedPluginRuntime as error:
         version.validation_status = "failed"
         report = _object(version.validation_report_json)
@@ -117,7 +118,7 @@ async def validate_plugin_job(
     job: DigitalPlatformJobRecord,
 ) -> dict[str, Any]:
     version, _, manifest = await _plugin_version_context(db, job)
-    _require_supported_version(version, manifest)
+    adapter = _require_supported_version(version, manifest)
 
     calculated_digest = _manifest_digest(manifest.to_dict())
     if calculated_digest != version.manifest_digest:
@@ -154,7 +155,7 @@ async def validate_plugin_job(
             raise PermanentPlatformJobError(
                 "Declared source digest does not match package artifact"
             )
-    elif manifest.execution_mode is not PluginExecutionMode.REMOTE_HTTP:
+    elif adapter.requires_artifact:
         raise PermanentPlatformJobError("Executable plugin package artifact is missing")
 
     if version.sbom_artifact_id:
@@ -175,7 +176,7 @@ async def validate_plugin_job(
         "validated_at": datetime.utcnow().isoformat(),
         "control_plane_execution": False,
     }
-    if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
+    if not adapter.requires_artifact:
         version.validation_status = "passed"
         report["isolated_build_required"] = False
         report["supply_chain_state"] = "not_applicable_remote_http"
@@ -210,8 +211,8 @@ async def isolated_validate_plugin_job(
     job: DigitalPlatformJobRecord,
 ) -> dict[str, Any]:
     version, _, manifest = await _plugin_version_context(db, job)
-    _require_supported_version(version, manifest)
-    if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
+    adapter = _require_supported_version(version, manifest)
+    if not adapter.requires_artifact:
         raise PermanentPlatformJobError(
             "Remote HTTP plugins do not have an isolated executable package"
         )

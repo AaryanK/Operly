@@ -17,7 +17,7 @@ from packages.database.plugin_platform_models import (
     PluginStorageNamespaceRecord,
     PluginVersionRecord,
 )
-from packages.plugins.contracts import PluginExecutionMode, PluginLifecycleState, PluginManifest
+from packages.plugins.contracts import PluginLifecycleState, PluginManifest
 from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
 from packages.plugins.runtime_support import manifest_runtime_support, require_supported_runtime
@@ -71,19 +71,14 @@ class PluginPlatformService:
         source_digest: str | None = None,
     ) -> tuple[PluginPackageRecord, PluginVersionRecord, PluginManifest]:
         manifest = PluginManifest.from_dict(manifest_payload)
-        require_supported_runtime(manifest)
-        if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
-            raise PluginPlatformError(
-                "Workspace-published plugins cannot request platform_native execution; "
-                "native providers ship with trusted Operly code"
-            )
+        adapter = require_supported_runtime(manifest)
         if manifest.runtime is None:
             raise PluginPlatformError("Workspace plugins require an isolated or remote runtime")
         # Merely naming a runtime in a manifest never creates mechanics. It must exist
         # in Operly's trusted registry before the package can enter validation.
         default_runtime_profiles().get(manifest.runtime.profile)
 
-        if manifest.execution_mode is not PluginExecutionMode.REMOTE_HTTP and not package_artifact_id:
+        if adapter.requires_artifact and not package_artifact_id:
             raise PluginPlatformError(
                 "Executable plugin workloads require an immutable Workspace package artifact"
             )
@@ -347,8 +342,6 @@ class PluginPlatformService:
             raise PluginPlatformError("Plugin cannot activate until package validation passes")
         manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
         require_supported_runtime(manifest)
-        if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
-            raise PluginPlatformError("Workspace installations cannot activate as platform_native")
         instance = await db.scalar(
             select(PluginRuntimeInstanceRecord)
             .where(

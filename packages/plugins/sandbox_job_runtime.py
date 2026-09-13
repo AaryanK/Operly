@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.artifacts import ArtifactScope, ArtifactService
 from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
-from packages.plugins.contracts import PluginExecutionMode
 from packages.plugins.runtime_provider import (
     PluginRuntimeProvider,
     PluginRuntimeTransportError,
@@ -114,30 +113,8 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
         self.runner = runner or ComputerRunnerClient()
         self._execution_gate = asyncio.Semaphore(_execution_concurrency_limit())
 
-    async def is_available(
-        self,
-        db: AsyncSession,
-        *,
-        context: ExecutionContext,
-        capability: CapabilitySpec,
-    ) -> bool:
-        try:
-            _, _, manifest, instance = await self._resolve(
-                db,
-                context=context,
-                capability=capability,
-                require_fresh=False,
-            )
-        except (LookupError, PermissionError, RuntimeError, ValueError):
-            return False
-        if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
-            return bool(
-                instance.provider == "railway-sandbox-job"
-                and instance.artifact_id
-                and instance.state == "ready"
-                and instance.health_state == "healthy"
-            )
-        return await super().is_available(db, context=context, capability=capability)
+    def _sandbox_backend(self):
+        return self
 
     @staticmethod
     def _sandbox_contract(manifest) -> None:
@@ -348,39 +325,6 @@ class SandboxJobPluginRuntimeProvider(PluginRuntimeProvider):
                     await self.runner.stop(runtime_id)
                 except Exception:
                     pass
-
-    async def execute(
-        self,
-        db: AsyncSession,
-        *,
-        context: ExecutionContext,
-        capability: CapabilitySpec,
-        arguments: dict[str, Any],
-        minimum_context: dict[str, Any],
-    ) -> CapabilityExecutionResult:
-        _, _, manifest, _ = await self._resolve(
-            db,
-            context=context,
-            capability=capability,
-            require_fresh=False,
-        )
-        if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
-            async with self._execution_gate:
-                return await self._execute_sandbox_job(
-                    db,
-                    context=context,
-                    capability=capability,
-                    arguments=arguments,
-                    minimum_context=minimum_context,
-                )
-        return await super().execute(
-            db,
-            context=context,
-            capability=capability,
-            arguments=arguments,
-            minimum_context=minimum_context,
-        )
-
 
 sandbox_job_plugin_runtime_provider = SandboxJobPluginRuntimeProvider()
 

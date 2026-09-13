@@ -157,7 +157,7 @@ class PluginRuntimeReconciler:
         *,
         tenant_id: str,
         installation_id: str,
-        endpoint: str,
+        endpoint: str | None = None,
     ) -> RuntimeReconciliationResult:
         installation, version, manifest = await self._context(
             db, tenant_id=tenant_id, installation_id=installation_id
@@ -170,6 +170,23 @@ class PluginRuntimeReconciler:
         if manifest.runtime is None or manifest.runtime.kind != "remote":
             raise RuntimeReconciliationError(
                 "Remote HTTP plugin runtime contract is invalid", permanent=True
+            )
+        if not endpoint:
+            existing = await db.scalar(
+                select(PluginRuntimeInstanceRecord)
+                .where(
+                    PluginRuntimeInstanceRecord.tenant_id == tenant_id,
+                    PluginRuntimeInstanceRecord.installation_id == installation_id,
+                    PluginRuntimeInstanceRecord.provider == "remote-http",
+                    PluginRuntimeInstanceRecord.endpoint_reference.is_not(None),
+                )
+                .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
+            )
+            endpoint = existing.endpoint_reference if existing else None
+        if not endpoint:
+            raise RuntimeReconciliationError(
+                "Remote HTTP runtime reconciliation requires an endpoint",
+                permanent=True,
             )
         try:
             base, host, port = validate_remote_base_url(endpoint)
@@ -473,40 +490,9 @@ class PluginRuntimeReconciler:
         _, _, manifest = await self._context(
             db, tenant_id=tenant_id, installation_id=installation_id
         )
-        if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
-            if not endpoint:
-                existing = await db.scalar(
-                    select(PluginRuntimeInstanceRecord)
-                    .where(
-                        PluginRuntimeInstanceRecord.tenant_id == tenant_id,
-                        PluginRuntimeInstanceRecord.installation_id == installation_id,
-                        PluginRuntimeInstanceRecord.provider == "remote-http",
-                        PluginRuntimeInstanceRecord.endpoint_reference.is_not(None),
-                    )
-                    .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
-                )
-                endpoint = existing.endpoint_reference if existing else None
-            if not endpoint:
-                raise RuntimeReconciliationError(
-                    "Remote HTTP runtime reconciliation requires an endpoint",
-                    permanent=True,
-                )
-            return await self.reconcile_remote_http(
-                db,
-                tenant_id=tenant_id,
-                installation_id=installation_id,
-                endpoint=endpoint,
-            )
-        if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
-            return await self.reconcile_sandbox_job(
-                db,
-                tenant_id=tenant_id,
-                installation_id=installation_id,
-            )
-        raise RuntimeReconciliationError(
-            f"unsupported_runtime_mode: No reconciliation adapter for {manifest.execution_mode.value}",
-            permanent=True,
-            code="unsupported_runtime_mode",
+        adapter = require_supported_runtime(manifest)
+        return await adapter.reconcile(
+            self, db, tenant_id=tenant_id, installation_id=installation_id, endpoint=endpoint,
         )
 
 
