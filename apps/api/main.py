@@ -31,8 +31,7 @@ from apps.api.session import router as session_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.agent_runtime.evaluation import run_startup_objective_eval_if_enabled
-from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute
-from packages.agent_runtime.runtime import AgentRuntimeSettings
+from packages.agent_runtime.status import agent_runtime_status as _agent_runtime_status
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
 from packages.personal_modules.connectors import router as personal_connectors_router
@@ -153,35 +152,6 @@ def validate_runtime_configuration() -> None:
             raise RuntimeError(
                 "Studio published content must use a separate registrable-style origin from Operly authentication"
             )
-
-
-def _agent_runtime_status() -> dict[str, object]:
-    enabled = AgentRuntimeSettings.from_environment().enabled
-    if not enabled:
-        return {
-            "enabled": False,
-            "configured": False,
-            "provider": None,
-            "model": None,
-            "reason": "OPERLY_AGENT_RUNTIME_ENABLED is off",
-        }
-    try:
-        route = InferenceRoute.from_environment()
-    except AgentInferenceError as error:
-        return {
-            "enabled": True,
-            "configured": False,
-            "provider": None,
-            "model": None,
-            "reason": str(error),
-        }
-    return {
-        "enabled": True,
-        "configured": True,
-        "provider": route.provider,
-        "model": route.model_id,
-        "reason": None,
-    }
 
 
 @asynccontextmanager

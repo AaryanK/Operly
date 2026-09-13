@@ -15,6 +15,10 @@ from packages.database.plugin_platform_models import (
     PluginRuntimeInstanceRecord,
     PluginVersionRecord,
 )
+from packages.plugins.contracts import PluginManifest
+from packages.plugins.runtime_support import (
+    UnsupportedPluginRuntime, manifest_runtime_support, require_supported_runtime,
+)
 from packages.plugins.jobs import digital_platform_jobs
 
 
@@ -88,6 +92,10 @@ async def runtime_status(
         "installation_enabled": installation.enabled,
         "version_id": installation.version_id,
         "validation_status": version.validation_status if version else "missing",
+        "runtime_support": (
+            manifest_runtime_support(PluginManifest.from_dict(json.loads(version.manifest_json)))
+            if version else None
+        ),
         "instances": [
             {
                 "id": row.id,
@@ -125,6 +133,13 @@ async def reconcile_runtime(
     version = await db.get(PluginVersionRecord, installation.version_id)
     if version is None:
         raise HTTPException(status_code=404, detail="Plugin version not found")
+    try:
+        manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        require_supported_runtime(manifest)
+    except UnsupportedPluginRuntime as error:
+        raise HTTPException(status_code=422, detail=error.support) from error
+    except (TypeError, ValueError, KeyError) as error:
+        raise HTTPException(status_code=422, detail="Installed plugin manifest is invalid") from error
     endpoint = str(payload.endpoint or "").strip() or None
     endpoint_digest = hashlib.sha256((endpoint or "existing").encode("utf-8")).hexdigest()[:24]
     try:
@@ -154,6 +169,7 @@ async def reconcile_runtime(
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {
         "accepted": True,
+        "runtime_support": manifest_runtime_support(manifest),
         "job_id": job.id,
         "job_state": job.state,
         "installation_id": installation.id,

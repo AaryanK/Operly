@@ -18,6 +18,7 @@ from packages.database.plugin_platform_models import (
     PluginVersionRecord,
 )
 from packages.plugins.contracts import PluginExecutionMode, PluginManifest
+from packages.plugins.runtime_support import UnsupportedPluginRuntime, require_supported_runtime
 from packages.plugins.runtime_provider import (
     PluginRuntimeTransportError,
     assert_public_runtime_host,
@@ -30,9 +31,10 @@ from packages.workspace_modules.agent_computer.sandbox import (
 
 
 class RuntimeReconciliationError(RuntimeError):
-    def __init__(self, message: str, *, permanent: bool = False) -> None:
+    def __init__(self, message: str, *, permanent: bool = False, code: str | None = None) -> None:
         super().__init__(message)
         self.permanent = permanent
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,10 +81,6 @@ class PluginRuntimeReconciler:
         version = await db.get(PluginVersionRecord, installation.version_id)
         if version is None:
             raise RuntimeReconciliationError("Plugin version not found", permanent=True)
-        if version.validation_status != "passed":
-            raise RuntimeReconciliationError(
-                "Plugin runtime cannot reconcile until package validation passes"
-            )
         try:
             payload = json.loads(version.manifest_json)
             if not isinstance(payload, dict):
@@ -92,6 +90,16 @@ class PluginRuntimeReconciler:
             raise RuntimeReconciliationError(
                 "Installed plugin manifest is invalid", permanent=True
             ) from error
+        try:
+            require_supported_runtime(manifest)
+        except UnsupportedPluginRuntime as error:
+            raise RuntimeReconciliationError(
+                str(error), permanent=True, code=error.support["reason_code"],
+            ) from error
+        if version.validation_status != "passed":
+            raise RuntimeReconciliationError(
+                "Plugin runtime cannot reconcile until package validation passes"
+            )
         return installation, version, manifest
 
     async def _remote_instance(
@@ -149,7 +157,7 @@ class PluginRuntimeReconciler:
         *,
         tenant_id: str,
         installation_id: str,
-        endpoint: str,
+        endpoint: str | None = None,
     ) -> RuntimeReconciliationResult:
         installation, version, manifest = await self._context(
             db, tenant_id=tenant_id, installation_id=installation_id
@@ -162,6 +170,23 @@ class PluginRuntimeReconciler:
         if manifest.runtime is None or manifest.runtime.kind != "remote":
             raise RuntimeReconciliationError(
                 "Remote HTTP plugin runtime contract is invalid", permanent=True
+            )
+        if not endpoint:
+            existing = await db.scalar(
+                select(PluginRuntimeInstanceRecord)
+                .where(
+                    PluginRuntimeInstanceRecord.tenant_id == tenant_id,
+                    PluginRuntimeInstanceRecord.installation_id == installation_id,
+                    PluginRuntimeInstanceRecord.provider == "remote-http",
+                    PluginRuntimeInstanceRecord.endpoint_reference.is_not(None),
+                )
+                .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
+            )
+            endpoint = existing.endpoint_reference if existing else None
+        if not endpoint:
+            raise RuntimeReconciliationError(
+                "Remote HTTP runtime reconciliation requires an endpoint",
+                permanent=True,
             )
         try:
             base, host, port = validate_remote_base_url(endpoint)
@@ -465,39 +490,9 @@ class PluginRuntimeReconciler:
         _, _, manifest = await self._context(
             db, tenant_id=tenant_id, installation_id=installation_id
         )
-        if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
-            if not endpoint:
-                existing = await db.scalar(
-                    select(PluginRuntimeInstanceRecord)
-                    .where(
-                        PluginRuntimeInstanceRecord.tenant_id == tenant_id,
-                        PluginRuntimeInstanceRecord.installation_id == installation_id,
-                        PluginRuntimeInstanceRecord.provider == "remote-http",
-                        PluginRuntimeInstanceRecord.endpoint_reference.is_not(None),
-                    )
-                    .order_by(PluginRuntimeInstanceRecord.updated_at.desc())
-                )
-                endpoint = existing.endpoint_reference if existing else None
-            if not endpoint:
-                raise RuntimeReconciliationError(
-                    "Remote HTTP runtime reconciliation requires an endpoint",
-                    permanent=True,
-                )
-            return await self.reconcile_remote_http(
-                db,
-                tenant_id=tenant_id,
-                installation_id=installation_id,
-                endpoint=endpoint,
-            )
-        if manifest.execution_mode is PluginExecutionMode.SANDBOX_JOB:
-            return await self.reconcile_sandbox_job(
-                db,
-                tenant_id=tenant_id,
-                installation_id=installation_id,
-            )
-        raise RuntimeReconciliationError(
-            f"Hosted runtime adapter for {manifest.execution_mode.value} is not implemented yet",
-            permanent=True,
+        adapter = require_supported_runtime(manifest)
+        return await adapter.reconcile(
+            self, db, tenant_id=tenant_id, installation_id=installation_id, endpoint=endpoint,
         )
 
 

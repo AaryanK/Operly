@@ -1,0 +1,28 @@
+# Plugin runtime support review — 2026-09-12
+
+Reviewed against fetched `origin/main` at `d7840a5ff6c3338f814cde376c6fe08c9a5a3d24`. This change adds no hosting adapters or schema migration.
+
+## Findings before implementation
+
+1. **Selection and advertisement.** `packages/plugins/contracts.py` accepts `remote_http`, `sandbox_job`, `web_service`, `worker`, `static_site`, and reserved `platform_native`. Manifests enter through POST `/api/plugin-platform/packages`; there is no dedicated mode picker or plugin-platform client in the current web app. The foundation endpoint advertised every enum as a digital workload class. The profile endpoint advertised seven profiles, including preview/deploy flags for hosted modes. Installation listings and agent capability discovery also exposed their contracts.
+2. **Implemented paths.** `remote_http` reconciles and health-checks a separately operated, declared HTTPS endpoint, then executes capabilities through the remote provider. `sandbox_job` validates/promotes an immutable artifact, checks the Sandbox Runner, and executes fresh isolated jobs per invocation. `web_service`, `worker`, and `static_site` have no end-to-end reconciliation/execution adapters. The historical static ZIP serving route is real, but it does not provision or reconcile a site. `platform_native` is reserved for trusted code shipped with Operly.
+3. **Misleading tests.** `test_plugin_platform.py` asserted that `react-vite.supports_deploy` was true. Profile-membership tests established vocabulary, not adapter execution. Existing sandbox reconciliation tests covered actual readiness/failure handling; there was no equivalent hosted-mode deployment proof.
+4. **Compatibility.** Narrowing the enum or rejecting unsupported modes in `PluginManifest.from_dict` would break installation inspection and other reads of historical versions. Support must be checked separately from manifest syntax. No stored manifest, execution mode, runtime instance or artifact is rewritten.
+5. **Smallest design.** A shared support contract describes available adapters and their compatible profile/kind combinations. Discovery and status expose it; mutation/execution boundaries enforce it. Merely hiding profile choices would leave API submissions and already queued jobs unprotected. Implementing three deployment adapters would be a separate infrastructure project.
+
+## Lifecycle and enforcement
+
+- **Manifest/schema:** `PluginManifest` retains historical syntax. `runtime_support.py` independently classifies mode/profile/kind support and gives a stable reason code.
+- **Validation:** publication rejects unsupported modes before creating package/version/job records. Trusted validation and runtime-recording seams also enforce support. Historical validation jobs are checked before digest/artifact processing, isolated builds, or the already-passed fast path; failures retain explicit support information in the validation report.
+- **API/UI/agents:** foundation advertises only the two implemented workload classes and separately lists declared vocabulary. Profiles remain inspectable with support metadata, while unsupported preview/deploy flags are false. Installation and runtime status responses include the same support object. Agent capability discovery omits unsupported installations; provider resolution independently blocks execution. Current UI consumers can use the same API metadata; no new UI is introduced.
+- **Job creation:** runtime reconciliation returns HTTP 422 with structured support metadata before queueing unsupported modes. Supported modes retain the existing durable reconciliation path. New installation and activation are also gated; historical read and static artifact-serving paths remain available.
+- **Worker/reconciler:** old jobs cannot bypass API preflight. The reconciler checks support before validation/readiness checks and returns a permanent error carrying `unsupported_runtime_mode` (or a profile mismatch reason). The existing worker commits a failed job with that reason in `last_error`; it does not endlessly retry an absent adapter.
+- **Status:** historical instance state remains evidence of what was stored, not current capability support. A historical `ready`/`healthy` instance can coexist with `runtime_support.supported=false`, and cannot activate or execute through the plugin provider. No mode is silently converted.
+
+`runtime_support.supported` means an adapter exists; it does not claim that credentials, endpoint health, runner availability, artifact validation or authority checks have passed. Sandbox jobs retain their existing network-off/no-credentials/no-bindings restrictions. Remote HTTP retains governed bindings and egress controls.
+
+The foundation endpoint retains `ai_runtime_enabled` but now shares the configuration-aware calculation used by `/api/health`. It also reports `ai_runtime_required=false` and links to that health endpoint. Main mounts both Personal and Workspace agent routes; enabling inference requires `OPERLY_AGENT_RUNTIME_ENABLED=1` and a configured inference route. The README and target-architecture annotation now distinguish implementation from deployment configuration and future hosted-mode targets.
+
+## Validation
+
+`tests/test_plugin_runtime_support.py` exercises SQLite-backed publication, historical inspection, API queue preflight, agent discovery/provider guards, validation jobs, supported reconciliation dispatch and durable worker failure reporting. HTTP health transport and Sandbox Runner/artifact boundaries are mocked; these tests do not claim to deploy real infrastructure. Existing plugin platform and sandbox reconciliation suites also run in CI alongside the new suite. No locking or scheduler behavior changes are involved.

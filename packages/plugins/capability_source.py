@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.database.plugin_platform_models import PluginInstallationRecord, PluginVersionRecord
 from packages.kernel.contracts import CapabilitySpec
 from packages.plugins.contracts import PluginManifest
+from packages.plugins.runtime_support import manifest_runtime_support
 from packages.security.execution_context import ExecutionContext
 
 
@@ -44,6 +45,8 @@ class InstalledPluginCapabilitySource:
             if version is None or version.validation_status != "passed":
                 continue
             manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+            if not manifest_runtime_support(manifest)["supported"]:
+                continue
             for spec in manifest.capability_specs():
                 if spec.id in seen:
                     raise RuntimeError(f"Installed plugin capability collision: {spec.id}")

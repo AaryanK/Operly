@@ -2,6 +2,8 @@
 
 Status: **normative target specification**
 
+Implementation note (2026-09-12): runtime profiles below describe the target, not currently supported deployment adapters. See [current plugin runtime support](plugin-runtime-support-2026-09-12.md); only `remote_http` and `sandbox_job` have end-to-end plugin reconciliation implementations.
+
 Branch: `architecture/universal-studio-runtime`
 
 This document defines the architecture that future refactors on this branch MUST converge toward. It is intentionally written before runtime changes so that provider fixes, Studio work, plugin work, and software-generation work do not create another parallel generation of Operly architecture.
