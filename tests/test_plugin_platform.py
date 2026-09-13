@@ -153,7 +153,8 @@ class PluginPlatformContractTests(unittest.TestCase):
             }
             <= ids
         )
-        self.assertTrue(registry.get("react-vite").supports_deploy)
+        self.assertFalse(registry.get("react-vite").supports_deploy)
+        self.assertFalse(registry.get("react-vite").public_dict()["runtime_support"]["supported"])
         self.assertEqual(registry.get("sandbox-job").default_network.mode, "off")
 
     def test_durable_schema_has_security_and_runtime_layers(self):

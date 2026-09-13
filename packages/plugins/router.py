@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.agent_runtime.status import agent_runtime_status
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.connectors.secrets import store_secret
 from packages.database.capability_binding_models import CapabilityBindingRecord
@@ -21,7 +22,8 @@ from packages.database.plugin_platform_models import (
 )
 from packages.plugins.budgets import resource_budgets
 from packages.plugins.capability_bindings import capability_bindings
-from packages.plugins.contracts import PluginContractError, PluginLifecycleState
+from packages.plugins.contracts import PluginContractError, PluginExecutionMode, PluginLifecycleState
+from packages.plugins.runtime_support import UnsupportedPluginRuntime, runtime_mode_support
 from packages.plugins.credentials import plugin_credentials
 from packages.plugins.runtime_profiles import default_runtime_profiles
 from packages.plugins.service import PluginPlatformError, plugin_platform
@@ -134,9 +136,12 @@ def _safe_json(value: str | None, fallback: Any) -> Any:
 @router.get("/foundation")
 async def plugin_foundation(auth: AuthContext = Depends(get_auth_context)):
     del auth
+    agent = agent_runtime_status()
     return {
         "schema": "operly.plugin/v1",
-        "ai_runtime_enabled": False,
+        "ai_runtime_enabled": bool(agent["enabled"] and agent["configured"]),
+        "ai_runtime_required": False,
+        "agent_runtime_status_url": "/api/health",
         "kernel_authority": "operly-kernel-v3",
         "principles": {
             "generated_code_in_control_plane": False,
@@ -147,13 +152,10 @@ async def plugin_foundation(auth: AuthContext = Depends(get_auth_context)):
             "workspace_authority_is_re_resolved_per_call": True,
         },
         "digital_workload_classes": [
-            "platform_native",
-            "remote_http",
-            "sandbox_job",
-            "web_service",
-            "worker",
-            "static_site",
+            mode.value for mode in PluginExecutionMode if runtime_mode_support(mode)["supported"]
         ],
+        "declared_workload_classes": [mode.value for mode in PluginExecutionMode],
+        "runtime_support": [runtime_mode_support(mode) for mode in PluginExecutionMode],
         "platform_primitives": [
             "capabilities",
             "workspace_permissions",
@@ -214,6 +216,9 @@ async def publish_plugin(
     except PermissionError as error:
         await db.rollback()
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except UnsupportedPluginRuntime as error:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=error.support) from error
     except (PluginContractError, PluginPlatformError, ValueError) as error:
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -253,6 +258,9 @@ async def install_plugin(
     except PermissionError as error:
         await db.rollback()
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except UnsupportedPluginRuntime as error:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=error.support) from error
     except (PluginContractError, PluginPlatformError, ValueError) as error:
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -288,6 +296,9 @@ async def update_installation(
     except PermissionError as error:
         await db.rollback()
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except UnsupportedPluginRuntime as error:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=error.support) from error
     except (PluginContractError, PluginPlatformError, ValueError) as error:
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(error)) from error

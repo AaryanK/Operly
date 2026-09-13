@@ -24,6 +24,7 @@ from packages.database.plugin_platform_models import (
 )
 from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
 from packages.plugins.bindings import RuntimeBindingService
+from packages.plugins.runtime_support import require_supported_runtime
 from packages.plugins.contracts import PluginExecutionMode, PluginManifest
 from packages.security.execution_context import ExecutionContext
 
@@ -164,6 +165,7 @@ class PluginRuntimeProvider:
                 f"Multiple active plugin installations provide capability {capability.id}"
             )
         installation, version, manifest = matches[0]
+        require_supported_runtime(manifest)
         instance = await db.scalar(
             select(PluginRuntimeInstanceRecord)
             .where(

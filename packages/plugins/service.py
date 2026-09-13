@@ -20,6 +20,7 @@ from packages.database.plugin_platform_models import (
 from packages.plugins.contracts import PluginExecutionMode, PluginLifecycleState, PluginManifest
 from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
+from packages.plugins.runtime_support import manifest_runtime_support, require_supported_runtime
 
 
 class PluginPlatformError(RuntimeError):
@@ -70,6 +71,7 @@ class PluginPlatformService:
         source_digest: str | None = None,
     ) -> tuple[PluginPackageRecord, PluginVersionRecord, PluginManifest]:
         manifest = PluginManifest.from_dict(manifest_payload)
+        require_supported_runtime(manifest)
         if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
             raise PluginPlatformError(
                 "Workspace-published plugins cannot request platform_native execution; "
@@ -188,6 +190,8 @@ class PluginPlatformService:
             raise LookupError("Plugin version not found")
         package = await self._package_for_version(db, version=version)
         self._assert_workspace_may_use(package, tenant_id)
+        if passed:
+            require_supported_runtime(PluginManifest.from_dict(json.loads(version.manifest_json)))
         version.validation_status = "passed" if passed else "failed"
         version.validation_report_json = _json(dict(report))
         await db.flush()
@@ -221,6 +225,7 @@ class PluginPlatformService:
         if version is None:
             raise LookupError("Plugin version not found")
         manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        require_supported_runtime(manifest)
         if manifest.runtime is None:
             raise PluginPlatformError("Plugin version does not declare a runtime")
         if runtime_profile != manifest.runtime.profile or runtime_kind != manifest.runtime.kind:
@@ -271,6 +276,7 @@ class PluginPlatformService:
         self._assert_workspace_may_use(package, tenant_id)
 
         manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        require_supported_runtime(manifest)
         requested = set(manifest.permissions)
         granted = set(granted_permissions or [])
         if not granted.issubset(requested):
@@ -340,6 +346,7 @@ class PluginPlatformService:
         if version is None or version.validation_status != "passed":
             raise PluginPlatformError("Plugin cannot activate until package validation passes")
         manifest = PluginManifest.from_dict(json.loads(version.manifest_json))
+        require_supported_runtime(manifest)
         if manifest.execution_mode is PluginExecutionMode.PLATFORM_NATIVE:
             raise PluginPlatformError("Workspace installations cannot activate as platform_native")
         instance = await db.scalar(
@@ -436,6 +443,7 @@ class PluginPlatformService:
                     "status": row.status,
                     "enabled": row.enabled,
                     "execution_mode": manifest.execution_mode.value,
+                    "runtime_support": manifest_runtime_support(manifest),
                     "runtime": manifest.runtime.profile if manifest.runtime else None,
                     "capabilities": [spec.public_dict() for spec in manifest.capability_specs()],
                     "permissions_requested": list(manifest.permissions),

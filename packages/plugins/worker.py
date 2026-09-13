@@ -29,6 +29,9 @@ from packages.plugins.deliveries import EventDeliveryError, digital_event_delive
 from packages.plugins.events import digital_events
 from packages.plugins.jobs import digital_platform_jobs
 from packages.plugins.runtime_profiles import default_runtime_profiles
+from packages.plugins.runtime_support import (
+    UnsupportedPluginRuntime, manifest_runtime_support, require_supported_runtime,
+)
 from packages.plugins.runtime_reconciler import (
     RuntimeReconciliationError,
     plugin_runtime_reconciler,
@@ -96,11 +99,25 @@ async def _plugin_version_context(
     return version, package, manifest
 
 
+def _require_supported_version(version: PluginVersionRecord, manifest: PluginManifest) -> None:
+    # Old queued jobs may predate the publish/install preflight. Do not build or
+    # promote unsupported runtimes even if historical validation had passed.
+    try:
+        require_supported_runtime(manifest)
+    except UnsupportedPluginRuntime as error:
+        version.validation_status = "failed"
+        report = _object(version.validation_report_json)
+        report["runtime_support"] = error.support
+        version.validation_report_json = _json(report)
+        raise PermanentPlatformJobError(str(error)) from error
+
+
 async def validate_plugin_job(
     db: AsyncSession,
     job: DigitalPlatformJobRecord,
 ) -> dict[str, Any]:
     version, _, manifest = await _plugin_version_context(db, job)
+    _require_supported_version(version, manifest)
 
     calculated_digest = _manifest_digest(manifest.to_dict())
     if calculated_digest != version.manifest_digest:
@@ -153,6 +170,7 @@ async def validate_plugin_job(
         "runtime_profile": profile.id,
         "runtime_kind": profile.kind,
         "execution_mode": manifest.execution_mode.value,
+        "runtime_support": manifest_runtime_support(manifest),
         "artifact_identity": artifact_report,
         "validated_at": datetime.utcnow().isoformat(),
         "control_plane_execution": False,
@@ -192,6 +210,7 @@ async def isolated_validate_plugin_job(
     job: DigitalPlatformJobRecord,
 ) -> dict[str, Any]:
     version, _, manifest = await _plugin_version_context(db, job)
+    _require_supported_version(version, manifest)
     if manifest.execution_mode is PluginExecutionMode.REMOTE_HTTP:
         raise PermanentPlatformJobError(
             "Remote HTTP plugins do not have an isolated executable package"

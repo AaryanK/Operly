@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from packages.plugins.contracts import NetworkPolicy, ResourcePolicy
+from packages.plugins.runtime_support import MODE_BY_RUNTIME_KIND, runtime_mode_support
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +19,7 @@ class RuntimeProfile:
     start_command: tuple[str, ...] | None = None
     supports_preview: bool = False
     supports_deploy: bool = False
-    supports_service_bindings: bool = True
+    supports_service_bindings: bool = False
     default_network: NetworkPolicy = field(default_factory=NetworkPolicy)
     default_resources: ResourcePolicy = field(default_factory=ResourcePolicy)
     allowed_dependency_managers: frozenset[str] = frozenset()
@@ -29,6 +30,7 @@ class RuntimeProfile:
             "display_name": self.display_name,
             "description": self.description,
             "kind": self.kind,
+            "runtime_support": runtime_mode_support(MODE_BY_RUNTIME_KIND[self.kind]),
             "languages": sorted(self.languages),
             "source_markers": list(self.source_markers),
             "supports_preview": self.supports_preview,
@@ -100,8 +102,8 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
                 kind="static",
                 languages=frozenset({"html", "css", "javascript"}),
                 source_markers=("index.html",),
-                supports_preview=True,
-                supports_deploy=True,
+                supports_preview=False,
+                supports_deploy=False,
                 default_resources=common,
             ),
             RuntimeProfile(
@@ -112,8 +114,8 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
                 languages=frozenset({"typescript", "javascript", "html", "css"}),
                 source_markers=("vite.config.ts", "vite.config.js"),
                 build_commands=(("npm", "ci"), ("npm", "run", "build")),
-                supports_preview=True,
-                supports_deploy=True,
+                supports_preview=False,
+                supports_deploy=False,
                 default_network=NetworkPolicy(mode="egress"),
                 default_resources=web_resources,
                 allowed_dependency_managers=frozenset({"npm"}),
@@ -127,8 +129,8 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
                 source_markers=("package.json",),
                 build_commands=(("npm", "ci"),),
                 start_command=("npm", "start"),
-                supports_preview=True,
-                supports_deploy=True,
+                supports_preview=False,
+                supports_deploy=False,
                 default_network=NetworkPolicy(mode="egress"),
                 default_resources=web_resources,
                 allowed_dependency_managers=frozenset({"npm"}),
@@ -140,8 +142,8 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
                 kind="web",
                 languages=frozenset({"python"}),
                 source_markers=("pyproject.toml", "requirements.txt"),
-                supports_preview=True,
-                supports_deploy=True,
+                supports_preview=False,
+                supports_deploy=False,
                 default_network=NetworkPolicy(mode="egress"),
                 default_resources=web_resources,
                 allowed_dependency_managers=frozenset({"pip", "uv"}),
@@ -154,7 +156,7 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
                 languages=frozenset({"python", "javascript", "typescript"}),
                 source_markers=("worker.toml",),
                 supports_preview=False,
-                supports_deploy=True,
+                supports_deploy=False,
                 default_network=NetworkPolicy(mode="egress"),
                 default_resources=web_resources,
                 allowed_dependency_managers=frozenset({"pip", "uv", "npm"}),
@@ -174,6 +176,7 @@ def default_runtime_profiles() -> RuntimeProfileRegistry:
             ),
             RuntimeProfile(
                 id="remote-http",
+                supports_service_bindings=True,
                 display_name="Remote HTTP adapter",
                 description="No hosted code; capabilities are implemented by a separately operated HTTPS service behind Operly policy.",
                 kind="remote",

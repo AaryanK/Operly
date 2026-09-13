@@ -1,8 +1,8 @@
 # OPERLY
 
-**OPERLY is a governed execution platform for people, workspaces, plugins, durable workflows, integrations, MCP clients, and future AI agents.**
+**OPERLY is a governed execution platform for people, workspaces, plugins, durable workflows, integrations, MCP clients, and AI agents.**
 
-The current repository is intentionally centered on a deterministic Kernel and capability runtime. Models are not the authority boundary, and in the current production boot path the AI runtime is deliberately disabled. The platform underneath it—identity, scope, permissions, capability discovery, approvals, idempotency, plugin execution, workflows, events, connectors, artifacts, audit, and runtime isolation—is the product foundation.
+The current repository is intentionally centered on a deterministic Kernel and capability runtime. Models are not the authority boundary. Personal and Workspace agent routes are mounted, while model execution depends on environment configuration. The platform underneath it—identity, scope, permissions, capability discovery, approvals, idempotency, plugin execution, workflows, events, connectors, artifacts, audit, and runtime isolation—is the product foundation.
 
 > **The long-term goal is simple: any authorized model or client should be able to understand the current person or workspace, discover only the capabilities available to it, and safely use those capabilities through the same governed runtime.**
 
@@ -15,7 +15,7 @@ This README describes the repository **as it exists on `main` today**. Older sub
 The FastAPI application identifies itself as:
 
 ```text
-0.10.0-universal-workflows
+0.11.0-agent-runtime-1
 ```
 
 The current booted platform includes:
@@ -37,14 +37,7 @@ The current booted platform includes:
 - audit and route traceability;
 - a deterministic Kernel runtime.
 
-The current boot path explicitly reports:
-
-```text
-kernel_runtime_enabled = true
-ai_runtime_enabled     = false
-```
-
-That distinction matters. The repository already contains much of the infrastructure an AI runtime will need, but the currently booted system does not pretend that a model-driven agent loop is live when it is not.
+The `/api/health` and `/api/rebuild-status` endpoints report agent runtime status from configuration. `ai_runtime_enabled` is true only when `OPERLY_AGENT_RUNTIME_ENABLED=1` and an inference route is configured; the flag defaults to off. The implementation lives in `packages/agent_runtime` and uses the governed Kernel. Repository support does not establish whether a particular deployment has enabled or configured inference.
 
 ---
 
@@ -97,7 +90,7 @@ Browser / API / Discord / MCP / Webhook / Workflow
                          │
           ┌──────────────┼──────────────┐
           ▼              ▼              ▼
-     direct route     Workflow       future AI
+     direct route     Workflow       Agent runtime
           │              │              │
           └──────────────┴──────┬───────┘
                                 ▼
@@ -126,7 +119,7 @@ The most important rule is:
 
 > **Every surface should converge on the same authority and capability semantics.**
 
-A web route, MCP client, scheduled workflow, Discord action, hosted plugin, and future AI agent should not each grow its own security model.
+A web route, MCP client, scheduled workflow, Discord action, hosted plugin, and AI agent should not each grow its own security model.
 
 ---
 
@@ -512,7 +505,7 @@ Production should preserve a hard distinction between trusted control-plane code
 
 ---
 
-# What is deliberately not live yet
+# Runtime availability
 
 The current repository should not be described as if all historical AI architecture is already active.
 
@@ -525,11 +518,17 @@ Today:
 - Personal and Workspace tool surfaces are active;
 - MCP and integrations are active;
 - Agent Computer is active;
-- **the general AI runtime is disabled in the booted application.**
+- Personal and Workspace agent routes are mounted; model execution requires the opt-in flag and inference configuration described above.
 
-That is a feature of the current stabilization phase, not a statement that AI is no longer part of Operly's direction.
+Plugin runtime support is narrower than the historical manifest vocabulary:
 
----
+| Workspace plugin mode | Current runtime support |
+| --- | --- |
+| `remote_http` | Reconciles a separately operated HTTPS endpoint and executes governed remote capabilities. |
+| `sandbox_job` | Reconciles validated artifacts for isolated per-invocation Sandbox Runner execution. |
+| `web_service`, `worker`, `static_site` | No end-to-end reconciliation adapters; unsupported for new publication, installation, activation and reconciliation. |
+
+The manifest parser retains all historical modes, including reserved `platform_native`. API foundation, profiles, installations and runtime status expose `runtime_support`; declared modes are not a promise of deployment support. Historical static artifact serving remains available under its existing checks. See [the runtime support review](docs/plugin-runtime-support-2026-09-12.md) for lifecycle and compatibility details.
 
 # Future directions
 
@@ -537,9 +536,9 @@ The following directions preserve the strongest ideas from earlier Operly archit
 
 ## 1. Model-driven Operly agent on top of the Kernel
 
-Reintroduce a provider-neutral AI runtime only after it can behave as an ordinary Kernel client.
+Extend the existing provider-neutral agent runtime while preserving its role as a Kernel client.
 
-The future agent should:
+Agent development should preserve this flow:
 
 ```text
 user request
@@ -730,7 +729,7 @@ request
 -> verification
 ```
 
-When AI runtime returns, model/provider calls should fit into that same trace rather than create a separate debugging system.
+Model/provider calls should fit into that same trace rather than create a separate debugging system.
 
 ## 13. Repository and release governance
 
