@@ -7,6 +7,7 @@ from packages.personal_modules.google_provider import (
     PROVIDER_ID as PERSONAL_GOOGLE_PROVIDER_ID,
     PersonalGoogleProvider,
     _supports as personal_google_supports,
+    connector_scopes,
     personal_google_capabilities,
     personal_google_connectors,
 )
@@ -36,7 +37,7 @@ class RuntimePersonalGoogleProvider(PersonalGoogleProvider):
             return None
         rows = await personal_google_connectors(db, context.user_id)
         if any(
-            personal_google_supports(capability.id, set(__import__("json").loads(row.granted_scopes_json or "[]")))
+            personal_google_supports(capability.id, connector_scopes(row))
             for row in rows
         ):
             return None
