@@ -140,7 +140,7 @@ def resolve_runtime_dispatch(
         return base
 
     resolvers_by_family = {
-        _capability_family(spec)
+        _capability_family(spec.id)
         for spec in capabilities
         if _is_resolver(spec)
     }
