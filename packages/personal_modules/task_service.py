@@ -121,11 +121,12 @@ async def find_personal_task_replay(
     if scoped is None:
         raise PersonalTaskConflict("Personal task request identity belongs to another authority")
     stored_budget = _json_object(existing.budget_json)
+    stored_grants = _json_object(existing.grants_reference_json)
     if (
         existing.goal != clean_goal
         or int(stored_budget.get("max_steps", -1)) != budget.max_steps
         or int(stored_budget.get("max_mutations", -1)) != budget.max_mutations
-        or _deadline_identity(existing.deadline_at) != _deadline_identity(deadline_at)
+        or stored_grants.get("submission_deadline_at") != _deadline_identity(deadline_at)
         or (
             context.conversation_id is not None
             and existing.conversation_id != context.conversation_id
@@ -212,6 +213,7 @@ async def submit_personal_task(
             "authority_mode": "live_reresolve",
             "principal_id": str(context.principal_id or ""),
             "scope_kind": context.scope_kind.value,
+            "submission_deadline_at": _deadline_identity(deadline_at),
         },
         separators=(",", ":"),
         sort_keys=True,
