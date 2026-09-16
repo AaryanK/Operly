@@ -37,6 +37,7 @@ _ALLOWED_TRANSITIONS = {
     "running": frozenset(
         {
             "waiting_approval",
+            "waiting_event",
             "completed",
             "failed",
             "cancelled",
@@ -45,6 +46,7 @@ _ALLOWED_TRANSITIONS = {
         }
     ),
     "waiting_approval": frozenset({"queued", "cancelled"}),
+    "waiting_event": frozenset({"queued", "completed", "failed", "cancelled"}),
 }
 _ALLOWED_PERSONAL_SURFACES = frozenset({SurfaceKind.PERSONAL_PRIVATE})
 _ALLOWED_WORKSPACE_SURFACES = frozenset(
@@ -252,7 +254,7 @@ async def request_cancellation(
     has_live_lease = bool(
         row.lease_token and row.lease_until is not None and row.lease_until > now
     )
-    if row.status in {"queued", "waiting_approval"} or (
+    if row.status in {"queued", "waiting_approval", "waiting_event"} or (
         row.status == "running" and not has_live_lease
     ):
         row.status = "cancelled"
@@ -392,7 +394,7 @@ async def transition_run(
     row.error_message = error_message or None
     if result is not None:
         row.result_json = _json(result)
-    if target == "waiting_approval" or target in TERMINAL_RUN_STATUSES:
+    if target in {"waiting_approval", "waiting_event"} or target in TERMINAL_RUN_STATUSES:
         row.lease_token = None
         row.lease_until = None
     if target in TERMINAL_RUN_STATUSES:
