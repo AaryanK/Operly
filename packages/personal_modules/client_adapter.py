@@ -8,14 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
-from packages.agent_runtime import AgentBudget, AgentRuntimeDisabled
-from packages.agent_runtime.inference import AgentInferenceError
-from packages.agent_runtime.planning import AgentPlanningError
-from packages.agent_runtime.store import (
-    AgentRunStateError,
-    queue_after_approval,
-    request_cancellation,
-)
 from packages.database.agent_chat_models import AgentChatMessage
 from packages.kernel.approvals import ApprovalError, approval_for_context
 from packages.kernel.contracts import AuthorizationDecision, RuntimeRequest, RuntimeResponse
@@ -24,12 +16,6 @@ from packages.kernel.idempotency import (
     IdempotencyInProgress,
     complete_request,
     reserve_request,
-)
-from packages.personal_modules.task_service import (
-    PersonalTaskConflict,
-    find_personal_task_replay,
-    personal_task_payload,
-    submit_personal_task,
 )
 from packages.security.execution_context import resolve_personal_execution_context
 from packages.security.surfaces import SurfaceKind
@@ -104,6 +90,15 @@ def _idempotency_error(error: Exception) -> HTTPException:
 
 
 def _task_error(error: Exception) -> HTTPException:
+    # Keep the ordinary Personal capability router importable in its intentionally
+    # dependency-light test/runtime environment. Task/inference modules are imported
+    # only when a durable task endpoint is actually exercised.
+    from packages.agent_runtime import AgentRuntimeDisabled
+    from packages.agent_runtime.inference import AgentInferenceError
+    from packages.agent_runtime.planning import AgentPlanningError
+    from packages.agent_runtime.store import AgentRunStateError
+    from packages.personal_modules.task_service import PersonalTaskConflict
+
     if isinstance(error, PersonalTaskConflict):
         return HTTPException(
             409,
@@ -220,6 +215,16 @@ async def submit_personal_task_request(
     """Accept a durable Personal objective and commit it before returning 202."""
 
     from apps.api.agent_runtime_router import _conversation
+    from packages.agent_runtime import AgentBudget, AgentRuntimeDisabled
+    from packages.agent_runtime.inference import AgentInferenceError
+    from packages.agent_runtime.planning import AgentPlanningError
+    from packages.agent_runtime.store import AgentRunStateError
+    from packages.personal_modules.task_service import (
+        PersonalTaskConflict,
+        find_personal_task_replay,
+        personal_task_payload,
+        submit_personal_task,
+    )
 
     budget = AgentBudget(
         max_steps=payload.max_steps,
@@ -306,6 +311,8 @@ async def personal_task_status(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    from packages.personal_modules.task_service import personal_task_payload
+
     context = await _personal_context(db, auth=auth)
     result = await personal_task_payload(db, context=context, run_id=task_id)
     if result is None:
@@ -319,6 +326,9 @@ async def cancel_personal_task(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    from packages.agent_runtime.store import AgentRunStateError, request_cancellation
+    from packages.personal_modules.task_service import personal_task_payload
+
     context = await _personal_context(db, auth=auth)
     try:
         await request_cancellation(db, context=context, run_id=task_id)
@@ -339,6 +349,9 @@ async def resume_personal_task(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    from packages.agent_runtime.store import AgentRunStateError, queue_after_approval
+    from packages.personal_modules.task_service import personal_task_payload
+
     context = await _personal_context(db, auth=auth)
     current = await personal_task_payload(db, context=context, run_id=task_id)
     if current is None:
