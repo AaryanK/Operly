@@ -15,6 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.connectors.account_secrets import read_account_secret, store_account_secret
 from packages.database.account_connector_models import AccountConnector, AccountConnectorSecret
+from packages.personal_modules.google_completion_provider import (
+    CONTACTS_READONLY,
+    completion_supported_capability_ids,
+)
 from packages.personal_modules.google_provider import (
     CALENDAR,
     CALENDAR_FREEBUSY,
@@ -30,8 +34,9 @@ from packages.personal_modules.google_provider import (
 
 router = APIRouter(prefix="/api/personal-connectors", tags=["personal-connectors"])
 
-# The basic tier is deliberately read-only. Calendar event creation/update/delete is
-# available only after the user explicitly connects the full assistant tier.
+# The basic tier is deliberately read-only. Calendar event creation/update/delete and
+# contact resolution for assistant actions are available only after the user explicitly
+# connects the full assistant tier.
 GOOGLE_BASIC_SCOPES = [
     "openid",
     "email",
@@ -48,6 +53,7 @@ GOOGLE_ASSISTANT_SCOPES = [
     CALENDAR,
     CALENDAR_FREEBUSY,
     CALENDAR_LIST_READONLY,
+    CONTACTS_READONLY,
 ]
 
 
@@ -157,6 +163,10 @@ async def _upsert_google_connector(
 def _connector_json(row: AccountConnector) -> dict:
     scopes = connector_scopes(row)
     config = _configuration(row.configuration_json)
+    capabilities = sorted(
+        set(supported_capability_ids(scopes))
+        | set(completion_supported_capability_ids(scopes))
+    )
     return {
         "id": row.id,
         "provider": row.provider,
@@ -167,7 +177,7 @@ def _connector_json(row: AccountConnector) -> dict:
         "account": row.provider_account_id,
         "avatarUrl": config.get("avatar_url"),
         "scopes": sorted(scopes),
-        "capabilities": supported_capability_ids(scopes),
+        "capabilities": capabilities,
         "healthStatus": row.health_status,
         "lastHealthCheck": (
             row.last_health_check.isoformat() if row.last_health_check else None
