@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,11 +46,23 @@ def _json_object(raw: str) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _json_array(raw: str) -> list[Any]:
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return list(value) if isinstance(value, list) else []
+
+
 def _clean_goal(goal: str) -> str:
     clean = " ".join(str(goal or "").replace("\x00", " ").split())
     if not clean:
         raise ValueError("Personal task objective is required")
     return clean
+
+
+def _deadline_identity(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 async def find_personal_task_replay(
@@ -59,6 +72,7 @@ async def find_personal_task_replay(
     request_id: str,
     goal: str,
     budget: AgentBudget,
+    deadline_at: datetime | None = None,
 ) -> PersonalTaskSubmission | None:
     """Resolve a transport retry before a new conversation has to be created."""
 
@@ -77,6 +91,7 @@ async def find_personal_task_replay(
         existing.goal != clean_goal
         or int(stored_budget.get("max_steps", -1)) != budget.max_steps
         or int(stored_budget.get("max_mutations", -1)) != budget.max_mutations
+        or _deadline_identity(existing.deadline_at) != _deadline_identity(deadline_at)
         or (
             context.conversation_id is not None
             and existing.conversation_id != context.conversation_id
@@ -95,6 +110,7 @@ async def submit_personal_task(
     request_id: str,
     goal: str,
     budget: AgentBudget,
+    deadline_at: datetime | None = None,
     model: AgentPlannerModel | None = None,
 ) -> PersonalTaskSubmission:
     """Plan and persist one Personal task before it is acknowledged to the caller.
@@ -111,6 +127,7 @@ async def submit_personal_task(
         request_id=request_id,
         goal=goal,
         budget=budget,
+        deadline_at=deadline_at,
     )
     if replay is not None:
         return replay
@@ -149,6 +166,23 @@ async def submit_personal_task(
         budget=budget,
     )
     row = await create_run(db, context=context, plan=plan)
+    row.deadline_at = deadline_at
+    row.plan_version = 1
+    row.checkpoint_version = 0
+    # This is deliberately a reference to the live authority source, not a persisted
+    # permission snapshot. The worker re-resolves the principal's current authority
+    # before every capability, so revoked permissions cannot be resurrected by a task.
+    row.grants_reference_json = json.dumps(
+        {
+            "authority_mode": "live_reresolve",
+            "principal_id": str(context.principal_id or ""),
+            "scope_kind": context.scope_kind.value,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    row.verified_observations_json = "[]"
+    row.wait_predicate_json = "{}"
     await db.flush()
     return PersonalTaskSubmission(row=row, replayed=False)
 
@@ -164,17 +198,21 @@ async def personal_task_payload(
         return None
     steps = await list_steps(db, run_id=row.id)
     current = next((step for step in steps if step.step_id == row.current_step_id), None)
-    checkpoint_version = sum(int(step.attempt_count or 0) for step in steps)
     return {
         "task_id": row.id,
         "scope_kind": row.scope_kind,
         "conversation_id": row.conversation_id,
         "objective": row.goal,
         "status": row.status,
+        "plan_version": int(row.plan_version or 1),
+        "checkpoint_version": int(row.checkpoint_version or 0),
         "current_step_id": row.current_step_id,
-        "checkpoint_version": checkpoint_version,
         "cancellation_requested": bool(row.cancellation_requested),
         "approval_id": current.approval_id if current is not None else None,
+        "deadline_at": row.deadline_at.isoformat() if row.deadline_at else None,
+        "grants_reference": _json_object(row.grants_reference_json),
+        "verified_observations": _json_array(row.verified_observations_json),
+        "wait_predicate": _json_object(row.wait_predicate_json),
         "error_code": row.error_code,
         "error": row.error_message,
         "result": _json_object(row.result_json),
