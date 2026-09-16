@@ -3,15 +3,12 @@ from __future__ import annotations
 from packages.kernel.bootstrap import build_kernel_runtime
 from packages.kernel.providers import CapabilityProvider
 from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
-from packages.personal_modules.google_completion_provider import (
-    PersonalGoogleCompletionProvider,
-    completion_google_capabilities,
-)
+from packages.personal_modules.google_completion_provider import completion_google_capabilities
 from packages.personal_modules.google_provider import (
     PROVIDER_ID as PERSONAL_GOOGLE_PROVIDER_ID,
-    PersonalGoogleProvider,
     personal_google_capabilities,
 )
+from packages.personal_modules.reliable_google_provider import ReliablePersonalGoogleProvider
 from packages.workflow import (
     PROVIDER_ID as WORKFLOW_PROVIDER_ID,
     WorkflowProvider,
@@ -34,10 +31,10 @@ def build_personal_runtime(
 ) -> PersonalRuntime:
     """Build the canonical Personal runtime, with a narrow provider seam for fixtures.
 
-    Production callers use the Google completion provider, which extends the existing
-    PersonalGoogleProvider with contact lookup and saved-draft read-back. Deterministic
-    evaluation may inject a contract-compatible fake while still exercising the same
-    registry, policy, idempotency, audit and Runtime1 execution path.
+    Production callers use the reliable Google provider, which extends the existing
+    P3 completion provider with approval-bound Gmail send identity/reconciliation.
+    Deterministic evaluation may inject a contract-compatible fake while still
+    exercising the same registry, policy, idempotency, audit and Runtime1 path.
     """
     base = build_kernel_runtime()
     runtime = PersonalRuntime(
@@ -55,7 +52,7 @@ def build_personal_runtime(
         runtime.registry.register(spec)
     runtime.providers.register(
         PERSONAL_GOOGLE_PROVIDER_ID,
-        personal_google_provider or PersonalGoogleCompletionProvider(),
+        personal_google_provider or ReliablePersonalGoogleProvider(),
     )
     runtime.providers.register(WORKFLOW_PROVIDER_ID, WorkflowProvider())
     return runtime
