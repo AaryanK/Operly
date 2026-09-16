@@ -122,7 +122,7 @@ async def find_completed_request(
     """Return an exact completed replay without reserving execution.
 
     The Kernel calls this only *after* resolving the capability and re-evaluating the
-    caller's current scope/surface/permissions. That prevents a cached response from
+    caller's current scope/surface/permissions. That prevents a cached result from
     becoming a stale-authority bypass after a role or permission change.
     """
 
@@ -251,12 +251,20 @@ async def mark_request_uncertain(
     current = await db.get(KernelRequestClaim, claim.id)
     if current is None:
         return
+    try:
+        metadata = json.loads(current.response_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["uncertainty_reason"] = str(reason or "provider_outcome_uncertain")[:500]
     current.status = "uncertain"
     current.run_id = run_id
     current.response_json = json.dumps(
-        {"uncertainty_reason": str(reason or "provider_outcome_uncertain")[:500]},
+        metadata,
         separators=(",", ":"),
         sort_keys=True,
+        default=str,
     )
     await db.flush()
     await db.commit()
