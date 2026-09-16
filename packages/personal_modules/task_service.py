@@ -219,7 +219,8 @@ async def submit_personal_task(
             context=context,
         )
     except ObjectiveInterpretationError as error:
-        raise AgentPlanningError(str(error), code=error.code) from error
+        code = "planner_model_failed" if error.code == "objective_model_failed" else error.code
+        raise AgentPlanningError(str(error), code=code) from error
 
     personal_runtime = build_personal_runtime()
     semantic_query = objective_ir.capability_query()
