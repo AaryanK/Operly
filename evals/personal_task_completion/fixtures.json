@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "personal-freebusy-afternoon-v1",
+      "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
+      "scope": "personal",
+      "owner_id": "user-alpha",
+      "fixed_clock": "2026-09-15T12:00:00-05:00",
+      "expected_status": "success",
+      "expected_effects": [
+        {
+          "effect_type": "calendar.freebusy.read",
+          "count": 1,
+          "fields": {
+            "time_zone": "America/Chicago",
+            "calendar_id": "primary"
+          }
+        }
+      ],
+      "forbidden_effect_types": ["calendar.event.created", "gmail.message.sent"]
+    },
+    {
+      "id": "personal-professor-email-draft-v1",
+      "version": 1,
+      "source_case_id": "DZ-007",
+      "prompt": "Draft a reply to my professor explaining my absence.",
+      "scope": "personal",
+      "owner_id": "user-alpha",
+      "fixed_clock": "2026-09-15T12:00:00-05:00",
+      "expected_status": "success",
+      "expected_effects": [
+        {
+          "effect_type": "gmail.draft.created",
+          "count": 1,
+          "fields": {
+            "to": ["professor@example.test"]
+          }
+        }
+      ],
+      "forbidden_effect_types": ["gmail.message.sent"]
+    },
+    {
+      "id": "personal-invitation-draft-v1",
+      "version": 1,
+      "source_case_id": "DZ-002",
+      "prompt": "Draft an email to Alex asking whether Tuesday at 2 works. Do not send it.",
+      "scope": "personal",
+      "owner_id": "user-alpha",
+      "fixed_clock": "2026-09-15T12:00:00-05:00",
+      "expected_status": "success",
+      "expected_effects": [
+        {
+          "effect_type": "gmail.draft.created",
+          "count": 1,
+          "fields": {
+            "to": ["alex@example.test"],
+            "time_zone": "America/Chicago"
+          }
+        }
+      ],
+      "forbidden_effect_types": ["gmail.message.sent", "calendar.event.created"]
+    },
+    {
+      "id": "personal-wrong-account-access-v1",
+      "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
+      "scope": "personal",
+      "owner_id": "user-alpha",
+      "fixed_clock": "2026-09-15T12:00:00-05:00",
+      "expected_status": "refused",
+      "expected_effects": [],
+      "forbidden_effect_types": ["calendar.freebusy.read", "gmail.draft.created", "gmail.message.sent"]
+    },
+    {
+      "id": "personal-missing-connector-v1",
+      "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
+      "scope": "personal",
+      "owner_id": "user-alpha",
+      "fixed_clock": "2026-09-15T12:00:00-05:00",
+      "expected_status": "blocked",
+      "expected_blocker_code": "personal_google_connector_required",
+      "expected_effects": [],
+      "forbidden_effect_types": ["calendar.freebusy.read", "gmail.draft.created", "gmail.message.sent"]
+    }
+  ]
+}

@@ -17,6 +17,7 @@ on:
       - "packages/database/schema.py"
       - "packages/workspace_modules/tools/runtime.py"
       - "packages/workspace_modules/integrations/discord/bot.py"
+      - "evals/personal_task_completion/**"
       - "alembic/versions/0057_agent_runtime_foundation.py"
       - "alembic/versions/0058_agent_chat_history.py"
       - "tests/test_agent_runtime_foundation.py"
@@ -29,6 +30,7 @@ on:
       - "tests/test_agent_runtime_retrieval_health.py"
       - "tests/test_agent_runtime_resource_resolution.py"
       - "tests/test_agent_runtime_objective_eval.py"
+      - "tests/test_agent_runtime_outcome_evaluation.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
       - "tests/test_agent_runtime_store.py"
@@ -75,6 +77,7 @@ jobs:
             packages/agent_runtime/inference.py \
             packages/agent_runtime/interactive.py \
             packages/agent_runtime/objective.py \
+            packages/agent_runtime/outcome_evaluation.py \
             packages/agent_runtime/planning.py \
             packages/agent_runtime/runtime.py \
             packages/agent_runtime/store.py \
@@ -100,6 +103,7 @@ jobs:
             tests/test_agent_runtime_retrieval_health.py \
             tests/test_agent_runtime_resource_resolution.py \
             tests/test_agent_runtime_objective_eval.py \
+            tests/test_agent_runtime_outcome_evaluation.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
             tests/test_agent_runtime_store.py \
@@ -118,6 +122,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_retrieval_health -v
           python -m unittest tests.test_agent_runtime_resource_resolution -v
           python -m unittest tests.test_agent_runtime_objective_eval -v
+          python -m unittest tests.test_agent_runtime_outcome_evaluation -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
           python -m unittest tests.test_agent_runtime_store -v
