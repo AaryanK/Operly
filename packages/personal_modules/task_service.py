@@ -10,7 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.agent_runtime.contracts import AgentBudget
 from packages.agent_runtime.inference import OpenAICompatibleAgentModel
-from packages.agent_runtime.planning import AgentPlannerModel, AgentPlannerRequest, AgentPlanningError, GovernedAgentPlanner
+from packages.agent_runtime.objective import (
+    ObjectiveIR,
+    ObjectiveInterpretationError,
+    ObjectiveInterpreter,
+    ObjectiveInterpreterModel,
+)
+from packages.agent_runtime.planning import (
+    AgentPlannerModel,
+    AgentPlannerRequest,
+    AgentPlanningError,
+    GovernedAgentPlanner,
+)
 from packages.agent_runtime.store import create_run, get_run_for_context, list_steps
 from packages.database.agent_runtime_models import AgentRuntimeRun
 from packages.kernel.registry import CapabilityRegistry
@@ -24,14 +35,14 @@ class PersonalTaskConflict(RuntimeError):
 
 
 _INVITATION_PLANNER_RULE = (
-    " If the user's objective explicitly requires waiting for an invited recipient's "
-    "reply or confirmation before booking a calendar event, and the relevant supplied "
-    "capabilities are available, order the planned operations as Gmail send_email, then "
-    "Calendar freebusy for the intended slot, then Calendar create_event. Operly will "
-    "durably pause after the send and will execute the freebusy step only after a "
-    "verified reply from the intended correspondent. Never place create_event before "
-    "that post-reply freebusy recheck. Do not invent a polling, wait, or approval "
-    "capability; waiting and approval are server-owned runtime behavior."
+    " If the validated objective requires a future wait before booking an invited "
+    "recipient, and the relevant supplied capabilities are available, order the "
+    "planned operations as Gmail send_email, then Calendar freebusy for the intended "
+    "slot, then Calendar create_event. Operly will durably pause after the send and "
+    "will execute the freebusy step only after a verified reply from the intended "
+    "correspondent. Never place create_event before that post-reply freebusy recheck. "
+    "Do not invent a polling, wait, or approval capability; waiting and approval are "
+    "server-owned runtime behavior."
 )
 
 
@@ -40,6 +51,7 @@ class _PersonalTaskPlannerModel:
     """Add server-owned Personal lifecycle rules without changing model authority."""
 
     delegate: AgentPlannerModel
+    requires_future_wait: bool = False
 
     def bind_spend_context(self, *, context: ExecutionContext, run_id: str) -> None:
         bind = getattr(self.delegate, "bind_spend_context", None)
@@ -47,12 +59,15 @@ class _PersonalTaskPlannerModel:
             bind(context=context, run_id=run_id)
 
     async def plan(self, request: AgentPlannerRequest):
+        instructions = request.instructions
+        if self.requires_future_wait:
+            instructions += _INVITATION_PLANNER_RULE
         enriched = AgentPlannerRequest(
             goal=request.goal,
             capabilities=request.capabilities,
             max_steps=request.max_steps,
             max_mutations=request.max_mutations,
-            instructions=request.instructions + _INVITATION_PLANNER_RULE,
+            instructions=instructions,
         )
         return await self.delegate.plan(enriched)
 
@@ -97,6 +112,19 @@ def _clean_goal(goal: str) -> str:
 
 def _deadline_identity(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _objective_ir_payload(value: ObjectiveIR) -> dict[str, Any]:
+    return {
+        "objective": value.objective,
+        "kind": value.kind.value,
+        "operations": [operation.value for operation in value.operations],
+        "resource_hints": list(value.resource_hints),
+        "requires_external_state": bool(value.requires_external_state),
+        "requires_mutation": bool(value.requires_mutation),
+        "requires_future_wait": bool(value.requires_future_wait),
+        "complexity": value.complexity.value,
+    }
 
 
 async def find_personal_task_replay(
@@ -147,13 +175,18 @@ async def submit_personal_task(
     budget: AgentBudget,
     deadline_at: datetime | None = None,
     model: AgentPlannerModel | None = None,
+    objective_model: ObjectiveInterpreterModel | None = None,
 ) -> PersonalTaskSubmission:
-    """Plan and persist one Personal task before it is acknowledged to the caller.
+    """Interpret, plan and persist one Personal task before acknowledging it.
 
     The client request identity deterministically names the durable run inside the
     authenticated Personal principal. A transport replay therefore returns the same
     task instead of creating another logical workflow. A changed objective/budget under
     the same request ID fails closed.
+
+    Future-wait semantics are derived once by the validated ObjectiveInterpreter and
+    persisted with the durable run. Later lifecycle gates consume that server-owned IR
+    instead of guessing intent from a capability pattern or from retrieved mail text.
     """
 
     replay = await find_personal_task_replay(
@@ -170,11 +203,30 @@ async def submit_personal_task(
     clean_goal = _clean_goal(goal)
     run_id = stable_personal_task_id(context, request_id)
 
+    planner_delegate = model or OpenAICompatibleAgentModel()
+    interpreter_delegate = objective_model or planner_delegate
+    if not callable(getattr(interpreter_delegate, "interpret", None)):
+        raise AgentPlanningError(
+            "Durable Personal task model does not support objective interpretation",
+            code="objective_interpretation_unavailable",
+        )
+    bind = getattr(interpreter_delegate, "bind_spend_context", None)
+    if callable(bind):
+        bind(context=context, run_id=run_id)
+    try:
+        objective_ir = await ObjectiveInterpreter(model=interpreter_delegate).interpret(
+            message=clean_goal,
+            context=context,
+        )
+    except ObjectiveInterpretationError as error:
+        raise AgentPlanningError(str(error), code=error.code) from error
+
     personal_runtime = build_personal_runtime()
+    semantic_query = objective_ir.capability_query()
     available = await personal_runtime.available_capabilities(
         db,
         context=context,
-        query=clean_goal,
+        query=(f"{clean_goal} | {semantic_query}" if semantic_query else clean_goal),
         limit=25,
     )
     if not available:
@@ -190,7 +242,10 @@ async def submit_personal_task(
     for spec in available:
         planning_registry.register(spec)
 
-    planner_model = _PersonalTaskPlannerModel(model or OpenAICompatibleAgentModel())
+    planner_model = _PersonalTaskPlannerModel(
+        planner_delegate,
+        requires_future_wait=objective_ir.requires_future_wait,
+    )
     planner = GovernedAgentPlanner(
         registry=planning_registry,
         model=planner_model,
@@ -208,12 +263,14 @@ async def submit_personal_task(
     # This is deliberately a reference to the live authority source, not a persisted
     # permission snapshot. The worker re-resolves the principal's current authority
     # before every capability, so revoked permissions cannot be resurrected by a task.
+    # The validated objective IR is durable semantic provenance, not capability authority.
     row.grants_reference_json = json.dumps(
         {
             "authority_mode": "live_reresolve",
             "principal_id": str(context.principal_id or ""),
             "scope_kind": context.scope_kind.value,
             "submission_deadline_at": _deadline_identity(deadline_at),
+            "objective_ir": _objective_ir_payload(objective_ir),
         },
         separators=(",", ":"),
         sort_keys=True,
