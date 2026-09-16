@@ -87,7 +87,7 @@
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
       "expected_status": "blocked",
-      "expected_blocker_code": "personal_google_connector_required",
+      "expected_blocker_code": "no_authorized_capabilities",
       "expected_effects": [],
       "forbidden_effect_types": ["calendar.freebusy.read", "gmail.draft.created", "gmail.message.sent"]
     }
