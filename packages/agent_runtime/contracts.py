@@ -9,6 +9,7 @@ from typing import Any, Mapping
 class AgentRunStatus(StrEnum):
     COMPLETED = "completed"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_EVENT = "waiting_event"
     FAILED = "failed"
     CANCELLED = "cancelled"
     BUDGET_EXHAUSTED = "budget_exhausted"

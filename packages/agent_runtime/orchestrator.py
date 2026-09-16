@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,8 @@ from packages.security.execution_context import (
 from packages.security.surfaces import SurfaceKind
 
 from .contracts import (
+    AgentPlan,
+    AgentPlanStep,
     AgentRunResult,
     AgentRunStatus,
     AgentStepResult,
@@ -40,6 +42,19 @@ class AgentLeaseLost(RuntimeError):
     pass
 
 
+PostStepGate = Callable[
+    [
+        AsyncSession,
+        AgentRuntimeRun,
+        AgentPlan,
+        AgentPlanStep,
+        AgentStepResult,
+        tuple[AgentStepResult, ...],
+    ],
+    Awaitable[AgentRunResult | None],
+]
+
+
 @dataclass(frozen=True, slots=True)
 class DurableAgentOrchestrator:
     """Drive one durable run while Kernel remains the only capability executor.
@@ -51,12 +66,18 @@ class DurableAgentOrchestrator:
     Long capability execution is protected by a lease heartbeat that uses its own DB
     session. Sharing the worker's execution session with the heartbeat would be unsafe
     because SQLAlchemy AsyncSession is not designed for concurrent use.
+
+    ``post_step_gate`` is an optional server-owned lifecycle boundary. It may pause or
+    fail a durable run after a completed Kernel step, but it cannot execute a capability
+    itself. Personal invitation waiting uses this hook while Kernel remains the only
+    capability executor.
     """
 
     runtime: GovernedAgentRuntime
     heartbeat_session_factory: Callable[[], AsyncSession]
     lease_seconds: int = 300
     heartbeat_interval_seconds: float | None = None
+    post_step_gate: PostStepGate | None = None
 
     def __post_init__(self) -> None:
         if not 30 <= self.lease_seconds <= 900:
@@ -503,6 +524,21 @@ class DurableAgentOrchestrator:
                     error_code=step_result.error_code,
                     error=step_result.error,
                 )
+
+            if step_result.status is AgentStepStatus.COMPLETED and self.post_step_gate is not None:
+                current_row = await db.get(AgentRuntimeRun, run_id)
+                if current_row is None:
+                    raise AgentRunStateError("Agent run disappeared before lifecycle gate")
+                gated = await self.post_step_gate(
+                    db,
+                    current_row,
+                    plan,
+                    step,
+                    step_result,
+                    tuple(records),
+                )
+                if gated is not None:
+                    return gated
             await db.commit()
 
         summary = {"completed_steps": len(durable_steps)}
