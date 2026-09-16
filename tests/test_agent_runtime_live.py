@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from packages.agent_runtime.context import ContextItem, ContextKind
 from packages.agent_runtime.inference import (
@@ -13,6 +17,16 @@ from packages.agent_runtime.inference import (
 )
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeSettings
+from packages.agent_runtime.spend import (
+    AgentSpendMeter,
+    ModelPrice,
+    PriceSnapshot,
+    SpendLimits,
+    SpendScope,
+)
+from packages.database.agent_spend_models import AgentSpendReservationRecord
+from packages.database.db import Base
+from packages.database.schema import import_all_models
 from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import (
     ExecutionContext,
@@ -42,6 +56,50 @@ class FakeModel:
     async def decide(self, **kwargs):
         self.decide_calls.append(kwargs)
         return {"move": "finish", "message": "done"}
+
+
+class SpendBindingFakeModel(FakeModel):
+    def __init__(self, interpretation, response="answer") -> None:
+        super().__init__(interpretation, response=response)
+        self.events: list[str] = []
+        self.bound_context = None
+        self.bound_run_id = None
+
+    def bind_spend_context(self, *, context, run_id):
+        self.events.append("bind")
+        self.bound_context = context
+        self.bound_run_id = run_id
+
+    async def interpret(self, request):
+        self.events.append("interpret")
+        return await super().interpret(request)
+
+
+class StubResponse:
+    def __init__(self, status_code: int, payload: dict | None = None) -> None:
+        self.status_code = status_code
+        self.payload = payload or {}
+
+    def json(self):
+        return self.payload
+
+
+class StubAsyncClient:
+    def __init__(self, responses: list[StubResponse], calls: list[dict]) -> None:
+        self.responses = responses
+        self.calls = calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, path, *, headers, json):
+        self.calls.append({"path": path, "headers": dict(headers), "json": dict(json)})
+        if not self.responses:
+            raise AssertionError("unexpected extra provider dispatch")
+        return self.responses.pop(0)
 
 
 def personal_context(*, full_permissions: bool = False) -> ExecutionContext:
@@ -110,6 +168,33 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
         supplied = model.respond_calls[0]["context_items"]
         self.assertEqual(len(supplied), 1)
         self.assertIn("recursion", supplied[0]["text"].lower())
+
+    async def test_runtime_binds_trusted_spend_context_before_first_model_call(self):
+        model = SpendBindingFakeModel(
+            {
+                "objective": "Explain recursion",
+                "kind": "respond",
+                "operations": ["respond"],
+                "resource_hints": [],
+                "requires_external_state": False,
+                "requires_mutation": False,
+                "requires_future_wait": False,
+                "complexity": "simple",
+            }
+        )
+        agent = Runtime1Agent(model=model, settings=AgentRuntimeSettings(enabled=True))
+        context = personal_context()
+        result = await agent.run(
+            None,
+            context=context,
+            message="Explain recursion.",
+            kernel=None,
+            run_id="trusted-runtime-run",
+        )
+        self.assertEqual(result.dispatch, "respond")
+        self.assertEqual(model.events[:2], ["bind", "interpret"])
+        self.assertIs(model.bound_context, context)
+        self.assertEqual(model.bound_run_id, "trusted-runtime-run")
 
     def test_email_retrieval_query_surfaces_read_tools_before_email_mutations(self):
         registry = build_personal_runtime().registry
@@ -273,6 +358,175 @@ class Runtime1LiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"/agent/conversations"', assistant)
         self.assertIn('"/agent/chat"', assistant)
         self.assertIn('"/agent/chat-with-attachments"', assistant)
+
+
+class InferenceSpendIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import_all_models()
+        self.tempdir = tempfile.TemporaryDirectory()
+        database = Path(self.tempdir.name) / "inference-spend.db"
+        self.engine = create_async_engine(
+            f"sqlite+aiosqlite:///{database}",
+            connect_args={"timeout": 10},
+        )
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+        self.tempdir.cleanup()
+
+    def meter(self, *, task_limit: int = 100, max_calls: int = 12) -> AgentSpendMeter:
+        return AgentSpendMeter(
+            scope=SpendScope(
+                scope_kind="personal",
+                scope_id="user-1",
+                task_id="task-provider-integration",
+                project_id="conversation-1",
+            ),
+            run_id="runtime-provider-integration",
+            session_factory=self.sessions,
+            prices=PriceSnapshot.from_mapping(
+                {
+                    "version": "integration-fixture",
+                    "models": {
+                        "fixture:model": {
+                            "input_micros_per_million_tokens": 0,
+                            "output_micros_per_million_tokens": 1_000_000,
+                        }
+                    },
+                }
+            ),
+            limits=SpendLimits(
+                small_task_micros=task_limit,
+                approved_composite_task_micros=max(task_limit, 500),
+                scope_month_micros=10_000,
+                project_month_micros=5_000,
+                max_model_calls=max_calls,
+            ),
+        )
+
+    def model(self, meter: AgentSpendMeter, *, max_attempts: int = 2) -> OpenAICompatibleAgentModel:
+        return OpenAICompatibleAgentModel(
+            route=InferenceRoute(
+                provider="fixture",
+                base_url="https://fixture.test/v1",
+                api_key=None,
+                model_id="model",
+                max_output_tokens=20,
+                max_attempts=max_attempts,
+            ),
+            spend_meter=meter,
+        )
+
+    async def reservations(self):
+        async with self.sessions() as db:
+            return list(
+                (
+                    await db.scalars(
+                        select(AgentSpendReservationRecord).where(
+                            AgentSpendReservationRecord.run_id == "runtime-provider-integration"
+                        )
+                    )
+                ).all()
+            )
+
+    async def test_retry_reserves_each_dispatch_and_keeps_failed_attempt_uncertain(self):
+        meter = self.meter()
+        model = self.model(meter)
+        responses = [
+            StubResponse(429),
+            StubResponse(
+                200,
+                {
+                    "choices": [{"message": {"content": "done"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4},
+                },
+            ),
+        ]
+        calls: list[dict] = []
+        with patch(
+            "packages.agent_runtime.inference.httpx.AsyncClient",
+            side_effect=lambda *args, **kwargs: StubAsyncClient(responses, calls),
+        ), patch("packages.agent_runtime.inference.asyncio.sleep", new=AsyncMock()):
+            answer = await model.respond(objective="answer", user_message="hello")
+
+        self.assertEqual(answer, "done")
+        self.assertEqual(len(calls), 2)
+        rows = await self.reservations()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row.status for row in rows}, {"uncertain", "settled"})
+        self.assertEqual({row.run_id for row in rows}, {"runtime-provider-integration"})
+        task = next(row for row in await meter.budget_state() if row["kind"] == "task")
+        self.assertEqual(task["calls_used"], 2)
+        self.assertEqual(task["spent_micros"], 4)
+        self.assertEqual(task["reserved_micros"], 20)
+
+    async def test_success_without_provider_usage_remains_conservatively_reserved(self):
+        meter = self.meter()
+        model = self.model(meter, max_attempts=1)
+        responses = [StubResponse(200, {"choices": [{"message": {"content": "done"}}]})]
+        calls: list[dict] = []
+        with patch(
+            "packages.agent_runtime.inference.httpx.AsyncClient",
+            side_effect=lambda *args, **kwargs: StubAsyncClient(responses, calls),
+        ):
+            answer = await model.respond(objective="answer", user_message="hello")
+
+        self.assertEqual(answer, "done")
+        self.assertEqual(len(calls), 1)
+        rows = await self.reservations()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].status, "uncertain")
+        self.assertEqual(rows[0].uncertainty_reason, "provider_usage_missing")
+        task = next(row for row in await meter.budget_state() if row["kind"] == "task")
+        self.assertEqual(task["spent_micros"], 0)
+        self.assertEqual(task["reserved_micros"], 20)
+        self.assertEqual(task["calls_used"], 1)
+
+    async def test_budget_exhaustion_blocks_provider_before_network_dispatch(self):
+        meter = self.meter(task_limit=10)
+        model = self.model(meter, max_attempts=1)
+        responses = [
+            StubResponse(
+                200,
+                {
+                    "choices": [{"message": {"content": "should not run"}}],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 1},
+                },
+            )
+        ]
+        calls: list[dict] = []
+        with patch(
+            "packages.agent_runtime.inference.httpx.AsyncClient",
+            side_effect=lambda *args, **kwargs: StubAsyncClient(responses, calls),
+        ):
+            with self.assertRaises(AgentInferenceError) as caught:
+                await model.respond(objective="answer", user_message="hello")
+        self.assertEqual(caught.exception.code, "inference_spend_budget_exhausted")
+        self.assertEqual(calls, [])
+
+    def test_real_model_bind_uses_trusted_personal_scope_and_exact_run_id(self):
+        model = OpenAICompatibleAgentModel(
+            route=InferenceRoute(
+                provider="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                api_key=None,
+                model_id="fixture",
+            )
+        )
+        model.bind_spend_context(context=personal_context(), run_id="trusted-run-123")
+        self.assertIsNotNone(model.spend_meter)
+        self.assertEqual(model.spend_meter.run_id, "trusted-run-123")
+        self.assertEqual(model.spend_meter.scope.scope_kind, "personal")
+        self.assertEqual(model.spend_meter.scope.scope_id, "user-1")
+        self.assertEqual(model.spend_meter.scope.task_id, "trusted-run-123")
+
+    def test_model_price_uses_exact_integer_ceiling_math(self):
+        price = ModelPrice(333_333, 666_667)
+        self.assertEqual(price.cost_micros(prompt_tokens=3, completion_tokens=3), 4)
+        self.assertIsInstance(price.cost_micros(prompt_tokens=1, completion_tokens=1), int)
 
 
 if __name__ == "__main__":
