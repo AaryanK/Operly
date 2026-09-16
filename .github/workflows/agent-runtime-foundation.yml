@@ -32,6 +32,7 @@ on:
       - "tests/test_agent_runtime_planning.py"
       - "tests/test_agent_runtime_live.py"
       - "tests/test_agent_runtime_spend_stops.py"
+      - "tests/test_agent_paid_tool_spend.py"
       - "tests/test_agent_runtime_query_scorecard.py"
       - "tests/test_agent_runtime_retrieval_health.py"
       - "tests/test_agent_runtime_resource_resolution.py"
@@ -91,6 +92,7 @@ jobs:
             packages/agent_runtime/planning.py \
             packages/agent_runtime/runtime.py \
             packages/agent_runtime/spend.py \
+            packages/agent_runtime/tool_spend.py \
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
             packages/agent_runtime/telemetry.py \
@@ -116,6 +118,7 @@ jobs:
             tests/test_agent_runtime_planning.py \
             tests/test_agent_runtime_live.py \
             tests/test_agent_runtime_spend_stops.py \
+            tests/test_agent_paid_tool_spend.py \
             tests/test_agent_runtime_query_scorecard.py \
             tests/test_agent_runtime_retrieval_health.py \
             tests/test_agent_runtime_resource_resolution.py \
@@ -140,6 +143,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_planning -v
           python -m unittest tests.test_agent_runtime_live -v
           python -m unittest tests.test_agent_runtime_spend_stops -v
+          python -m unittest tests.test_agent_paid_tool_spend -v
           python -m unittest tests.test_agent_runtime_query_scorecard -v
           python -m unittest tests.test_agent_runtime_retrieval_health -v
           python -m unittest tests.test_agent_runtime_resource_resolution -v
