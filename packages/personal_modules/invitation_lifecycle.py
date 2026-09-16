@@ -104,6 +104,16 @@ def _as_utc(value: Any, *, time_zone: str | None = None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _established_after_epoch(predicate: dict[str, Any]) -> int | None:
+    established = _as_utc(predicate.get("established_at"))
+    if established is None:
+        return None
+    # Gmail supports epoch-second after: filters. Subtract one second so a reply that
+    # lands in the same provider second as the invitation is not lost while mail from
+    # before the durable invitation boundary remains excluded.
+    return max(0, int(established.timestamp()) - 1)
+
+
 def _invitation_steps(
     plan: AgentPlan,
     send_step: AgentPlanStep,
@@ -574,12 +584,15 @@ async def _terminalize_wait(
     await db.commit()
 
 
-async def _expire_wait(
+async def _fail_wait(
     db: AsyncSession,
     *,
     row: AgentRuntimeRun,
     lease_token: str,
     predicate: dict[str, Any],
+    state: str,
+    code: str,
+    message: str,
 ) -> None:
     locked = await db.scalar(
         select(AgentRuntimeRun).where(AgentRuntimeRun.id == row.id).with_for_update()
@@ -587,12 +600,12 @@ async def _expire_wait(
     if locked is None or locked.status != "waiting_event" or locked.lease_token != lease_token:
         raise AgentRunStateError("Invitation wait lease was lost")
     predicate = dict(predicate)
-    predicate["state"] = "expired"
+    predicate["state"] = state
     predicate["resolved_at"] = datetime.now(timezone.utc).isoformat()
     locked.wait_predicate_json = _json(predicate)
     locked.status = "failed"
-    locked.error_code = "reply_deadline_elapsed"
-    locked.error_message = "The invitation reply deadline elapsed before a verified acceptance"
+    locked.error_code = code
+    locked.error_message = message
     locked.lease_token = None
     locked.lease_until = None
     locked.finished_at = datetime.utcnow()
@@ -644,24 +657,57 @@ async def poll_invitation_wait(
         return False
     predicate = _object(row.wait_predicate_json)
     if predicate.get("kind") != WAIT_KIND or predicate.get("state") != "waiting":
-        await _defer_wait(db, row=row, lease_token=lease_token, seconds=defer_seconds)
+        await _fail_wait(
+            db,
+            row=row,
+            lease_token=lease_token,
+            predicate=predicate,
+            state="invalid",
+            code="invalid_wait_predicate",
+            message="Stored invitation wait predicate is invalid",
+        )
         return True
     if _deadline_expired(row.deadline_at):
-        await _expire_wait(db, row=row, lease_token=lease_token, predicate=predicate)
+        await _fail_wait(
+            db,
+            row=row,
+            lease_token=lease_token,
+            predicate=predicate,
+            state="expired",
+            code="reply_deadline_elapsed",
+            message="The invitation reply deadline elapsed before a verified acceptance",
+        )
         return True
 
-    try:
-        context = await _current_personal_context(db, row)
-    except ExecutionContextError:
-        await _expire_wait(db, row=row, lease_token=lease_token, predicate=predicate)
-        return True
-
+    after_epoch = _established_after_epoch(predicate)
     connector_id = str(predicate.get("connector_id") or "")
     expected_sender = str(predicate.get("expected_sender") or "").lower()
     thread_id = str(predicate.get("thread_id") or "")
     sent_message_id = str(predicate.get("sent_message_id") or "")
-    if not connector_id or not expected_sender or not thread_id:
-        await _expire_wait(db, row=row, lease_token=lease_token, predicate=predicate)
+    if after_epoch is None or not connector_id or not expected_sender or not thread_id:
+        await _fail_wait(
+            db,
+            row=row,
+            lease_token=lease_token,
+            predicate=predicate,
+            state="invalid",
+            code="invalid_wait_predicate",
+            message="Stored invitation wait identity is incomplete or invalid",
+        )
+        return True
+
+    try:
+        context = await _current_personal_context(db, row)
+    except ExecutionContextError as error:
+        await _fail_wait(
+            db,
+            row=row,
+            lease_token=lease_token,
+            predicate=predicate,
+            state="authority_unavailable",
+            code="authority_unavailable",
+            message=str(error),
+        )
         return True
 
     runtime = build_personal_runtime()
@@ -674,7 +720,7 @@ async def poll_invitation_wait(
                 capability_id=GMAIL_SEARCH,
                 arguments={
                     "connector_id": connector_id,
-                    "query": f"from:{expected_sender}",
+                    "query": f"from:{expected_sender} after:{after_epoch}",
                     "limit": 20,
                 },
                 conversation_id=row.conversation_id,
