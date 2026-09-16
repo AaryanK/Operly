@@ -28,7 +28,7 @@ class PersonalTaskSubmission:
     replayed: bool
 
 
-def _stable_task_id(context: ExecutionContext, request_id: str) -> str:
+def stable_personal_task_id(context: ExecutionContext, request_id: str) -> str:
     principal = str(context.principal_id or "").strip()
     stable_request = str(request_id or "").strip()
     if not principal or not 8 <= len(stable_request) <= 120:
@@ -43,6 +43,49 @@ def _json_object(raw: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _clean_goal(goal: str) -> str:
+    clean = " ".join(str(goal or "").replace("\x00", " ").split())
+    if not clean:
+        raise ValueError("Personal task objective is required")
+    return clean
+
+
+async def find_personal_task_replay(
+    db: AsyncSession,
+    *,
+    context: ExecutionContext,
+    request_id: str,
+    goal: str,
+    budget: AgentBudget,
+) -> PersonalTaskSubmission | None:
+    """Resolve a transport retry before a new conversation has to be created."""
+
+    if not context.is_personal or context.surface is not SurfaceKind.PERSONAL_PRIVATE:
+        raise PersonalTaskConflict("Durable Personal tasks require Personal-private authority")
+    clean_goal = _clean_goal(goal)
+    run_id = stable_personal_task_id(context, request_id)
+    existing = await db.get(AgentRuntimeRun, run_id)
+    if existing is None:
+        return None
+    scoped = await get_run_for_context(db, context=context, run_id=run_id)
+    if scoped is None:
+        raise PersonalTaskConflict("Personal task request identity belongs to another authority")
+    stored_budget = _json_object(existing.budget_json)
+    if (
+        existing.goal != clean_goal
+        or int(stored_budget.get("max_steps", -1)) != budget.max_steps
+        or int(stored_budget.get("max_mutations", -1)) != budget.max_mutations
+        or (
+            context.conversation_id is not None
+            and existing.conversation_id != context.conversation_id
+        )
+    ):
+        raise PersonalTaskConflict(
+            "This request ID was already used for a different Personal task submission"
+        )
+    return PersonalTaskSubmission(row=existing, replayed=True)
 
 
 async def submit_personal_task(
@@ -62,30 +105,18 @@ async def submit_personal_task(
     the same request ID fails closed.
     """
 
-    if not context.is_personal or context.surface is not SurfaceKind.PERSONAL_PRIVATE:
-        raise PersonalTaskConflict("Durable Personal tasks require Personal-private authority")
+    replay = await find_personal_task_replay(
+        db,
+        context=context,
+        request_id=request_id,
+        goal=goal,
+        budget=budget,
+    )
+    if replay is not None:
+        return replay
 
-    clean_goal = " ".join(str(goal or "").replace("\x00", " ").split())
-    if not clean_goal:
-        raise ValueError("Personal task objective is required")
-
-    run_id = _stable_task_id(context, request_id)
-    existing = await db.get(AgentRuntimeRun, run_id)
-    if existing is not None:
-        scoped = await get_run_for_context(db, context=context, run_id=run_id)
-        if scoped is None:
-            raise PersonalTaskConflict("Personal task request identity belongs to another authority")
-        stored_budget = _json_object(existing.budget_json)
-        if (
-            existing.goal != clean_goal
-            or int(stored_budget.get("max_steps", -1)) != budget.max_steps
-            or int(stored_budget.get("max_mutations", -1)) != budget.max_mutations
-            or existing.conversation_id != context.conversation_id
-        ):
-            raise PersonalTaskConflict(
-                "This request ID was already used for a different Personal task submission"
-            )
-        return PersonalTaskSubmission(row=existing, replayed=True)
+    clean_goal = _clean_goal(goal)
+    run_id = stable_personal_task_id(context, request_id)
 
     personal_runtime = build_personal_runtime()
     available = await personal_runtime.available_capabilities(
