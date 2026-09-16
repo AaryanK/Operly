@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,10 +27,11 @@ from packages.kernel.idempotency import (
     IdempotencyInProgress,
     complete_request,
     find_completed_request,
+    mark_request_uncertain,
     reserve_request,
 )
 from packages.kernel.policy import CapabilityPolicyEngine
-from packages.kernel.providers import ProviderRegistry
+from packages.kernel.providers import ProviderExecutionUncertain, ProviderRegistry
 from packages.kernel.registry import CapabilityRegistry, CapabilityRegistryError
 from packages.kernel.schema_validation import SchemaValidationError, validate_schema
 from packages.security.execution_context import ExecutionContext
@@ -45,12 +46,14 @@ class RuntimeExecutionError(RuntimeError):
         code: str,
         status_code: int = 400,
         approval_id: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.run_id = run_id
         self.code = code
         self.status_code = status_code
         self.approval_id = approval_id
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,10 +294,26 @@ class OperlyKernelRuntime:
                     return reservation.replay
                 idempotency_claim = reservation.claim
 
+            # Providers receive transport identity only through trusted context metadata.
+            # It is never model input and cannot expand authority. Side-effect providers
+            # can use it to persist/reconcile an external operation without asking the
+            # model or client to smuggle a request identity through capability arguments.
+            provider_context = replace(
+                context,
+                metadata={
+                    **dict(context.metadata or {}),
+                    "_kernel_execution": {
+                        "request_id": execution_request.request_id,
+                        "approval_id": execution_request.approval_id,
+                        "run_id": audit.run_id,
+                        "capability_id": capability.id,
+                    },
+                },
+            )
             provider = self.providers.get(capability.provider_id)
             execution_result = await provider.execute(
                 db,
-                context=context,
+                context=provider_context,
                 capability=capability,
                 arguments=planned_arguments,
                 minimum_context=minimum_context,
@@ -352,6 +371,38 @@ class OperlyKernelRuntime:
             await complete_request(db, claim=idempotency_claim, response=response)
             await db.commit()
             return response
+        except ProviderExecutionUncertain as error:
+            await db.rollback()
+            await mark_request_uncertain(
+                db,
+                claim=idempotency_claim,
+                run_id=audit.run_id,
+                reason=str(error),
+            )
+            audit.step(
+                13,
+                RuntimeStage.RESPOND.value,
+                "uncertain",
+                {"code": "execution_outcome_uncertain"},
+            )
+            await self._persist_failure(
+                db,
+                audit=audit,
+                context=context,
+                request=request,
+                capability=capability,
+                code="execution_outcome_uncertain",
+                error=str(error),
+                status="execution_uncertain",
+            )
+            raise RuntimeExecutionError(
+                str(error),
+                run_id=audit.run_id,
+                code="execution_outcome_uncertain",
+                status_code=409,
+                approval_id=execution_request.approval_id if execution_request else None,
+                details=error.details,
+            ) from error
         except RuntimeExecutionError as error:
             await db.rollback()
             if (
@@ -491,9 +542,10 @@ class OperlyKernelRuntime:
         capability: CapabilitySpec | None,
         code: str,
         error: str,
+        status: str = "failed",
     ) -> None:
         audit.event(
-            "runtime.failed",
+            "runtime.uncertain" if status == "execution_uncertain" else "runtime.failed",
             {"run_id": audit.run_id, "code": code, "capability_id": capability.id if capability else None},
         )
         await persist_audit(
@@ -502,7 +554,7 @@ class OperlyKernelRuntime:
             context=context,
             goal=str(request.goal or ""),
             capability_id=capability.id if capability else request.capability_id,
-            status="failed",
+            status=status,
             result=None,
             error=error[:2000],
         )
