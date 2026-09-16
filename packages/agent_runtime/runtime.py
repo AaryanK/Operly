@@ -73,6 +73,7 @@ class GovernedAgentRuntime:
         self.kernel = kernel
         self.settings = settings or AgentRuntimeSettings.from_environment()
         self.spend_meter = spend_meter
+        self.paid_tool_prices = paid_tool_prices
         self.paid_tool_spend = (
             PaidToolSpendController(meter=spend_meter, prices=paid_tool_prices)
             if spend_meter is not None
@@ -174,22 +175,33 @@ class GovernedAgentRuntime:
         )
 
         paid_reservation = None
+        paid_tool_spend = self.paid_tool_spend
         try:
             spec = self.kernel.registry.get(step.capability_id)
         except CapabilityRegistryError:
             spec = None
         if spec is not None and is_paid_capability(spec):
-            if self.paid_tool_spend is None:
-                return AgentStepResult(
-                    step_id=step.step_id,
-                    capability_id=step.capability_id,
-                    request_id=request_id,
-                    status=AgentStepStatus.FAILED,
-                    error_code="paid_tool_spend_context_required",
-                    error="Paid capability execution requires persistent spend controls",
-                )
+            if paid_tool_spend is None:
+                try:
+                    trusted_meter = AgentSpendMeter.from_execution_context(
+                        context,
+                        run_id=run_id,
+                    )
+                    paid_tool_spend = PaidToolSpendController(
+                        meter=trusted_meter,
+                        prices=self.paid_tool_prices,
+                    )
+                except SpendControlError as error:
+                    return AgentStepResult(
+                        step_id=step.step_id,
+                        capability_id=step.capability_id,
+                        request_id=request_id,
+                        status=AgentStepStatus.FAILED,
+                        error_code=error.code,
+                        error=str(error),
+                    )
             try:
-                paid_reservation = await self.paid_tool_spend.reserve(
+                paid_reservation = await paid_tool_spend.reserve(
                     capability_id=spec.id
                 )
             except SpendControlError as error:
@@ -209,10 +221,6 @@ class GovernedAgentRuntime:
                 request=request,
             )
         except RuntimeExecutionError as error:
-            # These outcomes are produced before Kernel's durable mutation reservation
-            # or are already classified as an exact-request conflict. Do not probe the
-            # idempotency table: approval_required in particular must remain a clean
-            # WAITING_APPROVAL transition and must work with lightweight/fake DBs.
             pre_reservation_codes = {
                 "approval_required",
                 "approval_invalid",
@@ -220,15 +228,15 @@ class GovernedAgentRuntime:
                 "invalid_request",
                 "forbidden",
             }
-            if paid_reservation is not None and self.paid_tool_spend is not None:
+            if paid_reservation is not None and paid_tool_spend is not None:
                 try:
                     if error.code in pre_reservation_codes:
-                        await self.paid_tool_spend.release(
+                        await paid_tool_spend.release(
                             paid_reservation.reservation_id,
                             reason=f"kernel_{error.code}_before_dispatch",
                         )
                     else:
-                        await self.paid_tool_spend.mark_uncertain(
+                        await paid_tool_spend.mark_uncertain(
                             paid_reservation.reservation_id,
                             reason=f"kernel_{error.code}_dispatch_uncertain",
                         )
@@ -269,9 +277,9 @@ class GovernedAgentRuntime:
                 kernel_error=error,
             )
             if replay is not None:
-                if paid_reservation is not None and self.paid_tool_spend is not None:
+                if paid_reservation is not None and paid_tool_spend is not None:
                     try:
-                        await self.paid_tool_spend.settle(paid_reservation.reservation_id)
+                        await paid_tool_spend.settle(paid_reservation.reservation_id)
                     except Exception as accounting_error:
                         return AgentStepResult(
                             step_id=step.step_id,
@@ -316,12 +324,12 @@ class GovernedAgentRuntime:
                 error=str(error),
             )
 
-        if paid_reservation is not None and self.paid_tool_spend is not None:
+        if paid_reservation is not None and paid_tool_spend is not None:
             try:
-                await self.paid_tool_spend.settle(paid_reservation.reservation_id)
+                await paid_tool_spend.settle(paid_reservation.reservation_id)
             except Exception as accounting_error:
                 try:
-                    await self.paid_tool_spend.mark_uncertain(
+                    await paid_tool_spend.mark_uncertain(
                         paid_reservation.reservation_id,
                         reason="provider_succeeded_accounting_failed",
                     )
