@@ -52,8 +52,8 @@ class OutcomeEvaluationFixtureTests(unittest.TestCase):
                 external_id="draft-real-1",
                 payload={
                     "to": ["alex@example.test"],
-                    "time_zone": "America/Chicago",
-                    "subject": "Meeting next week",
+                    "subject": "Tuesday at 2?",
+                    "text_body": "Hi Alex,\n\nWould Tuesday at 2:00 PM work for you?",
                 },
             )
         )
@@ -185,7 +185,7 @@ class OutcomeEvaluationFixtureTests(unittest.TestCase):
             ledger=EffectLedger(),
             claim=OutcomeClaim(
                 status="blocked",
-                blocker_code="personal_google_connector_required",
+                blocker_code=fixture.expected_blocker_code,
             ),
         )
         self.assertEqual(verdict.completion_status, "incomplete")

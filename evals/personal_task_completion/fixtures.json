@@ -36,7 +36,9 @@
           "effect_type": "gmail.draft.created",
           "count": 1,
           "fields": {
-            "to": ["professor@example.test"]
+            "to": ["professor@example.test"],
+            "subject": "Class absence",
+            "text_body": "Professor,\n\nI was unable to attend class because of a family emergency.\n\nThank you."
           }
         }
       ],
@@ -57,7 +59,8 @@
           "count": 1,
           "fields": {
             "to": ["alex@example.test"],
-            "time_zone": "America/Chicago"
+            "subject": "Tuesday at 2?",
+            "text_body": "Hi Alex,\n\nWould Tuesday at 2:00 PM work for you?"
           }
         }
       ],
@@ -84,7 +87,7 @@
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
       "expected_status": "blocked",
-      "expected_blocker_code": "personal_google_connector_required",
+      "expected_blocker_code": "no_authorized_capabilities",
       "expected_effects": [],
       "forbidden_effect_types": ["calendar.freebusy.read", "gmail.draft.created", "gmail.message.sent"]
     }
