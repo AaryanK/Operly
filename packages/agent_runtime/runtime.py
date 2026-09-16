@@ -5,6 +5,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.agent_runtime.spend import AgentSpendMeter, SpendControlError
+from packages.agent_runtime.tool_spend import (
+    PaidToolPriceSnapshot,
+    PaidToolSpendController,
+    is_paid_capability,
+)
 from packages.kernel.contracts import CapabilityRisk, RuntimeRequest, RuntimeResponse
 from packages.kernel.idempotency import (
     IdempotencyConflict,
@@ -61,9 +67,17 @@ class GovernedAgentRuntime:
         *,
         kernel: OperlyKernelRuntime,
         settings: AgentRuntimeSettings | None = None,
+        spend_meter: AgentSpendMeter | None = None,
+        paid_tool_prices: PaidToolPriceSnapshot | None = None,
     ) -> None:
         self.kernel = kernel
         self.settings = settings or AgentRuntimeSettings.from_environment()
+        self.spend_meter = spend_meter
+        self.paid_tool_spend = (
+            PaidToolSpendController(meter=spend_meter, prices=paid_tool_prices)
+            if spend_meter is not None
+            else None
+        )
 
     def require_enabled(self) -> None:
         if not self.settings.enabled:
@@ -144,6 +158,8 @@ class GovernedAgentRuntime:
         The deterministic request ID is reused for approval resume and crash recovery.
         Kernel remains responsible for canonical capability resolution, authorization,
         approval validation, durable mutation reservation, provider execution and audit.
+        Paid-tool cost reservation is an additional server-owned budget boundary and
+        does not grant capability authority.
         """
 
         self.require_enabled()
@@ -156,6 +172,36 @@ class GovernedAgentRuntime:
             request_id=request_id,
             approval_id=step.approval_id,
         )
+
+        paid_reservation = None
+        try:
+            spec = self.kernel.registry.get(step.capability_id)
+        except CapabilityRegistryError:
+            spec = None
+        if spec is not None and is_paid_capability(spec):
+            if self.paid_tool_spend is None:
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=AgentStepStatus.FAILED,
+                    error_code="paid_tool_spend_context_required",
+                    error="Paid capability execution requires persistent spend controls",
+                )
+            try:
+                paid_reservation = await self.paid_tool_spend.reserve(
+                    capability_id=spec.id
+                )
+            except SpendControlError as error:
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=AgentStepStatus.FAILED,
+                    error_code=error.code,
+                    error=str(error),
+                )
+
         try:
             response = await self.kernel.execute(
                 db,
@@ -174,6 +220,30 @@ class GovernedAgentRuntime:
                 "invalid_request",
                 "forbidden",
             }
+            if paid_reservation is not None and self.paid_tool_spend is not None:
+                try:
+                    if error.code in pre_reservation_codes:
+                        await self.paid_tool_spend.release(
+                            paid_reservation.reservation_id,
+                            reason=f"kernel_{error.code}_before_dispatch",
+                        )
+                    else:
+                        await self.paid_tool_spend.mark_uncertain(
+                            paid_reservation.reservation_id,
+                            reason=f"kernel_{error.code}_dispatch_uncertain",
+                        )
+                except Exception as accounting_error:
+                    return AgentStepResult(
+                        step_id=step.step_id,
+                        capability_id=step.capability_id,
+                        request_id=request_id,
+                        status=AgentStepStatus.FAILED,
+                        kernel_run_id=error.run_id,
+                        approval_id=error.approval_id,
+                        error_code="paid_tool_spend_accounting_failed",
+                        error=f"Paid-tool accounting could not be reconciled: {accounting_error}",
+                    )
+
             if error.code in pre_reservation_codes:
                 status = (
                     AgentStepStatus.WAITING_APPROVAL
@@ -199,6 +269,20 @@ class GovernedAgentRuntime:
                 kernel_error=error,
             )
             if replay is not None:
+                if paid_reservation is not None and self.paid_tool_spend is not None:
+                    try:
+                        await self.paid_tool_spend.settle(paid_reservation.reservation_id)
+                    except Exception as accounting_error:
+                        return AgentStepResult(
+                            step_id=step.step_id,
+                            capability_id=step.capability_id,
+                            request_id=request_id,
+                            status=AgentStepStatus.FAILED,
+                            kernel_run_id=replay.run_id,
+                            result=dict(replay.result or {}),
+                            error_code="paid_tool_spend_accounting_failed",
+                            error=f"Paid-tool accounting could not be settled: {accounting_error}",
+                        )
                 return AgentStepResult(
                     step_id=step.step_id,
                     capability_id=step.capability_id,
@@ -231,6 +315,28 @@ class GovernedAgentRuntime:
                 error_code=error.code,
                 error=str(error),
             )
+
+        if paid_reservation is not None and self.paid_tool_spend is not None:
+            try:
+                await self.paid_tool_spend.settle(paid_reservation.reservation_id)
+            except Exception as accounting_error:
+                try:
+                    await self.paid_tool_spend.mark_uncertain(
+                        paid_reservation.reservation_id,
+                        reason="provider_succeeded_accounting_failed",
+                    )
+                except Exception:
+                    pass
+                return AgentStepResult(
+                    step_id=step.step_id,
+                    capability_id=step.capability_id,
+                    request_id=request_id,
+                    status=AgentStepStatus.FAILED,
+                    kernel_run_id=response.run_id,
+                    result=dict(response.result or {}),
+                    error_code="paid_tool_spend_accounting_failed",
+                    error=f"Paid-tool accounting could not be settled safely: {accounting_error}",
+                )
 
         return AgentStepResult(
             step_id=step.step_id,
