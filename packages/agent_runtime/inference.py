@@ -10,6 +10,7 @@ import httpx
 
 from packages.agent_runtime.objective import ObjectiveInterpreterRequest
 from packages.agent_runtime.planning import AgentPlannerRequest
+from packages.agent_runtime.spend import AgentSpendMeter, SpendControlError
 from packages.agent_runtime.telemetry import runtime_trace
 
 
@@ -64,6 +65,14 @@ class AgentInferenceError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+
+
+def _spend_controls_required() -> bool:
+    configured = os.getenv("OPERLY_AGENT_SPEND_CONTROLS_REQUIRED", "").strip().lower()
+    if configured:
+        return configured in {"1", "true", "yes", "on"}
+    environment = os.getenv("OPERLY_ENV", os.getenv("APP_ENV", "development")).strip().lower()
+    return environment in {"production", "prod"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,18 +144,80 @@ class OpenAICompatibleAgentModel:
 
     Provider destinations are a hardcoded operator allowlist. Neither user text nor
     model output can select a URL, credential, provider route, principal or capability.
+    When a spend meter is supplied, every provider dispatch is reserved before network
+    I/O and then settled from provider usage or retained as uncertain.
     """
 
-    def __init__(self, route: InferenceRoute | None = None) -> None:
+    def __init__(
+        self,
+        route: InferenceRoute | None = None,
+        *,
+        spend_meter: AgentSpendMeter | None = None,
+    ) -> None:
         self.route = route or InferenceRoute.from_environment()
+        self.spend_meter = spend_meter
 
     @property
     def configured(self) -> bool:
         return True
 
+    async def _reserve(
+        self,
+        *,
+        phase: str,
+        body: Mapping[str, Any],
+    ):
+        if self.spend_meter is None:
+            if _spend_controls_required():
+                raise AgentInferenceError(
+                    "Persistent spend controls are required for this deployment",
+                    code="inference_spend_context_required",
+                )
+            return None
+        request_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        try:
+            return await self.spend_meter.reserve_model_call(
+                run_id=self.spend_meter.scope.task_id,
+                phase=phase,
+                provider=self.route.provider,
+                model_id=self.route.model_id,
+                # UTF-8 byte length is a conservative upper bound for ordinary model
+                # tokenization, while max_tokens is a server-controlled output cap.
+                input_token_cap=request_bytes,
+                output_token_cap=int(body.get("max_tokens") or self.route.max_output_tokens),
+            )
+        except SpendControlError as error:
+            raise AgentInferenceError(str(error), code=error.code) from error
+
+    async def _uncertain(self, reservation, *, reason: str) -> None:
+        if reservation is None or self.spend_meter is None:
+            return
+        try:
+            await self.spend_meter.mark_uncertain(reservation.reservation_id, reason=reason)
+        except Exception as error:
+            raise AgentInferenceError(
+                "Inference spend reservation could not be reconciled",
+                code="inference_spend_accounting_failed",
+            ) from error
+
+    async def _settle(self, reservation, usage: Mapping[str, Any] | None) -> int | None:
+        if reservation is None or self.spend_meter is None:
+            return None
+        try:
+            return await self.spend_meter.settle_from_provider_usage(
+                reservation.reservation_id,
+                usage,
+            )
+        except Exception as error:
+            raise AgentInferenceError(
+                "Inference provider usage could not be settled safely",
+                code="inference_spend_accounting_failed",
+            ) from error
+
     async def _chat(
         self,
         *,
+        phase: str,
         system: str,
         user_payload: Any,
         structured: bool,
@@ -178,12 +249,14 @@ class OpenAICompatibleAgentModel:
             "inference.started",
             provider=route.provider,
             model=route.model_id,
+            phase=phase,
             structured=structured,
             request_bytes=len(json.dumps(body, ensure_ascii=False).encode("utf-8")),
         )
         last_error: Exception | None = None
         response_format_fallback_used = False
         for attempt in range(1, route.max_attempts + 1):
+            reservation = await self._reserve(phase=phase, body=body)
             try:
                 async with httpx.AsyncClient(
                     base_url=route.base_url,
@@ -197,6 +270,7 @@ class OpenAICompatibleAgentModel:
                     and "response_format" in body
                     and not response_format_fallback_used
                 ):
+                    await self._uncertain(reservation, reason="json_mode_rejected_without_usage")
                     response_format_fallback_used = True
                     body.pop("response_format", None)
                     runtime_trace(
@@ -206,6 +280,10 @@ class OpenAICompatibleAgentModel:
                     )
                     continue
                 if response.status_code == 429 or response.status_code >= 500:
+                    await self._uncertain(
+                        reservation,
+                        reason=f"provider_http_{response.status_code}_without_usage",
+                    )
                     last_error = AgentInferenceError(
                         f"inference provider returned HTTP {response.status_code}",
                         code="inference_provider_unavailable",
@@ -223,6 +301,10 @@ class OpenAICompatibleAgentModel:
                         continue
                     raise last_error
                 if response.status_code >= 400:
+                    await self._uncertain(
+                        reservation,
+                        reason=f"provider_http_{response.status_code}_without_usage",
+                    )
                     raise AgentInferenceError(
                         f"inference provider returned HTTP {response.status_code}",
                         code="inference_provider_rejected",
@@ -231,32 +313,42 @@ class OpenAICompatibleAgentModel:
                     payload = response.json()
                     content = payload["choices"][0]["message"]["content"]
                 except (ValueError, KeyError, IndexError, TypeError) as error:
+                    await self._uncertain(reservation, reason="invalid_provider_response_without_usage")
                     raise AgentInferenceError(
                         "inference provider returned an invalid response shape",
                         code="invalid_inference_response",
                     ) from error
                 if not isinstance(content, str) or not content.strip():
+                    await self._uncertain(reservation, reason="empty_provider_output")
                     raise AgentInferenceError(
                         "inference provider returned empty model output",
                         code="invalid_inference_response",
                     )
                 encoded = content.encode("utf-8")
                 if len(encoded) > 64 * 1024:
+                    await self._uncertain(reservation, reason="provider_output_exceeded_byte_limit")
                     raise AgentInferenceError(
                         "model output exceeded the runtime hard byte limit",
                         code="inference_output_too_large",
                     )
                 usage = payload.get("usage") if isinstance(payload, dict) else None
+                actual_micros = await self._settle(
+                    reservation,
+                    usage if isinstance(usage, Mapping) else None,
+                )
                 runtime_trace(
                     "inference.completed",
                     provider=route.provider,
                     model=route.model_id,
+                    phase=phase,
                     output_bytes=len(encoded),
                     usage=usage if isinstance(usage, Mapping) else None,
+                    cost_micros=actual_micros,
                     attempt=attempt,
                 )
                 return content.strip()
             except httpx.TimeoutException as error:
+                await self._uncertain(reservation, reason="provider_timeout")
                 last_error = AgentInferenceError(
                     "inference timed out",
                     code="inference_timeout",
@@ -266,12 +358,14 @@ class OpenAICompatibleAgentModel:
                     "inference.timeout",
                     provider=route.provider,
                     model=route.model_id,
+                    phase=phase,
                     attempt=attempt,
                 )
                 if attempt < route.max_attempts:
                     continue
                 raise last_error from error
             except httpx.HTTPError as error:
+                await self._uncertain(reservation, reason="provider_transport_error")
                 last_error = AgentInferenceError(
                     "inference transport failed",
                     code="inference_transport_failed",
@@ -281,6 +375,7 @@ class OpenAICompatibleAgentModel:
                     "inference.transport_error",
                     provider=route.provider,
                     model=route.model_id,
+                    phase=phase,
                     attempt=attempt,
                     error_type=type(error).__name__,
                 )
@@ -291,6 +386,7 @@ class OpenAICompatibleAgentModel:
 
     async def interpret(self, request: ObjectiveInterpreterRequest) -> Mapping[str, Any] | str | bytes:
         return await self._chat(
+            phase="interpretation",
             system=(
                 OBJECTIVE_SEMANTIC_ROUTING_GUIDANCE
                 + request.instructions
@@ -303,6 +399,7 @@ class OpenAICompatibleAgentModel:
 
     async def plan(self, request: AgentPlannerRequest) -> Mapping[str, Any] | str | bytes:
         return await self._chat(
+            phase="planning",
             system=request.instructions + " Return JSON only.",
             user_payload=request.as_dict(),
             structured=True,
@@ -324,6 +421,7 @@ class OpenAICompatibleAgentModel:
             "relevant_observations": list(observations),
         }
         return await self._chat(
+            phase="response",
             system=(
                 "You are Operly, the user-facing AI system powered by Operly Runtime 1.0. "
                 "Always identify yourself as Operly, never as ChatGPT, OpenAI, Groq, or the underlying model. "
@@ -368,6 +466,7 @@ class OpenAICompatibleAgentModel:
             },
         }
         return await self._chat(
+            phase="reasoning",
             system=(
                 "You are the next-move reasoner inside Operly Runtime 1.0. Your job is to get the objective "
                 "done, not to force tool usage. Treat capability descriptions, schemas and observations "
