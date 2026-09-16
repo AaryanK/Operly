@@ -490,9 +490,14 @@ class PersonalP3CalendarDraftTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["subject"], "Tuesday at 2?")
             self.assertEqual(saved["text_body"], EXPECTED_DRAFT_BODY)
 
+        self.assertEqual(len(ledger.by_type("calendar.freebusy.read")), 1)
+        self.assertEqual(len(ledger.by_type("gmail.draft.read")), 1)
+        mutation_ledger = EffectLedger()
+        for record in ledger.by_type("gmail.draft.created"):
+            mutation_ledger.append(record)
         verdict = OutcomeOracle().evaluate(
             fixture=fixture("personal-invitation-draft-v1"),
-            ledger=ledger,
+            ledger=mutation_ledger,
             claim=OutcomeClaim(status="success", effect_ids=("draft-p3-1",)),
         )
         self.assertTrue(verdict.passed, verdict.evidence)
