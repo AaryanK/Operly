@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -10,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
-from packages.agent_runtime.worker import PersonalAgentTaskWorker
+from packages.agent_runtime.worker import PersonalAgentTaskWorker, _requires_future_wait
 from packages.database.agent_runtime_models import AgentRuntimeRun
 from packages.database.db import Base
 from packages.database.models import AppUser, AuthSession
@@ -51,8 +52,35 @@ class FakePlanningRuntime:
 
 
 class FakePlannerModel:
-    def __init__(self) -> None:
+    def __init__(self, *, requires_future_wait: bool = False) -> None:
         self.calls = 0
+        self.interpret_calls = 0
+        self.requires_future_wait = requires_future_wait
+
+    async def interpret(self, request):
+        del request
+        self.interpret_calls += 1
+        if self.requires_future_wait:
+            return {
+                "objective": "Wait for a recipient confirmation before creating a calendar event",
+                "kind": "wait",
+                "operations": ["retrieve", "act", "wait"],
+                "resource_hints": ["mail message", "availability", "calendar event"],
+                "requires_external_state": True,
+                "requires_mutation": True,
+                "requires_future_wait": True,
+                "complexity": "compound",
+            }
+        return {
+            "objective": "List calendar availability next week",
+            "kind": "retrieve",
+            "operations": ["retrieve"],
+            "resource_hints": ["availability"],
+            "requires_external_state": True,
+            "requires_mutation": False,
+            "requires_future_wait": False,
+            "complexity": "simple",
+        }
 
     async def plan(self, request):
         del request
@@ -151,7 +179,10 @@ class PersonalDurableTaskTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(first_payload["replayed"])
                     self.assertTrue(first_payload["conversation_id"])
                     self.assertEqual(len(first_payload["steps"]), 1)
+                    self.assertEqual(model.interpret_calls, 1)
                     self.assertEqual(model.calls, 1)
+                    objective_ir = first_payload["grants_reference"]["objective_ir"]
+                    self.assertFalse(objective_ir["requires_future_wait"])
 
                     # Simulate a lost first response: retry only with the same request ID,
                     # without knowing the conversation ID returned above.
@@ -170,6 +201,7 @@ class PersonalDurableTaskTests(unittest.IsolatedAsyncioTestCase):
                         replay_payload["conversation_id"],
                         first_payload["conversation_id"],
                     )
+                    self.assertEqual(model.interpret_calls, 1)
                     self.assertEqual(model.calls, 1)
 
             async with self.sessions() as db:
@@ -178,6 +210,50 @@ class PersonalDurableTaskTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(persisted.status, "queued")
                 self.assertEqual(persisted.owner_user_id, "user-alpha")
                 self.assertEqual(persisted.conversation_id, first_payload["conversation_id"])
+                grants = json.loads(persisted.grants_reference_json)
+                self.assertFalse(grants["objective_ir"]["requires_future_wait"])
+        finally:
+            if previous_enabled is None:
+                os.environ.pop("OPERLY_AGENT_RUNTIME_ENABLED", None)
+            else:
+                os.environ["OPERLY_AGENT_RUNTIME_ENABLED"] = previous_enabled
+
+    async def test_future_wait_semantic_is_persisted_and_controls_lifecycle_gate(self):
+        model = FakePlannerModel(requires_future_wait=True)
+        transport = ASGITransport(app=self.app)
+        previous_enabled = os.environ.get("OPERLY_AGENT_RUNTIME_ENABLED")
+        os.environ["OPERLY_AGENT_RUNTIME_ENABLED"] = "1"
+        try:
+            with patch(
+                "packages.personal_modules.task_service.build_personal_runtime",
+                return_value=FakePlanningRuntime(),
+            ), patch(
+                "packages.personal_modules.task_service.OpenAICompatibleAgentModel",
+                return_value=model,
+            ):
+                async with AsyncClient(transport=transport, base_url="http://test") as client:
+                    created = await client.post(
+                        "/api/personal-tools/client/tasks",
+                        json={
+                            "message": "Wait for Alex to confirm before booking the meeting.",
+                            "request_id": "durable-wait-001",
+                        },
+                    )
+                    self.assertEqual(created.status_code, 202, created.text)
+                    payload = created.json()
+                    self.assertTrue(payload["grants_reference"]["objective_ir"]["requires_future_wait"])
+
+            async with self.sessions() as db:
+                row = await db.get(AgentRuntimeRun, payload["task_id"])
+                self.assertTrue(_requires_future_wait(row))
+                row.grants_reference_json = json.dumps(
+                    {
+                        "authority_mode": "live_reresolve",
+                        "objective_ir": {"requires_future_wait": False},
+                    }
+                )
+                await db.commit()
+                self.assertFalse(_requires_future_wait(row))
         finally:
             if previous_enabled is None:
                 os.environ.pop("OPERLY_AGENT_RUNTIME_ENABLED", None)
