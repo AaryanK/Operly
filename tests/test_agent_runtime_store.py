@@ -105,6 +105,11 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.principal_id, "user:user-1")
         self.assertEqual(row.source_channel, "web")
         self.assertEqual(row.source_surface, SurfaceKind.WORKSPACE_PRIVATE.value)
+        self.assertEqual(row.plan_version, 1)
+        self.assertEqual(row.checkpoint_version, 0)
+        self.assertEqual(row.grants_reference_json, "{}")
+        self.assertEqual(row.verified_observations_json, "[]")
+        self.assertEqual(row.wait_predicate_json, "{}")
         self.assertEqual([item.step_id for item in steps], ["read", "write"])
         self.assertEqual(len({item.request_id for item in steps}), 2)
         self.assertTrue(all(len(item.request_id) <= 160 for item in steps))
@@ -267,8 +272,8 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(AgentRunStateError):
                 await transition_run(db, run_id="state-run", to_status="running")
 
-    def test_schema_head_advances_with_runtime_chat_history(self):
-        self.assertEqual(ALEMBIC_HEAD, "0059_agent_spend_controls")
+    def test_schema_head_advances_with_durable_task_checkpoints(self):
+        self.assertEqual(ALEMBIC_HEAD, "0060_durable_agent_task_checkpoints")
 
 
 if __name__ == "__main__":
