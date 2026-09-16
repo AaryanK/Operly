@@ -5,10 +5,10 @@ import os
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from packages.database.agent_runtime_models import AgentRuntimeRun
+from packages.database.agent_runtime_models import AgentRuntimeRun, AgentRuntimeStep
 from packages.database.db import SessionFactory
 from packages.personal_modules.runtime import build_personal_runtime
 
@@ -69,6 +69,19 @@ class PersonalAgentTaskWorker:
             lease_seconds=self.lease_seconds,
         )
 
+    async def _persist_checkpoint_version(self, db: AsyncSession, *, run_id: str) -> None:
+        attempts = await db.scalar(
+            select(func.coalesce(func.sum(AgentRuntimeStep.attempt_count), 0)).where(
+                AgentRuntimeStep.agent_run_id == run_id
+            )
+        )
+        row = await db.get(AgentRuntimeRun, run_id)
+        if row is None:
+            return
+        row.checkpoint_version = max(int(row.checkpoint_version or 0), int(attempts or 0))
+        row.updated_at = datetime.utcnow()
+        await db.commit()
+
     async def _process(self, run_id: str) -> bool:
         lease_token = f"{self.worker_id}:{uuid4()}"[:80]
         try:
@@ -78,6 +91,8 @@ class PersonalAgentTaskWorker:
                     run_id=run_id,
                     lease_token=lease_token,
                 )
+                if result is not None:
+                    await self._persist_checkpoint_version(db, run_id=run_id)
                 return result is not None
         except (AgentRuntimeDisabled, AgentLeaseLost):
             return False
