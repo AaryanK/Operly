@@ -57,6 +57,27 @@ class ProviderRegistry:
             return True
         return bool(await checker(db, context=context, capability=capability))
 
+    async def unavailability_reason(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        capability: CapabilitySpec,
+    ) -> str | None:
+        """Return a stable, non-secret blocker code when a provider can explain absence.
+
+        Availability remains fail-closed: this method never makes a capability visible.
+        It only lets Runtime1 distinguish an unavailable dependency from missing
+        authority without inspecting provider credentials or raw provider state.
+        """
+        provider = self.get(capability.provider_id)
+        resolver = getattr(provider, "unavailability_reason", None)
+        if resolver is None:
+            return None
+        value = await resolver(db, context=context, capability=capability)
+        clean = str(value or "").strip().lower()
+        return clean or None
+
 
 Handler = Callable[
     [AsyncSession, ExecutionContext, dict[str, Any], dict[str, Any]],
