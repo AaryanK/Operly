@@ -17,8 +17,13 @@ from packages.personal_modules.invitation_lifecycle import (
 )
 from packages.personal_modules.runtime import build_personal_runtime
 
+from .contracts import AgentRunResult, AgentRunStatus
 from .orchestrator import AgentLeaseLost, DurableAgentOrchestrator
 from .runtime import AgentRuntimeDisabled, GovernedAgentRuntime
+from .store import transition_run
+
+
+_CALENDAR_CREATE = "google.calendar.create_event"
 
 
 def _requires_future_wait(row: AgentRuntimeRun) -> bool:
@@ -41,7 +46,7 @@ def _requires_future_wait(row: AgentRuntimeRun) -> bool:
 async def _personal_post_step_gate(db, row, plan, step, step_result, records):
     if not _requires_future_wait(row):
         return None
-    return await invitation_post_step_gate(
+    gated = await invitation_post_step_gate(
         db,
         row,
         plan,
@@ -49,6 +54,65 @@ async def _personal_post_step_gate(db, row, plan, step, step_result, records):
         step_result,
         records,
     )
+    if gated is not None:
+        return gated
+
+    # The invitation lifecycle module marks the final checkpoint only after the
+    # post-reply free/busy recheck. Production Calendar create returns COMPLETED only
+    # after independent provider readback. Terminalize here so the verified external
+    # outcome/link are not replaced by the generic completed-step counter.
+    if step.capability_id == _CALENDAR_CREATE:
+        try:
+            predicate = json.loads(row.wait_predicate_json or "{}")
+        except (TypeError, ValueError):
+            predicate = {}
+        if isinstance(predicate, dict) and predicate.get("state") == "calendar_created":
+            result = dict(step_result.result or {})
+            event_id = str(result.get("event_id") or "").strip()
+            event_link = str(result.get("event_link") or "").strip()
+            if result.get("verification_status") != "read_back" or not event_id or not event_link:
+                message = "Created Calendar event was not independently verified"
+                await transition_run(
+                    db,
+                    run_id=row.id,
+                    to_status="failed",
+                    current_step_id=step.step_id,
+                    error_code="calendar_verification_failed",
+                    error_message=message,
+                )
+                await db.commit()
+                return AgentRunResult(
+                    run_id=row.id,
+                    status=AgentRunStatus.FAILED,
+                    steps=records,
+                    next_step_id=step.step_id,
+                    error_code="calendar_verification_failed",
+                    error=message,
+                )
+
+            outcome = {
+                "invitation_outcome": "accepted",
+                "calendar_id": result.get("calendar_id"),
+                "calendar_event_id": event_id,
+                "calendar_event_link": event_link,
+                "verification_status": "read_back",
+            }
+            completed = await transition_run(
+                db,
+                run_id=row.id,
+                to_status="completed",
+                current_step_id=step.step_id,
+                result=outcome,
+            )
+            completed.wait_predicate_json = row.wait_predicate_json
+            completed.checkpoint_version = int(row.checkpoint_version or 0)
+            await db.commit()
+            return AgentRunResult(
+                run_id=row.id,
+                status=AgentRunStatus.COMPLETED,
+                steps=records,
+            )
+    return None
 
 
 class PersonalAgentTaskWorker:
