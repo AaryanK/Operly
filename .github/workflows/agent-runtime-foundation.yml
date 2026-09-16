@@ -43,6 +43,7 @@ on:
       - "tests/test_agent_runtime_personal_task_fixtures.py"
       - "tests/test_personal_agent_api_negative_fixtures.py"
       - "tests/test_personal_client_adapter.py"
+      - "tests/test_personal_client_fixture_flow.py"
       - "tests/test_personal_p3_calendar_draft.py"
       - "tests/test_agent_spend_budget.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
@@ -132,6 +133,7 @@ jobs:
             tests/test_agent_runtime_personal_task_fixtures.py \
             tests/test_personal_agent_api_negative_fixtures.py \
             tests/test_personal_client_adapter.py \
+            tests/test_personal_client_fixture_flow.py \
             tests/test_personal_p3_calendar_draft.py \
             tests/test_agent_spend_budget.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
@@ -158,6 +160,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_personal_task_fixtures -v
           python -m unittest tests.test_personal_agent_api_negative_fixtures -v
           python -m unittest tests.test_personal_client_adapter -v
+          python -m unittest tests.test_personal_client_fixture_flow -v
           python -m unittest tests.test_personal_p3_calendar_draft -v
           python -m unittest tests.test_agent_spend_budget -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
