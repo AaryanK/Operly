@@ -32,6 +32,7 @@ from packages.security.execution_context import ExecutionContext
 
 
 GMAIL_SEND_CAPABILITY = "google.gmail.send_email"
+GMAIL_READ_CAPABILITY = "google.gmail.read_message"
 
 
 def _kernel_execution(context: ExecutionContext) -> dict[str, str]:
@@ -262,6 +263,45 @@ class ReliablePersonalGoogleProvider(PersonalGoogleCompletionProvider):
         arguments: dict[str, Any],
         minimum_context: dict[str, Any],
     ) -> CapabilityExecutionResult:
+        if capability.id == GMAIL_READ_CAPABILITY:
+            del minimum_context
+            if not context.is_personal or not context.user_id:
+                raise PermissionError("Personal Gmail read requires Personal authority")
+            connector = await _connector(
+                db,
+                context,
+                capability.id,
+                str(arguments.get("connector_id") or "") or None,
+            )
+            token = await access_token(db, connector)
+            message_id = str(arguments["message_id"])
+            detail = await _read_message(token, message_id)
+            headers = _headers(detail.get("payload") or {})
+            plain, rich = _message_bodies(detail.get("payload") or {})
+            internal_date = str(detail.get("internalDate") or "").strip()
+            internal_date_ms = int(internal_date) if internal_date.isdigit() else None
+            return CapabilityExecutionResult(
+                value={
+                    "id": detail.get("id"),
+                    "thread_id": detail.get("threadId"),
+                    "from": headers.get("from"),
+                    "to": headers.get("to"),
+                    "cc": headers.get("cc"),
+                    "subject": headers.get("subject"),
+                    "date": headers.get("date"),
+                    "snippet": str(detail.get("snippet") or "")[:1000],
+                    "text_body": plain,
+                    "html_body": rich,
+                    "label_ids": detail.get("labelIds", []),
+                    "rfc822_message_id": headers.get("message-id"),
+                    "in_reply_to": headers.get("in-reply-to"),
+                    "references": headers.get("references"),
+                    "internal_date_ms": internal_date_ms,
+                },
+                resource_type="gmail_message",
+                resource_id=str(detail.get("id") or message_id),
+            )
+
         if capability.id != GMAIL_SEND_CAPABILITY:
             return await super().execute(
                 db,
