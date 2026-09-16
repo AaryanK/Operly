@@ -12,9 +12,11 @@ on:
       - "packages/personal_modules/runtime.py"
       - "packages/personal_modules/router.py"
       - "packages/personal_modules/client_adapter.py"
+      - "packages/personal_modules/task_service.py"
       - "packages/personal_modules/connectors.py"
       - "packages/personal_modules/google_completion_provider.py"
       - "packages/personal_modules/reliable_google_provider.py"
+      - "packages/plugins/concurrent_worker.py"
       - "packages/kernel/approvals.py"
       - "packages/kernel/capability_search.py"
       - "packages/kernel/idempotency.py"
@@ -49,6 +51,7 @@ on:
       - "tests/test_personal_agent_api_negative_fixtures.py"
       - "tests/test_personal_client_adapter.py"
       - "tests/test_personal_client_fixture_flow.py"
+      - "tests/test_personal_durable_tasks.py"
       - "tests/test_personal_p3_calendar_draft.py"
       - "tests/test_personal_p6_approved_send.py"
       - "tests/test_agent_spend_budget.py"
@@ -105,13 +108,16 @@ jobs:
             packages/agent_runtime/tool_spend.py \
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
+            packages/agent_runtime/worker.py \
             packages/agent_runtime/telemetry.py \
             packages/personal_modules/runtime.py \
             packages/personal_modules/router.py \
             packages/personal_modules/client_adapter.py \
+            packages/personal_modules/task_service.py \
             packages/personal_modules/connectors.py \
             packages/personal_modules/google_completion_provider.py \
             packages/personal_modules/reliable_google_provider.py \
+            packages/plugins/concurrent_worker.py \
             packages/kernel/approvals.py \
             packages/kernel/capability_search.py \
             packages/kernel/idempotency.py \
@@ -145,6 +151,7 @@ jobs:
             tests/test_personal_agent_api_negative_fixtures.py \
             tests/test_personal_client_adapter.py \
             tests/test_personal_client_fixture_flow.py \
+            tests/test_personal_durable_tasks.py \
             tests/test_personal_p3_calendar_draft.py \
             tests/test_personal_p6_approved_send.py \
             tests/test_agent_spend_budget.py \
@@ -173,6 +180,7 @@ jobs:
           python -m unittest tests.test_personal_agent_api_negative_fixtures -v
           python -m unittest tests.test_personal_client_adapter -v
           python -m unittest tests.test_personal_client_fixture_flow -v
+          python -m unittest tests.test_personal_durable_tasks -v
           python -m unittest tests.test_personal_p3_calendar_draft -v
           python -m unittest tests.test_personal_p6_approved_send -v
           python -m unittest tests.test_agent_spend_budget -v
