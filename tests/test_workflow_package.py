@@ -68,7 +68,7 @@ class WorkflowPackageTests(unittest.TestCase):
         spec = validate_workflow_spec({"steps": [
             {"id": "mail", "capability_id": "google.gmail.send_email", "arguments": {"to": "a@example.com"}},
             {"id": "build", "capability_id": "computer.python.exec", "arguments": {"computer_session_id": "{{trigger.computer_session_id}}", "code": "print(1)"}, "depends_on": ["mail"]},
-            {"id": "deploy", "capability_id": "studio.solution.deploy", "arguments": {"project_id": "{{trigger.project_id}}"}, "depends_on": ["build"]},
+            {"id": "deploy", "capability_id": "studio.solution.deploy", "arguments": {"project_id": "{{trigger.project_id"}, "depends_on": ["build"]},
         ]})
         self.assertEqual([step["capability_id"] for step in spec["steps"]], ["google.gmail.send_email", "computer.python.exec", "studio.solution.deploy"])
         with self.assertRaises(WorkflowSpecError):
@@ -158,7 +158,7 @@ class WorkflowPackageTests(unittest.TestCase):
         self.assertIn("workflow_depth", audit)
         self.assertIn("workflow.trigger.create", provider)
         self.assertIn("A non-owner may only access their own workflows", access)
-        self.assertIn('ALEMBIC_HEAD = "0059_agent_spend_controls"', schema)
+        self.assertIn('ALEMBIC_HEAD = "0060_durable_agent_task_checkpoints"', schema)
 
     def test_workflow_engine_does_not_import_external_provider_executors(self):
         root = Path(__file__).resolve().parents[1]
