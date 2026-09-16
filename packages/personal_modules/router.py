@@ -145,6 +145,8 @@ async def _execute(
         detail = {"code": error.code, "message": str(error), "run_id": error.run_id}
         if error.approval_id:
             detail["approval_id"] = error.approval_id
+        if error.details:
+            detail["details"] = dict(error.details)
         raise HTTPException(status_code=error.status_code, detail=detail) from error
     return response.as_dict()
 
