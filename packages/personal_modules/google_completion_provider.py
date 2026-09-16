@@ -63,7 +63,7 @@ def completion_google_capabilities() -> tuple[CapabilitySpec, ...]:
                 {"contacts": _array(contact, max_items=20)},
                 required=["contacts"],
             ),
-            permissions=("contacts:read",),
+            permissions=("messaging:read",),
             risk=CapabilityRisk.READ_ONLY,
             resource_scope="personal",
             tags=frozenset(
