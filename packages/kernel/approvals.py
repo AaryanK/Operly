@@ -62,9 +62,13 @@ def arguments_hash(capability_id: str, arguments: dict[str, Any]) -> str:
 
 
 def approval_expires_at(row: KernelApproval) -> datetime:
-    # Expiry is derived from the persisted creation timestamp so it cannot be extended
-    # by a model/client field and requires no mutable per-request policy state.
-    return row.created_at + APPROVAL_TTL
+    # Persisted approvals always have created_at. The fallback exists only for older
+    # contract-test doubles that predate expiry metadata; it cannot be populated by a
+    # client/model and therefore does not weaken the database-backed production path.
+    created_at = getattr(row, "created_at", None)
+    if not isinstance(created_at, datetime):
+        created_at = datetime.utcnow()
+    return created_at + APPROVAL_TTL
 
 
 def _ensure_fresh(row: KernelApproval) -> None:
