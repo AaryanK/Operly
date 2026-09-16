@@ -4,7 +4,6 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from math import ceil
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -22,6 +21,14 @@ from packages.security.execution_context import ExecutionContext
 
 _MICROS_PER_MILLION = 1_000_000
 _MAX_PRICE_MICROS_PER_MILLION = 1_000_000_000
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    if numerator < 0 or denominator <= 0:
+        raise ValueError("ceil division requires a nonnegative numerator and positive denominator")
+    if numerator == 0:
+        return 0
+    return (numerator + denominator - 1) // denominator
 
 
 class SpendControlError(RuntimeError):
@@ -71,9 +78,12 @@ class ModelPrice:
     def cost_micros(self, *, prompt_tokens: int, completion_tokens: int) -> int:
         if prompt_tokens < 0 or completion_tokens < 0:
             raise ValueError("token usage cannot be negative")
-        return (
-            ceil(prompt_tokens * self.input_micros_per_million_tokens / _MICROS_PER_MILLION)
-            + ceil(completion_tokens * self.output_micros_per_million_tokens / _MICROS_PER_MILLION)
+        return _ceil_div(
+            prompt_tokens * self.input_micros_per_million_tokens,
+            _MICROS_PER_MILLION,
+        ) + _ceil_div(
+            completion_tokens * self.output_micros_per_million_tokens,
+            _MICROS_PER_MILLION,
         )
 
 
@@ -197,11 +207,7 @@ class SpendScope:
         task_id = str(metadata.get("agent_task_id") or run_id or "").strip()
         if not task_id:
             raise SpendConfigurationError("agent task identity is required for spend accounting")
-        project_id = str(
-            metadata.get("project_id")
-            or context.conversation_id
-            or "default"
-        ).strip()
+        project_id = str(metadata.get("project_id") or context.conversation_id or "default").strip()
         if not project_id:
             project_id = "default"
         approved = str(metadata.get("agent_budget_profile") or "").strip().lower() == "approved_composite"
@@ -245,12 +251,16 @@ class AgentSpendMeter:
         self,
         *,
         scope: SpendScope,
+        run_id: str | None = None,
         session_factory: async_sessionmaker[AsyncSession] = SessionFactory,
         prices: PriceSnapshot | None = None,
         limits: SpendLimits | None = None,
         now: datetime | None = None,
     ) -> None:
         self.scope = scope
+        self.run_id = str(run_id or scope.task_id or "").strip()[:120]
+        if not self.run_id:
+            raise SpendConfigurationError("runtime run identity is required for spend accounting")
         self.session_factory = session_factory
         self.prices = prices or PriceSnapshot.from_environment()
         self.limits = limits or SpendLimits.from_environment()
@@ -266,6 +276,7 @@ class AgentSpendMeter:
     ) -> "AgentSpendMeter":
         return cls(
             scope=SpendScope.from_execution_context(context, run_id=run_id),
+            run_id=run_id,
             session_factory=session_factory,
         )
 
