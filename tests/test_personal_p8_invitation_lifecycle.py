@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -123,11 +124,13 @@ class FakeReplyRuntime:
         self.thread_id = thread_id
         self.body = body
         self.calls: list[str] = []
+        self.search_query: str | None = None
 
     async def execute(self, db, *, context, request):
         del db, context
         self.calls.append(request.capability_id)
         if request.capability_id == "google.gmail.search":
+            self.search_query = str(request.arguments.get("query") or "")
             return SimpleNamespace(
                 result={
                     "messages": [
@@ -182,6 +185,17 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(result)
             self.assertEqual(result.status, AgentRunStatus.WAITING_EVENT)
 
+    async def _mark_reply_verified_running(self) -> None:
+        await self._waiting_run()
+        async with self.sessions() as db:
+            row = await db.get(AgentRuntimeRun, RUN_ID)
+            predicate = json.loads(row.wait_predicate_json)
+            predicate["state"] = "reply_verified"
+            row.wait_predicate_json = json.dumps(predicate)
+            row.status = "running"
+            row.lease_token = "execution-lease"
+            await db.commit()
+
     def test_reply_classifier_is_conservative_and_does_not_execute_mail_text(self):
         self.assertEqual(classify_invitation_reply("Yes, Tuesday at 2 works for me."), "affirmative")
         self.assertEqual(classify_invitation_reply("Sorry, that does not work for me."), "negative")
@@ -208,6 +222,7 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(predicate["expected_sender"], RECIPIENT)
         self.assertEqual(predicate["freebusy_step_id"], "recheck")
         self.assertEqual(predicate["calendar_event_step_id"], "book")
+        self.assertTrue(predicate["established_at"])
 
     async def test_verified_affirmative_reply_resumes_but_does_not_book(self):
         await self._waiting_run()
@@ -229,6 +244,9 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertTrue(processed)
         self.assertEqual(fake.calls, ["google.gmail.search", "google.gmail.read_message"])
+        self.assertIsNotNone(fake.search_query)
+        self.assertIn(f"from:{RECIPIENT}", fake.search_query)
+        self.assertRegex(fake.search_query or "", r"\bafter:\d+\b")
         async with self.sessions() as db:
             row = await db.get(AgentRuntimeRun, RUN_ID)
             observations = json.loads(row.verified_observations_json)
@@ -334,17 +352,34 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["invitation_outcome"], "declined")
         self.assertNotIn("google.calendar", fake.calls)
 
-    async def test_freebusy_recheck_blocks_stale_slot_before_calendar_create(self):
-        await self._waiting_run()
+    async def test_freebusy_recheck_allows_still_free_slot(self):
+        await self._mark_reply_verified_running()
+        freebusy = AgentStepResult(
+            step_id="recheck",
+            capability_id="google.calendar.freebusy",
+            request_id=stable_step_request_id(RUN_ID, "recheck"),
+            status=AgentStepStatus.COMPLETED,
+            result={"calendars": {"primary": {"busy": []}}},
+        )
         async with self.sessions() as db:
             row = await db.get(AgentRuntimeRun, RUN_ID)
-            predicate = json.loads(row.wait_predicate_json)
-            predicate["state"] = "reply_verified"
-            row.wait_predicate_json = json.dumps(predicate)
-            row.status = "running"
-            row.lease_token = "execution-lease"
+            gated = await invitation_post_step_gate(
+                db,
+                row,
+                plan(),
+                plan().steps[1],
+                freebusy,
+                (freebusy,),
+            )
             await db.commit()
+            await db.refresh(row)
+            predicate = json.loads(row.wait_predicate_json)
+        self.assertIsNone(gated)
+        self.assertEqual(predicate["state"], "calendar_rechecked")
+        self.assertTrue(predicate["calendar_rechecked_at"])
 
+    async def test_freebusy_recheck_blocks_stale_slot_before_calendar_create(self):
+        await self._mark_reply_verified_running()
         freebusy = AgentStepResult(
             step_id="recheck",
             capability_id="google.calendar.freebusy",
