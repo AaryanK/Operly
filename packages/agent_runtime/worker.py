@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from uuid import uuid4
@@ -18,6 +19,36 @@ from packages.personal_modules.runtime import build_personal_runtime
 
 from .orchestrator import AgentLeaseLost, DurableAgentOrchestrator
 from .runtime import AgentRuntimeDisabled, GovernedAgentRuntime
+
+
+def _requires_future_wait(row: AgentRuntimeRun) -> bool:
+    """Read the validated objective semantic persisted at task submission.
+
+    Capability shape alone must never create a future wait. Older tasks without the
+    ObjectiveIR marker continue normally instead of being reinterpreted after restart.
+    """
+
+    try:
+        grants = json.loads(row.grants_reference_json or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(grants, dict):
+        return False
+    objective_ir = grants.get("objective_ir")
+    return isinstance(objective_ir, dict) and objective_ir.get("requires_future_wait") is True
+
+
+async def _personal_post_step_gate(db, row, plan, step, step_result, records):
+    if not _requires_future_wait(row):
+        return None
+    return await invitation_post_step_gate(
+        db,
+        row,
+        plan,
+        step,
+        step_result,
+        records,
+    )
 
 
 class PersonalAgentTaskWorker:
@@ -97,7 +128,7 @@ class PersonalAgentTaskWorker:
             runtime=GovernedAgentRuntime(kernel=build_personal_runtime()),
             heartbeat_session_factory=self.session_factory,
             lease_seconds=self.lease_seconds,
-            post_step_gate=invitation_post_step_gate,
+            post_step_gate=_personal_post_step_gate,
         )
 
     async def _persist_checkpoint_version(self, db: AsyncSession, *, run_id: str) -> None:
