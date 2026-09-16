@@ -12,6 +12,7 @@ from packages.agent_runtime.objective import ObjectiveInterpreterRequest
 from packages.agent_runtime.planning import AgentPlannerRequest
 from packages.agent_runtime.spend import AgentSpendMeter, SpendControlError
 from packages.agent_runtime.telemetry import runtime_trace
+from packages.security.execution_context import ExecutionContext
 
 
 OBJECTIVE_SEMANTIC_ROUTING_GUIDANCE = (
@@ -144,8 +145,8 @@ class OpenAICompatibleAgentModel:
 
     Provider destinations are a hardcoded operator allowlist. Neither user text nor
     model output can select a URL, credential, provider route, principal or capability.
-    When a spend meter is supplied, every provider dispatch is reserved before network
-    I/O and then settled from provider usage or retained as uncertain.
+    Every bound provider dispatch is reserved before network I/O and then settled from
+    provider usage or retained conservatively as uncertain.
     """
 
     def __init__(
@@ -156,10 +157,20 @@ class OpenAICompatibleAgentModel:
     ) -> None:
         self.route = route or InferenceRoute.from_environment()
         self.spend_meter = spend_meter
+        self._explicit_spend_meter = spend_meter is not None
 
     @property
     def configured(self) -> bool:
         return True
+
+    def bind_spend_context(self, *, context: ExecutionContext, run_id: str) -> None:
+        """Bind trusted Runtime1 authority to accounting without exposing it to the model."""
+        if self._explicit_spend_meter:
+            return
+        try:
+            self.spend_meter = AgentSpendMeter.from_execution_context(context, run_id=run_id)
+        except SpendControlError as error:
+            raise AgentInferenceError(str(error), code=error.code) from error
 
     async def _reserve(
         self,
@@ -174,15 +185,17 @@ class OpenAICompatibleAgentModel:
                     code="inference_spend_context_required",
                 )
             return None
-        request_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        request_bytes = len(
+            json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
         try:
             return await self.spend_meter.reserve_model_call(
-                run_id=self.spend_meter.scope.task_id,
+                run_id=self.spend_meter.run_id,
                 phase=phase,
                 provider=self.route.provider,
                 model_id=self.route.model_id,
-                # UTF-8 byte length is a conservative upper bound for ordinary model
-                # tokenization, while max_tokens is a server-controlled output cap.
+                # UTF-8 byte length is deliberately conservative versus ordinary
+                # tokenization; output is bounded by the server-controlled max_tokens.
                 input_token_cap=request_bytes,
                 output_token_cap=int(body.get("max_tokens") or self.route.max_output_tokens),
             )
