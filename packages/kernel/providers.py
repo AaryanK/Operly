@@ -12,6 +12,14 @@ from packages.kernel.contracts import CapabilityExecutionResult, CapabilitySpec
 from packages.security.execution_context import ExecutionContext
 
 
+class ProviderExecutionUncertain(RuntimeError):
+    """The provider boundary may have committed a side effect but did not confirm it."""
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
 class CapabilityProvider(Protocol):
     async def execute(
         self,
@@ -156,7 +164,7 @@ class NativeOperlyProvider:
                 .limit(limit)
             )
         ).all()
-        return CapabilityExecutionResult(value={"tasks": [self._task_json(row) for row in rows]})
+        return CapabilityExecutionResult(value={"tasks": [self._task_json(task) for task in rows]})
 
     async def _tasks_create(
         self,
