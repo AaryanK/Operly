@@ -36,6 +36,11 @@ class OutcomeEvaluationFixtureTests(unittest.TestCase):
             },
         )
         self.assertTrue(all(item.scope == "personal" for item in fixtures))
+        self.assertTrue(all(item.prompt.strip() for item in fixtures))
+        self.assertEqual(fixtures_by_id()["personal-freebusy-afternoon-v1"].source_case_id, "DZ-001")
+        self.assertEqual(fixtures_by_id()["personal-professor-email-draft-v1"].source_case_id, "DZ-007")
+        self.assertEqual(fixtures_by_id()["personal-invitation-draft-v1"].source_case_id, "DZ-002")
+        self.assertIn("Do not send", fixtures_by_id()["personal-invitation-draft-v1"].prompt)
 
     def test_matching_invitation_draft_passes_from_ledger_state(self):
         fixture = fixtures_by_id()["personal-invitation-draft-v1"]

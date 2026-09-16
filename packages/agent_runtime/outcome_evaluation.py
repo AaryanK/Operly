@@ -46,6 +46,8 @@ class EffectExpectation:
 class EvaluationFixture:
     fixture_id: str
     version: int
+    source_case_id: str
+    prompt: str
     scope: str
     owner_id: str
     fixed_clock: str
@@ -145,6 +147,8 @@ def load_fixtures(path: str | Path) -> tuple[EvaluationFixture, ...]:
             EvaluationFixture(
                 fixture_id=fixture_id,
                 version=int(raw["version"]),
+                source_case_id=str(raw["source_case_id"]),
+                prompt=str(raw["prompt"]),
                 scope=str(raw["scope"]),
                 owner_id=str(raw["owner_id"]),
                 fixed_clock=str(raw["fixed_clock"]),

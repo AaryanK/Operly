@@ -4,6 +4,8 @@
     {
       "id": "personal-freebusy-afternoon-v1",
       "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
       "scope": "personal",
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
@@ -23,6 +25,8 @@
     {
       "id": "personal-professor-email-draft-v1",
       "version": 1,
+      "source_case_id": "DZ-007",
+      "prompt": "Draft a reply to my professor explaining my absence.",
       "scope": "personal",
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
@@ -41,6 +45,8 @@
     {
       "id": "personal-invitation-draft-v1",
       "version": 1,
+      "source_case_id": "DZ-002",
+      "prompt": "Draft an email to Alex asking whether Tuesday at 2 works. Do not send it.",
       "scope": "personal",
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
@@ -60,6 +66,8 @@
     {
       "id": "personal-wrong-account-access-v1",
       "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
       "scope": "personal",
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
@@ -70,6 +78,8 @@
     {
       "id": "personal-missing-connector-v1",
       "version": 1,
+      "source_case_id": "DZ-001",
+      "prompt": "Find an afternoon next week when I am free.",
       "scope": "personal",
       "owner_id": "user-alpha",
       "fixed_clock": "2026-09-15T12:00:00-05:00",
