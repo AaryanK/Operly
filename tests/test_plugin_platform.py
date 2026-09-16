@@ -204,7 +204,7 @@ class PluginPlatformContractTests(unittest.TestCase):
             "digital_usage_ledger",
         }
         self.assertTrue(expected <= set(Base.metadata.tables))
-        self.assertEqual(ALEMBIC_HEAD, "0059_agent_spend_controls")
+        self.assertEqual(ALEMBIC_HEAD, "0060_durable_agent_task_checkpoints")
 
     def test_job_idempotency_scope_never_relies_on_nullable_tenant(self):
         service = DigitalPlatformJobService()
