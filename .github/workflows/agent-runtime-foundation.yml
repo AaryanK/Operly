@@ -9,6 +9,7 @@ on:
       - "apps/web/src/workspace/WorkspaceOperly.tsx"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
       - "packages/agent_runtime/**"
+      - "packages/personal_modules/runtime.py"
       - "packages/kernel/capability_search.py"
       - "packages/kernel/registry.py"
       - "packages/kernel/runtime_availability.py"
@@ -31,6 +32,7 @@ on:
       - "tests/test_agent_runtime_resource_resolution.py"
       - "tests/test_agent_runtime_objective_eval.py"
       - "tests/test_agent_runtime_outcome_evaluation.py"
+      - "tests/test_agent_runtime_personal_task_fixtures.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
       - "tests/test_agent_runtime_store.py"
@@ -83,6 +85,7 @@ jobs:
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
             packages/agent_runtime/telemetry.py \
+            packages/personal_modules/runtime.py \
             packages/kernel/capability_search.py \
             packages/kernel/registry.py \
             packages/kernel/runtime_availability.py \
@@ -104,6 +107,7 @@ jobs:
             tests/test_agent_runtime_resource_resolution.py \
             tests/test_agent_runtime_objective_eval.py \
             tests/test_agent_runtime_outcome_evaluation.py \
+            tests/test_agent_runtime_personal_task_fixtures.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
             tests/test_agent_runtime_store.py \
@@ -123,6 +127,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_resource_resolution -v
           python -m unittest tests.test_agent_runtime_objective_eval -v
           python -m unittest tests.test_agent_runtime_outcome_evaluation -v
+          python -m unittest tests.test_agent_runtime_personal_task_fixtures -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
           python -m unittest tests.test_agent_runtime_store -v
