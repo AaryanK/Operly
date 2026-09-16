@@ -238,37 +238,51 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observations[0]["message_id"], "gmail-reply-1")
         self.assertEqual(observations[0]["classification"], "affirmative")
 
-    async def test_wrong_sender_or_wrong_thread_never_resumes(self):
-        for candidate_from, thread_id in (
-            ("Mallory <mallory@example.test>", "gmail-thread-1"),
-            ("Alex <alex@example.test>", "other-thread"),
+    async def test_wrong_sender_never_resumes(self):
+        await self._waiting_run()
+        fake = FakeReplyRuntime(
+            candidate_from="Mallory <mallory@example.test>",
+            thread_id="gmail-thread-1",
+            body="Yes, that works.",
+        )
+        with patch(
+            "packages.personal_modules.invitation_lifecycle.build_personal_runtime",
+            return_value=fake,
         ):
-            with self.subTest(candidate_from=candidate_from, thread_id=thread_id):
-                async with self.sessions() as db:
-                    existing = await db.get(AgentRuntimeRun, RUN_ID)
-                    if existing is not None:
-                        await db.delete(existing)
-                        await db.commit()
-                await self._waiting_run()
-                fake = FakeReplyRuntime(
-                    candidate_from=candidate_from,
-                    thread_id=thread_id,
-                    body="Yes, that works.",
+            async with self.sessions() as db:
+                await poll_invitation_wait(
+                    db,
+                    run_id=RUN_ID,
+                    lease_token="worker-wait-spoof",
+                    defer_seconds=30,
                 )
-                with patch(
-                    "packages.personal_modules.invitation_lifecycle.build_personal_runtime",
-                    return_value=fake,
-                ):
-                    async with self.sessions() as db:
-                        await poll_invitation_wait(
-                            db,
-                            run_id=RUN_ID,
-                            lease_token="worker-wait-spoof",
-                            defer_seconds=30,
-                        )
-                async with self.sessions() as db:
-                    row = await db.get(AgentRuntimeRun, RUN_ID)
-                self.assertEqual(row.status, "waiting_event")
+        async with self.sessions() as db:
+            row = await db.get(AgentRuntimeRun, RUN_ID)
+        self.assertEqual(row.status, "waiting_event")
+        self.assertEqual(fake.calls, ["google.gmail.search"])
+
+    async def test_wrong_thread_never_resumes(self):
+        await self._waiting_run()
+        fake = FakeReplyRuntime(
+            candidate_from="Alex <alex@example.test>",
+            thread_id="other-thread",
+            body="Yes, that works.",
+        )
+        with patch(
+            "packages.personal_modules.invitation_lifecycle.build_personal_runtime",
+            return_value=fake,
+        ):
+            async with self.sessions() as db:
+                await poll_invitation_wait(
+                    db,
+                    run_id=RUN_ID,
+                    lease_token="worker-wait-thread",
+                    defer_seconds=30,
+                )
+        async with self.sessions() as db:
+            row = await db.get(AgentRuntimeRun, RUN_ID)
+        self.assertEqual(row.status, "waiting_event")
+        self.assertEqual(fake.calls, ["google.gmail.search"])
 
     async def test_ambiguous_reply_is_deduped_and_waits_for_new_evidence(self):
         await self._waiting_run()
