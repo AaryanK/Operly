@@ -140,7 +140,7 @@ def resolve_runtime_dispatch(
         return base
 
     resolvers_by_family = {
-        _capability_family(spec.id)
+        _capability_family(spec)
         for spec in capabilities
         if _is_resolver(spec)
     }
@@ -307,6 +307,10 @@ class Runtime1Agent:
         if not self.settings.enabled:
             from packages.agent_runtime.runtime import AgentRuntimeDisabled
             raise AgentRuntimeDisabled("Agent runtime is disabled")
+
+        bind_spend_context = getattr(self.model, "bind_spend_context", None)
+        if callable(bind_spend_context):
+            bind_spend_context(context=context, run_id=run_id)
 
         runtime_trace(
             "request.received",
