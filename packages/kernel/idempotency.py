@@ -103,8 +103,13 @@ def _validate_existing(
         )
     if claim.status == "completed":
         return _response_from_json(claim.response_json)
-    if claim.status == "running":
-        raise IdempotencyInProgress("An identical request is already executing")
+    if claim.status in {"running", "uncertain"}:
+        message = (
+            "An identical request has an uncertain external outcome and must be reconciled"
+            if claim.status == "uncertain"
+            else "An identical request is already executing"
+        )
+        raise IdempotencyInProgress(message)
     return None
 
 
@@ -232,6 +237,31 @@ async def reserve_request(
         raise IdempotencyInProgress("An identical request is already executing")
 
 
+async def mark_request_uncertain(
+    db: AsyncSession,
+    *,
+    claim: KernelRequestClaim | None,
+    run_id: str,
+    reason: str,
+) -> None:
+    """Persist that a reserved mutation crossed a provider boundary without certainty."""
+
+    if claim is None:
+        return
+    current = await db.get(KernelRequestClaim, claim.id)
+    if current is None:
+        return
+    current.status = "uncertain"
+    current.run_id = run_id
+    current.response_json = json.dumps(
+        {"uncertainty_reason": str(reason or "provider_outcome_uncertain")[:500]},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    await db.flush()
+    await db.commit()
+
+
 async def complete_request(
     db: AsyncSession,
     *,
@@ -240,10 +270,13 @@ async def complete_request(
 ) -> None:
     if claim is None:
         return
-    claim.status = "completed"
-    claim.run_id = response.run_id
-    claim.capability_id = response.capability_id
-    claim.response_json = json.dumps(
+    current = await db.get(KernelRequestClaim, claim.id)
+    if current is None:
+        return
+    current.status = "completed"
+    current.run_id = response.run_id
+    current.capability_id = response.capability_id
+    current.response_json = json.dumps(
         response.as_dict(), separators=(",", ":"), sort_keys=True, default=str
     )
     await db.flush()
