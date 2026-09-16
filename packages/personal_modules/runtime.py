@@ -6,7 +6,9 @@ from packages.kernel.runtime_availability import AvailabilityAwareKernelRuntime
 from packages.personal_modules.google_provider import (
     PROVIDER_ID as PERSONAL_GOOGLE_PROVIDER_ID,
     PersonalGoogleProvider,
+    _supports as personal_google_supports,
     personal_google_capabilities,
+    personal_google_connectors,
 )
 from packages.workflow import (
     PROVIDER_ID as WORKFLOW_PROVIDER_ID,
@@ -22,6 +24,23 @@ class PersonalRuntime(AvailabilityAwareKernelRuntime):
     execution remains behind the same Kernel policy / approval / idempotency / audit
     boundary. Personal authority never receives a synthetic Workspace ID.
     """
+
+
+class RuntimePersonalGoogleProvider(PersonalGoogleProvider):
+    """Production Google provider with non-secret availability diagnostics for Runtime1."""
+
+    async def unavailability_reason(self, db, *, context, capability):
+        if not context.is_personal or not context.user_id:
+            return None
+        if capability.id == "google.connection.status":
+            return None
+        rows = await personal_google_connectors(db, context.user_id)
+        if any(
+            personal_google_supports(capability.id, set(__import__("json").loads(row.granted_scopes_json or "[]")))
+            for row in rows
+        ):
+            return None
+        return "personal_google_connector_required"
 
 
 def build_personal_runtime(
@@ -48,7 +67,7 @@ def build_personal_runtime(
         runtime.registry.register(spec)
     runtime.providers.register(
         PERSONAL_GOOGLE_PROVIDER_ID,
-        personal_google_provider or PersonalGoogleProvider(),
+        personal_google_provider or RuntimePersonalGoogleProvider(),
     )
     runtime.providers.register(WORKFLOW_PROVIDER_ID, WorkflowProvider())
     return runtime
