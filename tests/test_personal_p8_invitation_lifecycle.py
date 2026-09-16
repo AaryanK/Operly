@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -37,6 +36,7 @@ from packages.security.surfaces import SurfaceKind
 
 RUN_ID = "personal-invitation-run"
 RECIPIENT = "alex@example.test"
+PARENT_MESSAGE_ID = "<operly-fixture@operly.invalid>"
 
 
 def context() -> ExecutionContext:
@@ -112,17 +112,27 @@ def send_result() -> AgentStepResult:
             "provider_account": "alpha@example.test",
             "provider_status": "accepted",
             "verification_status": "read_back",
-            "rfc822_message_id": "<operly-fixture@operly.invalid>",
+            "rfc822_message_id": PARENT_MESSAGE_ID,
             "approval_arguments_hash": "approved-hash",
         },
     )
 
 
 class FakeReplyRuntime:
-    def __init__(self, *, candidate_from: str, thread_id: str, body: str):
+    def __init__(
+        self,
+        *,
+        candidate_from: str,
+        thread_id: str,
+        body: str,
+        parent_message_id: str = PARENT_MESSAGE_ID,
+        internal_date_ms: int = 4_102_444_800_000,
+    ):
         self.candidate_from = candidate_from
         self.thread_id = thread_id
         self.body = body
+        self.parent_message_id = parent_message_id
+        self.internal_date_ms = internal_date_ms
         self.calls: list[str] = []
         self.search_query: str | None = None
 
@@ -151,6 +161,9 @@ class FakeReplyRuntime:
                     "from": self.candidate_from,
                     "subject": "Re: Tuesday at 2?",
                     "text_body": self.body,
+                    "in_reply_to": self.parent_message_id,
+                    "references": self.parent_message_id,
+                    "internal_date_ms": self.internal_date_ms,
                 }
             )
         raise AssertionError(request.capability_id)
@@ -219,6 +232,7 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(predicate["kind"], "gmail_thread_reply")
         self.assertEqual(predicate["thread_id"], "gmail-thread-1")
         self.assertEqual(predicate["sent_message_id"], "gmail-sent-1")
+        self.assertEqual(predicate["rfc822_message_id"], PARENT_MESSAGE_ID)
         self.assertEqual(predicate["expected_sender"], RECIPIENT)
         self.assertEqual(predicate["freebusy_step_id"], "recheck")
         self.assertEqual(predicate["calendar_event_step_id"], "book")
@@ -301,6 +315,30 @@ class PersonalInvitationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             row = await db.get(AgentRuntimeRun, RUN_ID)
         self.assertEqual(row.status, "waiting_event")
         self.assertEqual(fake.calls, ["google.gmail.search"])
+
+    async def test_wrong_parent_message_never_resumes(self):
+        await self._waiting_run()
+        fake = FakeReplyRuntime(
+            candidate_from="Alex <alex@example.test>",
+            thread_id="gmail-thread-1",
+            body="Yes, that works.",
+            parent_message_id="<different-message@example.test>",
+        )
+        with patch(
+            "packages.personal_modules.invitation_lifecycle.build_personal_runtime",
+            return_value=fake,
+        ):
+            async with self.sessions() as db:
+                await poll_invitation_wait(
+                    db,
+                    run_id=RUN_ID,
+                    lease_token="worker-wait-parent",
+                    defer_seconds=30,
+                )
+        async with self.sessions() as db:
+            row = await db.get(AgentRuntimeRun, RUN_ID)
+        self.assertEqual(row.status, "waiting_event")
+        self.assertEqual(fake.calls, ["google.gmail.search", "google.gmail.read_message"])
 
     async def test_ambiguous_reply_is_deduped_and_waits_for_new_evidence(self):
         await self._waiting_run()
