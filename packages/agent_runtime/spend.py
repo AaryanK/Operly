@@ -143,8 +143,8 @@ class PriceSnapshot:
 class SpendLimits:
     small_task_micros: int = 10_000
     approved_composite_task_micros: int = 50_000
-    scope_month_micros: int = 5_000_000
-    project_month_micros: int = 1_000_000
+    scope_month_micros: int = 1_000_000
+    project_month_micros: int = 25_000_000
     max_model_calls: int = 12
 
     def __post_init__(self) -> None:
@@ -179,8 +179,8 @@ class SpendLimits:
                 approved_composite_task_micros=integer(
                     "OPERLY_AGENT_APPROVED_COMPOSITE_BUDGET_MICROS", 50_000
                 ),
-                scope_month_micros=integer("OPERLY_AGENT_SCOPE_MONTH_BUDGET_MICROS", 5_000_000),
-                project_month_micros=integer("OPERLY_AGENT_PROJECT_MONTH_BUDGET_MICROS", 1_000_000),
+                scope_month_micros=integer("OPERLY_AGENT_SCOPE_MONTH_BUDGET_MICROS", 1_000_000),
+                project_month_micros=integer("OPERLY_AGENT_PROJECT_MONTH_BUDGET_MICROS", 25_000_000),
                 max_model_calls=integer("OPERLY_AGENT_MAX_MODEL_CALLS", 12),
             )
         except ValueError as error:
