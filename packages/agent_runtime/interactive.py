@@ -20,6 +20,30 @@ from packages.kernel.schema_validation import SchemaValidationError, validate_sc
 from packages.security.execution_context import ExecutionContext
 
 
+_SPEND_STOP_CODES = frozenset(
+    {
+        "inference_spend_budget_exhausted",
+        "inference_model_call_budget_exhausted",
+        "inference_price_unknown",
+        "inference_spend_not_configured",
+        "inference_spend_context_required",
+        "inference_spend_accounting_failed",
+    }
+)
+
+
+def _spend_stop_code(error: BaseException) -> str | None:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = str(getattr(current, "code", "") or "")
+        if code in _SPEND_STOP_CODES:
+            return code
+        current = current.__cause__ or current.__context__
+    return None
+
+
 class Runtime1Model(Protocol):
     async def interpret(self, request): ...
     async def respond(
@@ -183,6 +207,62 @@ class Runtime1Agent:
             context_assembler=self.context_assembler,
         )
 
+    def _spend_stop_result(
+        self,
+        *,
+        run_id: str,
+        dispatch: str,
+        objective_kind: str,
+        cycles: int,
+        calls: Sequence[str],
+        code: str,
+    ) -> Runtime1Result:
+        if code in {
+            "inference_spend_budget_exhausted",
+            "inference_model_call_budget_exhausted",
+        }:
+            message = (
+                "I stopped before another paid model call because this task reached its configured "
+                "spend or model-call limit."
+            )
+        elif code == "inference_price_unknown":
+            message = (
+                "I stopped before another paid model call because its configured price could not be "
+                "verified safely."
+            )
+        elif code in {"inference_spend_not_configured", "inference_spend_context_required"}:
+            message = (
+                "I stopped before another paid model call because persistent spend controls are not "
+                "fully configured for this runtime."
+            )
+        else:
+            message = (
+                "I stopped because spend accounting could not be reconciled safely, so I did not "
+                "continue with another paid model call."
+            )
+        if calls:
+            message += " Completed external capability calls before stopping: " + ", ".join(calls) + "."
+        else:
+            message += " No external capability call completed before the stop."
+        runtime_trace(
+            "request.spend_stopped",
+            run_id=run_id,
+            dispatch=dispatch,
+            objective_kind=objective_kind,
+            cycles=cycles,
+            error_code=code,
+            capability_calls=list(calls),
+        )
+        return Runtime1Result(
+            message=message,
+            run_id=run_id,
+            dispatch=dispatch,
+            objective_kind=objective_kind,
+            cycles=cycles,
+            capability_calls=tuple(calls),
+            error_code=code,
+        )
+
     def _cards(self, specs: Sequence[CapabilitySpec]) -> list[dict[str, Any]]:
         return [
             {
@@ -308,6 +388,10 @@ class Runtime1Agent:
             from packages.agent_runtime.runtime import AgentRuntimeDisabled
             raise AgentRuntimeDisabled("Agent runtime is disabled")
 
+        bind_spend_context = getattr(self.model, "bind_spend_context", None)
+        if callable(bind_spend_context):
+            bind_spend_context(context=context, run_id=run_id)
+
         runtime_trace(
             "request.received",
             run_id=run_id,
@@ -318,11 +402,24 @@ class Runtime1Agent:
             message_sha256_16=fingerprint(message),
             offered_context_items=len(context_items),
         )
-        objective = await self.interpreter.interpret(
-            message=message,
-            context=context,
-            context_items=context_items,
-        )
+        try:
+            objective = await self.interpreter.interpret(
+                message=message,
+                context=context,
+                context_items=context_items,
+            )
+        except Exception as error:
+            spend_code = _spend_stop_code(error)
+            if spend_code:
+                return self._spend_stop_result(
+                    run_id=run_id,
+                    dispatch="budget_stop",
+                    objective_kind="unknown",
+                    cycles=0,
+                    calls=(),
+                    code=spend_code,
+                )
+            raise
         dispatch = objective.dispatch_path()
         runtime_trace(
             "objective.interpreted",
@@ -353,11 +450,24 @@ class Runtime1Agent:
         )
 
         if dispatch is RuntimeDispatchPath.RESPOND:
-            answer = await self.model.respond(
-                objective=objective.objective,
-                user_message=message,
-                context_items=selected.as_prompt_items(),
-            )
+            try:
+                answer = await self.model.respond(
+                    objective=objective.objective,
+                    user_message=message,
+                    context_items=selected.as_prompt_items(),
+                )
+            except Exception as error:
+                spend_code = _spend_stop_code(error)
+                if spend_code:
+                    return self._spend_stop_result(
+                        run_id=run_id,
+                        dispatch=dispatch.value,
+                        objective_kind=objective.kind.value,
+                        cycles=0,
+                        calls=(),
+                        code=spend_code,
+                    )
+                raise
             runtime_trace(
                 "request.completed",
                 run_id=run_id,
@@ -381,16 +491,29 @@ class Runtime1Agent:
             query=objective.capability_query(),
         )
         if not capabilities:
-            answer = await self.model.respond(
-                objective=objective.objective,
-                user_message=message,
-                context_items=selected.as_prompt_items(),
-                observations=[{
-                    "ok": False,
-                    "error_code": "no_authorized_capabilities",
-                    "message": "No currently authorized and available capability matched this objective.",
-                }],
-            )
+            try:
+                answer = await self.model.respond(
+                    objective=objective.objective,
+                    user_message=message,
+                    context_items=selected.as_prompt_items(),
+                    observations=[{
+                        "ok": False,
+                        "error_code": "no_authorized_capabilities",
+                        "message": "No currently authorized and available capability matched this objective.",
+                    }],
+                )
+            except Exception as error:
+                spend_code = _spend_stop_code(error)
+                if spend_code:
+                    return self._spend_stop_result(
+                        run_id=run_id,
+                        dispatch=dispatch.value,
+                        objective_kind=objective.kind.value,
+                        cycles=0,
+                        calls=(),
+                        code=spend_code,
+                    )
+                raise
             runtime_trace(
                 "request.completed",
                 run_id=run_id,
@@ -434,15 +557,28 @@ class Runtime1Agent:
         )
 
         for cycle in range(1, max_cycles + 1):
-            raw_decision = await self.model.decide(
-                objective=objective.objective,
-                user_message=message,
-                context_items=selected.as_prompt_items(),
-                observations=observations[-self.limits.max_observations :],
-                capabilities=self._cards(capabilities),
-                remaining_steps=max_cycles - cycle + 1,
-                remaining_mutations=max(0, self.limits.max_mutations - mutation_count),
-            )
+            try:
+                raw_decision = await self.model.decide(
+                    objective=objective.objective,
+                    user_message=message,
+                    context_items=selected.as_prompt_items(),
+                    observations=observations[-self.limits.max_observations :],
+                    capabilities=self._cards(capabilities),
+                    remaining_steps=max_cycles - cycle + 1,
+                    remaining_mutations=max(0, self.limits.max_mutations - mutation_count),
+                )
+            except Exception as error:
+                spend_code = _spend_stop_code(error)
+                if spend_code:
+                    return self._spend_stop_result(
+                        run_id=run_id,
+                        dispatch=dispatch.value,
+                        objective_kind=objective.kind.value,
+                        cycles=cycle,
+                        calls=calls,
+                        code=spend_code,
+                    )
+                raise
             try:
                 decision = self._decode_decision(raw_decision)
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -695,12 +831,25 @@ class Runtime1Agent:
                     break
 
             if dispatch is RuntimeDispatchPath.DIRECT_CAPABILITY:
-                answer = await self.model.respond(
-                    objective=objective.objective,
-                    user_message=message,
-                    context_items=selected.as_prompt_items(),
-                    observations=observations[-self.limits.max_observations :],
-                )
+                try:
+                    answer = await self.model.respond(
+                        objective=objective.objective,
+                        user_message=message,
+                        context_items=selected.as_prompt_items(),
+                        observations=observations[-self.limits.max_observations :],
+                    )
+                except Exception as error:
+                    spend_code = _spend_stop_code(error)
+                    if spend_code:
+                        return self._spend_stop_result(
+                            run_id=run_id,
+                            dispatch=dispatch.value,
+                            objective_kind=objective.kind.value,
+                            cycles=cycle,
+                            calls=calls,
+                            code=spend_code,
+                        )
+                    raise
                 runtime_trace(
                     "request.completed",
                     run_id=run_id,
@@ -718,12 +867,25 @@ class Runtime1Agent:
                     capability_calls=tuple(calls),
                 )
 
-        answer = await self.model.respond(
-            objective=objective.objective,
-            user_message=message,
-            context_items=selected.as_prompt_items(),
-            observations=observations[-self.limits.max_observations :],
-        )
+        try:
+            answer = await self.model.respond(
+                objective=objective.objective,
+                user_message=message,
+                context_items=selected.as_prompt_items(),
+                observations=observations[-self.limits.max_observations :],
+            )
+        except Exception as error:
+            spend_code = _spend_stop_code(error)
+            if spend_code:
+                return self._spend_stop_result(
+                    run_id=run_id,
+                    dispatch=dispatch.value,
+                    objective_kind=objective.kind.value,
+                    cycles=max_cycles,
+                    calls=calls,
+                    code=spend_code,
+                )
+            raise
         runtime_trace(
             "request.completed",
             run_id=run_id,

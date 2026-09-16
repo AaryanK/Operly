@@ -268,7 +268,7 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
                 await transition_run(db, run_id="state-run", to_status="running")
 
     def test_schema_head_advances_with_runtime_chat_history(self):
-        self.assertEqual(ALEMBIC_HEAD, "0058_agent_chat_history")
+        self.assertEqual(ALEMBIC_HEAD, "0059_agent_spend_controls")
 
 
 if __name__ == "__main__":
