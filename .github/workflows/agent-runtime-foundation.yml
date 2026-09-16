@@ -34,6 +34,7 @@ on:
       - "alembic/versions/0057_agent_runtime_foundation.py"
       - "alembic/versions/0058_agent_chat_history.py"
       - "alembic/versions/0059_agent_spend_controls.py"
+      - "alembic/versions/0060_durable_agent_task_checkpoints.py"
       - "tests/test_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_objective.py"
       - "tests/test_agent_runtime_objective_repair.py"
@@ -134,6 +135,7 @@ jobs:
             alembic/versions/0057_agent_runtime_foundation.py \
             alembic/versions/0058_agent_chat_history.py \
             alembic/versions/0059_agent_spend_controls.py \
+            alembic/versions/0060_durable_agent_task_checkpoints.py \
             tests/test_agent_runtime_foundation.py \
             tests/test_agent_runtime_objective.py \
             tests/test_agent_runtime_objective_repair.py \
