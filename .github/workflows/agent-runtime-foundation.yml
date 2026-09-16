@@ -57,6 +57,7 @@ on:
       - "tests/test_personal_p3_calendar_draft.py"
       - "tests/test_personal_p6_approved_send.py"
       - "tests/test_personal_p8_invitation_lifecycle.py"
+      - "tests/test_personal_p8_verified_booking.py"
       - "tests/test_agent_spend_budget.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
@@ -160,6 +161,7 @@ jobs:
             tests/test_personal_p3_calendar_draft.py \
             tests/test_personal_p6_approved_send.py \
             tests/test_personal_p8_invitation_lifecycle.py \
+            tests/test_personal_p8_verified_booking.py \
             tests/test_agent_spend_budget.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
@@ -190,6 +192,7 @@ jobs:
           python -m unittest tests.test_personal_p3_calendar_draft -v
           python -m unittest tests.test_personal_p6_approved_send -v
           python -m unittest tests.test_personal_p8_invitation_lifecycle -v
+          python -m unittest tests.test_personal_p8_verified_booking -v
           python -m unittest tests.test_agent_spend_budget -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
