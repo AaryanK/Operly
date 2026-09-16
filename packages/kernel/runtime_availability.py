@@ -34,14 +34,7 @@ def _focus_resource_family(
     query: str,
     candidates: tuple[CapabilitySpec, ...],
 ) -> tuple[CapabilitySpec, ...]:
-    """Drop operation-only noise once a resource-specific capability family is found.
-
-    Capability search intentionally has broad operation recall. A generic verb like
-    "read" can therefore seed many unrelated read-only contracts. The model-compiled
-    resource hints are a stronger signal. When at least one candidate matches those
-    hints, keep the strongest resource matches plus siblings in their local capability
-    family so multi-step search -> read flows remain possible.
-    """
+    """Drop operation-only noise once a resource-specific capability family is found."""
 
     parsed = CapabilitySearchQuery.parse(query)
     if not parsed.resource_terms or len(candidates) <= 1:
@@ -76,6 +69,24 @@ def _focus_resource_family(
 class AvailabilityAwareKernelRuntime(OperlyKernelRuntime):
     """Kernel runtime with truthful, resource-focused capability exposure."""
 
+    def _candidates(
+        self,
+        *,
+        context: ExecutionContext,
+        query: str | None,
+        limit: int,
+    ) -> tuple[CapabilitySpec, ...]:
+        bounded_limit = max(1, min(limit, 50))
+        if query:
+            candidates = self.registry.search(
+                query,
+                context=context,
+                effective_only=True,
+                limit=max(bounded_limit, min(50, bounded_limit * 4)),
+            )
+            return _focus_resource_family(query, candidates)
+        return self.registry.effective(context)
+
     async def available_capabilities(
         self,
         db: AsyncSession,
@@ -85,18 +96,7 @@ class AvailabilityAwareKernelRuntime(OperlyKernelRuntime):
         limit: int = 50,
     ) -> tuple[CapabilitySpec, ...]:
         bounded_limit = max(1, min(limit, 50))
-        if query:
-            # Retrieve a wider bounded pool first; resource-family focus happens only
-            # after trusted registry permission/surface filtering.
-            candidates = self.registry.search(
-                query,
-                context=context,
-                effective_only=True,
-                limit=max(bounded_limit, min(50, bounded_limit * 4)),
-            )
-            candidates = _focus_resource_family(query, candidates)
-        else:
-            candidates = self.registry.effective(context)
+        candidates = self._candidates(context=context, query=query, limit=bounded_limit)
 
         available: list[CapabilitySpec] = []
         for spec in candidates:
@@ -109,3 +109,49 @@ class AvailabilityAwareKernelRuntime(OperlyKernelRuntime):
                 if len(available) >= bounded_limit:
                     break
         return tuple(available)
+
+    async def availability_blocker_code(
+        self,
+        db: AsyncSession,
+        *,
+        context: ExecutionContext,
+        query: str,
+        limit: int = 50,
+    ) -> str | None:
+        """Explain why authorized candidates are hidden, without exposing them.
+
+        The method is called only after normal availability filtering returns no tools.
+        If trusted registry search found no effective candidates, the caller should keep
+        the ordinary no-authorized-capability result. If candidates exist but providers
+        hide all of them, a provider may return a stable blocker code. Conflicting or
+        unexplained reasons collapse to a generic dependency-unavailable code.
+        """
+
+        candidates = self._candidates(context=context, query=query, limit=limit)
+        if not candidates:
+            return None
+
+        reasons: list[str] = []
+        unavailable_count = 0
+        for spec in candidates:
+            if await self.providers.is_available(
+                db,
+                context=context,
+                capability=spec,
+            ):
+                return None
+            unavailable_count += 1
+            reason = await self.providers.unavailability_reason(
+                db,
+                context=context,
+                capability=spec,
+            )
+            if reason:
+                reasons.append(reason)
+
+        if unavailable_count == 0:
+            return None
+        unique = set(reasons)
+        if len(unique) == 1 and len(reasons) == unavailable_count:
+            return reasons[0]
+        return "capability_dependency_unavailable"
