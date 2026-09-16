@@ -8,7 +8,19 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from packages.agent_runtime.contracts import (
+    AgentBudget,
+    AgentPlan,
+    AgentPlanStep,
+    AgentRunStatus,
+    AgentStepResult,
+    AgentStepStatus,
+    stable_step_request_id,
+)
+from packages.agent_runtime.store import create_run, transition_run
+from packages.agent_runtime.worker import _personal_post_step_gate
 from packages.database.account_connector_models import AccountConnector
+from packages.database.agent_runtime_models import AgentRuntimeRun
 from packages.database.db import Base
 from packages.database.kernel_models import KernelApproval, KernelRequestClaim
 from packages.database.models import AppUser
@@ -55,6 +67,42 @@ def verified_event(event_id: str, expected: dict) -> dict:
         },
         "attendees": [{"email": email} for email in expected.get("attendees") or []],
     }
+
+
+def invitation_plan(run_id: str) -> AgentPlan:
+    return AgentPlan(
+        run_id=run_id,
+        goal="Invite Alex and book only after Alex confirms",
+        budget=AgentBudget(max_steps=4, max_mutations=2),
+        steps=(
+            AgentPlanStep(
+                step_id="send",
+                capability_id="google.gmail.send_email",
+                arguments={
+                    "connector_id": "google-alpha",
+                    "to": ["alex@example.test"],
+                    "subject": "Tuesday at 2?",
+                    "text_body": "Would Tuesday at 2 PM work?",
+                },
+            ),
+            AgentPlanStep(
+                step_id="recheck",
+                capability_id="google.calendar.freebusy",
+                arguments={
+                    "connector_id": "google-alpha",
+                    "time_min": "2026-09-22T13:00:00-05:00",
+                    "time_max": "2026-09-22T16:00:00-05:00",
+                    "calendar_ids": ["primary"],
+                    "time_zone": "America/Chicago",
+                },
+            ),
+            AgentPlanStep(
+                step_id="book",
+                capability_id="google.calendar.create_event",
+                arguments=dict(EVENT_ARGS),
+            ),
+        ),
+    )
 
 
 class PersonalVerifiedCalendarBookingTests(unittest.IsolatedAsyncioTestCase):
@@ -306,6 +354,62 @@ class PersonalVerifiedCalendarBookingTests(unittest.IsolatedAsyncioTestCase):
             request_id=request_id,
         ))
         self.assertIn("uncertainty_reason", metadata)
+
+    async def test_personal_lifecycle_terminal_result_retains_verified_event_link(self):
+        run_id = "verified-booking-task"
+        plan = invitation_plan(run_id)
+        async with self.sessions() as db:
+            row = await create_run(db, context=self.context, plan=plan)
+            row.grants_reference_json = json.dumps(
+                {
+                    "authority_mode": "live_reresolve",
+                    "objective_ir": {"requires_future_wait": True},
+                }
+            )
+            await transition_run(db, run_id=run_id, to_status="running")
+            row.wait_predicate_json = json.dumps(
+                {
+                    "kind": "gmail_thread_reply",
+                    "state": "calendar_rechecked",
+                    "calendar_event_step_id": "book",
+                },
+                sort_keys=True,
+            )
+            await db.commit()
+
+        event_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+        event_link = f"https://calendar.google.com/calendar/event?eid={event_id}"
+        result = AgentStepResult(
+            step_id="book",
+            capability_id="google.calendar.create_event",
+            request_id=stable_step_request_id(run_id, "book"),
+            status=AgentStepStatus.COMPLETED,
+            result={
+                "calendar_id": "primary",
+                "event_id": event_id,
+                "event_link": event_link,
+                "verification_status": "read_back",
+            },
+        )
+        async with self.sessions() as db:
+            row = await db.get(AgentRuntimeRun, run_id)
+            gated = await _personal_post_step_gate(
+                db,
+                row,
+                plan,
+                plan.steps[2],
+                result,
+                (result,),
+            )
+            persisted = await db.get(AgentRuntimeRun, run_id)
+            outcome = json.loads(persisted.result_json)
+
+        self.assertIsNotNone(gated)
+        self.assertEqual(gated.status, AgentRunStatus.COMPLETED)
+        self.assertEqual(persisted.status, "completed")
+        self.assertEqual(outcome["calendar_event_id"], event_id)
+        self.assertEqual(outcome["calendar_event_link"], event_link)
+        self.assertEqual(outcome["verification_status"], "read_back")
 
 
 if __name__ == "__main__":
