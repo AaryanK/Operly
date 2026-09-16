@@ -100,7 +100,7 @@ class PersonalClientAdapterTests(unittest.IsolatedAsyncioTestCase):
             "message": "Find an afternoon next week when I am free.",
             "request_id": "client-request-001",
         }
-        with patch("packages.personal_modules.client_adapter._run", runner):
+        with patch("apps.api.agent_runtime_router._run", runner):
             first = await self._post(payload)
             second = await self._post(payload)
 
@@ -125,7 +125,7 @@ class PersonalClientAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_request_id_with_different_payload_is_rejected(self):
         runner = AsyncMock(side_effect=self._fake_run)
-        with patch("packages.personal_modules.client_adapter._run", runner):
+        with patch("apps.api.agent_runtime_router._run", runner):
             first = await self._post(
                 {
                     "message": "Check my calendar.",
@@ -159,7 +159,7 @@ class PersonalClientAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_other_account_cannot_continue_first_accounts_conversation(self):
         runner = AsyncMock(side_effect=self._fake_run)
-        with patch("packages.personal_modules.client_adapter._run", runner):
+        with patch("apps.api.agent_runtime_router._run", runner):
             alpha = await self._post(
                 {
                     "message": "Check my calendar.",
