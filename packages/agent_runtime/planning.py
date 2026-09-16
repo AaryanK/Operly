@@ -242,6 +242,11 @@ class GovernedAgentPlanner:
                 "planner input exceeds prompt budget",
                 code="planning_input_too_large",
             )
+
+        bind_spend_context = getattr(self.model, "bind_spend_context", None)
+        if callable(bind_spend_context):
+            bind_spend_context(context=context, run_id=clean_run_id)
+
         try:
             raw = await self.model.plan(request)
         except Exception as error:
