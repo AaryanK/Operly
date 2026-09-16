@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.agent_runtime_router import _conversation, _run
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.kernel.contracts import AuthorizationDecision, RuntimeRequest, RuntimeResponse
 from packages.kernel.idempotency import (
@@ -84,6 +83,10 @@ async def submit_personal_request(
     create a duplicate submission. Completed identical retries replay the stored result;
     an unresolved in-flight claim returns a truthful blocker for later reconciliation.
     """
+
+    # Keep Runtime1/httpx dependencies out of lightweight Personal capability imports.
+    # The client adapter pays that dependency cost only when the endpoint actually runs.
+    from apps.api.agent_runtime_router import _conversation, _run
 
     context = await resolve_personal_execution_context(
         db,
