@@ -17,12 +17,14 @@ on:
       - "packages/kernel/runtime_availability.py"
       - "packages/database/agent_runtime_models.py"
       - "packages/database/agent_chat_models.py"
+      - "packages/database/agent_spend_models.py"
       - "packages/database/schema.py"
       - "packages/workspace_modules/tools/runtime.py"
       - "packages/workspace_modules/integrations/discord/bot.py"
       - "evals/personal_task_completion/**"
       - "alembic/versions/0057_agent_runtime_foundation.py"
       - "alembic/versions/0058_agent_chat_history.py"
+      - "alembic/versions/0059_agent_spend_controls.py"
       - "tests/test_agent_runtime_foundation.py"
       - "tests/test_agent_runtime_objective.py"
       - "tests/test_agent_runtime_objective_repair.py"
@@ -37,6 +39,7 @@ on:
       - "tests/test_agent_runtime_personal_task_fixtures.py"
       - "tests/test_personal_agent_api_negative_fixtures.py"
       - "tests/test_personal_p3_calendar_draft.py"
+      - "tests/test_agent_spend_budget.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
       - "tests/test_agent_runtime_store.py"
@@ -86,6 +89,7 @@ jobs:
             packages/agent_runtime/outcome_evaluation.py \
             packages/agent_runtime/planning.py \
             packages/agent_runtime/runtime.py \
+            packages/agent_runtime/spend.py \
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
             packages/agent_runtime/telemetry.py \
@@ -97,11 +101,13 @@ jobs:
             packages/kernel/runtime_availability.py \
             packages/database/agent_runtime_models.py \
             packages/database/agent_chat_models.py \
+            packages/database/agent_spend_models.py \
             packages/database/schema.py \
             packages/workspace_modules/tools/runtime.py \
             packages/workspace_modules/integrations/discord/bot.py \
             alembic/versions/0057_agent_runtime_foundation.py \
             alembic/versions/0058_agent_chat_history.py \
+            alembic/versions/0059_agent_spend_controls.py \
             tests/test_agent_runtime_foundation.py \
             tests/test_agent_runtime_objective.py \
             tests/test_agent_runtime_objective_repair.py \
@@ -116,6 +122,7 @@ jobs:
             tests/test_agent_runtime_personal_task_fixtures.py \
             tests/test_personal_agent_api_negative_fixtures.py \
             tests/test_personal_p3_calendar_draft.py \
+            tests/test_agent_spend_budget.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
             tests/test_agent_runtime_store.py \
@@ -138,6 +145,7 @@ jobs:
           python -m unittest tests.test_agent_runtime_personal_task_fixtures -v
           python -m unittest tests.test_personal_agent_api_negative_fixtures -v
           python -m unittest tests.test_personal_p3_calendar_draft -v
+          python -m unittest tests.test_agent_spend_budget -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
           python -m unittest tests.test_agent_runtime_store -v
