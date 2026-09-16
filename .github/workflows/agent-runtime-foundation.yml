@@ -14,8 +14,13 @@ on:
       - "packages/personal_modules/client_adapter.py"
       - "packages/personal_modules/connectors.py"
       - "packages/personal_modules/google_completion_provider.py"
+      - "packages/personal_modules/reliable_google_provider.py"
+      - "packages/kernel/approvals.py"
       - "packages/kernel/capability_search.py"
+      - "packages/kernel/idempotency.py"
+      - "packages/kernel/providers.py"
       - "packages/kernel/registry.py"
+      - "packages/kernel/runtime.py"
       - "packages/kernel/runtime_availability.py"
       - "packages/database/agent_runtime_models.py"
       - "packages/database/agent_chat_models.py"
@@ -45,6 +50,7 @@ on:
       - "tests/test_personal_client_adapter.py"
       - "tests/test_personal_client_fixture_flow.py"
       - "tests/test_personal_p3_calendar_draft.py"
+      - "tests/test_personal_p6_approved_send.py"
       - "tests/test_agent_spend_budget.py"
       - "tests/test_agent_runtime_semantic_scope_hardening.py"
       - "tests/test_kernel_capability_search.py"
@@ -105,8 +111,13 @@ jobs:
             packages/personal_modules/client_adapter.py \
             packages/personal_modules/connectors.py \
             packages/personal_modules/google_completion_provider.py \
+            packages/personal_modules/reliable_google_provider.py \
+            packages/kernel/approvals.py \
             packages/kernel/capability_search.py \
+            packages/kernel/idempotency.py \
+            packages/kernel/providers.py \
             packages/kernel/registry.py \
+            packages/kernel/runtime.py \
             packages/kernel/runtime_availability.py \
             packages/database/agent_runtime_models.py \
             packages/database/agent_chat_models.py \
@@ -135,6 +146,7 @@ jobs:
             tests/test_personal_client_adapter.py \
             tests/test_personal_client_fixture_flow.py \
             tests/test_personal_p3_calendar_draft.py \
+            tests/test_personal_p6_approved_send.py \
             tests/test_agent_spend_budget.py \
             tests/test_agent_runtime_semantic_scope_hardening.py \
             tests/test_kernel_capability_search.py \
@@ -162,6 +174,7 @@ jobs:
           python -m unittest tests.test_personal_client_adapter -v
           python -m unittest tests.test_personal_client_fixture_flow -v
           python -m unittest tests.test_personal_p3_calendar_draft -v
+          python -m unittest tests.test_personal_p6_approved_send -v
           python -m unittest tests.test_agent_spend_budget -v
           python -m unittest tests.test_agent_runtime_semantic_scope_hardening -v
           python -m unittest tests.test_kernel_capability_search -v
