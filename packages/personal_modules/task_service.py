@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.agent_runtime.contracts import AgentBudget
 from packages.agent_runtime.inference import OpenAICompatibleAgentModel
-from packages.agent_runtime.planning import AgentPlannerModel, AgentPlanningError, GovernedAgentPlanner
+from packages.agent_runtime.planning import AgentPlannerModel, AgentPlannerRequest, AgentPlanningError, GovernedAgentPlanner
 from packages.agent_runtime.store import create_run, get_run_for_context, list_steps
 from packages.database.agent_runtime_models import AgentRuntimeRun
 from packages.kernel.registry import CapabilityRegistry
@@ -21,6 +21,40 @@ from packages.security.surfaces import SurfaceKind
 
 class PersonalTaskConflict(RuntimeError):
     pass
+
+
+_INVITATION_PLANNER_RULE = (
+    " If the user's objective explicitly requires waiting for an invited recipient's "
+    "reply or confirmation before booking a calendar event, and the relevant supplied "
+    "capabilities are available, order the planned operations as Gmail send_email, then "
+    "Calendar freebusy for the intended slot, then Calendar create_event. Operly will "
+    "durably pause after the send and will execute the freebusy step only after a "
+    "verified reply from the intended correspondent. Never place create_event before "
+    "that post-reply freebusy recheck. Do not invent a polling, wait, or approval "
+    "capability; waiting and approval are server-owned runtime behavior."
+)
+
+
+@dataclass(slots=True)
+class _PersonalTaskPlannerModel:
+    """Add server-owned Personal lifecycle rules without changing model authority."""
+
+    delegate: AgentPlannerModel
+
+    def bind_spend_context(self, *, context: ExecutionContext, run_id: str) -> None:
+        bind = getattr(self.delegate, "bind_spend_context", None)
+        if callable(bind):
+            bind(context=context, run_id=run_id)
+
+    async def plan(self, request: AgentPlannerRequest):
+        enriched = AgentPlannerRequest(
+            goal=request.goal,
+            capabilities=request.capabilities,
+            max_steps=request.max_steps,
+            max_mutations=request.max_mutations,
+            instructions=request.instructions + _INVITATION_PLANNER_RULE,
+        )
+        return await self.delegate.plan(enriched)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,9 +189,10 @@ async def submit_personal_task(
     for spec in available:
         planning_registry.register(spec)
 
+    planner_model = _PersonalTaskPlannerModel(model or OpenAICompatibleAgentModel())
     planner = GovernedAgentPlanner(
         registry=planning_registry,
-        model=model or OpenAICompatibleAgentModel(),
+        model=planner_model,
     )
     plan = await planner.plan(
         run_id=run_id,
