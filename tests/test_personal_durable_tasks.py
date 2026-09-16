@@ -235,7 +235,7 @@ class PersonalDurableTaskTests(unittest.IsolatedAsyncioTestCase):
                     created = await client.post(
                         "/api/personal-tools/client/tasks",
                         json={
-                            "message": "Wait for Alex to confirm before booking the meeting.",
+                            "message": "Wait for Alex to confirm before checking calendar availability and booking the meeting.",
                             "request_id": "durable-wait-001",
                         },
                     )
