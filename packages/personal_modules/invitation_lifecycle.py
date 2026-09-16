@@ -114,6 +114,44 @@ def _established_after_epoch(predicate: dict[str, Any]) -> int | None:
     return max(0, int(established.timestamp()) - 1)
 
 
+def _message_references_invitation(
+    message: dict[str, Any],
+    predicate: dict[str, Any],
+) -> bool:
+    expected = str(predicate.get("rfc822_message_id") or "").strip()
+    if not expected:
+        return False
+    referenced = set(
+        re.findall(
+            r"<[^<>\s]+>",
+            " ".join(
+                (
+                    str(message.get("in_reply_to") or ""),
+                    str(message.get("references") or ""),
+                )
+            ),
+        )
+    )
+    return expected in referenced
+
+
+def _message_after_invitation(
+    message: dict[str, Any],
+    predicate: dict[str, Any],
+) -> bool:
+    established = _as_utc(predicate.get("established_at"))
+    if established is None:
+        return False
+    try:
+        internal_date_ms = int(message.get("internal_date_ms"))
+    except (TypeError, ValueError):
+        return False
+    # Allow one second of provider clock/serialization granularity, matching the Gmail
+    # search boundary above, but never accept a materially pre-invitation message.
+    threshold_ms = int(established.timestamp() * 1000) - 1000
+    return internal_date_ms >= threshold_ms
+
+
 def _invitation_steps(
     plan: AgentPlan,
     send_step: AgentPlanStep,
@@ -684,7 +722,14 @@ async def poll_invitation_wait(
     expected_sender = str(predicate.get("expected_sender") or "").lower()
     thread_id = str(predicate.get("thread_id") or "")
     sent_message_id = str(predicate.get("sent_message_id") or "")
-    if after_epoch is None or not connector_id or not expected_sender or not thread_id:
+    parent_message_id = str(predicate.get("rfc822_message_id") or "")
+    if (
+        after_epoch is None
+        or not connector_id
+        or not expected_sender
+        or not thread_id
+        or not parent_message_id
+    ):
         await _fail_wait(
             db,
             row=row,
@@ -770,6 +815,10 @@ async def poll_invitation_wait(
         if str(message.get("thread_id") or "") != thread_id:
             continue
         if expected_sender not in _addresses(message.get("from")):
+            continue
+        if not _message_references_invitation(message, predicate):
+            continue
+        if not _message_after_invitation(message, predicate):
             continue
 
         classification = classify_invitation_reply(message.get("text_body"))
