@@ -15,12 +15,14 @@ from packages.kernel.approvals import ApprovalError, approval_json, decide_appro
 from packages.kernel.contracts import CapabilitySpec, RuntimeRequest
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.kernel.runtime import RuntimeExecutionError
+from packages.personal_modules.client_adapter import router as personal_client_router
 from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
 
 
 router = APIRouter(prefix="/api/personal-tools", tags=["personal-tools"])
+router.include_router(personal_client_router)
 _runtime = build_personal_runtime()
 
 
