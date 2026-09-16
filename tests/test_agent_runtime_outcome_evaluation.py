@@ -52,8 +52,8 @@ class OutcomeEvaluationFixtureTests(unittest.TestCase):
                 external_id="draft-real-1",
                 payload={
                     "to": ["alex@example.test"],
-                    "time_zone": "America/Chicago",
-                    "subject": "Meeting next week",
+                    "subject": "Tuesday at 2?",
+                    "text_body": "Hi Alex,\n\nWould Tuesday at 2:00 PM work for you?",
                 },
             )
         )
