@@ -7,8 +7,16 @@ import {
   useState,
 } from "react";
 
-import { ApiError, api } from "../../api";
+import { api } from "../../api";
 import { WorkspaceSummary } from "../../app/types";
+import {
+  CapabilityApproval,
+  CapabilityTool,
+  approveAndResumeCapability,
+  denyCapability,
+  executeCapability,
+  loadWorkspaceCapabilities,
+} from "../../runtime/capabilityRuntime";
 
 export type Row = Record<string, unknown>;
 
@@ -36,32 +44,9 @@ export type DiscordStatus = {
   ai_enabled: boolean;
 };
 
-export type Tool = {
-  id: string;
-  display_name: string;
-  description: string;
-  provider_id: string;
-  approval_required: boolean;
-  endpoint: string;
-  method: "POST";
-  permissions: string[];
-  risk: string;
-};
+export type Tool = CapabilityTool;
 
-type ToolIndex = { tools: Tool[] };
-type ToolRun = {
-  run_id: string;
-  status: string;
-  capability_id: string;
-  result: unknown;
-  done: boolean;
-};
-
-type PendingApproval = {
-  approvalId: string;
-  requestId: string;
-  tool: Tool;
-  args: Row;
+type PendingApproval = CapabilityApproval & {
   summary: string;
   onSuccess?: (value: unknown) => void | Promise<void>;
 };
@@ -138,13 +123,6 @@ export const formatWhen = (value: unknown) => {
       }).format(date);
 };
 
-const stableRequestId = (capabilityId: string) => {
-  try {
-    return `${capabilityId}:${crypto.randomUUID()}`;
-  } catch {
-    return `${capabilityId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  }
-};
 
 export function IntegrationRuntimeProvider({
   workspace,
@@ -173,11 +151,11 @@ export function IntegrationRuntimeProvider({
       const [connectorRows, discord, index] = await Promise.all([
         api<Connection[]>("/connectors"),
         api<DiscordStatus>("/connectors/discord/status"),
-        api<ToolIndex>("/workspace-tools"),
+        loadWorkspaceCapabilities(),
       ]);
       setConnections(connectorRows);
       setDiscordStatus(discord);
-      setTools(index.tools);
+      setTools(index);
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -210,27 +188,19 @@ export function IntegrationRuntimeProvider({
       return undefined;
     }
 
-    const requestId = stableRequestId(id);
     setBusy(id);
     setError(null);
     setNotice(null);
     try {
-      const run = await api<ToolRun>(tool.endpoint, {
-        method: tool.method,
-        body: JSON.stringify({ arguments: args, request_id: requestId }),
-      });
-      await onSuccess?.(run.result);
-      setNotice(`${tool.display_name} completed.`);
-      return run.result;
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "approval_required") {
-        const details = object(caught.details);
-        const approvalId = text(details.approval_id);
-        if (approvalId) {
-          setPending({ approvalId, requestId, tool, args, summary, onSuccess });
-          return undefined;
-        }
+      const execution = await executeCapability(tool, args);
+      if (execution.status === "approval_required") {
+        setPending({ ...execution.approval, summary, onSuccess });
+        return undefined;
       }
+      await onSuccess?.(execution.run.result);
+      setNotice(`${tool.display_name} completed.`);
+      return execution.run.result;
+    } catch (caught) {
       setError(caught instanceof Error ? caught.message : `${tool.display_name} failed`);
       return undefined;
     } finally {
@@ -244,21 +214,7 @@ export function IntegrationRuntimeProvider({
     setBusy(approval.tool.id);
     setError(null);
     try {
-      await api(
-        `/workspace-tools/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
-        {
-          method: "POST",
-          body: JSON.stringify({ approved: true }),
-        },
-      );
-      const run = await api<ToolRun>(approval.tool.endpoint, {
-        method: approval.tool.method,
-        body: JSON.stringify({
-          arguments: approval.args,
-          request_id: approval.requestId,
-          approval_id: approval.approvalId,
-        }),
-      });
+      const run = await approveAndResumeCapability(approval);
       await approval.onSuccess?.(run.result);
       setNotice(`${approval.tool.display_name} completed after approval.`);
       setPending(null);
@@ -275,13 +231,7 @@ export function IntegrationRuntimeProvider({
     setBusy(approval.tool.id);
     setError(null);
     try {
-      await api(
-        `/workspace-tools/approvals/${encodeURIComponent(approval.approvalId)}/decision`,
-        {
-          method: "POST",
-          body: JSON.stringify({ approved: false }),
-        },
-      );
+      await denyCapability(approval);
       setPending(null);
       setNotice(`${approval.tool.display_name} was cancelled.`);
     } catch (caught) {
