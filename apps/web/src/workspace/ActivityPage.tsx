@@ -3,7 +3,6 @@ import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
 import { decideCapabilityApproval } from "../runtime/capabilityRuntime";
-import { LegacyApprovalsPanel } from "./LegacyApprovalsPanel";
 
 type Row = Record<string, unknown>;
 type ActivityData = {
@@ -145,7 +144,6 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
           </div>)}</div> : <Empty>No Workspace tool approvals yet.</Empty>}
         </article>
 
-        <LegacyApprovalsPanel />
 
         <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Execution</span><h2>Tasks</h2></div><span>{openTasks.length} open</span></div>{data.tasks.length ? <div className="row-list">{data.tasks.slice(0, 14).map((item) => <div className="data-row" key={text(item.id)}><div><strong>{text(item.title, "Task")}</strong><small>{item.due_at ? `Due ${when(item.due_at)}` : titleCase(item.status)}</small></div>{text(item.status) !== "completed" ? <button type="button" className="icon-action" onClick={() => void complete(text(item.id))}>✓</button> : <Status value="completed" />}</div>)}</div> : <Empty>No tasks yet.</Empty>}</article>
 
