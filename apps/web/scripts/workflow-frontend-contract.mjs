@@ -11,7 +11,7 @@ const rootApp = read("src/app/App.tsx");
 const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 const entry = read("src/main.tsx");
 const liveStyles = read("src/ui/workspace.css");
-const surfacePolish = read("src/ui/surface-polish.css");
+const experienceStyles = read("src/ui/experience.css");
 const capabilityRuntime = read("src/runtime/capabilityRuntime.ts");
 
 const requiredCapabilities = [
@@ -104,10 +104,10 @@ for (const marker of [
 }
 if (access.includes('value="public"')) failures.push("MCP frontend must not offer anonymous/public tool execution");
 
-for (const stylesheet of ["foundation.css", "workspace.css", "mobile.css", "surface-polish.css"]) {
+for (const stylesheet of ["foundation.css", "workspace.css", "experience.css"]) {
   if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for advanced workspace surfaces`);
 }
-if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/workspace.css')) failures.push("surface-polish.css must load after consolidated workspace styles");
+if (entry.lastIndexOf('./ui/experience.css') < entry.lastIndexOf('./ui/workspace.css')) failures.push("experience.css must load after consolidated workspace styles");
 for (const marker of [
   "@media (pointer: coarse)",
   ".workspace-lite-advanced .metric-grid",
@@ -126,7 +126,7 @@ for (const marker of [
   ".workspace-lite-advanced .integration-tabs",
   ".workspace-lite-advanced details code",
 ]) {
-  if (!surfacePolish.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
+  if (!experienceStyles.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
 }
 
 if (failures.length) {
