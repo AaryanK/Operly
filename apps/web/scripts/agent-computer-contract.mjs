@@ -22,6 +22,7 @@ const [
   tools,
   main,
   schema,
+  workspaceStyles,
 ] = await Promise.all([
   text("apps/web/src/workspace/AgentComputerPage.tsx"),
   text("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"),
@@ -35,6 +36,7 @@ const [
   text("packages/workspace_modules/tools/__init__.py"),
   text("apps/api/main.py"),
   text("packages/database/schema.py"),
+  text("apps/web/src/ui/workspace.css"),
 ]);
 
 for (const file of [
@@ -51,9 +53,9 @@ for (const file of [
   "apps/sandbox_runner/server.mjs",
   "apps/sandbox_runner/computer_tool.py",
   "apps/sandbox_runner/README.md",
-  "apps/web/src/ui/agent-computer.css",
 ]) assert(await exists(file), `Agent Computer implementation is missing ${file}`);
 assert(!(await exists("apps/computer_runner")), "Agent Computer must not create a second runner service");
+assert(workspaceStyles.includes(".agent-computer-layout"), "Consolidated Workspace styles must retain Agent Computer presentation");
 
 assert(liveShell.includes('import("../workspace/AgentComputerPage")'), "Live Workspace shell must lazy-load Agent Computer");
 assert(liveShell.includes('case "agent-computer"'), "Live Workspace shell must render Agent Computer");
