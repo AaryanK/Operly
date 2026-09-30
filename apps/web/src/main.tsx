@@ -12,7 +12,6 @@ import "./ui/connection-avatars.css";
 import "./ui/workspace-lite.css";
 import "./ui/workspace-assistant-shell.css";
 import "./ui/workspace-os.css";
-import "./ui/workspace-human.css";
 import "./ui/integration-workbench.css";
 import "./ui/agent-computer.css";
 import "./ui/mobile.css";
