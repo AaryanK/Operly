@@ -42,6 +42,8 @@ const [
   canvaPanel,
   discordPanel,
   connectionsManager,
+  capabilityRuntime,
+  workspaceOSPanel,
 ] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("apps/web/src/workspace/ActivityPage.tsx"),
@@ -66,6 +68,8 @@ const [
   text("apps/web/src/workspace/integrations/CanvaPanel.tsx"),
   text("apps/web/src/workspace/integrations/DiscordPanel.tsx"),
   text("apps/web/src/workspace/integrations/ConnectionsManager.tsx"),
+  text("apps/web/src/runtime/capabilityRuntime.ts"),
+  text("apps/web/src/workspace-lite/WorkspaceOSPanel.tsx"),
 ]);
 
 assert(
@@ -207,16 +211,32 @@ assert(integrationWorkbench.includes("CanvaPanel"), "Integration workbench must 
 assert(integrationWorkbench.includes("DiscordPanel"), "Integration workbench must mount Discord UI");
 
 assert(
-  integrationRuntime.includes('api<ToolIndex>("/workspace-tools")'),
-  "Integration runtime must discover currently executable Workspace tools",
+  integrationRuntime.includes("loadWorkspaceCapabilities()"),
+  "Integration runtime must discover Workspace tools through the shared capability runtime",
 );
 assert(
-  integrationRuntime.includes("tool.endpoint"),
-  "Integration runtime must execute backend-advertised endpoints rather than bypassing Workspace tools",
+  integrationRuntime.includes("executeCapability(tool, args)"),
+  "Integration runtime must execute through the shared frontend capability runtime",
 );
 assert(
-  integrationRuntime.includes("/workspace-tools/approvals/"),
-  "Integration runtime must resume approval-gated tools through the Workspace approval boundary",
+  integrationRuntime.includes("approveAndResumeCapability(approval)") && integrationRuntime.includes("denyCapability(approval)"),
+  "Integration runtime must use the shared approval and resume path",
+);
+assert(
+  capabilityRuntime.includes('api<CapabilityCatalog>("/workspace-tools")') && capabilityRuntime.includes("api<CapabilityRun>(tool.endpoint"),
+  "Shared capability runtime must discover tools and execute backend-advertised endpoints",
+);
+assert(
+  capabilityRuntime.includes("/workspace-tools/approvals/") && capabilityRuntime.includes("request_id: requestId") && capabilityRuntime.includes("approval_id: options.approvalId"),
+  "Shared capability runtime must preserve request identity across approval resume",
+);
+assert(
+  workspaceOSPanel.includes("recordCapabilityId(moduleKey, def.entity, operation)") && workspaceOSPanel.includes("executeCapability(tool, args)") && workspaceOSPanel.includes("loadWorkspaceCapabilities()"),
+  "Generic Workspace record mutations must execute through the shared capability runtime",
+);
+assert(
+  !workspaceOSPanel.includes('method: record?.id ? "PATCH" : "POST"') && !workspaceOSPanel.includes('method: "DELETE" }); await load(data.offset)'),
+  "Generic Workspace record create/update/delete must not bypass the Kernel through direct REST mutations",
 );
 assert(
   integrationRuntime.includes('"/connectors/google/connect?tier=assistant"'),
