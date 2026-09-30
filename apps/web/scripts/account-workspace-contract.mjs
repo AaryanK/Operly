@@ -22,6 +22,11 @@ const [safeShell, accountSettings, personalHome, main, accountOverrides, appType
   repoText("apps/api/session.py"),
 ]);
 
+const themeMarker = "===== operly-settings-theme.css =====";
+const themeStart = accountOverrides.indexOf(themeMarker);
+assert(themeStart >= 0, "Consolidated account overrides must preserve the Operly theme section");
+const operlyThemeCss = accountOverrides.slice(themeStart);
+
 assert(
   safeShell.includes('import { AccountSettings } from "../account/AccountSettings"') && !safeShell.includes('lazy(() => import("../account/AccountSettings")'),
   "Account settings must ship with the current authenticated shell instead of loading as a legacy lazy UI island",
@@ -120,11 +125,11 @@ assert(
   "The structural account shell must still own settings, user-panel, and new-conversation layout",
 );
 assert(
-  accountOverrides.includes('var(--ui-accent') &&
-  accountOverrides.includes('var(--ui-panel') &&
-  accountOverrides.includes('var(--ui-nav') &&
-  !accountOverrides.includes('#5865f2') &&
-  !accountOverrides.includes('#313338'),
+  operlyThemeCss.includes('var(--ui-accent') &&
+  operlyThemeCss.includes('var(--ui-panel') &&
+  operlyThemeCss.includes('var(--ui-nav') &&
+  !operlyThemeCss.includes('#5865f2') &&
+  !operlyThemeCss.includes('#313338'),
   "The final settings presentation must use Operly theme tokens instead of Discord colors",
 );
 
