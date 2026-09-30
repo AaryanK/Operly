@@ -239,7 +239,7 @@ function RecordTable({ moduleKey, def, tools, writable }: { moduleKey: string; d
   </section>;
 }
 
-function InventoryStock({ writable }: { writable: boolean }) {
+function InventoryStock({ tools, writable }: { tools: Map<string, CapabilityTool>; writable: boolean }) {
   const [data, setData] = useState<RecordPage>({ items: [], total: 0, limit: 200, offset: 0 });
   const [error, setError] = useState("");
   const load = useCallback(async () => {
@@ -248,8 +248,14 @@ function InventoryStock({ writable }: { writable: boolean }) {
   }, []);
   useEffect(() => { void load(); }, [load]);
   const adjust = async (itemId: string, amount: number, reason: string) => {
-    try { await api(`/workspace-os/inventory/${itemId}/adjust`, { method: "POST", body: JSON.stringify({ quantity_change: amount, reason }) }); await load(); }
-    catch (caught) { setError(errorText(caught, "Could not adjust inventory")); }
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.inventory.adjust"),
+        { item_id: itemId, quantity_change: amount, reason },
+        "Approve this exact inventory adjustment?",
+      );
+      await load();
+    } catch (caught) { setError(errorText(caught, "Could not adjust inventory")); }
   };
   return <section className="workspace-os-records"><div className="workspace-os-toolbar"><div><h2>Stock</h2><span>{data.total} catalog items</span></div></div>{error && <div className="workspace-os-error">{error}</div>}
     <div className="workspace-os-inventory-grid">{data.items.map((item) => <article key={String(item.id)} className={Number(item.stock_qty) <= Number(item.reorder_level) ? "low" : ""}>
@@ -293,16 +299,23 @@ function ModulePage({ module, tools }: { module: ModuleInfo; tools: Map<string, 
   const def = inventoryTabs.find((candidate) => candidate.entity === activeEntity) || inventoryTabs[0];
   return <div className="workspace-os-module-page"><header className="workspace-os-module-header"><div><span>{module.category.toUpperCase()}</span><h1>{module.name}</h1><p>{module.description}</p></div></header>
     <nav className="workspace-os-entity-tabs">{inventoryTabs.map((candidate) => <button key={candidate.entity} className={candidate.entity === def.entity ? "active" : ""} onClick={() => setActiveEntity(candidate.entity)}>{candidate.label}</button>)}</nav>
-    {module.key === "inventory" && def.entity === "stock" ? <InventoryStock writable={module.can_write} /> : <RecordTable moduleKey={module.key} def={def} tools={tools} writable={module.can_write} />}
+    {module.key === "inventory" && def.entity === "stock" ? <InventoryStock tools={tools} writable={module.can_write} /> : <RecordTable moduleKey={module.key} def={def} tools={tools} writable={module.can_write} />}
   </div>;
 }
 
-function GeneralSettings({ context, onReload }: { context: WorkspaceContext; onReload: () => Promise<void> }) {
+function GeneralSettings({ context, tools, onReload }: { context: WorkspaceContext; tools: Map<string, CapabilityTool>; onReload: () => Promise<void> }) {
   const canManage = context.permissions.includes("workspace:settings:manage") || context.role === "owner";
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [saved, setSaved] = useState(false);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); setError(""); setSaved(false);
-    try { await api("/workspace-os/settings", { method: "PATCH", body: JSON.stringify({ name: form.get("name"), timezone: form.get("timezone"), logo_url: form.get("logo_url") }) }); await onReload(); setSaved(true); }
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.settings.update"),
+        { name: form.get("name"), timezone: form.get("timezone"), logo_url: form.get("logo_url") },
+        "Approve these workspace setting changes?",
+      );
+      await onReload(); setSaved(true);
+    }
     catch (caught) { setError(errorText(caught, "Could not update workspace")); } finally { setBusy(false); }
   };
   return <form className="workspace-os-settings-card" onSubmit={submit}><h2>Workspace identity</h2><p>Name, timezone and visual identity are shared by everyone in this workspace.</p>
@@ -314,16 +327,31 @@ function GeneralSettings({ context, onReload }: { context: WorkspaceContext; onR
   </form>;
 }
 
-function ModuleSettings({ context, onReload }: { context: WorkspaceContext; onReload: () => Promise<void> }) {
+function ModuleSettings({ context, tools, onReload }: { context: WorkspaceContext; tools: Map<string, CapabilityTool>; onReload: () => Promise<void> }) {
   const [presets, setPresets] = useState<Preset[]>([]); const [busy, setBusy] = useState(""); const [error, setError] = useState("");
   useEffect(() => { api<Preset[]>("/workspace-os/presets").then(setPresets).catch(() => setPresets([])); }, []);
   const toggle = async (module: ModuleInfo) => {
-    setBusy(module.key); setError(""); try { await api(`/workspace-os/modules/${module.key}`, { method: "PUT", body: JSON.stringify({ enabled: !module.enabled, configuration: {} }) }); await onReload(); }
+    setBusy(module.key); setError(""); try {
+      await runWorkspaceMutation(
+        tools.get("workspace.modules.set"),
+        { module_key: module.key, enabled: !module.enabled, configuration: {} },
+        `Approve changing the ${module.name} module state?`,
+      );
+      await onReload();
+    }
     catch (caught) { setError(errorText(caught, "Could not change module")); } finally { setBusy(""); }
   };
   const apply = async (preset: Preset) => {
     if (!window.confirm(`Apply the ${preset.name} pack? Existing modules and data will be preserved.`)) return;
-    setBusy(`preset:${preset.key}`); setError(""); try { await api(`/workspace-os/presets/${preset.key}/apply`, { method: "POST" }); await onReload(); }
+    setBusy(`preset:${preset.key}`); setError(""); try {
+      await runWorkspaceMutation(
+        tools.get("workspace.presets.apply"),
+        { preset_key: preset.key },
+        `Approve applying the ${preset.name} workspace pack?`,
+        true,
+      );
+      await onReload();
+    }
     catch (caught) { setError(errorText(caught, "Could not apply workspace pack")); } finally { setBusy(""); }
   };
   return <div className="workspace-os-settings-stack"><section className="workspace-os-settings-card"><h2>Starter packs</h2><p>Starter packs only enable modules. They never delete data or create a separate kind of workspace.</p>
@@ -338,7 +366,7 @@ async function copyText(value: string): Promise<void> {
   const area = document.createElement("textarea"); area.value = value; document.body.appendChild(area); area.select(); document.execCommand("copy"); area.remove();
 }
 
-function MembersSettings({ context }: { context: WorkspaceContext }) {
+function MembersSettings({ context, tools }: { context: WorkspaceContext; tools: Map<string, CapabilityTool> }) {
   const [members, setMembers] = useState<Member[]>([]); const [roles, setRoles] = useState<RoleInfo[]>([]); const [invites, setInvites] = useState<Invite[]>([]);
   const [createdInvite, setCreatedInvite] = useState<CreatedInvite | null>(null); const [copied, setCopied] = useState(false); const [error, setError] = useState("");
   const canManage = context.permissions.includes("workspace:members:manage") || context.role === "owner";
@@ -351,19 +379,61 @@ function MembersSettings({ context }: { context: WorkspaceContext }) {
   useEffect(() => { void load(); }, [load]);
   const add = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget); setError("");
-    try { await api("/workspace-os/members", { method: "POST", body: JSON.stringify({ email: form.get("email"), role: form.get("role") }) }); event.currentTarget.reset(); await load(); }
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.members.add"),
+        { email: form.get("email"), role: form.get("role") },
+        "Approve adding this person to the workspace with the selected role?",
+      );
+      event.currentTarget.reset(); await load();
+    }
     catch (caught) { setError(errorText(caught, "Could not add member")); }
   };
   const createInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget); setError(""); setCopied(false);
     try {
-      const result = await api<CreatedInvite>("/workspace-os/invitations", { method: "POST", body: JSON.stringify({ email: form.get("email") || null, role: form.get("role"), ttl_days: Number(form.get("ttl_days") || 7) }) });
+      const result = await runWorkspaceMutation(
+        tools.get("workspace.invitations.create"),
+        { email: form.get("email") || null, role: form.get("role"), ttl_days: Number(form.get("ttl_days") || 7) },
+        "Approve creating this workspace invitation?",
+      ) as CreatedInvite;
       setCreatedInvite(result); await load();
     } catch (caught) { setError(errorText(caught, "Could not create invite link")); }
   };
-  const setRole = async (userId: string, role: string) => { try { await api(`/workspace-os/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }); await load(); } catch (caught) { setError(errorText(caught, "Could not change role")); } };
-  const remove = async (member: Member) => { if (!window.confirm(`Remove ${member.display_name || member.email} from this workspace?`)) return; try { await api(`/workspace-os/members/${member.user_id}`, { method: "DELETE" }); await load(); } catch (caught) { setError(errorText(caught, "Could not remove member")); } };
-  const revoke = async (invite: Invite) => { if (!window.confirm("Revoke this invitation?")) return; try { await api(`/workspace-os/invitations/${invite.id}`, { method: "DELETE" }); await load(); } catch (caught) { setError(errorText(caught, "Could not revoke invitation")); } };
+  const setRole = async (userId: string, role: string) => {
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.members.role.update"),
+        { user_id: userId, role },
+        "Approve changing this workspace member's role?",
+      );
+      await load();
+    } catch (caught) { setError(errorText(caught, "Could not change role")); }
+  };
+  const remove = async (member: Member) => {
+    if (!window.confirm(`Remove ${member.display_name || member.email} from this workspace?`)) return;
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.members.remove"),
+        { user_id: member.user_id },
+        "Approve removing this workspace member?",
+        true,
+      );
+      await load();
+    } catch (caught) { setError(errorText(caught, "Could not remove member")); }
+  };
+  const revoke = async (invite: Invite) => {
+    if (!window.confirm("Revoke this invitation?")) return;
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.invitations.revoke"),
+        { invitation_id: invite.id },
+        "Approve revoking this invitation?",
+        true,
+      );
+      await load();
+    } catch (caught) { setError(errorText(caught, "Could not revoke invitation")); }
+  };
   return <div className="workspace-os-settings-stack"><section className="workspace-os-settings-card"><h2>Members & access</h2><p>Workspace membership is the authority boundary. The selected workspace plus the member's role determines what that session can read or change.</p>{error && <div className="workspace-os-error">{error}</div>}
     {canManage && <form className="workspace-os-member-add" onSubmit={add}><input name="email" type="email" placeholder="Existing Operly account email" required /><select name="role" defaultValue="employee">{roles.map((role) => <option key={role.key} value={role.key}>{role.name}</option>)}</select><button className="primary">Add member</button></form>}
     <div className="workspace-os-members">{members.map((member) => <article key={member.user_id}><div><strong>{member.display_name || member.email}</strong><span>{member.email}</span></div>{canManage ? <><select value={member.role} onChange={(event) => void setRole(member.user_id, event.target.value)}>{roles.map((role) => <option key={role.key} value={role.key}>{role.name}</option>)}</select><button onClick={() => void remove(member)}>Remove</button></> : <b>{humanize(member.role)}</b>}</article>)}</div>
@@ -374,7 +444,7 @@ function MembersSettings({ context }: { context: WorkspaceContext }) {
   </section>}</div>;
 }
 
-function RolesSettings({ context }: { context: WorkspaceContext }) {
+function RolesSettings({ context, tools }: { context: WorkspaceContext; tools: Map<string, CapabilityTool> }) {
   const [data, setData] = useState<RolesResponse>({ roles: [], known_permissions: [] }); const [selected, setSelected] = useState(""); const [selectedPermissions, setSelectedPermissions] = useState<Set<string>>(new Set()); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const canManage = context.permissions.includes("workspace:roles:manage") || context.role === "owner";
   const load = useCallback(async () => { try { const result = await api<RolesResponse>("/workspace-os/roles"); setData(result); setSelected((value) => value || result.roles[0]?.key || ""); } catch (caught) { setError(errorText(caught, "Could not load roles")); } }, []);
@@ -382,8 +452,34 @@ function RolesSettings({ context }: { context: WorkspaceContext }) {
   const role = data.roles.find((candidate) => candidate.key === selected);
   const permissionKey = role?.permissions.join("|") || "";
   useEffect(() => { setSelectedPermissions(new Set(role?.permissions || [])); }, [role?.key, permissionKey]);
-  const save = async () => { if (!role) return; setBusy(true); setError(""); try { await api(`/workspace-os/roles/${role.key}`, { method: "PUT", body: JSON.stringify({ name: role.name, permissions: [...selectedPermissions] }) }); await load(); } catch (caught) { setError(errorText(caught, "Could not save role")); } finally { setBusy(false); } };
-  const create = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); const name = String(form.get("name") || "").trim(); const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); if (!key) return; try { await api(`/workspace-os/roles/${key}`, { method: "PUT", body: JSON.stringify({ name, permissions: ["workspace:read"] }) }); await load(); setSelected(key); event.currentTarget.reset(); } catch (caught) { setError(errorText(caught, "Could not create role")); } };
+  const save = async () => {
+    if (!role) return;
+    setBusy(true); setError("");
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.roles.permissions.set"),
+        { role_key: role.key, name: role.name, permissions: [...selectedPermissions] },
+        `Approve changing permissions for ${role.name}?`,
+      );
+      await load();
+    } catch (caught) { setError(errorText(caught, "Could not save role")); }
+    finally { setBusy(false); }
+  };
+  const create = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "").trim();
+    const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!key) return;
+    try {
+      await runWorkspaceMutation(
+        tools.get("workspace.roles.permissions.set"),
+        { role_key: key, name, permissions: ["workspace:read"] },
+        `Approve creating the ${name} role?`,
+      );
+      await load(); setSelected(key); event.currentTarget.reset();
+    } catch (caught) { setError(errorText(caught, "Could not create role")); }
+  };
   const groups = useMemo(() => { const result: Record<string, string[]> = {}; for (const permission of data.known_permissions) { const group = permission.split(":", 1)[0]; (result[group] ||= []).push(permission); } return result; }, [data.known_permissions]);
   return <div className="workspace-os-settings-card"><h2>Roles & permissions</h2><p>Built-in roles evolve with safe Operly defaults. Custom roles remain explicit so new modules never silently grant them authority.</p>{error && <div className="workspace-os-error">{error}</div>}
     {canManage && <form className="workspace-os-role-add" onSubmit={create}><input name="name" placeholder="New custom role" required /><button>Create role</button></form>}
@@ -393,11 +489,11 @@ function RolesSettings({ context }: { context: WorkspaceContext }) {
   </div>;
 }
 
-function Settings({ context, onReload }: { context: WorkspaceContext; onReload: () => Promise<void> }) {
+function Settings({ context, tools, onReload }: { context: WorkspaceContext; tools: Map<string, CapabilityTool>; onReload: () => Promise<void> }) {
   const [tab, setTab] = useState("general");
   return <div className="workspace-os-settings"><header><span>WORKSPACE SETTINGS</span><h1>{context.workspace.name}</h1><p>Workspace identity, installed modules and member authority all use the same session-scoped boundary.</p></header>
     <nav className="workspace-os-settings-tabs">{[["general", "General"], ["modules", "Modules"], ["members", "Members"], ["roles", "Roles & permissions"]].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
-    {tab === "general" && <GeneralSettings context={context} onReload={onReload} />}{tab === "modules" && <ModuleSettings context={context} onReload={onReload} />}{tab === "members" && <MembersSettings context={context} />}{tab === "roles" && <RolesSettings context={context} />}
+    {tab === "general" && <GeneralSettings context={context} tools={tools} onReload={onReload} />}{tab === "modules" && <ModuleSettings context={context} tools={tools} onReload={onReload} />}{tab === "members" && <MembersSettings context={context} tools={tools} />}{tab === "roles" && <RolesSettings context={context} tools={tools} />}
   </div>;
 }
 
@@ -429,7 +525,7 @@ export function WorkspaceOSPanel({ workspaceId, pathname }: { workspaceId: strin
     <nav>{categories.map(([category, modules]) => <div className="workspace-os-nav-group" key={category}><small>{humanize(category)}</small>{modules.map((module) => <a key={module.key} className={section === module.key ? "active" : ""} href={workspacePath(workspaceId, module.key)}><span className="workspace-os-nav-dot" />{module.name}</a>)}</div>)}</nav>
     <a className={`workspace-os-settings-link ${section === "settings" ? "active" : ""}`} href={workspacePath(workspaceId, "settings")}>⚙ Workspace settings</a>
   </aside><div className="workspace-os-pane">{error && <div className="workspace-os-error workspace-os-top-error">{error}</div>}
-    {section === "settings" ? <Settings context={context} onReload={reload} /> : section === "dashboard" ? <Dashboard summary={summary} modules={context.modules} />
+    {section === "settings" ? <Settings context={context} tools={tools} onReload={reload} /> : section === "dashboard" ? <Dashboard summary={summary} modules={context.modules} />
       : activeModule && activeModule.enabled && activeModule.can_read ? <ModulePage module={activeModule} tools={tools} />
       : activeModule && !activeModule.enabled ? <section className="workspace-os-blank"><h1>{activeModule.name}</h1><p>This module is installed but not enabled for this workspace.</p>{activeModule.can_manage && <a className="primary-link" href={workspacePath(workspaceId, "settings")}>Enable in workspace settings</a>}</section>
       : <section className="workspace-os-blank"><h1>Module unavailable</h1><p>This role does not have access to that workspace module.</p></section>}
