@@ -1,6 +1,13 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
+import {
+  CapabilityTool,
+  approveAndResumeCapability,
+  denyCapability,
+  executeCapability,
+  loadWorkspaceCapabilities,
+} from "../runtime/capabilityRuntime";
 
 
 type FieldType = "text" | "email" | "number" | "textarea" | "datetime-local" | "select" | "checkbox" | "reference";
@@ -54,6 +61,29 @@ type CreatedInvite = Invite & { invite_url: string; token: string };
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function recordCapabilityId(moduleKey: string, entity: string, operation: "create" | "update" | "delete"): string {
+  const normalized = (value: string) => value.trim().toLowerCase().replaceAll("-", "_");
+  return `workspace_os.${normalized(moduleKey)}.${normalized(entity)}.${operation}`;
+}
+
+async function runWorkspaceMutation(
+  tool: CapabilityTool | undefined,
+  args: Record<string, unknown>,
+  approvalCopy: string,
+): Promise<unknown> {
+  if (!tool) throw new Error("This action is not currently available for your Workspace authority.");
+  const execution = await executeCapability(tool, args);
+  if (execution.status === "completed") return execution.run.result;
+
+  const approved = window.confirm(approvalCopy);
+  if (!approved) {
+    await denyCapability(execution.approval);
+    throw new Error("Action cancelled.");
+  }
+  const run = await approveAndResumeCapability(execution.approval);
+  return run.result;
 }
 
 function pathSection(pathname: string, workspaceId: string): string {
@@ -115,7 +145,7 @@ function ReferenceField({ field, defaultValue }: { field: FieldDef; defaultValue
   </select>;
 }
 
-function RecordEditor({ def, record, onClose, onSaved }: { def: EntityDef; record?: Record<string, unknown>; onClose: () => void; onSaved: () => void }) {
+function RecordEditor({ moduleKey, def, tools, record, onClose, onSaved }: { moduleKey: string; def: EntityDef; tools: Map<string, CapabilityTool>; record?: Record<string, unknown>; onClose: () => void; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -127,14 +157,22 @@ function RecordEditor({ def, record, onClose, onSaved }: { def: EntityDef; recor
       if (field.type === "checkbox") payload[field.key] = form.get(field.key) === "on";
       else {
         const value = form.get(field.key);
-        if (value !== null && String(value) !== "") payload[field.key] = value;
-        else if (record && field.key in record) payload[field.key] = null;
+        if (value !== null && String(value) !== "") {
+          payload[field.key] = field.type === "number" ? Number(value) : value;
+        } else if (record && field.key in record) payload[field.key] = null;
       }
     }
     try {
-      await api(`/workspace-os/records/${def.entity}${record?.id ? `/${String(record.id)}` : ""}`, {
-        method: record?.id ? "PATCH" : "POST", body: JSON.stringify(payload),
-      });
+      const operation = record?.id ? "update" : "create";
+      const tool = tools.get(recordCapabilityId(moduleKey, def.entity, operation));
+      const args = record?.id
+        ? { record_id: String(record.id), changes: payload }
+        : payload;
+      await runWorkspaceMutation(
+        tool,
+        args,
+        `Operly requires approval for ${tool?.display_name || operation}. Approve this exact action?`,
+      );
       onSaved(); onClose();
     } catch (caught) { setError(errorText(caught, `Could not save ${def.singular.toLowerCase()}`)); }
     finally { setBusy(false); }
@@ -156,7 +194,7 @@ function RecordEditor({ def, record, onClose, onSaved }: { def: EntityDef; recor
   </form></Modal>;
 }
 
-function RecordTable({ def, writable }: { def: EntityDef; writable: boolean }) {
+function RecordTable({ moduleKey, def, tools, writable }: { moduleKey: string; def: EntityDef; tools: Map<string, CapabilityTool>; writable: boolean }) {
   const [data, setData] = useState<RecordPage>({ items: [], total: 0, limit: 50, offset: 0 });
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -171,9 +209,16 @@ function RecordTable({ def, writable }: { def: EntityDef; writable: boolean }) {
   }, [def.entity, def.label, query]);
   useEffect(() => { void load(0); }, [load]);
   const remove = async (record: Record<string, unknown>) => {
-    if (!record.id || !window.confirm(`Delete this ${def.singular.toLowerCase()}?`)) return;
-    try { await api(`/workspace-os/records/${def.entity}/${String(record.id)}`, { method: "DELETE" }); await load(data.offset); }
-    catch (caught) { setError(errorText(caught, "Could not delete record")); }
+    if (!record.id) return;
+    try {
+      const tool = tools.get(recordCapabilityId(moduleKey, def.entity, "delete"));
+      await runWorkspaceMutation(
+        tool,
+        { record_id: String(record.id) },
+        `Delete this ${def.singular.toLowerCase()}? This exact action will be recorded by the Operly Kernel.`,
+      );
+      await load(data.offset);
+    } catch (caught) { setError(errorText(caught, "Could not delete record")); }
   };
   const colspan = def.columns.length + (writable && !def.readOnly ? 1 : 0);
   return <section className="workspace-os-records"><div className="workspace-os-toolbar">
@@ -188,7 +233,7 @@ function RecordTable({ def, writable }: { def: EntityDef; writable: boolean }) {
         {writable && !def.readOnly && <td className="workspace-os-row-actions"><button onClick={() => setEditing(record)}>Edit</button><button onClick={() => void remove(record)}>Delete</button></td>}
       </tr>)}</tbody></table></div>
     {data.total > data.limit && <div className="workspace-os-pagination"><button disabled={data.offset === 0} onClick={() => void load(Math.max(0, data.offset - data.limit))}>Previous</button><span>{data.offset + 1}–{Math.min(data.total, data.offset + data.limit)} of {data.total}</span><button disabled={data.offset + data.limit >= data.total} onClick={() => void load(data.offset + data.limit)}>Next</button></div>}
-    {editing !== undefined && <RecordEditor def={def} record={editing || undefined} onClose={() => setEditing(undefined)} onSaved={() => void load(data.offset)} />}
+    {editing !== undefined && <RecordEditor moduleKey={moduleKey} def={def} tools={tools} record={editing || undefined} onClose={() => setEditing(undefined)} onSaved={() => void load(data.offset)} />}
   </section>;
 }
 
@@ -238,7 +283,7 @@ function Dashboard({ summary, modules }: { summary: Summary | null; modules: Mod
   </div>;
 }
 
-function ModulePage({ module }: { module: ModuleInfo }) {
+function ModulePage({ module, tools }: { module: ModuleInfo; tools: Map<string, CapabilityTool> }) {
   const inventoryTabs = module.key === "inventory" ? [{ entity: "stock", label: "Stock", singular: "Stock", columns: [], fields: [] } as EntityDef, ...module.entities] : module.entities;
   const [activeEntity, setActiveEntity] = useState(inventoryTabs[0]?.entity || "");
   useEffect(() => setActiveEntity((module.key === "inventory" ? "stock" : module.entities[0]?.entity) || ""), [module.key]);
@@ -246,7 +291,7 @@ function ModulePage({ module }: { module: ModuleInfo }) {
   const def = inventoryTabs.find((candidate) => candidate.entity === activeEntity) || inventoryTabs[0];
   return <div className="workspace-os-module-page"><header className="workspace-os-module-header"><div><span>{module.category.toUpperCase()}</span><h1>{module.name}</h1><p>{module.description}</p></div></header>
     <nav className="workspace-os-entity-tabs">{inventoryTabs.map((candidate) => <button key={candidate.entity} className={candidate.entity === def.entity ? "active" : ""} onClick={() => setActiveEntity(candidate.entity)}>{candidate.label}</button>)}</nav>
-    {module.key === "inventory" && def.entity === "stock" ? <InventoryStock writable={module.can_write} /> : <RecordTable def={def} writable={module.can_write} />}
+    {module.key === "inventory" && def.entity === "stock" ? <InventoryStock writable={module.can_write} /> : <RecordTable moduleKey={module.key} def={def} tools={tools} writable={module.can_write} />}
   </div>;
 }
 
@@ -355,11 +400,21 @@ function Settings({ context, onReload }: { context: WorkspaceContext; onReload: 
 }
 
 export function WorkspaceOSPanel({ workspaceId, pathname }: { workspaceId: string; pathname: string }) {
-  const [context, setContext] = useState<WorkspaceContext | null>(null); const [summary, setSummary] = useState<Summary | null>(null); const [error, setError] = useState("");
+  const [context, setContext] = useState<WorkspaceContext | null>(null); const [summary, setSummary] = useState<Summary | null>(null); const [tools, setTools] = useState<Map<string, CapabilityTool>>(new Map()); const [error, setError] = useState("");
   const section = pathSection(pathname, workspaceId);
   const reload = useCallback(async () => {
     setError("");
-    try { const current = await api<WorkspaceContext>("/workspace-os/context"); if (current.workspace.id !== workspaceId) throw new Error("Workspace session is still switching"); setContext(current); setSummary(await api<Summary>("/workspace-os/summary")); }
+    try {
+      const current = await api<WorkspaceContext>("/workspace-os/context");
+      if (current.workspace.id !== workspaceId) throw new Error("Workspace session is still switching");
+      const [workspaceSummary, capabilityTools] = await Promise.all([
+        api<Summary>("/workspace-os/summary"),
+        loadWorkspaceCapabilities(),
+      ]);
+      setContext(current);
+      setSummary(workspaceSummary);
+      setTools(new Map(capabilityTools.map((tool) => [tool.id, tool])));
+    }
     catch (caught) { setError(errorText(caught, "Could not open workspace")); }
   }, [workspaceId]);
   useEffect(() => { void reload(); }, [reload]);
@@ -373,7 +428,7 @@ export function WorkspaceOSPanel({ workspaceId, pathname }: { workspaceId: strin
     <a className={`workspace-os-settings-link ${section === "settings" ? "active" : ""}`} href={workspacePath(workspaceId, "settings")}>⚙ Workspace settings</a>
   </aside><div className="workspace-os-pane">{error && <div className="workspace-os-error workspace-os-top-error">{error}</div>}
     {section === "settings" ? <Settings context={context} onReload={reload} /> : section === "dashboard" ? <Dashboard summary={summary} modules={context.modules} />
-      : activeModule && activeModule.enabled && activeModule.can_read ? <ModulePage module={activeModule} />
+      : activeModule && activeModule.enabled && activeModule.can_read ? <ModulePage module={activeModule} tools={tools} />
       : activeModule && !activeModule.enabled ? <section className="workspace-os-blank"><h1>{activeModule.name}</h1><p>This module is installed but not enabled for this workspace.</p>{activeModule.can_manage && <a className="primary-link" href={workspacePath(workspaceId, "settings")}>Enable in workspace settings</a>}</section>
       : <section className="workspace-os-blank"><h1>Module unavailable</h1><p>This role does not have access to that workspace module.</p></section>}
   </div></div>;
