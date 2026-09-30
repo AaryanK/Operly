@@ -77,12 +77,12 @@ assert(
   "Workspace UI must discover tools through /workspace-tools",
 );
 assert(
-  page.includes("api<RunResult>(selected.endpoint"),
-  "Workspace UI must invoke each backend-advertised tool endpoint directly",
+  page.includes("executeCapability(selected, parsed)"),
+  "Workspace UI must invoke capabilities through the shared frontend runtime",
 );
 assert(
-  page.includes("/workspace-tools/approvals/"),
-  "Workspace UI approval resume must stay on workspace-tools API",
+  page.includes("approveAndResumeCapability(pendingApproval)") && page.includes("denyCapability(pendingApproval)"),
+  "Workspace UI approval decisions must use the shared exact-payload resume path",
 );
 assert(
   page.includes("api<Capability>(selected.contract_endpoint)"),
