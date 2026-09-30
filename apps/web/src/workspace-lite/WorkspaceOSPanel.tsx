@@ -72,12 +72,13 @@ async function runWorkspaceMutation(
   tool: CapabilityTool | undefined,
   args: Record<string, unknown>,
   approvalCopy: string,
+  approvalAlreadyConfirmed = false,
 ): Promise<unknown> {
   if (!tool) throw new Error("This action is not currently available for your Workspace authority.");
   const execution = await executeCapability(tool, args);
   if (execution.status === "completed") return execution.run.result;
 
-  const approved = window.confirm(approvalCopy);
+  const approved = approvalAlreadyConfirmed || window.confirm(approvalCopy);
   if (!approved) {
     await denyCapability(execution.approval);
     throw new Error("Action cancelled.");
@@ -209,13 +210,14 @@ function RecordTable({ moduleKey, def, tools, writable }: { moduleKey: string; d
   }, [def.entity, def.label, query]);
   useEffect(() => { void load(0); }, [load]);
   const remove = async (record: Record<string, unknown>) => {
-    if (!record.id) return;
+    if (!record.id || !window.confirm(`Delete this ${def.singular.toLowerCase()}?`)) return;
     try {
       const tool = tools.get(recordCapabilityId(moduleKey, def.entity, "delete"));
       await runWorkspaceMutation(
         tool,
         { record_id: String(record.id) },
         `Delete this ${def.singular.toLowerCase()}? This exact action will be recorded by the Operly Kernel.`,
+        true,
       );
       await load(data.offset);
     } catch (caught) { setError(errorText(caught, "Could not delete record")); }
