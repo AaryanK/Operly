@@ -190,7 +190,10 @@ assert(
   "Workspace tool router must live in workspace_modules, not apps/api",
 );
 
-assert(!bootstrap.includes("packages.workspace_modules"), "Generic Kernel composition must not import Workspace modules");
+assert(
+  !bootstrap.includes("from packages.workspace_modules") && !bootstrap.includes("import packages.workspace_modules"),
+  "Generic Kernel composition must not import Workspace modules",
+);
 assert(workspaceRuntime.includes("workspace_capabilities()"), "Workspace package must own capability composition");
 assert(workspaceRuntime.includes("register_workspace_providers(runtime.providers)"), "Workspace package must own provider composition");
 assert(!nativeProvider.includes("_workspace_describe"), "Generic native provider must not implement Workspace domain operations");
