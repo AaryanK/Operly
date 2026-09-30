@@ -9,26 +9,27 @@ const web = (path) => readFile(resolve(webRoot, path), "utf8");
 const repo = (path) => readFile(resolve(repoRoot, path), "utf8");
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [brand, main, googleRouter] = await Promise.all([
-  web("src/ui/brand.css"),
+const [foundation, main, googleRouter] = await Promise.all([
+  web("src/ui/foundation.css"),
   web("src/main.tsx"),
   repo("apps/api/personal_connectors_router.py"),
 ]);
 
 assert(
-  brand.includes(':root,\nhtml[data-theme="dark"]') &&
-  brand.includes('--ui-accent: #9b72ff') &&
-  brand.includes('--ui-accent-strong: #c4a7ff') &&
-  brand.includes('--ui-accent-gradient: linear-gradient(135deg, #8d63f4'),
+  foundation.includes(':root,\nhtml[data-theme="dark"]') &&
+  foundation.includes('--ui-accent: #9b72ff') &&
+  foundation.includes('--ui-accent-strong: #c4a7ff') &&
+  foundation.includes('--ui-accent-gradient: linear-gradient(135deg, #8d63f4'),
   "Operly brand accents must remain purple in both light and dark appearances",
 );
 assert(
-  !brand.includes('#79c99d') && !brand.includes('#b9ee72'),
+  !foundation.includes('#79c99d') && !foundation.includes('#b9ee72'),
   "Legacy green/lime brand accents must not return in the Operly brand layer",
 );
 assert(
-  main.indexOf('./ui/theme.css') < main.indexOf('./ui/brand.css'),
-  "The brand layer must load after generic theme values so purple remains authoritative",
+  main.includes('./ui/foundation.css') &&
+  foundation.indexOf("===== theme.css =====") < foundation.indexOf("===== brand.css ====="),
+  "Consolidated foundation must preserve theme-before-brand cascade order",
 );
 assert(
   googleRouter.includes('def google_oauth_configuration()') &&
