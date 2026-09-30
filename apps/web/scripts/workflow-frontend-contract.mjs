@@ -10,7 +10,7 @@ const allTools = read("src/workspace/CapabilitiesPage.tsx");
 const rootApp = read("src/app/App.tsx");
 const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 const entry = read("src/main.tsx");
-const liveStyles = read("src/ui/workspace-lite.css");
+const liveStyles = read("src/ui/workspace.css");
 const surfacePolish = read("src/ui/surface-polish.css");
 const capabilityRuntime = read("src/runtime/capabilityRuntime.ts");
 
@@ -104,10 +104,10 @@ for (const marker of [
 }
 if (access.includes('value="public"')) failures.push("MCP frontend must not offer anonymous/public tool execution");
 
-for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css", "surface-polish.css"]) {
+for (const stylesheet of ["foundation.css", "workspace.css", "mobile.css", "surface-polish.css"]) {
   if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for advanced workspace surfaces`);
 }
-if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/agent-computer.css')) failures.push("surface-polish.css must load after component-specific advanced workspace styles");
+if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/workspace.css')) failures.push("surface-polish.css must load after consolidated workspace styles");
 for (const marker of [
   "@media (pointer: coarse)",
   ".workspace-lite-advanced .metric-grid",
