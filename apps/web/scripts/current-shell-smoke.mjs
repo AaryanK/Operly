@@ -11,7 +11,7 @@ const [shell, settings, personal, css] = await Promise.all([
   read("src/workspace-lite/WorkspaceSafeApp.tsx"),
   read("src/account/AccountSettings.tsx"),
   read("src/account/PersonalHome.tsx"),
-  read("src/ui/discord-account-shell.css"),
+  read("src/ui/account-overrides.css"),
 ]);
 
 assert(!settings.includes("/identities"), "legacy identities API must not be referenced by current settings");
