@@ -114,6 +114,11 @@ assert(
   "Activity must expose Workspace tool approval review through the shared Kernel approval client",
 );
 assert(
+  !activityPage.includes('"/approvals"') &&
+  !activityPage.includes("LegacyApprovalsPanel"),
+  "Activity must not revive the retired pre-Kernel approval lineage",
+);
+assert(
   activityPage.includes('"/workspace-tools/events?limit=80"'),
   "Activity must expose Workspace tool event history",
 );
