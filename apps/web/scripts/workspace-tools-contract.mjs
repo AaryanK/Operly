@@ -21,8 +21,7 @@ const assert = (condition, message) => {
 const [
   page,
   activityPage,
-  home,
-  routes,
+  liveShell,
   router,
   main,
   bootstrap,
@@ -33,7 +32,6 @@ const [
   discordLifecycle,
   connections,
   connectionsPage,
-  workspaceShell,
   canvaAuthoring,
   integrationRuntime,
   integrationWorkbench,
@@ -48,8 +46,7 @@ const [
 ] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("apps/web/src/workspace/ActivityPage.tsx"),
-  text("apps/web/src/workspace/WorkspaceHome.tsx"),
-  text("apps/web/src/app/routes.ts"),
+  text("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("packages/workspace_modules/tools/router.py"),
   text("apps/api/main.py"),
   text("packages/kernel/bootstrap.py"),
@@ -60,7 +57,6 @@ const [
   text("packages/workspace_modules/integrations/discord/lifecycle.py"),
   text("packages/workspace_modules/integrations/router.py"),
   text("apps/web/src/workspace/ConnectionsPage.tsx"),
-  text("apps/web/src/workspace/WorkspaceShell.tsx"),
   text("packages/workspace_modules/integrations/canva/authoring.py"),
   text("apps/web/src/workspace/integrations/runtime.tsx"),
   text("apps/web/src/workspace/integrations/IntegrationWorkbench.tsx"),
@@ -121,9 +117,14 @@ assert(
   activityPage.includes("/workspace-tools/runs/${encodeURIComponent(clean)}"),
   "Activity must expose the Workspace tool run inspector",
 );
-assert(home.includes('section: "capabilities", title: "Use any tool"'), "Workspace Home must make universal tool access obvious");
-assert(routes.includes('{ id: "capabilities", label: "All tools"'), "Workspace navigation must use the plain-language All tools label");
-assert(workspaceShell.includes('extend: "Tools & connections"'), "Workspace navigation group must be understandable without platform jargon");
+assert(
+  liveShell.includes('section="capabilities"') && liveShell.includes(">All tools</WorkspaceControlLink>"),
+  "Live Workspace shell must make universal tool access obvious",
+);
+assert(
+  liveShell.includes('section="connections"') && liveShell.includes(">Integrations</WorkspaceControlLink>"),
+  "Live Workspace shell must expose governed integrations",
+);
 
 assert(router.includes('prefix="/api/workspace-tools"'), "Workspace tools need their own authenticated API boundary");
 assert(router.includes('@router.post("/{capability_id}/execute")'), "Every capability ID must resolve to an executable endpoint");
@@ -204,7 +205,7 @@ assert(main.includes("workspace_integrations_router"), "FastAPI must mount Works
 assert(main.includes("await discord_bot_lifecycle.start()"), "Application lifespan must start the deterministic Discord bot");
 assert(main.includes("await discord_bot_lifecycle.stop()"), "Application lifespan must stop the deterministic Discord bot");
 
-assert(workspaceShell.includes('import("./ConnectionsPage")'), "Workspace shell must render the dedicated integration workbench");
+assert(liveShell.includes('import("../workspace/ConnectionsPage")'), "Live Workspace shell must render the dedicated integration workbench");
 assert(connectionsPage.includes("IntegrationWorkbench"), "Connections page must delegate to the modular integration workbench");
 assert(integrationWorkbench.includes("IntegrationRuntimeProvider"), "Integration workbench must use the shared deterministic integration runtime");
 assert(integrationWorkbench.includes("GmailPanel"), "Integration workbench must mount Gmail UI");
