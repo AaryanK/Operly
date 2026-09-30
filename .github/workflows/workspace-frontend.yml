@@ -54,10 +54,18 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
-      - name: Verify workspace interaction chain
+      - name: Run frontend contracts
         working-directory: apps/web
-        run: npm run test:workspace-safe
+        run: npm run test:contracts
+
+      - name: Verify workflow frontend contract
+        working-directory: apps/web
+        run: npm run test:workflow
 
       - name: Build frontend
         working-directory: apps/web
         run: npm run build
+
+      - name: Verify bundle split contract
+        working-directory: apps/web
+        run: npm run test:bundle
