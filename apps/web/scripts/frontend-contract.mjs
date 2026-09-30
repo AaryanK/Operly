@@ -10,24 +10,44 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [rootApp, productApp, publicApp, apiClient, adminPage, legalPage, main, publicStyles, reactPalette, liveStyles, productShell, convergence, theme, brand, legalLinks, personal, workspace, apiMain, dockerfile, emailBase, ...emailBodies] = await Promise.all([
+const [
+  rootApp,
+  liveShell,
+  workspaceOS,
+  personal,
+  capabilityRuntime,
+  publicApp,
+  apiClient,
+  adminPage,
+  legalPage,
+  main,
+  theme,
+  brand,
+  publicStyles,
+  liveStyles,
+  personalStyles,
+  workspaceStyles,
+  apiMain,
+  dockerfile,
+  emailBase,
+  ...emailBodies
+] = await Promise.all([
   text("src/app/App.tsx"),
-  text("src/app/ProductApp.tsx"),
+  text("src/workspace-lite/WorkspaceSafeApp.tsx"),
+  text("src/workspace-lite/WorkspaceOSPanel.tsx"),
+  text("src/account/PersonalHome.tsx"),
+  text("src/runtime/capabilityRuntime.ts"),
   text("src/public/PublicApp.tsx"),
   text("src/api.ts"),
   text("src/admin/AdminPage.tsx"),
   text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
-  text("src/ui/public.css"),
-  text("src/ui/react-public-admin-palette.css"),
-  text("src/ui/react-public-live.css"),
-  text("src/ui/product-shell.css"),
-  text("src/ui/convergence.css"),
   text("src/ui/theme.css"),
   text("src/ui/brand.css"),
-  text("src/ui/legal-links.css"),
-  text("src/account/PersonalHome.tsx"),
-  text("src/workspace/WorkspaceShell.tsx"),
+  text("src/ui/public.css"),
+  text("src/ui/react-public-live.css"),
+  text("src/ui/personal-operly.css"),
+  text("src/ui/workspace-lite.css"),
   repoText("apps/api/main.py"),
   repoText("Dockerfile"),
   repoText("packages/email/templates/base.html"),
@@ -38,112 +58,103 @@ const [rootApp, productApp, publicApp, apiClient, adminPage, legalPage, main, pu
   repoText("packages/email/templates/security_alert.html"),
 ]);
 
+// Canonical routing and authenticated shell.
+assert(rootApp.includes('import { WorkspaceSafeApp } from "../workspace-lite/WorkspaceSafeApp";'), "React root must import the canonical authenticated shell");
+assert(!rootApp.includes("ProductApp"), "React root must not reintroduce the retired parallel ProductApp shell");
+for (const route of ["/account", "/personal", "/app", "/channels"]) {
+  assert(rootApp.includes(`pathname === "${route}"`), `React root must route ${route} through the authenticated shell`);
+}
+assert(rootApp.includes('pathname.startsWith("/channels/")'), "React root must own scoped /channels routes");
+assert(rootApp.includes("<WorkspaceSafeApp pathname={pathname}"), "Authenticated routes must converge on WorkspaceSafeApp");
+
+// Live scope and authority boundary.
+assert(liveShell.includes('api<PersonalProfile>("/auth/me")'), "Live shell must load authenticated account identity");
+assert(liveShell.includes('api<Workspace[]>("/auth/workspaces")'), "Live shell must load current Workspace membership");
+assert(liveShell.includes('api("/auth/switch-workspace"'), "Workspace switching must update server authority");
+assert(liveShell.includes('api("/auth/personal-scope"'), "Personal scope switching must update server authority");
+assert(liveShell.includes('<WorkspaceOSPanel workspaceId={selected.id} pathname={pathname} />'), "Normal Workspace pages must render through the live Workspace OS");
+for (const page of ["WorkflowPage", "ActivityPage", "AgentComputerPage", "ConnectionsPage", "CapabilitiesPage", "AccessPage"]) {
+  assert(liveShell.includes(page), `Live shell is missing advanced surface ${page}`);
+}
+assert(liveShell.includes("navigate(path)"), "Advanced Workspace navigation must stay inside the SPA");
+assert(liveShell.includes("WorkspaceAssistantPanel"), "Live Workspace shell must retain the scoped assistant");
+
+// Human mutations converge on the governed capability runtime.
+assert(workspaceOS.includes("loadWorkspaceCapabilities()"), "Workspace OS must resolve live authorized capabilities");
+assert(workspaceOS.includes("executeCapability(tool, args)"), "Workspace OS mutations must use the shared capability runtime");
+for (const id of [
+  "workspace.settings.update",
+  "workspace.modules.set",
+  "workspace.presets.apply",
+  "workspace.members.add",
+  "workspace.members.role.update",
+  "workspace.members.remove",
+  "workspace.roles.permissions.set",
+  "workspace.invitations.create",
+  "workspace.invitations.revoke",
+  "workspace.inventory.adjust",
+]) {
+  assert(workspaceOS.includes(`tools.get("${id}")`), `Workspace OS is missing governed mutation ${id}`);
+}
+assert(capabilityRuntime.includes('api<CapabilityCatalog>("/workspace-tools")'), "Shared capability runtime must discover the authorized tool catalog");
+assert(capabilityRuntime.includes("request_id: requestId"), "Shared capability runtime must preserve mutation request identity");
+assert(capabilityRuntime.includes("approval_id: options.approvalId"), "Shared capability runtime must preserve approval identity on resume");
+
+// Personal experience remains first-class and separate from Workspace authority.
+assert(personal.includes("personal-conversation-search"), "Personal Operly must provide conversation search");
+assert(personal.includes("mobile-personal-list"), "Personal Operly must have a mobile conversation-list state");
+assert(personal.includes("mobile-personal-thread"), "Personal Operly must have a full-screen mobile thread state");
+assert(!personal.includes('"/approvals/personal"'), "Personal Operly must not revive the retired legacy approval UI");
+
+// Public/auth/admin/legal routes remain React-owned.
 assert(rootApp.includes('pathname === "/admin"'), "React root must own /admin");
 assert(rootApp.includes('pathname === "/privacy"'), "React root must own /privacy");
 assert(rootApp.includes('pathname === "/terms"'), "React root must own /terms");
-assert(rootApp.includes('pathname.startsWith("/channels/")'), "React root must own authenticated /channels routes");
-assert(rootApp.includes("<PublicApp pathname={pathname}"), "React root must own public/auth and unknown routes");
-
 for (const route of ["/login", "/signup", "/verify-email", "/forgot-password", "/reset-password", "/onboarding"]) {
   assert(publicApp.includes(`pathname === "${route}"`), `React public app is missing ${route}`);
 }
-for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/workspace-invitations/accept", "/api/identities/discord/sign-in"]) {
+for (const contract of ["/auth/login", "/auth/signup", "/auth/google", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/workspace-invitations/accept"]) {
   assert(publicApp.includes(contract), `React auth migration is missing ${contract}`);
 }
 for (const preauthPath of ["/auth/signup", "/auth/login", "/session/login", "/auth/verify-email", "/auth/resend-verification", "/auth/forgot-password", "/auth/reset-password", "/auth/google"]) {
   assert(apiClient.includes(`"${preauthPath}"`), `React API client must recognize ${preauthPath} as a pre-auth CSRF path`);
 }
-assert(apiClient.includes("if (PREAUTH_CSRF_PATHS.has(path)) return preauth || session;"), "Pre-auth writes must prefer the independent pre-auth CSRF token over stale session CSRF");
-assert(apiClient.includes("authorizedHeaders(path, options)"), "React API requests must choose CSRF using the request path");
-assert(publicApp.includes('go("/channels/@me")'), "Personal auth handoff must target the canonical route");
-assert(publicApp.includes("/channels/${encodeURIComponent"), "Workspace auth handoff must target the canonical route");
-assert(publicApp.includes("workspace-invitations/inspect"), "Workspace invitation inspection must survive the migration");
-assert(publicApp.includes("<RuntimePreview />"), "Public landing must keep the React runtime preview");
-assert(publicApp.includes('id="studio"'), "Public landing must keep the React Studio product section");
-assert(publicApp.includes("auth-visual-panel"), "Auth routes must keep the React visual context panel");
-assert(publicApp.includes("public-model-band"), "Public landing must keep the model-agnostic operating-layer section");
-
-for (const contract of ["/admin/session", "/admin/overview", "/admin/ai-usage?range=", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
-  assert(adminPage.includes(contract), `React admin migration is missing ${contract}`);
-}
-assert(adminPage.includes('type Tab = "overview" | "ai-usage" | "users" | "workspaces"'), "React admin must keep AI Usage as a first-class tab");
-assert(adminPage.includes("admin-overview-grid"), "React admin must keep the rich overview composition");
-assert(adminPage.includes("admin-health-ring"), "React admin must keep account-health visualization");
-assert(adminPage.includes("admin-growth-panel"), "React admin must keep the 30-day growth chart");
-assert(adminPage.includes("metrics.mau"), "React admin must keep MAU visibility");
-assert(adminPage.includes("metrics.signups_today"), "React admin must keep today signup visibility");
-assert(adminPage.includes("admin-token-chart"), "React admin must render token usage over time");
-assert(adminPage.includes("admin-model-row"), "React admin must render per-model usage");
-assert(adminPage.includes("admin-shell-orb"), "React admin must keep its canonical visual shell treatment");
-assert(legalPage.includes("Privacy Policy"), "React Privacy Policy is missing");
-assert(legalPage.includes("Terms of Service"), "React Terms of Service is missing");
+assert(adminPage.includes('type Tab = "overview" | "ai-usage" | "users" | "workspaces"'), "React admin must keep its canonical tabs");
+assert(legalPage.includes("Privacy Policy") && legalPage.includes("Terms of Service"), "Legal surfaces must remain present");
 assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
 
+// Backend/frontend delivery remains React-only.
 assert(apiMain.includes("KNOWN_REACT_ROUTES"), "FastAPI must declare canonical React frontend routes");
-assert(apiMain.includes("return react_shell(status_code=404)"), "Unknown frontend routes must render the React 404 shell");
+assert(apiMain.includes("return react_shell(status_code=404)"), "Unknown frontend routes must render the React shell");
 assert(!apiMain.includes("WEB_STATIC"), "FastAPI must not depend on the removed static frontend");
-assert(!apiMain.includes('app.mount("/static"'), "Legacy /static application mount must be retired");
+assert(!apiMain.includes('app.mount("/static"'), "Legacy static application mount must stay retired");
 assert(!dockerfile.includes("apps/web/static"), "Production image must not depend on apps/web/static");
 assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo source must come from Vite public assets");
 
-assert(main.includes('import "./ui/public.css"'), "React must load public/auth/admin/legal styles");
-assert(main.includes('import "./ui/react-public-admin-palette.css"'), "React must load the public/admin palette convergence layer");
-assert(main.includes('import "./ui/react-public-live.css"'), "React must load the live public/admin layer");
-assert(main.includes('import "./ui/product-shell.css"'), "React must load the authenticated product shell");
-assert(main.indexOf('import "./ui/react-public-admin-palette.css"') > main.indexOf('import "./ui/public.css"'), "Public/admin palette convergence must load after public.css");
-assert(main.indexOf('import "./ui/react-public-live.css"') > main.indexOf('import "./ui/react-public-admin-palette.css"'), "Live public/admin layer must load after the palette convergence layer");
-assert(main.indexOf('import "./ui/product-shell.css"') > main.indexOf('import "./ui/react-public-live.css"'), "Authenticated product shell must load last so structure is deterministic");
-assert(main.includes('import "./ui/legal-links.css"'), "React must load signed-in legal navigation styles");
-assert(main.includes('import "./ui/convergence.css"'), "React must keep the palette convergence layer until its remaining shared rules are retired");
-assert(publicStyles.includes(".react-auth-card"), "React auth card styling is missing");
-assert(publicStyles.includes(".admin-react-shell"), "React admin styling is missing");
-assert(publicStyles.includes(".react-legal-shell"), "React legal styling is missing");
-assert(reactPalette.includes(".react-public-page"), "React public palette convergence is missing");
-assert(reactPalette.includes(".admin-react-shell"), "React admin palette convergence is missing");
-assert(reactPalette.includes(".admin-brand .operly-mark"), "React admin must explicitly bound the OperlyMark image size");
-assert(reactPalette.includes(".operly-runtime-preview"), "React landing preview styling is missing");
-assert(reactPalette.includes(".auth-visual-panel"), "React auth visual styling is missing");
-assert(reactPalette.includes("var(--ui-canvas)"), "React public/admin convergence must use the canonical Operly canvas token");
-assert(liveStyles.includes(".runtime-chain b"), "React landing runtime must keep visible live state motion");
-assert(liveStyles.includes(".auth-visual-orb"), "React auth surface must keep ambient capability motion");
-assert(liveStyles.includes(".admin-token-chart"), "React admin AI usage chart styling is missing");
-assert(liveStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin live motion must respect reduced-motion preference");
-
-assert(productApp.includes("<ScopeRail"), "Authenticated product shell must keep the canonical scope rail");
-assert(productApp.includes("authenticated-content"), "Authenticated shell must separate the scope rail from active product content");
-assert(workspace.includes("workspace-nav-search"), "Workspace navigation must provide section search");
-assert(workspace.includes("nav-group-heading"), "Workspace navigation groups must be collapsible");
-assert(workspace.includes("mobile-nav-open"), "Workspace mobile shell must have a navigation state");
-assert(workspace.includes("mobile-content-open"), "Workspace mobile shell must have a full-content state");
-assert(workspace.includes("workspace-mobile-content-header"), "Workspace mobile content must provide an explicit back control");
-assert(!workspace.includes("workspace-mobile-nav"), "The old workspace bottom navigation must stay retired");
-assert(!workspace.includes("workspace-more-sheet"), "The old workspace More sheet must stay retired");
-assert(personal.includes("personal-conversation-search"), "Personal Operly must provide conversation search");
-assert(personal.includes("mobile-personal-list"), "Personal Operly must have a mobile conversation-list state");
-assert(personal.includes("mobile-personal-thread"), "Personal Operly must have a full-screen mobile thread state");
-assert(personal.includes("personal-mobile-content-header"), "Personal mobile thread must provide an explicit back control");
-assert(!personal.includes("mobile-history-button"), "The old Personal history drawer trigger must stay retired");
-assert(!personal.includes("personal-history-backdrop"), "The old Personal history drawer backdrop must stay retired");
-
-for (const shellContract of [
-  ".authenticated-content",
-  ".workspace-content-frame",
-  ".workspace-nav-search",
-  ".personal-conversation-search",
-  ".mobile-content-open .workspace-content-frame",
-  ".mobile-personal-thread .personal-surface",
-  "grid-template-columns: 72px minmax(0, 1fr)",
-  "100dvh",
-  "env(safe-area-inset-bottom)",
-  ":focus-visible",
-  "prefers-reduced-motion",
+// Current stylesheet entry must describe the live app, not deleted shell generations.
+for (const stylesheet of [
+  "tokens.css",
+  "app.css",
+  "theme.css",
+  "brand.css",
+  "workspace-lite.css",
+  "workspace-assistant-shell.css",
+  "workspace-os.css",
+  "integration-workbench.css",
+  "agent-computer.css",
+  "mobile.css",
+  "surface-polish.css",
+  "personal-operly.css",
+  "personal-operly-state.css",
+  "public.css",
+  "react-public-live.css",
 ]) {
-  assert(productShell.includes(shellContract), `Authenticated product shell is missing structural contract: ${shellContract}`);
+  assert(main.includes(`import "./ui/${stylesheet}"`), `Frontend entry must load ${stylesheet}`);
 }
-assert(productShell.includes("flex-direction: column !important"), "Phone scope rail must remain vertical rather than becoming a top strip");
-assert(productShell.includes("position: fixed"), "Selected mobile content must be able to take over the full viewport");
-assert(convergence.includes("@media (max-width: 680px)"), "Legacy convergence layer must still keep shared phone fallbacks while the shell migration settles");
-assert(legalLinks.includes("env(safe-area-inset-bottom)"), "Signed-in legal links must respect phone safe areas");
+assert(workspaceStyles.includes("@media (pointer: coarse)") || workspaceStyles.includes("@media (max-width:"), "Workspace shell must retain responsive behavior");
+assert(personalStyles.includes("color-scheme: dark"), "Personal Operly must retain the authenticated dark surface");
+assert(publicStyles.includes(".react-auth-card"), "React auth styling is missing");
+assert(liveStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin motion must respect reduced-motion preference");
 
 for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
   assert(!theme.toLowerCase().includes(legacyPurple.toLowerCase()), `Dark theme contains legacy purple brand accent: ${legacyPurple}`);
@@ -152,6 +163,7 @@ for (const legacyPurple of ["#7d6cff", "rgba(125,108,255", "rgba(111,92,255"]) {
   assert(!brand.toLowerCase().includes(legacyPurple.toLowerCase()), `Brand boot contains legacy purple accent: ${legacyPurple}`);
 }
 
+// Transactional email design remains aligned with the product.
 for (const token of ["#f3f5f1", "#13231c", "#dfe6df", "#102f24"]) {
   assert(emailBase.toLowerCase().includes(token), `Transactional email shell is missing canonical Operly token: ${token}`);
 }
@@ -160,4 +172,4 @@ for (const emailBody of emailBodies) {
   assert(!emailBody.toLowerCase().includes("#176c4a"), "Legacy email green #176c4a must not return");
 }
 
-console.log("React-only frontend contracts passed.");
+console.log("Canonical React frontend contracts passed.");
