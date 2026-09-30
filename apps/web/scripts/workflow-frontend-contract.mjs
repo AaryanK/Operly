@@ -15,6 +15,7 @@ const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 const entry = read("src/main.tsx");
 const liveStyles = read("src/ui/workspace-lite.css");
 const surfacePolish = read("src/ui/surface-polish.css");
+const capabilityRuntime = read("src/runtime/capabilityRuntime.ts");
 
 const requiredCapabilities = [
   "workflow.list",
@@ -43,7 +44,9 @@ for (const id of requiredCapabilities) {
 for (const marker of [
   'api<ToolCatalog>("/workspace-tools")',
   '"/workspace-tools/approvals?limit=100"',
-  '/workspace-tools/approvals/${encodeURIComponent',
+  'executeCapability(capability, argumentsValue)',
+  'approveAndResumeCapability(pendingAction)',
+  'decideCapabilityApproval(item.id, approved)',
   'actionTools',
   'Immutable attempt history',
   'Workflow trace',
@@ -57,6 +60,7 @@ if (!routes.includes('| "workflows"') || !routes.includes('{ id: "workflows", la
 if (!shell.includes('import("./WorkflowPage")') || !shell.includes('case "workflows"')) failures.push("WorkspaceShell must retain WorkflowPage coverage");
 if (!home.includes('section: "workflows"') || !home.includes('title: "Automate work"')) failures.push("Workspace Home must make Workflow discoverable");
 if (!allTools.includes('api<CapabilityResponse>("/workspace-tools")') || !allTools.includes("no hidden API-only action")) failures.push("All tools must remain the universal capability fallback");
+if (!capabilityRuntime.includes("/workspace-tools/approvals/") || !capabilityRuntime.includes("approval_id: options.approvalId")) failures.push("Shared capability runtime must own exact approval resume semantics");
 
 if (rootApp.includes("ProductApp")) failures.push("Authenticated /channels routes must not hand off to the separate ProductApp bootstrap");
 if (!rootApp.includes('pathname.startsWith("/channels/")') || !rootApp.includes("<WorkspaceSafeApp pathname={pathname}")) failures.push("All /channels routes must stay in WorkspaceSafeApp");
