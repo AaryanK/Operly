@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
+import { decideCapabilityApproval } from "../runtime/capabilityRuntime";
 
 type Row = Record<string, unknown>;
 type ToolStatus = {
@@ -292,10 +293,7 @@ export function AgentComputerPage({ workspace }: { workspace: WorkspaceSummary }
     setBusy(true);
     setError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(active.approval_id)}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ approved: true }),
-      });
+      await decideCapabilityApproval(active.approval_id, true);
       const resumed = await api<ComputerSession>(`/agent-computer/sessions/${encodeURIComponent(active.id)}/resume`, {
         method: "POST",
       });
