@@ -44,6 +44,7 @@ const [
   connectionsManager,
   capabilityRuntime,
   workspaceOSPanel,
+  workspaceControls,
 ] = await Promise.all([
   text("apps/web/src/workspace/CapabilitiesPage.tsx"),
   text("apps/web/src/workspace/ActivityPage.tsx"),
@@ -70,6 +71,7 @@ const [
   text("apps/web/src/workspace/integrations/ConnectionsManager.tsx"),
   text("apps/web/src/runtime/capabilityRuntime.ts"),
   text("apps/web/src/workspace-lite/WorkspaceOSPanel.tsx"),
+  text("packages/workspace_modules/tools/controls.py"),
 ]);
 
 assert(
@@ -237,6 +239,42 @@ assert(
 assert(
   !workspaceOSPanel.includes('method: record?.id ? "PATCH" : "POST"') && !workspaceOSPanel.includes('method: "DELETE" }); await load(data.offset)'),
   "Generic Workspace record create/update/delete must not bypass the Kernel through direct REST mutations",
+);
+for (const capability of [
+  "workspace.settings.update",
+  "workspace.modules.set",
+  "workspace.presets.apply",
+  "workspace.members.add",
+  "workspace.members.role.update",
+  "workspace.members.remove",
+  "workspace.roles.permissions.set",
+  "workspace.invitations.create",
+  "workspace.invitations.revoke",
+  "workspace.inventory.adjust",
+]) {
+  assert(
+    workspaceOSPanel.includes(`tools.get("${capability}")`),
+    `Live Workspace UI must route ${capability} through the capability runtime`,
+  );
+}
+for (const forbidden of [
+  'api("/workspace-os/settings", { method: "PATCH"',
+  'api(`/workspace-os/modules/${module.key}`, { method: "PUT"',
+  'api(`/workspace-os/presets/${preset.key}/apply`, { method: "POST"',
+  'api("/workspace-os/members", { method: "POST"',
+  'api(`/workspace-os/members/${userId}`, { method: "PATCH"',
+  'api(`/workspace-os/members/${member.user_id}`, { method: "DELETE"',
+  'api("/workspace-os/invitations", { method: "POST"',
+  'api(`/workspace-os/invitations/${invite.id}`, { method: "DELETE"',
+  'api(`/workspace-os/roles/${role.key}`, { method: "PUT"',
+  'api(`/workspace-os/inventory/${itemId}/adjust`, { method: "POST"',
+]) {
+  assert(!workspaceOSPanel.includes(forbidden), `Live Workspace UI mutation bypass returned: ${forbidden}`);
+}
+assert(
+  workspaceControls.includes('"invite_url": {"type": "string"}') &&
+  workspaceControls.includes('f"{base}/join#invite={quote(token, safe=\'\')}"'),
+  "Governed invitation creation must preserve the canonical deployment invite URL",
 );
 assert(
   integrationRuntime.includes('"/connectors/google/connect?tier=assistant"'),
