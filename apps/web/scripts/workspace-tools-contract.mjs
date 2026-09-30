@@ -30,6 +30,8 @@ const [
   integrations,
   discordBot,
   discordLifecycle,
+  discordRuntimeStatus,
+  discordProvider,
   connections,
   connectionsPage,
   canvaAuthoring,
@@ -55,6 +57,8 @@ const [
   text("packages/workspace_modules/integrations/__init__.py"),
   text("packages/workspace_modules/integrations/discord/bot.py"),
   text("packages/workspace_modules/integrations/discord/lifecycle.py"),
+  text("packages/workspace_modules/integrations/discord/runtime_status.py"),
+  text("packages/workspace_modules/integrations/discord/provider.py"),
   text("packages/workspace_modules/integrations/router.py"),
   text("apps/web/src/workspace/ConnectionsPage.tsx"),
   text("packages/workspace_modules/integrations/canva/authoring.py"),
@@ -339,7 +343,18 @@ for (const capability of [
 ]) {
   assert(discordPanel.includes(`"${capability}"`), `Discord panel is missing ${capability}`);
 }
-assert(discordPanel.includes("AI off"), "Integration workbench must make Discord's deterministic-only state explicit");
+assert(
+  discordPanel.includes('"AI ready"') && discordPanel.includes('"AI unavailable"') && discordPanel.includes("discordStatus?.ai_enabled"),
+  "Integration workbench must show the live Discord Agent Runtime readiness state",
+);
+assert(
+  connections.includes("discord_ai_runtime_status()") && connections.includes('"ai_detail": ai_detail'),
+  "Discord connector status API must report the same live Agent Runtime readiness used by the bot",
+);
+assert(
+  discordProvider.includes("discord_ai_runtime_status()") && discordProvider.includes('"ai_enabled": ai_enabled'),
+  "Discord status capability must report live Agent Runtime readiness",
+);
 assert(connectionsManager.includes("Reconnect / expand scopes"), "Connection manager must support scope expansion");
 
 for (const capability of [
@@ -361,15 +376,28 @@ assert(
 assert(canvaAuthoring.includes("approval=True"), "Canva in-place/new-design autofill must remain approval gated");
 
 for (const forbidden of [
-  "AgentRuntime",
   "ChannelService.handle",
   "model_runtime",
   "secure_runtime",
   "packages.agents",
 ]) {
-  assert(!discordBot.includes(forbidden), `Deterministic Discord bot leaked AI runtime dependency: ${forbidden}`);
-  assert(!discordLifecycle.includes(forbidden), `Discord lifecycle leaked AI runtime dependency: ${forbidden}`);
+  assert(!discordBot.includes(forbidden), `Discord bot leaked a parallel AI/runtime dependency: ${forbidden}`);
+  assert(!discordLifecycle.includes(forbidden), `Discord lifecycle leaked a parallel AI/runtime dependency: ${forbidden}`);
 }
-assert(discordBot.includes("AI chat is not enabled yet"), "Discord bot must make the deterministic-only behavior explicit");
+assert(
+  discordBot.includes("Runtime1Agent") &&
+  discordBot.includes("resolve_execution_context") &&
+  discordBot.includes("resolve_personal_execution_context") &&
+  discordBot.includes("build_workspace_runtime") &&
+  discordBot.includes("facade.request_runtime(db, context=context)") &&
+  discordBot.includes("kernel=kernel"),
+  "Discord AI ingress must resolve scoped authority and acquire the governed Kernel before Runtime1 execution",
+);
+assert(
+  discordBot.includes("discord_ai_runtime_status()") &&
+  discordRuntimeStatus.includes("AgentRuntimeSettings.from_environment().enabled") &&
+  discordRuntimeStatus.includes("InferenceRoute.from_environment()"),
+  "Discord bot and connector surfaces must share one deployment-aware Agent Runtime readiness check",
+);
 
 console.log("Workspace tools, universal human control surface, and deterministic integration workbench contracts passed.");
