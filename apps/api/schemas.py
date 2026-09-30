@@ -100,8 +100,6 @@ class MemoryCreate(BaseModel):
     kind: str = Field(default="fact", max_length=50)
 
 
-class ApprovalDecision(BaseModel):
-    status: str
 
 
 class TenantUpdate(BaseModel):
