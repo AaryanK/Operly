@@ -29,9 +29,9 @@ export function applyTheme(preference: ThemePreference): ResolvedTheme {
   const resolved = resolveTheme(preference);
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = preference;
-  document.documentElement.style.colorScheme = "dark";
+  document.documentElement.style.colorScheme = resolved;
   const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) meta.content = "#0d0a15";
+  if (meta) meta.content = resolved === "dark" ? "#0b0f18" : "#f6f7fb";
   return resolved;
 }
 
