@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, api } from "../api";
+import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
+import {
+  CapabilityApproval,
+  CapabilityRun,
+  approveAndResumeCapability,
+  denyCapability,
+  executeCapability,
+} from "../runtime/capabilityRuntime";
 
 type JsonSchema = {
   type?: string | string[];
@@ -50,15 +57,7 @@ type CapabilityResponse = {
   tools: Capability[];
 };
 
-type RunResult = {
-  run_id: string;
-  status: string;
-  capability_id: string;
-  decision: string;
-  result: unknown;
-  done: boolean;
-  trace: Array<Record<string, unknown>>;
-};
+type RunResult = CapabilityRun;
 
 type AreaKey = "everyday" | "customers" | "money" | "work" | "email" | "calendar" | "canva" | "discord" | "studio" | "computer" | "workspace" | "system" | "other";
 type EditorMode = "guided" | "advanced";
@@ -92,11 +91,6 @@ const schemaType = (schema: JsonSchema) => {
   if (Array.isArray(schema.type)) return schema.type.find((item) => item !== "null") || "string";
   return schema.type || "string";
 };
-
-function stableRequestId(capabilityId: string) {
-  try { return `${capabilityId}:${crypto.randomUUID()}`; }
-  catch { return `${capabilityId}:${Date.now()}:${Math.random().toString(36).slice(2)}`; }
-}
 
 function areaFor(capability: Capability): AreaKey {
   const id = capability.id.toLowerCase();
@@ -265,16 +259,15 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
   const [contractBusy, setContractBusy] = useState(false);
   const [run, setRun] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  const [approvalId, setApprovalId] = useState<string | null>(null);
-  const [requestId, setRequestId] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<CapabilityApproval | null>(null);
+  const approvalId = pendingApproval?.approvalId || null;
 
   function prepare(capability: Capability) {
     setFieldValues(initialFieldValues(capability));
     setArgumentsText(defaultArguments(capability));
     setRun(null);
     setRunError(null);
-    setApprovalId(null);
-    setRequestId(null);
+    setPendingApproval(null);
   }
 
   async function reload() {
@@ -328,8 +321,7 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
     setFieldValues((current) => ({ ...current, [key]: value }));
     setRun(null);
     setRunError(null);
-    setApprovalId(null);
-    setRequestId(null);
+    setPendingApproval(null);
   }
 
   async function refreshContract() {
@@ -347,7 +339,7 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
     }
   }
 
-  async function execute(existingApprovalId?: string) {
+  async function execute() {
     if (!selected) return;
     setBusy(true);
     setRun(null);
@@ -362,41 +354,34 @@ export function CapabilitiesPage({ workspace }: { workspace: WorkspaceSummary })
         if (!advanced || typeof advanced !== "object" || Array.isArray(advanced)) throw new Error("Advanced arguments must be a JSON object.");
         parsed = advanced as Record<string, unknown>;
       }
-      const nextRequestId = requestId || stableRequestId(selected.id);
-      setRequestId(nextRequestId);
-      const result = await api<RunResult>(selected.endpoint, {
-        method: selected.method,
-        body: JSON.stringify({ arguments: parsed, request_id: nextRequestId, approval_id: existingApprovalId || undefined }),
-      });
-      setRun(result);
-      setApprovalId(null);
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "approval_required") {
-        const details = caught.details && typeof caught.details === "object" ? caught.details as Record<string, unknown> : {};
-        const id = typeof details.approval_id === "string" ? details.approval_id : null;
-        setApprovalId(id);
-        setRunError(id ? "Operly is waiting for you to approve this exact action." : caught.message);
-      } else {
-        setRunError(caught instanceof Error ? caught.message : "This tool could not run");
+
+      const execution = await executeCapability(selected, parsed);
+      if (execution.status === "approval_required") {
+        setPendingApproval(execution.approval);
+        setRunError("Operly is waiting for you to approve this exact action.");
+        return;
       }
+      setRun(execution.run);
+      setPendingApproval(null);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : "This tool could not run");
     } finally {
       setBusy(false);
     }
   }
 
   async function decideApproval(approved: boolean) {
-    if (!approvalId) return;
+    if (!pendingApproval) return;
     setBusy(true);
     setRunError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(approvalId)}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ approved }),
-      });
-      if (approved) await execute(approvalId);
-      else {
-        setApprovalId(null);
-        setRequestId(null);
+      if (approved) {
+        const resumed = await approveAndResumeCapability(pendingApproval);
+        setRun(resumed);
+        setPendingApproval(null);
+      } else {
+        await denyCapability(pendingApproval);
+        setPendingApproval(null);
         setRunError("Nothing was changed. You chose not to approve this action.");
       }
     } catch (caught) {
