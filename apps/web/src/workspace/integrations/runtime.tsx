@@ -42,6 +42,7 @@ export type DiscordStatus = {
   bot_user: string | null;
   invite_url: string | null;
   ai_enabled: boolean;
+  ai_detail?: string | null;
 };
 
 export type Tool = CapabilityTool;
