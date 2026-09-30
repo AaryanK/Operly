@@ -10,13 +10,12 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, accountSettings, personalHome, main, discordCss, operlyThemeCss, appTypes, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
+const [safeShell, accountSettings, personalHome, main, accountOverrides, appTypes, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/account/AccountSettings.tsx"),
   text("src/account/PersonalHome.tsx"),
   text("src/main.tsx"),
-  text("src/ui/discord-account-shell.css"),
-  text("src/ui/operly-settings-theme.css"),
+  text("src/ui/account-overrides.css"),
   text("src/app/types.ts"),
   repoText("apps/api/account_compat_router.py"),
   repoText("apps/api/runtime_entry.py"),
@@ -110,23 +109,22 @@ assert(
   "The production entrypoint must register the account profile boundary ahead of the React catch-all",
 );
 assert(
-  main.includes('import "./ui/discord-account-shell.css"') &&
-  main.includes('import "./ui/operly-settings-theme.css"') &&
-  main.lastIndexOf('./ui/operly-settings-theme.css') > main.lastIndexOf('./ui/discord-account-shell.css'),
-  "Discord settings structure must be followed by Operly's visual theme layer",
+  main.includes('import "./ui/account-overrides.css"') &&
+  main.lastIndexOf('./ui/account-overrides.css') > main.lastIndexOf('./ui/public-surfaces.css'),
+  "Account/settings overrides must remain the final visual layer",
 );
 assert(
-  discordCss.includes('.discord-settings-overlay') &&
-  discordCss.includes('.discord-user-panel') &&
-  discordCss.includes('.personal-new-draft'),
+  accountOverrides.includes('.discord-settings-overlay') &&
+  accountOverrides.includes('.discord-user-panel') &&
+  accountOverrides.includes('.personal-new-draft'),
   "The structural account shell must still own settings, user-panel, and new-conversation layout",
 );
 assert(
-  operlyThemeCss.includes('var(--ui-accent') &&
-  operlyThemeCss.includes('var(--ui-panel') &&
-  operlyThemeCss.includes('var(--ui-nav') &&
-  !operlyThemeCss.includes('#5865f2') &&
-  !operlyThemeCss.includes('#313338'),
+  accountOverrides.includes('var(--ui-accent') &&
+  accountOverrides.includes('var(--ui-panel') &&
+  accountOverrides.includes('var(--ui-nav') &&
+  !accountOverrides.includes('#5865f2') &&
+  !accountOverrides.includes('#313338'),
   "The final settings presentation must use Operly theme tokens instead of Discord colors",
 );
 
