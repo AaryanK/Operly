@@ -62,6 +62,7 @@ on:
       - main
     paths:
       - ".github/workflows/workflow-engine.yml"
+      - "requirements.txt"
       - "alembic/versions/0051_workflow_engine.py"
       - "alembic/versions/0052_mcp_agent_gateway.py"
       - "alembic/versions/0053_digital_business_infrastructure.py"
