@@ -21,10 +21,8 @@ const [
   adminPage,
   legalPage,
   main,
-  theme,
-  brand,
+  foundationStyles,
   publicStyles,
-  liveStyles,
   personalStyles,
   workspaceStyles,
   apiMain,
@@ -42,12 +40,10 @@ const [
   text("src/admin/AdminPage.tsx"),
   text("src/legal/LegalPage.tsx"),
   text("src/main.tsx"),
-  text("src/ui/theme.css"),
-  text("src/ui/brand.css"),
-  text("src/ui/public.css"),
-  text("src/ui/react-public-live.css"),
-  text("src/ui/personal-operly.css"),
-  text("src/ui/workspace-lite.css"),
+  text("src/ui/foundation.css"),
+  text("src/ui/public-surfaces.css"),
+  text("src/ui/personal.css"),
+  text("src/ui/workspace.css"),
   repoText("apps/api/main.py"),
   repoText("Dockerfile"),
   repoText("packages/email/templates/base.html"),
@@ -133,34 +129,24 @@ assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo 
 
 // Current stylesheet entry must describe the live app, not deleted shell generations.
 for (const stylesheet of [
-  "tokens.css",
-  "app.css",
-  "theme.css",
-  "brand.css",
-  "workspace-lite.css",
-  "workspace-assistant-shell.css",
-  "workspace-os.css",
-  "integration-workbench.css",
-  "agent-computer.css",
+  "foundation.css",
+  "account-base.css",
+  "workspace.css",
   "mobile.css",
   "surface-polish.css",
-  "personal-operly.css",
-  "personal-operly-state.css",
-  "public.css",
-  "react-public-live.css",
+  "personal.css",
+  "public-surfaces.css",
+  "account-overrides.css",
 ]) {
   assert(main.includes(`import "./ui/${stylesheet}"`), `Frontend entry must load ${stylesheet}`);
 }
 assert(workspaceStyles.includes("@media (pointer: coarse)") || workspaceStyles.includes("@media (max-width:"), "Workspace shell must retain responsive behavior");
 assert(personalStyles.includes("color-scheme: dark"), "Personal Operly must retain the authenticated dark surface");
 assert(publicStyles.includes(".react-auth-card"), "React auth styling is missing");
-assert(liveStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin motion must respect reduced-motion preference");
+assert(publicStyles.includes("@media (prefers-reduced-motion: reduce)"), "Public/admin motion must respect reduced-motion preference");
 
-for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255"]) {
-  assert(!theme.toLowerCase().includes(legacyPurple.toLowerCase()), `Dark theme contains legacy purple brand accent: ${legacyPurple}`);
-}
-for (const legacyPurple of ["#7d6cff", "rgba(125,108,255", "rgba(111,92,255"]) {
-  assert(!brand.toLowerCase().includes(legacyPurple.toLowerCase()), `Brand boot contains legacy purple accent: ${legacyPurple}`);
+for (const legacyPurple of ["#8173ff", "#7568e8", "#b9b0ff", "rgba(126, 104, 255", "rgba(129,115,255", "#7d6cff", "rgba(125,108,255", "rgba(111,92,255"]) {
+  assert(!foundationStyles.toLowerCase().includes(legacyPurple.toLowerCase()), `Foundation contains legacy brand accent: ${legacyPurple}`);
 }
 
 // Transactional email design remains aligned with the product.
