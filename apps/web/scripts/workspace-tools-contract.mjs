@@ -106,8 +106,8 @@ assert(!page.includes('"/kernel/execute"'), "Workspace UI must not use the gener
 assert(!page.includes('"/kernel/capabilities"'), "Workspace UI must not discover tools from the generic Kernel route");
 
 assert(
-  activityPage.includes('"/workspace-tools/approvals?limit=50"') && activityPage.includes("/workspace-tools/approvals/${encodeURIComponent(id)}/decision"),
-  "Activity must expose Workspace tool approval review and decisions",
+  activityPage.includes('"/workspace-tools/approvals?limit=50"') && activityPage.includes("decideCapabilityApproval(id, approved)"),
+  "Activity must expose Workspace tool approval review through the shared Kernel approval client",
 );
 assert(
   activityPage.includes('"/workspace-tools/events?limit=80"'),
