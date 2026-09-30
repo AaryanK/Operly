@@ -124,6 +124,7 @@ assert(apiMain.includes("KNOWN_REACT_ROUTES"), "FastAPI must declare canonical R
 assert(apiMain.includes("return react_shell(status_code=404)"), "Unknown frontend routes must render the React shell");
 assert(!apiMain.includes("WEB_STATIC"), "FastAPI must not depend on the removed static frontend");
 assert(!apiMain.includes('app.mount("/static"'), "Legacy static application mount must stay retired");
+assert(!apiMain.includes("approvals_router"), "Canonical API must not mount the retired pre-Kernel approvals router");
 assert(!dockerfile.includes("apps/web/static"), "Production image must not depend on apps/web/static");
 assert(dockerfile.includes("apps/web/public/operly-logo.png"), "Production logo source must come from Vite public assets");
 
