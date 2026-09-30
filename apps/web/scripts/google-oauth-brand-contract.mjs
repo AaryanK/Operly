@@ -15,20 +15,25 @@ const [foundation, main, googleRouter] = await Promise.all([
   repo("apps/api/personal_connectors_router.py"),
 ]);
 
+const brandMarker = "===== brand.css =====";
+const brandStart = foundation.indexOf(brandMarker);
+assert(brandStart >= 0, "Consolidated foundation must preserve the brand section");
+const brand = foundation.slice(brandStart);
+
 assert(
-  foundation.includes(':root,\nhtml[data-theme="dark"]') &&
-  foundation.includes('--ui-accent: #9b72ff') &&
-  foundation.includes('--ui-accent-strong: #c4a7ff') &&
-  foundation.includes('--ui-accent-gradient: linear-gradient(135deg, #8d63f4'),
+  brand.includes(':root,\nhtml[data-theme="dark"]') &&
+  brand.includes('--ui-accent: #9b72ff') &&
+  brand.includes('--ui-accent-strong: #c4a7ff') &&
+  brand.includes('--ui-accent-gradient: linear-gradient(135deg, #8d63f4'),
   "Operly brand accents must remain purple in both light and dark appearances",
 );
 assert(
-  !foundation.includes('#79c99d') && !foundation.includes('#b9ee72'),
+  !brand.includes('#79c99d') && !brand.includes('#b9ee72'),
   "Legacy green/lime brand accents must not return in the Operly brand layer",
 );
 assert(
   main.includes('./ui/foundation.css') &&
-  foundation.indexOf("===== theme.css =====") < foundation.indexOf("===== brand.css ====="),
+  foundation.indexOf("===== theme.css =====") < brandStart,
   "Consolidated foundation must preserve theme-before-brand cascade order",
 );
 assert(
