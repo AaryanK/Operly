@@ -40,8 +40,9 @@ assert(
   "The Discord-style scope rail must expose workspace creation",
 );
 assert(
-  !safeShell.includes('workspace-lite-account') && safeShell.includes('onOpenSettings={() => openAccountSettings("account")}'),
-  "Profile settings must live in the Personal Operly user panel, not as a detached avatar on the server rail",
+  safeShell.includes('onOpenSettings={() => openAccountSettings("account")}') &&
+  safeShell.includes('className="workspace-lite-menu workspace-lite-account-menu"'),
+  "Profile settings must be reachable from Personal Operly and the canonical authenticated account menu",
 );
 assert(
   safeShell.includes('void logout()') && safeShell.includes('Signing out…'),
