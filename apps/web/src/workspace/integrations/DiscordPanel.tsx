@@ -154,11 +154,15 @@ export function DiscordPanel() {
             <span className="eyebrow">Deterministic messaging</span>
             <h2>{channel ? `#${text(channel.name)}` : "Select a channel"}</h2>
           </div>
-          <span className="status-chip">AI off</span>
+          <span className={`status-chip ${runtime.discordStatus?.ai_enabled ? "status-active" : ""}`}>
+            {runtime.discordStatus?.ai_enabled ? "AI ready" : "AI unavailable"}
+          </span>
         </div>
         <p className="integration-meta">
           Operly rechecks the workspace binding and the bot's live Discord channel permissions
-          before each read or write.
+          before each read or write. Addressed bot conversations use the same scoped Agent Runtime
+          and governed Workspace capabilities; this message workbench itself remains deterministic.
+          {runtime.discordStatus?.ai_detail ? ` ${runtime.discordStatus.ai_detail}` : ""}
         </p>
 
         <div className="integration-chat-log">
