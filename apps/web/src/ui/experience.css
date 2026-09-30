@@ -1,0 +1,587 @@
+/* ===== mobile.css ===== */
+/* Mobile density and navigation rules. Imported last so the phone layout has one clear hierarchy. */
+@media (max-width: 900px) {
+  .surface-header { padding: 22px 24px; }
+  .content-grid, .activity-columns, .plugin-grid, .metric-grid, .settings-grid { padding-left: 24px; padding-right: 24px; }
+  .home-grid { padding-left: 24px; padding-right: 24px; }
+  .surface-header h1 { font-size: clamp(26px, 7vw, 34px); }
+  .page-header { gap: 14px; }
+  .data-card, .metric-card, .plugin-card, .destination-card { padding: 16px; }
+  .destination-card { min-height: 0; }
+  .destination-card > span { margin-bottom: 16px; }
+  .admin-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-panel-grid { grid-template-columns: 1fr; }
+  .react-hero { grid-template-columns: 1fr; gap: 28px; padding-top: 58px; }
+  .react-hero h1 { font-size: clamp(44px, 9vw, 68px); }
+  .public-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  html, body, #root { width: 100%; min-width: 0; overflow-x: hidden; }
+
+  /* Mobile drawers must sit above the sticky scope switcher so their close
+     controls stay tappable. */
+  #personal-conversation-history { z-index: 80; }
+  .history-mobile-close { position: relative; z-index: 81; }
+
+  .workspace-page { min-height: calc(100vh - 52px); padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+  /* Keep the page title useful, not dominant. */
+  .surface-header {
+    padding: 16px 14px;
+  }
+  .surface-header h1, .compact-header h1 { margin: 3px 0 5px; font-size: 25px; line-height: 1.08; }
+  .surface-header p { font-size: 13px; line-height: 1.42; }
+  .eyebrow { font-size: 9px; letter-spacing: .1em; }
+  .page-header { align-items: stretch; gap: 10px; }
+  .page-actions { width: 100%; gap: 7px; }
+  .page-actions > button, .page-actions > a { min-height: 40px; flex: 1 1 auto; }
+
+  /* Consistent phone gutters. */
+  .content-grid, .activity-columns, .plugin-grid, .metric-grid, .settings-grid, .home-grid {
+    gap: 10px;
+    padding: 12px 14px 18px;
+  }
+  .home-grid { padding-top: 12px; }
+  .loading-panel, .empty-panel, .inline-form, .presence-card, .solution-compose-card, .solutions-library, .info-banner, .page-error {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+  .loading-panel, .empty-panel { margin-top: 14px; padding: 16px; }
+  .presence-card, .solution-compose-card, .solutions-library, .info-banner { padding: 15px; }
+  .inline-form { margin-top: 14px; padding: 14px; }
+
+  /* Cards should read like rows on a phone, not desktop panels shrunk down. */
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-card, .data-card, .plugin-card, .destination-card, .solution-card, .settings-card { padding: 14px; border-radius: 12px; }
+  .metric-card > strong { margin: 5px 0 2px; font-size: 23px; }
+  .metric-card > span { font-size: 10px; }
+  .metric-card > small { font-size: 11px; }
+  .plugin-card { min-height: 0; gap: 9px; }
+  .destination-card { min-height: 0; }
+  .destination-card > span { margin-bottom: 10px; }
+  .destination-card p, .plugin-card p { font-size: 13px; line-height: 1.4; }
+  .card-heading, .section-heading { align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+  .card-heading h2, .section-heading h2 { font-size: 18px; }
+
+  .data-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 7px 10px;
+    padding: 11px 0;
+  }
+  .data-row > div { flex-basis: calc(100% - 72px); }
+  .data-row .row-actions { width: 100%; }
+  .data-row .row-actions > button { flex: 1; }
+  .status-chip { min-height: 23px; padding: 3px 7px; font-size: 10px; }
+
+  .connector-card, .personal-connector-card {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 9px 10px;
+    padding: 13px;
+  }
+  .connector-logo, .plugin-icon { width: 38px; height: 38px; border-radius: 11px; }
+  .connector-card > .status-chip, .personal-connector-card > .status-chip { grid-column: 2; justify-self: start; }
+  .connector-card > .row-actions, .personal-connector-card > .row-actions { grid-column: 1 / -1; width: 100%; }
+  .connector-card > .row-actions > button, .personal-connector-card > .row-actions > button { flex: 1; min-height: 40px; }
+  .connector-copy p, .connector-copy small, .personal-connector-card small { font-size: 11px; line-height: 1.38; }
+
+  .settings-callout { padding: 14px; gap: 12px; }
+  .settings-callout .row-actions { width: 100%; }
+  .settings-callout .row-actions > button { flex: 1 1 120px; min-height: 40px; }
+  .settings-boundary-grid { gap: 9px; }
+  .settings-boundary-grid > div { padding: 12px; }
+
+  /* Account settings becomes a phone sheet with a compact tab scroller. */
+  .editor-overlay.account-settings-overlay { align-items: stretch; padding: 0; }
+  .account-settings-card {
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+  .account-settings-nav { padding: 6px 8px; gap: 3px; }
+  .account-settings-nav > button { min-height: 38px; padding: 7px 10px; font-size: 12px; }
+  .account-settings-main { padding: 0 14px 24px; }
+  .account-settings-main > header { margin: 0 -14px 12px; padding: 12px 14px; }
+  .account-settings-main > header h2 { font-size: 21px; }
+  .account-settings-main > header > button { width: 38px; height: 38px; }
+  .account-identity { grid-template-columns: 42px minmax(0, 1fr); padding: 11px; }
+  .account-identity > span { width: 42px; height: 42px; border-radius: 11px; }
+  .form-stack { gap: 11px; }
+  .form-stack input, .form-stack select, .form-stack textarea { min-height: 42px; }
+
+  /* Conversation UI: preserve message space and keep controls compact. */
+  .personal-layout, .ai-layout-react { min-height: calc(100vh - 52px); }
+  .conversation-stage { padding-left: 14px; padding-right: 14px; }
+  .composer { width: calc(100% - 20px); margin-left: 10px; margin-right: 10px; }
+  .composer-actions { gap: 7px; }
+  .composer-actions > div { flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .suggestion-grid { gap: 8px; margin: 12px auto; }
+  .suggestion-grid button { min-height: 0; padding: 13px; }
+  .message-row { gap: 9px; padding: 10px 0; }
+
+  /* Admin: replace the 230px sidebar with one horizontal control strip. */
+  .admin-react-shell { display: block; }
+  .admin-react-shell > aside {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    width: 100%;
+    height: auto;
+    padding: 7px 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .admin-brand { border: 0; padding: 0; }
+  .admin-brand > div { display: none; }
+  .admin-brand svg { width: 32px; height: 32px; }
+  .admin-react-shell aside nav { display: flex; gap: 4px; margin: 0; overflow-x: auto; scrollbar-width: none; }
+  .admin-react-shell aside nav button { width: auto; min-height: 36px; padding: 7px 9px; white-space: nowrap; font-size: 12px; }
+  .admin-user { margin: 0; padding: 0; border: 0; }
+  .admin-user > div { display: none; }
+  .admin-user button { width: auto; min-height: 36px; margin: 0; padding: 7px 9px; }
+  .admin-react-shell > main > header { align-items: flex-start; padding: 16px 14px; }
+  .admin-react-shell > main > header h1 { font-size: 24px; }
+  .admin-tab-content { padding: 14px; }
+  .admin-metric-grid { gap: 8px; }
+  .admin-metric { padding: 12px; }
+  .admin-metric strong { font-size: 24px; }
+  .admin-panel-grid { gap: 10px; margin-top: 10px; }
+  .admin-panel, .admin-workspace-card { padding: 13px; }
+  .admin-list-row { align-items: flex-start; flex-wrap: wrap; gap: 5px 10px; }
+  .admin-table { margin: 0 -14px; border-left: 0; border-right: 0; border-radius: 0; }
+
+  /* Public/auth/legal pages: fewer simultaneous controls and shorter hero blocks. */
+  .react-public-header, .react-legal-topbar {
+    min-height: 56px;
+    padding: 0 14px;
+    gap: 10px;
+  }
+  .react-public-header nav { display: none; }
+  .react-public-header > div { gap: 7px; }
+  .react-public-header > div a { padding: 8px 10px; font-size: 12px; }
+  .public-brand-mark, .react-legal-brand svg, .react-legal-brand img { width: 31px; height: 31px; }
+  .react-hero { padding: 42px 16px 34px; gap: 20px; }
+  .react-hero h1 { margin: 8px 0 14px; font-size: clamp(39px, 12vw, 54px); line-height: 1; }
+  .react-hero p { font-size: 16px; line-height: 1.5; }
+  .hero-actions { margin-top: 20px; gap: 9px; }
+  .hero-actions .hero-button { flex: 1 1 150px; }
+  .runtime-card { min-height: 0; padding: 18px; border-radius: 18px; }
+  .runtime-card h3 { margin: 24px 0 8px; font-size: 22px; }
+  .runtime-chain { margin-top: 20px; }
+  .public-section { padding: 38px 16px; }
+  .public-section h2, .public-cta h2 { margin-bottom: 18px; font-size: clamp(30px, 9vw, 42px); }
+  .public-grid, .request-grid { grid-template-columns: 1fr; gap: 9px; }
+  .public-grid article { min-height: 0; padding: 16px; }
+  .public-grid h3 { margin: 15px 0 6px; }
+  .request-grid span { padding: 15px; font-size: 15px; }
+  .dark-band { padding-left: 16px; padding-right: 16px; }
+  .public-cta { margin: 18px 14px 42px; padding: 28px 18px; border-radius: 18px; }
+  .react-public-footer, .react-legal-footer { padding: 20px 16px; }
+
+  .react-auth-shell { padding: 22px 12px; align-items: start; }
+  .react-auth-card { padding: 20px 16px; gap: 11px; border-radius: 16px; }
+  .react-auth-card h1 { font-size: 28px; }
+  .react-auth-card input, .discord-auth-button, .google-react-button { min-height: 44px; }
+  .auth-links { gap: 8px; }
+
+  .react-legal-topbar nav { gap: 9px; font-size: 11px; }
+  .react-legal-shell { padding: 30px 16px 44px; }
+  .react-legal-hero { padding: 18px 0 20px; }
+  .react-legal-hero h1 { font-size: clamp(36px, 11vw, 48px); }
+  .react-legal-content { padding-top: 10px; }
+  .react-legal-content h2 { margin-top: 26px; font-size: 20px; }
+  .not-found-react { padding: 28px 18px; }
+}
+
+@media (max-width: 430px) {
+  .metric-grid, .admin-metric-grid { grid-template-columns: 1fr; }
+  .page-actions > button, .page-actions > a { flex-basis: 100%; }
+  .surface-header h1, .compact-header h1 { font-size: 23px; }
+  .card-heading, .section-heading { flex-direction: column; }
+  .settings-callout .row-actions > button { flex-basis: 100%; }
+  .react-public-header .secondary-button { display: none; }
+  .react-legal-topbar nav a:first-child { display: none; }
+}
+
+/* ===== surface-polish.css ===== */
+/* Canonical React surface corrections and navigation ergonomics. */
+.workspace-shell,
+.ai-layout-react,
+.personal-layout {
+  transition: grid-template-columns .18s ease;
+}
+
+.workspace-nav-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.workspace-nav-head .workspace-identity { min-width: 0; }
+.workspace-nav-toggle {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 9px;
+  background: rgba(255,255,255,.045);
+  color: #aeb7c9;
+  font-size: 20px;
+  line-height: 1;
+}
+.workspace-nav-toggle:hover {
+  border-color: rgba(151,137,255,.36);
+  background: rgba(129,115,255,.13);
+  color: #fff;
+}
+.nav-item-glyph { display: none; }
+
+@media (min-width: 681px) {
+  .workspace-shell.workspace-nav-collapsed { grid-template-columns: 76px minmax(0,1fr); }
+  .workspace-nav-collapsed .workspace-nav { padding-inline: 9px; overflow-x: hidden; }
+  .workspace-nav-collapsed .workspace-nav-head { grid-template-columns: 1fr; justify-items: center; }
+  .workspace-nav-collapsed .workspace-identity { width: 48px; grid-template-columns: 1fr; padding: 4px 3px 10px; border-bottom: 0; }
+  .workspace-nav-collapsed .workspace-identity > span { width: 42px; height: 42px; }
+  .workspace-nav-collapsed .workspace-identity > div { display: none; }
+  .workspace-nav-collapsed .workspace-nav-toggle { width: 42px; }
+  .workspace-nav-collapsed .nav-group { margin-top: 12px; }
+  .workspace-nav-collapsed .nav-group > small { display: none; }
+  .workspace-nav-collapsed .nav-group button {
+    min-height: 42px;
+    display: grid;
+    place-items: center;
+    padding: 7px;
+    text-align: center;
+  }
+  .workspace-nav-collapsed .nav-item-label { display: none; }
+  .workspace-nav-collapsed .nav-item-glyph {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: #b7c0d1;
+    font-size: 16px;
+  }
+  .workspace-nav-collapsed .nav-group button.active .nav-item-glyph { color: #fff; }
+  .workspace-nav-collapsed .nav-group button.active::before { top: 9px; bottom: 9px; }
+}
+
+.history-head-actions { display: flex; align-items: center; gap: 5px; }
+.history-head-actions button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--ui-line);
+  border-radius: 9px;
+  background: var(--ui-panel);
+  color: var(--ui-muted);
+}
+.history-head-actions button:hover { color: var(--ui-ink); border-color: rgba(129,116,255,.34); }
+.history-collapse { font-size: 18px; line-height: 1; }
+
+@media (min-width: 681px) {
+  .personal-layout.history-collapsed { grid-template-columns: 58px minmax(0,1fr); }
+  .ai-layout-react.history-collapsed { grid-template-columns: 58px minmax(0,1fr); }
+  .history-collapsed .personal-history,
+  .history-collapsed .conversation-list-panel { padding-inline: 8px; }
+  .history-collapsed .history-head { display: grid; justify-items: center; padding-inline: 0; }
+  .history-collapsed .history-head > div:first-child,
+  .history-collapsed .history-list,
+  .history-collapsed .history-account { display: none; }
+  .history-collapsed .history-head-actions { flex-direction: column; }
+}
+
+/* Dark mode must never leak light placeholder blocks or form controls. */
+html[data-theme="dark"] .empty-panel,
+html[data-theme="dark"] .loading-panel {
+  border-color: #334055;
+  background: linear-gradient(180deg, rgba(22,29,43,.88), rgba(15,21,32,.88));
+  color: #9eabc0;
+}
+html[data-theme="dark"] .member-row select {
+  background: #0f1520;
+  color: var(--ui-ink);
+  border-color: #334055;
+}
+html[data-theme="dark"] .capability-list > span {
+  border: 1px solid rgba(143,129,255,.16);
+  background: linear-gradient(135deg, #272142, #182937);
+  color: #c7c0ff;
+}
+html[data-theme="dark"] .role-key,
+html[data-theme="dark"] details,
+html[data-theme="dark"] details summary { color: #97a4ba; }
+html[data-theme="dark"] details code {
+  border: 1px solid #2b3547;
+  background: #0b1019;
+  color: #bbc6d8;
+}
+html[data-theme="dark"] .permission-editor-head > button,
+html[data-theme="dark"] .permission-editor-actions,
+html[data-theme="dark"] .permission-groups section {
+  background: #151c29;
+  color: var(--ui-ink);
+  border-color: var(--ui-line);
+}
+html[data-theme="dark"] .permission-editor { background: #111723; }
+html[data-theme="dark"] .permission-groups label { border-top-color: var(--ui-line); }
+html[data-theme="dark"] .connector-logo,
+html[data-theme="dark"] .plugin-icon {
+  background: linear-gradient(145deg, #3a4560, #252e41);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+html[data-theme="dark"] .workspace-nav-toggle,
+html[data-theme="dark"] .history-head-actions button {
+  background: rgba(255,255,255,.045);
+  color: #aeb7c9;
+  border-color: rgba(255,255,255,.08);
+}
+
+/* The live Workspace OS is intentionally dark. Advanced tools mounted inside
+   it must inherit the same surface system even when the account appearance or
+   browser reports a light color scheme. This prevents white cards and native
+   light controls from leaking into Workflow, Activity, Computer, Integrations
+   and All tools. */
+.workspace-lite-shell { color-scheme: dark; }
+.workspace-lite-advanced {
+  --ui-canvas: #0b0f18;
+  --ui-panel: #15111e;
+  --ui-panel-muted: #1b1627;
+  --ui-ink: #f7f3ff;
+  --ui-muted: #aaa2b7;
+  --ui-muted-2: #786f88;
+  --ui-line: rgba(212,190,255,.12);
+  --ui-line-strong: rgba(212,190,255,.22);
+  --ui-accent: #9b72ff;
+  --ui-accent-strong: #c4a7ff;
+  --ui-accent-soft: rgba(155,114,255,.14);
+  --ui-danger: #ff8f9d;
+  color: var(--ui-ink);
+  color-scheme: dark;
+}
+.workspace-lite-advanced > .workspace-page,
+.workspace-lite-advanced .surface-header {
+  color: var(--ui-ink);
+}
+.workspace-lite-advanced .surface-header {
+  border-color: var(--ui-line);
+  background:
+    radial-gradient(circle at 88% -25%, rgba(155,114,255,.10), transparent 30rem),
+    rgba(21,17,30,.96);
+}
+.workspace-lite-advanced .surface-header p,
+.workspace-lite-advanced .metric-card > span,
+.workspace-lite-advanced .metric-card > small,
+.workspace-lite-advanced .data-row small,
+.workspace-lite-advanced .data-row p,
+.workspace-lite-advanced .connector-copy p,
+.workspace-lite-advanced .connector-copy small,
+.workspace-lite-advanced .plugin-card p,
+.workspace-lite-advanced .role-key,
+.workspace-lite-advanced details,
+.workspace-lite-advanced details summary {
+  color: var(--ui-muted);
+}
+
+.workspace-lite-advanced .metric-card,
+.workspace-lite-advanced .data-card,
+.workspace-lite-advanced .presence-card,
+.workspace-lite-advanced .solution-compose-card,
+.workspace-lite-advanced .solutions-library,
+.workspace-lite-advanced .info-banner,
+.workspace-lite-advanced .inline-form,
+.workspace-lite-advanced .plugin-card,
+.workspace-lite-advanced .connector-card,
+.workspace-lite-advanced .role-card,
+.workspace-lite-advanced .computer-screen-shell,
+.workspace-lite-advanced .computer-project-preview,
+.workspace-lite-advanced .computer-approval-checkpoint,
+.workspace-lite-advanced .computer-result-card,
+.workspace-lite-advanced .computer-native-tool-console,
+.workspace-lite-advanced .computer-timeline,
+.workspace-lite-advanced .integration-provider-card,
+.workspace-lite-advanced .integration-approval-card {
+  border-color: var(--ui-line);
+  background: linear-gradient(180deg, rgba(25,20,35,.98), rgba(18,14,27,.98));
+  color: var(--ui-ink);
+  box-shadow: 0 12px 34px rgba(0,0,0,.20);
+}
+.workspace-lite-advanced .metric-card {
+  background: linear-gradient(145deg, rgba(29,23,42,.98), rgba(19,15,29,.98));
+}
+.workspace-lite-advanced .empty-panel,
+.workspace-lite-advanced .loading-panel {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+  color: var(--ui-muted);
+}
+.workspace-lite-advanced .data-row,
+.workspace-lite-advanced .message-row {
+  border-color: var(--ui-line);
+}
+
+.workspace-lite-advanced input:not([type="checkbox"]):not([type="radio"]),
+.workspace-lite-advanced textarea,
+.workspace-lite-advanced select {
+  border: 1px solid var(--ui-line-strong);
+  background: #100c18;
+  color: var(--ui-ink);
+  accent-color: var(--ui-accent);
+}
+.workspace-lite-advanced input::placeholder,
+.workspace-lite-advanced textarea::placeholder { color: #766d86; }
+.workspace-lite-advanced input:focus,
+.workspace-lite-advanced textarea:focus,
+.workspace-lite-advanced select:focus {
+  outline: none;
+  border-color: rgba(196,167,255,.55);
+  box-shadow: 0 0 0 3px rgba(155,114,255,.14);
+}
+.workspace-lite-advanced select option {
+  background: #100c18;
+  color: var(--ui-ink);
+}
+
+.workspace-lite-advanced button:not(.primary-button):not(.danger-button):not(.text-button):not(.icon-action),
+.workspace-lite-advanced .secondary-button,
+.workspace-lite-advanced .button-link {
+  border: 1px solid var(--ui-line);
+  background: rgba(255,255,255,.045);
+  color: #ece7f4;
+}
+.workspace-lite-advanced button:not(.primary-button):not(.danger-button):not(.text-button):not(.icon-action):hover,
+.workspace-lite-advanced .secondary-button:hover,
+.workspace-lite-advanced .button-link:hover {
+  border-color: rgba(196,167,255,.30);
+  background: rgba(155,114,255,.11);
+  color: #fff;
+}
+.workspace-lite-advanced .primary-button {
+  border-color: transparent;
+  background: linear-gradient(135deg, #7655e8, #a16cf2);
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(104,72,199,.22);
+}
+.workspace-lite-advanced .danger-button {
+  background: #2b171f;
+  border-color: #633144;
+  color: #ffabb6;
+}
+
+.workspace-lite-advanced details code,
+.workspace-lite-advanced pre,
+.workspace-lite-advanced .integration-message-body,
+.workspace-lite-advanced .integration-job pre,
+.workspace-lite-advanced .integration-approval-card pre,
+.workspace-lite-advanced .integration-structured-result {
+  border-color: var(--ui-line);
+  background: #0b0810;
+  color: #d7cee2;
+}
+.workspace-lite-advanced .status-chip {
+  background: #211b2c;
+  color: #b9afc8;
+}
+.workspace-lite-advanced .status-active,
+.workspace-lite-advanced .status-connected,
+.workspace-lite-advanced .status-healthy,
+.workspace-lite-advanced .status-completed,
+.workspace-lite-advanced .status-succeeded,
+.workspace-lite-advanced .status-live,
+.workspace-lite-advanced .status-exposed {
+  background: #173225;
+  color: #96e2b3;
+}
+.workspace-lite-advanced .status-pending,
+.workspace-lite-advanced .status-attention,
+.workspace-lite-advanced .status-publishing {
+  background: #392d16;
+  color: #efd184;
+}
+.workspace-lite-advanced .status-failed,
+.workspace-lite-advanced .status-error,
+.workspace-lite-advanced .status-disabled,
+.workspace-lite-advanced .status-rejected,
+.workspace-lite-advanced .status-hidden {
+  background: #361b23;
+  color: #ff9eab;
+}
+
+.workspace-lite-advanced .computer-screen-shell {
+  overflow: hidden;
+  background: #100c18;
+}
+.workspace-lite-advanced .computer-screen-bar {
+  border-color: var(--ui-line);
+  background: #15111e;
+}
+.workspace-lite-advanced .computer-screen {
+  background:
+    radial-gradient(circle at 76% 0%, rgba(155,114,255,.09), transparent 25rem),
+    linear-gradient(180deg, #15111e, #0d0a15);
+}
+.workspace-lite-advanced .computer-session-list > button {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+  color: var(--ui-ink);
+}
+.workspace-lite-advanced .computer-session-list > button.active {
+  border-color: rgba(196,167,255,.42);
+  background: rgba(155,114,255,.12);
+  outline-color: rgba(196,167,255,.52);
+}
+.workspace-lite-advanced .computer-glyph,
+.workspace-lite-advanced .computer-security-grid > span,
+.workspace-lite-advanced .computer-approval-checkpoint dl > div {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+}
+
+.workspace-lite-advanced .integration-tabs {
+  border-color: var(--ui-line);
+  background: rgba(255,255,255,.025);
+}
+.workspace-lite-advanced .integration-tabs button { background: transparent; }
+.workspace-lite-advanced .integration-tabs button.active,
+.workspace-lite-advanced .integration-scroll-list > button.active,
+.workspace-lite-advanced .canva-card-grid > button.active {
+  border-color: rgba(196,167,255,.30);
+  background: rgba(155,114,255,.12);
+  color: #fff;
+  outline-color: rgba(196,167,255,.46);
+}
+.workspace-lite-advanced .integration-provider-icon,
+.workspace-lite-advanced .canva-card-grid img {
+  border-color: var(--ui-line);
+  background: #211a2d;
+}
+.workspace-lite-advanced .integration-scroll-list > button,
+.workspace-lite-advanced .canva-card-grid > button {
+  border-color: var(--ui-line);
+  color: var(--ui-ink);
+}
+
+.workspace-lite-advanced .inline-error {
+  border-color: #623241;
+  background: #2a171f;
+  color: #ffabb6;
+}
+.workspace-lite-advanced .approval-substance,
+.workspace-lite-advanced .success-banner {
+  border: 1px solid rgba(116,213,151,.24);
+  background: rgba(33,93,55,.20);
+  color: #bceccb;
+}
+
+@media (max-width: 680px) {
+  .workspace-nav-toggle { display: none; }
+  .history-collapse { display: none; }
+}
