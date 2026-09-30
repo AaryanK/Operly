@@ -6,9 +6,6 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const page = read("src/workspace/WorkflowPage.tsx");
 const access = read("src/workspace/AccessPage.tsx");
-const routes = read("src/app/routes.ts");
-const shell = read("src/workspace/WorkspaceShell.tsx");
-const home = read("src/workspace/WorkspaceHome.tsx");
 const allTools = read("src/workspace/CapabilitiesPage.tsx");
 const rootApp = read("src/app/App.tsx");
 const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
@@ -56,9 +53,8 @@ for (const marker of [
 ]) {
   if (!page.includes(marker)) failures.push(`WorkflowPage missing frontend boundary: ${marker}`);
 }
-if (!routes.includes('| "workflows"') || !routes.includes('{ id: "workflows", label: "Workflows"')) failures.push("Workspace route must expose Workflows");
-if (!shell.includes('import("./WorkflowPage")') || !shell.includes('case "workflows"')) failures.push("WorkspaceShell must retain WorkflowPage coverage");
-if (!home.includes('section: "workflows"') || !home.includes('title: "Automate work"')) failures.push("Workspace Home must make Workflow discoverable");
+if (!liveShell.includes('import("../workspace/WorkflowPage")') || !liveShell.includes('case "workflows"')) failures.push("Live Workspace shell must retain WorkflowPage coverage");
+if (!liveShell.includes('section="workflows"') || !liveShell.includes(">Workflows</WorkspaceControlLink>")) failures.push("Live Workspace shell must make Workflow discoverable");
 if (!allTools.includes('api<CapabilityResponse>("/workspace-tools")') || !allTools.includes("no hidden API-only action")) failures.push("All tools must remain the universal capability fallback");
 if (!capabilityRuntime.includes("/workspace-tools/approvals/") || !capabilityRuntime.includes("approval_id: options.approvalId")) failures.push("Shared capability runtime must own exact approval resume semantics");
 
