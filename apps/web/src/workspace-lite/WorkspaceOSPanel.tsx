@@ -411,7 +411,7 @@ export function WorkspaceOSPanel({ workspaceId, pathname }: { workspaceId: strin
       if (current.workspace.id !== workspaceId) throw new Error("Workspace session is still switching");
       const [workspaceSummary, capabilityTools] = await Promise.all([
         api<Summary>("/workspace-os/summary"),
-        loadWorkspaceCapabilities(),
+        loadWorkspaceCapabilities().catch(() => []),
       ]);
       setContext(current);
       setSummary(workspaceSummary);
