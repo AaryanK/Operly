@@ -1,3 +1,4 @@
+/* ===== settings.css ===== */
 .scope-add { color: #9fe0b8; background: #23342a; font-size: 22px; }
 .scope-add:hover { color: #fff; background: #2f7d4e; }
 .workspace-identity { cursor: pointer; }
@@ -51,3 +52,41 @@
 .workspace-settings-list small { margin-top: 3px; color: var(--ui-muted); }
 @media (max-width: 800px) { .settings-grid { grid-template-columns: 1fr; } .settings-card.full-settings { grid-column: auto; } .account-settings-overlay { padding: 10px; } .account-settings-card { grid-template-columns: 1fr; height: min(760px,calc(100vh - 20px)); } .account-settings-nav { display: flex; gap: 4px; overflow-x: auto; padding: 10px; border-right: 0; border-bottom: 1px solid var(--ui-line); } .account-settings-nav > div { display: none; } .account-settings-nav > button { width: auto; white-space: nowrap; } }
 @media (max-width: 680px) { .settings-grid { padding-left: 18px; padding-right: 18px; } .settings-boundary-grid { grid-template-columns: 1fr; } .settings-callout { align-items: flex-start; flex-direction: column; } .personal-connector-card { grid-template-columns: 40px minmax(0,1fr); } .personal-connector-card > .status-chip { grid-column: 2; justify-self: start; } }
+
+/* ===== connection-avatars.css ===== */
+.personal-connector-card .connector-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(139, 130, 246, 0.24);
+  background: linear-gradient(145deg, #343b4d, #262c3a);
+  box-shadow: 0 5px 16px rgba(15, 18, 28, 0.18), inset 0 0 0 1px rgba(255,255,255,0.04);
+  color: #fff;
+  flex: 0 0 46px;
+}
+
+.personal-connector-card .connector-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  border-radius: inherit;
+}
+
+.personal-connector-card[data-provider="discord"] .connector-logo {
+  background: linear-gradient(145deg, #5865f2, #404eed);
+}
+
+.personal-connector-card .connector-logo + div {
+  min-width: 0;
+}
+
+@media (max-width: 680px) {
+  .personal-connector-card .connector-logo {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+}

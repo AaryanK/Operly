@@ -11,12 +11,12 @@ const [shell, settings, personal, css] = await Promise.all([
   read("src/workspace-lite/WorkspaceSafeApp.tsx"),
   read("src/account/AccountSettings.tsx"),
   read("src/account/PersonalHome.tsx"),
-  read("src/ui/discord-account-shell.css"),
+  read("src/ui/account-overrides.css"),
 ]);
 
 assert(!settings.includes("/identities"), "legacy identities API must not be referenced by current settings");
 assert(shell.includes('import { AccountSettings } from "../account/AccountSettings"'), "settings must be part of the current shell bundle");
-assert(!shell.includes("workspace-lite-account"), "detached account avatar must not be on the server rail");
+assert(shell.includes('className="workspace-lite-menu workspace-lite-account-menu"'), "canonical authenticated account menu must remain in the live shell");
 assert(shell.includes('onOpenSettings={() => openAccountSettings("account")}'), "Personal profile must open user settings");
 assert(personal.includes("draftConversation"), "Personal Operly must expose a new-conversation draft state");
 assert(personal.includes("discord-user-panel"), "Personal Operly must expose the Discord-style user panel");

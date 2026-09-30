@@ -38,6 +38,7 @@ from packages.workspace_modules.integrations.common import (
 )
 from packages.workspace_modules.integrations.discord.client import bot
 from packages.workspace_modules.integrations.discord.provider import _invite_url
+from packages.workspace_modules.integrations.discord.runtime_status import discord_ai_runtime_status
 from packages.workspace_modules.integrations.google.provider import (
     CALENDAR,
     CALENDAR_FREEBUSY,
@@ -337,12 +338,14 @@ async def canva_permissions(auth: AuthContext = Depends(get_auth_context)):
 @router.get("/discord/status")
 async def discord_status(auth: AuthContext = Depends(get_auth_context)):
     del auth
+    ai_enabled, ai_detail = discord_ai_runtime_status()
     return {
         "configured": bool(os.getenv("DISCORD_BOT_TOKEN", "").strip()),
         "ready": bool(bot.is_ready()),
         "bot_user": str(bot.user) if bot.user else None,
         "invite_url": _invite_url(),
-        "ai_enabled": False,
+        "ai_enabled": ai_enabled,
+        "ai_detail": ai_detail,
     }
 
 

@@ -6,15 +6,13 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const page = read("src/workspace/WorkflowPage.tsx");
 const access = read("src/workspace/AccessPage.tsx");
-const routes = read("src/app/routes.ts");
-const shell = read("src/workspace/WorkspaceShell.tsx");
-const home = read("src/workspace/WorkspaceHome.tsx");
 const allTools = read("src/workspace/CapabilitiesPage.tsx");
 const rootApp = read("src/app/App.tsx");
 const liveShell = read("src/workspace-lite/WorkspaceSafeApp.tsx");
 const entry = read("src/main.tsx");
-const liveStyles = read("src/ui/workspace-lite.css");
-const surfacePolish = read("src/ui/surface-polish.css");
+const liveStyles = read("src/ui/workspace.css");
+const experienceStyles = read("src/ui/experience.css");
+const capabilityRuntime = read("src/runtime/capabilityRuntime.ts");
 
 const requiredCapabilities = [
   "workflow.list",
@@ -43,7 +41,9 @@ for (const id of requiredCapabilities) {
 for (const marker of [
   'api<ToolCatalog>("/workspace-tools")',
   '"/workspace-tools/approvals?limit=100"',
-  '/workspace-tools/approvals/${encodeURIComponent',
+  'executeCapability(capability, argumentsValue)',
+  'approveAndResumeCapability(pendingAction)',
+  'decideCapabilityApproval(item.id, approved)',
   'actionTools',
   'Immutable attempt history',
   'Workflow trace',
@@ -53,10 +53,10 @@ for (const marker of [
 ]) {
   if (!page.includes(marker)) failures.push(`WorkflowPage missing frontend boundary: ${marker}`);
 }
-if (!routes.includes('| "workflows"') || !routes.includes('{ id: "workflows", label: "Workflows"')) failures.push("Workspace route must expose Workflows");
-if (!shell.includes('import("./WorkflowPage")') || !shell.includes('case "workflows"')) failures.push("WorkspaceShell must retain WorkflowPage coverage");
-if (!home.includes('section: "workflows"') || !home.includes('title: "Automate work"')) failures.push("Workspace Home must make Workflow discoverable");
+if (!liveShell.includes('import("../workspace/WorkflowPage")') || !liveShell.includes('case "workflows"')) failures.push("Live Workspace shell must retain WorkflowPage coverage");
+if (!liveShell.includes('section="workflows"') || !liveShell.includes(">Workflows</WorkspaceControlLink>")) failures.push("Live Workspace shell must make Workflow discoverable");
 if (!allTools.includes('api<CapabilityResponse>("/workspace-tools")') || !allTools.includes("no hidden API-only action")) failures.push("All tools must remain the universal capability fallback");
+if (!capabilityRuntime.includes("/workspace-tools/approvals/") || !capabilityRuntime.includes("approval_id: options.approvalId")) failures.push("Shared capability runtime must own exact approval resume semantics");
 
 if (rootApp.includes("ProductApp")) failures.push("Authenticated /channels routes must not hand off to the separate ProductApp bootstrap");
 if (!rootApp.includes('pathname.startsWith("/channels/")') || !rootApp.includes("<WorkspaceSafeApp pathname={pathname}")) failures.push("All /channels routes must stay in WorkspaceSafeApp");
@@ -104,10 +104,10 @@ for (const marker of [
 }
 if (access.includes('value="public"')) failures.push("MCP frontend must not offer anonymous/public tool execution");
 
-for (const stylesheet of ["tokens.css", "app.css", "theme.css", "mobile.css", "surface-polish.css"]) {
+for (const stylesheet of ["foundation.css", "workspace.css", "experience.css"]) {
   if (!entry.includes(`./ui/${stylesheet}`)) failures.push(`Frontend entry must load ${stylesheet} for advanced workspace surfaces`);
 }
-if (entry.lastIndexOf('./ui/surface-polish.css') < entry.lastIndexOf('./ui/agent-computer.css')) failures.push("surface-polish.css must load after component-specific advanced workspace styles");
+if (entry.lastIndexOf('./ui/experience.css') < entry.lastIndexOf('./ui/workspace.css')) failures.push("experience.css must load after consolidated workspace styles");
 for (const marker of [
   "@media (pointer: coarse)",
   ".workspace-lite-advanced .metric-grid",
@@ -126,7 +126,7 @@ for (const marker of [
   ".workspace-lite-advanced .integration-tabs",
   ".workspace-lite-advanced details code",
 ]) {
-  if (!surfacePolish.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
+  if (!experienceStyles.includes(marker)) failures.push(`Advanced workspace dark-surface contract missing: ${marker}`);
 }
 
 if (failures.length) {

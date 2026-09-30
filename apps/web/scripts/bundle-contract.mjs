@@ -13,8 +13,8 @@ const files = await readdir(assets);
 const javascript = files.filter((name) => name.endsWith(".js"));
 
 assert(javascript.length >= 6, `Expected route-level JavaScript splitting; found only ${javascript.length} chunks`);
-for (const expected of ["PersonalHome-", "WorkspaceShell-", "AccountSettings-"]) {
-  assert(javascript.some((name) => name.startsWith(expected)), `Missing lazy authenticated chunk: ${expected}*`);
+for (const expected of ["PersonalHome-", "WorkflowPage-", "AgentComputerPage-"]) {
+  assert(javascript.some((name) => name.startsWith(expected)), `Missing live lazy authenticated chunk: ${expected}*`);
 }
 
 const sizes = await Promise.all(javascript.map(async (name) => ({ name, size: (await stat(resolve(assets, name))).size })));

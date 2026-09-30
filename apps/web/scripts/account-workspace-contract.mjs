@@ -10,18 +10,22 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, accountSettings, personalHome, main, discordCss, operlyThemeCss, appTypes, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
+const [safeShell, accountSettings, personalHome, main, accountOverrides, appTypes, accountCompatRouter, runtimeEntry, authSession] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/account/AccountSettings.tsx"),
   text("src/account/PersonalHome.tsx"),
   text("src/main.tsx"),
-  text("src/ui/discord-account-shell.css"),
-  text("src/ui/operly-settings-theme.css"),
+  text("src/ui/account-overrides.css"),
   text("src/app/types.ts"),
   repoText("apps/api/account_compat_router.py"),
   repoText("apps/api/runtime_entry.py"),
   repoText("apps/api/session.py"),
 ]);
+
+const themeMarker = "===== operly-settings-theme.css =====";
+const themeStart = accountOverrides.indexOf(themeMarker);
+assert(themeStart >= 0, "Consolidated account overrides must preserve the Operly theme section");
+const operlyThemeCss = accountOverrides.slice(themeStart);
 
 assert(
   safeShell.includes('import { AccountSettings } from "../account/AccountSettings"') && !safeShell.includes('lazy(() => import("../account/AccountSettings")'),
@@ -40,8 +44,9 @@ assert(
   "The Discord-style scope rail must expose workspace creation",
 );
 assert(
-  !safeShell.includes('workspace-lite-account') && safeShell.includes('onOpenSettings={() => openAccountSettings("account")}'),
-  "Profile settings must live in the Personal Operly user panel, not as a detached avatar on the server rail",
+  safeShell.includes('onOpenSettings={() => openAccountSettings("account")}') &&
+  safeShell.includes('className="workspace-lite-menu workspace-lite-account-menu"'),
+  "Profile settings must be reachable from Personal Operly and the canonical authenticated account menu",
 );
 assert(
   safeShell.includes('void logout()') && safeShell.includes('Signing out…'),
@@ -109,15 +114,14 @@ assert(
   "The production entrypoint must register the account profile boundary ahead of the React catch-all",
 );
 assert(
-  main.includes('import "./ui/discord-account-shell.css"') &&
-  main.includes('import "./ui/operly-settings-theme.css"') &&
-  main.lastIndexOf('./ui/operly-settings-theme.css') > main.lastIndexOf('./ui/discord-account-shell.css'),
-  "Discord settings structure must be followed by Operly's visual theme layer",
+  main.includes('import "./ui/account-overrides.css"') &&
+  main.lastIndexOf('./ui/account-overrides.css') > main.lastIndexOf('./ui/public-surfaces.css'),
+  "Account/settings overrides must remain the final visual layer",
 );
 assert(
-  discordCss.includes('.discord-settings-overlay') &&
-  discordCss.includes('.discord-user-panel') &&
-  discordCss.includes('.personal-new-draft'),
+  accountOverrides.includes('.discord-settings-overlay') &&
+  accountOverrides.includes('.discord-user-panel') &&
+  accountOverrides.includes('.personal-new-draft'),
   "The structural account shell must still own settings, user-panel, and new-conversation layout",
 );
 assert(

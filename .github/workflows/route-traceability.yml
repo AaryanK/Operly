@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/route-traceability.yml"
+      - "requirements.txt"
       - "apps/api/**"
       - "packages/**/router.py"
       - "packages/**/**_router.py"
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - ".github/workflows/route-traceability.yml"
+      - "requirements.txt"
       - "apps/api/**"
       - "packages/**/router.py"
       - "packages/**/**_router.py"

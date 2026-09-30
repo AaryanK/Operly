@@ -9,11 +9,16 @@ const web = (path) => readFile(resolve(webRoot, path), "utf8");
 const repo = (path) => readFile(resolve(repoRoot, path), "utf8");
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [brand, main, googleRouter] = await Promise.all([
-  web("src/ui/brand.css"),
+const [foundation, main, googleRouter] = await Promise.all([
+  web("src/ui/foundation.css"),
   web("src/main.tsx"),
   repo("apps/api/personal_connectors_router.py"),
 ]);
+
+const brandMarker = "===== brand.css =====";
+const brandStart = foundation.indexOf(brandMarker);
+assert(brandStart >= 0, "Consolidated foundation must preserve the brand section");
+const brand = foundation.slice(brandStart);
 
 assert(
   brand.includes(':root,\nhtml[data-theme="dark"]') &&
@@ -27,8 +32,9 @@ assert(
   "Legacy green/lime brand accents must not return in the Operly brand layer",
 );
 assert(
-  main.indexOf('./ui/theme.css') < main.indexOf('./ui/brand.css'),
-  "The brand layer must load after generic theme values so purple remains authoritative",
+  main.includes('./ui/foundation.css') &&
+  foundation.indexOf("===== theme.css =====") < brandStart,
+  "Consolidated foundation must preserve theme-before-brand cascade order",
 );
 assert(
   googleRouter.includes('def google_oauth_configuration()') &&

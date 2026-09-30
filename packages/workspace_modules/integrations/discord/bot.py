@@ -7,9 +7,9 @@ import re
 import discord
 from sqlalchemy import select
 
-from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute, OpenAICompatibleAgentModel
+from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
 from packages.agent_runtime.interactive import Runtime1Agent
-from packages.agent_runtime.runtime import AgentRuntimeDisabled, AgentRuntimeSettings
+from packages.agent_runtime.runtime import AgentRuntimeDisabled
 from packages.agent_runtime.telemetry import fingerprint, runtime_trace
 from packages.database.channel_models import ChannelInstallation, ExternalIdentity
 from packages.database.db import session_scope
@@ -23,6 +23,7 @@ from packages.security.execution_context import (
 from packages.security.permissions import resolve_workspace_permissions
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.integrations.discord.client import bot
+from packages.workspace_modules.integrations.discord.runtime_status import discord_ai_runtime_status
 from packages.workspace_modules.integrations.discord.runtime_test import evaluate_discord_request
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
@@ -31,16 +32,6 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("
 
 def _runtime_agent() -> Runtime1Agent:
     return Runtime1Agent(model=OpenAICompatibleAgentModel())
-
-
-def _runtime_status() -> tuple[bool, str]:
-    if not AgentRuntimeSettings.from_environment().enabled:
-        return False, "Agent Runtime 1.0 is disabled by deployment policy."
-    try:
-        route = InferenceRoute.from_environment()
-    except AgentInferenceError as error:
-        return False, str(error)
-    return True, f"Agent Runtime 1.0 is ready with {route.provider}/{route.model_id}."
 
 
 async def _linked_operly_user_id(discord_user_id: int) -> str | None:
@@ -176,7 +167,7 @@ async def _runtime_test(message: discord.Message, prompt: str) -> None:
         )
         return
 
-    ready, detail = _runtime_status()
+    ready, detail = discord_ai_runtime_status()
     if not ready:
         await message.reply(detail)
         return
@@ -306,7 +297,7 @@ async def _handle_command(message: discord.Message) -> bool:
         return True
     if command == "status":
         row = await _installation(message)
-        ready, detail = _runtime_status()
+        ready, detail = discord_ai_runtime_status()
         binding = (
             f"Bound workspace: `{row.tenant_id}`."
             if row
@@ -440,7 +431,7 @@ async def _reply_chunks(message: discord.Message, text: str) -> None:
 
 @bot.event
 async def on_ready() -> None:
-    ready, detail = _runtime_status()
+    ready, detail = discord_ai_runtime_status()
     runtime_trace(
         "discord.connected",
         bot_user=str(bot.user),

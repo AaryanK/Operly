@@ -11,8 +11,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const [
   page,
-  routes,
-  shell,
+  liveShell,
   computerRouter,
   nativeTools,
   sandboxClient,
@@ -23,10 +22,10 @@ const [
   tools,
   main,
   schema,
+  workspaceStyles,
 ] = await Promise.all([
   text("apps/web/src/workspace/AgentComputerPage.tsx"),
-  text("apps/web/src/app/routes.ts"),
-  text("apps/web/src/workspace/WorkspaceShell.tsx"),
+  text("apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("packages/workspace_modules/agent_computer/router.py"),
   text("packages/workspace_modules/agent_computer/native_tools.py"),
   text("packages/workspace_modules/agent_computer/sandbox.py"),
@@ -37,6 +36,7 @@ const [
   text("packages/workspace_modules/tools/__init__.py"),
   text("apps/api/main.py"),
   text("packages/database/schema.py"),
+  text("apps/web/src/ui/workspace.css"),
 ]);
 
 for (const file of [
@@ -53,14 +53,13 @@ for (const file of [
   "apps/sandbox_runner/server.mjs",
   "apps/sandbox_runner/computer_tool.py",
   "apps/sandbox_runner/README.md",
-  "apps/web/src/ui/agent-computer.css",
 ]) assert(await exists(file), `Agent Computer implementation is missing ${file}`);
 assert(!(await exists("apps/computer_runner")), "Agent Computer must not create a second runner service");
+assert(workspaceStyles.includes(".agent-computer-layout"), "Consolidated Workspace styles must retain Agent Computer presentation");
 
-assert(routes.includes('| "agent-computer"'), "Workspace route type must expose Agent Computer");
-assert(routes.includes('{ id: "agent-computer", label: "Agent Computer"'), "Workspace navigation must expose Agent Computer");
-assert(shell.includes('import("./AgentComputerPage")'), "Workspace shell must lazy-load Agent Computer");
-assert(shell.includes('case "agent-computer"'), "Workspace shell must render Agent Computer");
+assert(liveShell.includes('import("../workspace/AgentComputerPage")'), "Live Workspace shell must lazy-load Agent Computer");
+assert(liveShell.includes('case "agent-computer"'), "Live Workspace shell must render Agent Computer");
+assert(liveShell.includes('section="agent-computer"') && liveShell.includes(">Computer</WorkspaceControlLink>"), "Live Workspace navigation must expose Agent Computer");
 
 assert(page.includes('api<ComputerStatus>("/agent-computer/status")'), "Agent Computer UI must resolve current runtime authority");
 assert(page.includes('"/agent-computer/sessions"'), "Agent Computer UI must create durable sessions");
@@ -73,7 +72,7 @@ assert(page.includes("computer_session_id is injected server-side"), "Frontend m
 assert(page.includes("Railway Sandbox VM"), "Frontend must show the actual per-session isolation boundary");
 assert(page.includes("not joined to Operly's private service network"), "Frontend must explain that the agent VM cannot access Operly private services");
 assert(!page.includes("Full public egress"), "Frontend must not imply a private-network-capable Computer mode");
-assert(page.includes("/workspace-tools/approvals/"), "Business approvals must use the canonical Workspace approval boundary");
+assert(page.includes("decideCapabilityApproval(active.approval_id, true)"), "Business approvals must use the shared Kernel approval client");
 assert(page.includes("/resume"), "Approved Workspace presets must resume the same session");
 
 assert(computerRouter.includes('context.can("computer:execute")'), "Computer API must require computer:execute");
@@ -142,7 +141,7 @@ assert(tools.includes("workspace_studio_capabilities"), "Workspace tool composit
 assert(tools.includes("WorkspaceStudioProvider"), "Workspace provider composition must include Studio provider");
 assert(main.includes("agent_computer_router"), "FastAPI must mount the Workspace Agent Computer API");
 assert(main.includes("studio_public_router"), "FastAPI must mount verified Studio hosting routes");
-assert(schema.includes('ALEMBIC_HEAD = "0050_workspace_agent_computer"'), "Schema head must include Agent Computer migration");
 assert(schema.includes("agent_computer_models"), "Agent Computer models must be registered with Base metadata");
+assert(!schema.includes('ALEMBIC_HEAD = "0050_workspace_agent_computer"'), "Agent Computer contract must not pin the repository schema head to its historical migration");
 
 console.log("Agent Computer control plane + Railway Sandbox execution plane contracts passed.");

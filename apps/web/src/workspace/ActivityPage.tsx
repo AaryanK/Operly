@@ -2,12 +2,13 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
+import { decideCapabilityApproval } from "../runtime/capabilityRuntime";
+import { LegacyApprovalsPanel } from "./LegacyApprovalsPanel";
 
 type Row = Record<string, unknown>;
 type ActivityData = {
   messages: Row[];
   tasks: Row[];
-  approvals: Row[];
   toolApprovals: Row[];
   toolEvents: Row[];
 };
@@ -21,7 +22,6 @@ const when = (value: unknown) => {
   try { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(raw)); }
   catch { return raw; }
 };
-const failureMessage = (result: PromiseRejectedResult, fallback: string) => result.reason instanceof Error ? result.reason.message : fallback;
 
 function PageHeader({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return <header className="surface-header page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div></header>;
@@ -29,20 +29,6 @@ function PageHeader({ eyebrow, title, description }: { eyebrow: string; title: s
 
 function Empty({ children }: { children: React.ReactNode }) { return <div className="empty-panel">{children}</div>; }
 function Status({ value }: { value: unknown }) { return <span className={`status-chip status-${text(value).toLowerCase().replaceAll("_", "-")}`}>{titleCase(value)}</span>; }
-
-function ApprovalSubstance({ item }: { item: Row }) {
-  const details = object(item.details);
-  return <div className="approval-substance">
-    <div className="approval-substance-grid">
-      <span><small>Objective</small><strong>{text(details.objective, text(item.action, "Action"))}</strong></span>
-      <span><small>Expected outcome</small><strong>{text(details.expected_outcome, "Complete the requested action")}</strong></span>
-      <span><small>Risk</small><strong>{text(details.risk_level, "Review required")}</strong></span>
-      <span><small>Capability</small><strong>{text(details.capability, text(item.action, "Action"))}</strong></span>
-    </div>
-    {details.rationale && <p className="approval-rationale"><strong>Why Operly wants to do this:</strong> {text(details.rationale)}</p>}
-    <details><summary>See the full action</summary><code>{JSON.stringify(details, null, 2)}</code></details>
-  </div>;
-}
 
 function ToolApprovalSubstance({ item }: { item: Row }) {
   const args = object(item.arguments);
@@ -71,22 +57,20 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
     setLoading(true);
     setError(null);
     try {
-      const [messagesResult, tasksResult, approvalsResult, toolApprovalsResult, toolEventsResult] = await Promise.allSettled([
+      const [messagesResult, tasksResult, toolApprovalsResult, toolEventsResult] = await Promise.allSettled([
         api<Row[]>("/messages"),
         api<Row[]>("/tasks"),
-        api<Row[]>("/approvals"),
         api<{ approvals: Row[] }>("/workspace-tools/approvals?limit=50"),
         api<{ events: Row[] }>("/workspace-tools/events?limit=80"),
       ]);
       setData({
         messages: messagesResult.status === "fulfilled" ? messagesResult.value : [],
         tasks: tasksResult.status === "fulfilled" ? tasksResult.value : [],
-        approvals: approvalsResult.status === "fulfilled" ? approvalsResult.value : [],
         toolApprovals: toolApprovalsResult.status === "fulfilled" ? toolApprovalsResult.value.approvals || [] : [],
         toolEvents: toolEventsResult.status === "fulfilled" ? toolEventsResult.value.events || [] : [],
       });
-      if (approvalsResult.status === "rejected" && toolApprovalsResult.status === "rejected") {
-        setError(`Approvals could not be loaded: ${failureMessage(approvalsResult, "approval service unavailable")}`);
+      if (toolApprovalsResult.status === "rejected") {
+        setError("Workspace tool approvals could not be loaded.");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load workspace activity");
@@ -97,27 +81,11 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
 
   useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [workspace.id]);
 
-  async function approval(id: string, status: "approved" | "rejected") {
-    setDecisionBusy(id);
-    setError(null);
-    try {
-      await api(`/approvals/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) });
-      await reload();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Approval decision could not be saved");
-    } finally {
-      setDecisionBusy(null);
-    }
-  }
-
   async function toolApproval(id: string, approved: boolean) {
     setDecisionBusy(id);
     setError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(id)}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ approved }),
-      });
+      await decideCapabilityApproval(id, approved);
       await reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Tool approval decision could not be saved");
@@ -151,7 +119,6 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
     }
   }
 
-  const pending = (data?.approvals || []).filter((item) => text(item.status) === "pending");
   const toolPending = (data?.toolApprovals || []).filter((item) => text(item.status) === "pending");
   const openTasks = (data?.tasks || []).filter((item) => text(item.status) !== "completed");
   const runSteps = Array.isArray(runDetail?.steps) ? runDetail.steps as Row[] : [];
@@ -163,7 +130,7 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
 
     {data && <>
       <section className="metric-grid">
-        <article className="metric-card"><span>Needs your OK</span><strong>{toolPending.length + pending.length}</strong><small>Actions waiting for a human decision</small></article>
+        <article className="metric-card"><span>Needs your OK</span><strong>{toolPending.length}</strong><small>Kernel-governed actions waiting for a human decision</small></article>
         <article className="metric-card"><span>Open tasks</span><strong>{openTasks.length}</strong><small>Work still in progress</small></article>
         <article className="metric-card"><span>Tool events</span><strong>{data.toolEvents.length}</strong><small>Recent deterministic execution history</small></article>
         <article className="metric-card"><span>Messages</span><strong>{data.messages.length}</strong><small>Recent workspace conversations</small></article>
@@ -178,7 +145,7 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
           </div>)}</div> : <Empty>No Workspace tool approvals yet.</Empty>}
         </article>
 
-        {data.approvals.length > 0 && <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Legacy workflows</span><h2>Other approvals</h2></div><span>{pending.length} pending</span></div><div className="row-list">{data.approvals.slice(0, 12).map((item) => <div className="data-row stacked approval-row" key={text(item.id)}><div><Status value={item.status} /><strong>{text(item.action, "Action")}</strong><ApprovalSubstance item={item} /></div>{text(item.status) === "pending" && <div className="row-actions"><button type="button" disabled={decisionBusy === text(item.id)} onClick={() => void approval(text(item.id), "rejected")}>Reject</button><button type="button" className="primary-button" disabled={decisionBusy === text(item.id)} onClick={() => void approval(text(item.id), "approved")}>{decisionBusy === text(item.id) ? "Working…" : "Approve"}</button></div>}</div>)}</div></article>}
+        <LegacyApprovalsPanel />
 
         <article className="data-card"><div className="card-heading"><div><span className="eyebrow">Execution</span><h2>Tasks</h2></div><span>{openTasks.length} open</span></div>{data.tasks.length ? <div className="row-list">{data.tasks.slice(0, 14).map((item) => <div className="data-row" key={text(item.id)}><div><strong>{text(item.title, "Task")}</strong><small>{item.due_at ? `Due ${when(item.due_at)}` : titleCase(item.status)}</small></div>{text(item.status) !== "completed" ? <button type="button" className="icon-action" onClick={() => void complete(text(item.id))}>✓</button> : <Status value="completed" />}</div>)}</div> : <Empty>No tasks yet.</Empty>}</article>
 

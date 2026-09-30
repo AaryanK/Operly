@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -315,8 +317,9 @@ def workspace_control_capabilities() -> tuple[CapabilitySpec, ...]:
                     "target_email": {"type": ["string", "null"]},
                     "expires_at": {"type": "string"},
                     "token": {"type": "string"},
+                    "invite_url": {"type": "string"},
                 },
-                required=["id", "role", "target_email", "expires_at", "token"],
+                required=["id", "role", "target_email", "expires_at", "token", "invite_url"],
             ),
             risk=CapabilityRisk.HIGH,
             approval=True,
@@ -787,6 +790,7 @@ class WorkspaceControlProvider:
         except WorkspaceInvitationError as error:
             raise ValueError(str(error)) from error
         _activity(db, auth, "created", "workspace_invitation", row.id, f"Created a {role_key} workspace invitation")
+        base = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
         return CapabilityExecutionResult(
             value={
                 "id": row.id,
@@ -794,6 +798,7 @@ class WorkspaceControlProvider:
                 "target_email": row.target_email,
                 "expires_at": row.expires_at.isoformat(),
                 "token": token,
+                "invite_url": f"{base}/join#invite={quote(token, safe='')}",
             },
             resource_type="workspace_invitation",
             resource_id=row.id,
