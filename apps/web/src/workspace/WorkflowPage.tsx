@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, api } from "../api";
+import { api } from "../api";
 import { navigate, workspacePath } from "../app/routes";
 import { WorkspaceSummary } from "../app/types";
+import {
+  CapabilityApproval,
+  approveAndResumeCapability,
+  decideCapabilityApproval,
+  denyCapability,
+  executeCapability,
+} from "../runtime/capabilityRuntime";
 
 type Row = Record<string, unknown>;
 type JsonSchema = {
@@ -17,15 +24,16 @@ type Capability = {
   id: string;
   display_name: string;
   description: string;
+  provider_id: string;
   endpoint: string;
   method: "POST";
   input_schema: JsonSchema;
+  permissions: string[];
   risk: string;
   approval_required: boolean;
   tags: string[];
 };
 type ToolCatalog = { tools: Capability[] };
-type ToolRun = { run_id: string; status: string; result: unknown; done: boolean };
 type Workflow = {
   id: string;
   name: string;
@@ -126,11 +134,7 @@ type Approval = {
   requested_by_principal_id?: string | null;
   created_at?: string;
 };
-type PendingAction = {
-  capabilityId: string;
-  arguments: Row;
-  approvalId: string;
-  requestId: string;
+type PendingAction = CapabilityApproval & {
   label: string;
 };
 type ScheduleType = "manual" | "once" | "interval" | "daily" | "weekly" | "cron";
@@ -178,10 +182,6 @@ const timezone = () => {
   catch { return "UTC"; }
 };
 const schemaType = (schema: JsonSchema) => Array.isArray(schema.type) ? schema.type.find((item) => item !== "null") || "string" : schema.type || "string";
-const stableRequestId = (capabilityId: string) => {
-  try { return `workflow-ui:${capabilityId}:${crypto.randomUUID()}`; }
-  catch { return `workflow-ui:${capabilityId}:${Date.now()}:${Math.random().toString(36).slice(2)}`; }
-};
 const terminalRun = (status: string) => ["completed", "completed_with_errors", "failed", "cancelled", "orphaned"].includes(status);
 
 function defaultSchedule(): ScheduleDraft {
@@ -349,14 +349,14 @@ export function WorkflowPage({ workspace }: { workspace: WorkspaceSummary }) {
   const workflowApprovals = useMemo(() => approvals.filter((item) => item.capability_id?.startsWith("workflow.") || text(item.conversation_id).startsWith("workflow:")), [approvals]);
   const selectedRuns = useMemo(() => selectedWorkflowId ? runs.filter((item) => item.workflow_id === selectedWorkflowId) : runs, [runs, selectedWorkflowId]);
 
-  async function invokeValue<T>(capabilityId: string, argumentsValue: Row, requestId = stableRequestId(capabilityId), approvalId?: string): Promise<T> {
+  async function invokeValue<T>(capabilityId: string, argumentsValue: Row): Promise<T> {
     const capability = toolsById.get(capabilityId);
     if (!capability) throw new Error(`${titleCase(capabilityId)} is not available to your role right now.`);
-    const response = await api<ToolRun>(capability.endpoint, {
-      method: capability.method,
-      body: JSON.stringify({ arguments: argumentsValue, request_id: requestId, approval_id: approvalId }),
-    });
-    return response.result as T;
+    const execution = await executeCapability(capability, argumentsValue);
+    if (execution.status === "approval_required") {
+      throw new Error(`${capability.display_name} unexpectedly requires approval in this read path.`);
+    }
+    return execution.run.result as T;
   }
 
   async function refreshApprovals() {
@@ -373,8 +373,8 @@ export function WorkflowPage({ workspace }: { workspace: WorkspaceSummary }) {
       const capability = map.get(capabilityId);
       if (!capability) return null;
       try {
-        const response = await api<ToolRun>(capability.endpoint, { method: capability.method, body: JSON.stringify({ arguments: args, request_id: stableRequestId(capabilityId) }) });
-        return response.result as T;
+        const execution = await executeCapability(capability, args);
+        return execution.status === "completed" ? execution.run.result as T : null;
       } catch { return null; }
     }
     const [workflowResult, runResult, runtimeResult] = await Promise.all([
@@ -513,28 +513,28 @@ export function WorkflowPage({ workspace }: { workspace: WorkspaceSummary }) {
   }
 
   async function perform(capabilityId: string, argumentsValue: Row, label: string) {
-    const requestId = stableRequestId(capabilityId);
+    const capability = toolsById.get(capabilityId);
+    if (!capability) {
+      setError(`${titleCase(capabilityId)} is not available to your role right now.`);
+      return false;
+    }
     setBusy(label);
     setError(null);
     setNotice(null);
     try {
-      await invokeValue(capabilityId, argumentsValue, requestId);
+      const execution = await executeCapability(capability, argumentsValue);
+      if (execution.status === "approval_required") {
+        setPendingAction({ ...execution.approval, label });
+        setNotice(`${label} is waiting for your approval.`);
+        await refreshApprovals();
+        return false;
+      }
       setNotice(`${label} completed.`);
       setPendingAction(null);
       await refreshOverview();
       if (selectedWorkflowId) await loadWorkflow(selectedWorkflowId);
       return true;
     } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "approval_required") {
-        const details = object(caught.details);
-        const approvalId = text(details.approval_id);
-        if (approvalId) {
-          setPendingAction({ capabilityId, arguments: argumentsValue, approvalId, requestId, label });
-          setNotice(`${label} is waiting for your approval.`);
-          await refreshApprovals();
-          return false;
-        }
-      }
       setError(caught instanceof Error ? caught.message : `${label} failed`);
       return false;
     } finally { setBusy(null); }
@@ -545,14 +545,14 @@ export function WorkflowPage({ workspace }: { workspace: WorkspaceSummary }) {
     setBusy("approval");
     setError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(pendingAction.approvalId)}/decision`, { method: "POST", body: JSON.stringify({ approved }) });
       if (!approved) {
+        await denyCapability(pendingAction);
         setNotice("Nothing changed. You did not approve that action.");
         setPendingAction(null);
         await refreshApprovals();
         return;
       }
-      await invokeValue(pendingAction.capabilityId, pendingAction.arguments, pendingAction.requestId, pendingAction.approvalId);
+      await approveAndResumeCapability(pendingAction);
       setNotice(`${pendingAction.label} completed after approval.`);
       setPendingAction(null);
       await refreshOverview();
@@ -565,7 +565,7 @@ export function WorkflowPage({ workspace }: { workspace: WorkspaceSummary }) {
     setBusy(`approval:${item.id}`);
     setError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(item.id)}/decision`, { method: "POST", body: JSON.stringify({ approved }) });
+      await decideCapabilityApproval(item.id, approved);
       setNotice(approved ? "Approved. The workflow scheduler will continue the exact paused action." : "Denied. The workflow will record the rejection in its trace.");
       await refreshApprovals();
       window.setTimeout(() => { void refreshOverview(); if (selectedWorkflowId) void loadWorkflow(selectedWorkflowId); }, 1200);
