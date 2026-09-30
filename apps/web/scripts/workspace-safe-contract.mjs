@@ -10,13 +10,12 @@ async function text(path) { return readFile(resolve(webRoot, path), "utf8"); }
 async function repoText(path) { return readFile(resolve(repoRoot, path), "utf8"); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const [safeShell, assistantPanel, assistantStyles, personalHome, personalStyles, personalStateStyles, main, apiClient, csrfMiddleware] = await Promise.all([
+const [safeShell, assistantPanel, workspaceStyles, personalHome, personalStyles, main, apiClient, csrfMiddleware] = await Promise.all([
   text("src/workspace-lite/WorkspaceSafeApp.tsx"),
   text("src/workspace/WorkspaceAssistantPanel.tsx"),
-  text("src/ui/workspace-assistant-shell.css"),
+  text("src/ui/workspace.css"),
   text("src/account/PersonalHome.tsx"),
-  text("src/ui/personal-operly.css"),
-  text("src/ui/personal-operly-state.css"),
+  text("src/ui/personal.css"),
   text("src/main.tsx"),
   text("src/api.ts"),
   repoText("apps/api/csrf.py"),
@@ -64,7 +63,7 @@ assert(
 );
 assert(safeShell.includes('label="Operly AI"'), "Scope rail must expose Operly AI explicitly");
 assert(safeShell.includes('aria-label="Switch to Personal Operly">ME</button>'), "Personal scope switching must remain a separate explicit control");
-assert(personalStateStyles.includes('content: "Personal AI"'), "Touch scope rail must spell out Personal AI instead of exposing only the cryptic ME label");
+assert(personalStyles.includes('content: "Personal AI"'), "Touch scope rail must spell out Personal AI instead of exposing only the cryptic ME label");
 assert(safeShell.includes('case "operly": return <WorkspaceOperly workspace={workspace} />;'), "Workspace Operly full-page route must remain available");
 
 assert(safeShell.includes("const [assistantOpen, setAssistantOpen]"), "Workspace shell must own assistant drawer state");
@@ -94,18 +93,18 @@ for (const chatContract of ["/agent/conversations", "/agent/chat", "/agent/chat-
 }
 assert(assistantPanel.includes("workspace.name"), "Integrated assistant must visibly retain workspace identity");
 assert(assistantPanel.includes("Open Operly full page"), "Integrated assistant must retain a full-page escape hatch");
-assert(main.includes('import "./ui/workspace-assistant-shell.css"'), "Integrated assistant styles must load in the application shell");
-assert(assistantStyles.includes(".workspace-lite-stage.assistant-open"), "Desktop assistant split-pane contract is missing");
-assert(assistantStyles.includes("position: fixed"), "Narrow assistant layout must become an overlay rather than crush workspace content");
-assert(assistantStyles.includes("env(safe-area-inset-bottom)"), "Mobile assistant must respect device safe areas");
-assert(assistantStyles.includes("flex-wrap: nowrap"), "Touch workspace header must stay one row so assistant overlay offset remains correct");
-assert(assistantStyles.includes("order: initial") && assistantStyles.includes("width: auto"), "Touch header actions must not inherit the old full-width second row");
-assert(assistantStyles.includes("z-index: 130"), "Workspace header menus must stay above the assistant overlay");
-assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: none; }"), "Mobile-only navigation must stay hidden on desktop");
-assert(assistantStyles.includes(".workspace-lite-mobile-menu-links { display: contents; }"), "Touch workspace menu must reveal mobile-only navigation");
-assert(!assistantStyles.includes(".workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }"), "Touch layout must not hide the workspace tools menu");
+assert(main.includes('import "./ui/workspace.css"'), "Integrated assistant styles must load in the canonical workspace layer");
+assert(workspaceStyles.includes(".workspace-lite-stage.assistant-open"), "Desktop assistant split-pane contract is missing");
+assert(workspaceStyles.includes("position: fixed"), "Narrow assistant layout must become an overlay rather than crush workspace content");
+assert(workspaceStyles.includes("env(safe-area-inset-bottom)"), "Mobile assistant must respect device safe areas");
+assert(workspaceStyles.includes("flex-wrap: nowrap"), "Touch workspace header must stay one row so assistant overlay offset remains correct");
+assert(workspaceStyles.includes("order: initial") && workspaceStyles.includes("width: auto"), "Touch header actions must not inherit the old full-width second row");
+assert(workspaceStyles.includes("z-index: 130"), "Workspace header menus must stay above the assistant overlay");
+assert(workspaceStyles.includes(".workspace-lite-mobile-menu-links { display: none; }"), "Mobile-only navigation must stay hidden on desktop");
+assert(workspaceStyles.includes(".workspace-lite-mobile-menu-links { display: contents; }"), "Touch workspace menu must reveal mobile-only navigation");
+assert(!workspaceStyles.includes(".workspace-lite-topbar-actions .workspace-lite-menu:not(.workspace-lite-account-menu) { display: none; }"), "Touch layout must not hide the workspace tools menu");
 
-assert(main.includes('import "./ui/personal-operly.css"') && main.includes('import "./ui/personal-operly-state.css"'), "Personal Operly dark/touch styles must load with the authenticated shell");
+assert(main.includes('import "./ui/personal.css"'), "Personal Operly dark/touch styles must load with the authenticated shell");
 assert(personalHome.includes("workspace-lite-personal-stage personal-layout"), "Personal Operly must own a dedicated authenticated dark-theme boundary");
 assert(personalHome.includes("const [mobileListOpen, setMobileListOpen] = useState(false)"), "Personal Operly should open directly to the chat on phones instead of the legacy list pane");
 assert(personalHome.includes('>← Chats</button>'), "Personal chat must expose an explicit mobile route back to conversations");
@@ -113,7 +112,7 @@ assert(!personalHome.includes('"/approvals/personal"'), "Personal Operly must no
 assert(personalHome.includes("canonical human-control checkpoint"), "Personal Operly must describe the Agent Runtime approval boundary instead of reviving legacy approval routing");
 assert(personalStyles.includes("color-scheme: dark"), "Personal Operly must use the current dark authenticated theme");
 assert(personalStyles.includes("@media (max-width: 760px), (pointer: coarse)"), "Personal Operly must handle touch devices that report desktop-like layout viewports");
-assert(personalStateStyles.includes(".workspace-lite-personal-stage.mobile-personal-list .personal-history"), "Personal conversation list needs an explicit full-screen touch state");
-assert(personalStateStyles.includes(".workspace-lite-personal-stage.mobile-personal-thread .personal-history { display: none; }"), "Personal chat touch state must not leak the desktop sidebar into the thread");
+assert(personalStyles.includes(".workspace-lite-personal-stage.mobile-personal-list .personal-history"), "Personal conversation list needs an explicit full-screen touch state");
+assert(personalStyles.includes(".workspace-lite-personal-stage.mobile-personal-thread .personal-history { display: none; }"), "Personal chat touch state must not leak the desktop sidebar into the thread");
 
 console.log("Workspace safe-shell interaction contracts passed.");
