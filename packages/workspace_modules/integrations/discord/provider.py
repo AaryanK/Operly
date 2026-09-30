@@ -11,6 +11,7 @@ from packages.kernel.contracts import CapabilityExecutionResult, CapabilityRisk,
 from packages.security.execution_context import ExecutionContext
 from packages.workspace_modules.integrations.discord.client import bot, bot_status
 from packages.workspace_modules.integrations.discord.permissions import authorized_channel, workspace_discord_installations
+from packages.workspace_modules.integrations.discord.runtime_status import discord_ai_runtime_status
 
 PROVIDER_ID = "operly.discord"
 
@@ -29,7 +30,7 @@ def _capability(capability_id: str, name: str, description: str, *, permission: 
 
 def workspace_discord_capabilities() -> tuple[CapabilitySpec, ...]:
     return (
-        _capability("discord.bot.status", "Read Discord bot status", "Inspect whether the deterministic Operly Discord bot is configured and connected. AI chat is not part of this bot runtime.", permission="integrations:read", output_schema=_object({}, additional=True), tags=("bot", "status", "read")),
+        _capability("discord.bot.status", "Read Discord bot status", "Inspect whether the Operly Discord bot is configured, connected, and able to hand addressed messages to the governed Agent Runtime.", permission="integrations:read", output_schema=_object({}, additional=True), tags=("bot", "status", "read")),
         _capability("discord.installations.list", "List Discord installations", "List Discord servers deterministically bound to this Operly workspace.", permission="discord:read", output_schema=_object({"installations": _array(_object({}, additional=True))}, required=["installations"]), tags=("installation", "read")),
         _capability("discord.channels.list", "List Discord channels", "List channels the Operly bot can view inside Discord servers bound to this workspace.", permission="discord:read", output_schema=_object({"channels": _array(_object({}, additional=True))}, required=["channels"]), tags=("channel", "read")),
         _capability("discord.messages.list", "Read Discord messages", "Read a bounded set of recent messages from an installed Discord channel after checking live bot permissions.", permission="discord:read", input_schema=_object({"channel_id": {"type": "string", "minLength": 1, "maxLength": 30}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=["channel_id"]), output_schema=_object({"messages": _array(_object({}, additional=True))}, required=["messages"]), tags=("message", "history", "read")),
@@ -54,7 +55,8 @@ class WorkspaceDiscordProvider:
         workspace_id, capability_id = context.workspace_id, capability.id
         if capability_id == "discord.bot.status":
             status = bot_status()
-            status.update({"configured": bool(os.getenv("DISCORD_BOT_TOKEN", "").strip()), "enabled": os.getenv("OPERLY_DISCORD_BOT_ENABLED", "true").strip().lower() not in {"0", "false", "off", "no"}, "invite_url": _invite_url(), "ai_enabled": False})
+            ai_enabled, ai_detail = discord_ai_runtime_status()
+            status.update({"configured": bool(os.getenv("DISCORD_BOT_TOKEN", "").strip()), "enabled": os.getenv("OPERLY_DISCORD_BOT_ENABLED", "true").strip().lower() not in {"0", "false", "off", "no"}, "invite_url": _invite_url(), "ai_enabled": ai_enabled, "ai_detail": ai_detail})
             return CapabilityExecutionResult(value=status, resource_type="discord_bot")
         installations = await workspace_discord_installations(db, workspace_id)
         if capability_id == "discord.installations.list":
