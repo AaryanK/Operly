@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/capability-compound-matrix.yml"
+      - "requirements.txt"
       - "packages/kernel/**"
       - "packages/personal_modules/**"
       - "packages/workflow/**"
@@ -14,6 +15,7 @@ on:
       - main
     paths:
       - ".github/workflows/capability-compound-matrix.yml"
+      - "requirements.txt"
       - "packages/kernel/**"
       - "packages/personal_modules/**"
       - "packages/workflow/**"
