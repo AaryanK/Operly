@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { api } from "../api";
 import { WorkspaceSummary } from "../app/types";
+import { decideCapabilityApproval } from "../runtime/capabilityRuntime";
 
 type Row = Record<string, unknown>;
 type ActivityData = {
@@ -114,10 +115,7 @@ export function ActivityPage({ workspace }: { workspace: WorkspaceSummary }) {
     setDecisionBusy(id);
     setError(null);
     try {
-      await api(`/workspace-tools/approvals/${encodeURIComponent(id)}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ approved }),
-      });
+      await decideCapabilityApproval(id, approved);
       await reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Tool approval decision could not be saved");
