@@ -13,7 +13,7 @@ from typing import Any
 EXPECTED_BASE_ROUTE_COUNT = 154
 EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"  # pragma: allowlist secret
 EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
-EXPECTED_ADMIN_ROUTE_COUNT = 6
+EXPECTED_ADMIN_ROUTE_COUNT = 7
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
     + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
@@ -76,6 +76,11 @@ _EXPECTED_ADMIN_ROUTES = frozenset(
         (
             "GET /api/admin/session",
             "apps.api.admin_router:admin_session",
+            "admin_router",
+        ),
+        (
+            "GET /api/admin/events",
+            "apps.api.admin_router:admin_events",
             "admin_router",
         ),
         (
