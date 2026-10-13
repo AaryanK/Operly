@@ -3,11 +3,12 @@ import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.admin_ai_usage import build_admin_ai_usage
+from apps.api.admin_events import admin_event_stream
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.database.models import (
     AppUser,
@@ -163,6 +164,22 @@ async def admin_session(
             "display_name": account.user.display_name,
         },
     }
+
+
+@router.get("/events")
+async def admin_events(
+    request: Request,
+    account: AccountAuthContext = Depends(require_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    # The authenticated dependency has finished checking this session. Release
+    # its read transaction before opening a potentially long-lived SSE response.
+    await db.rollback()
+    return await admin_event_stream(
+        request,
+        session_id=account.session.id,
+        admin_email=_configured_admin_email(),
+    )
 
 
 @router.get("/overview")
