@@ -25,7 +25,7 @@ from packages.database.models import AppUser, AuthSession
 logger = logging.getLogger(__name__)
 
 CHANNEL = "operly_admin_invalidation"
-TOPICS = frozenset({"overview", "ai-usage", "users", "workspaces"})
+TOPICS = frozenset({"overview", "ai-usage", "users", "workspaces", "all"})
 HEARTBEAT_SECONDS = 15
 OVERVIEW_ROLLING_SECONDS = 60
 MAX_QUEUE_SIZE = 64
@@ -85,8 +85,8 @@ async def admin_event_stream(
             with suppress(asyncio.QueueEmpty):
                 queue.get_nowait()
             with suppress(asyncio.QueueFull):
-                queue.put_nowait("overview")
-                # The reconnect 'ready' event and focus refresh cover all topics.
+                queue.put_nowait("all")
+                # Resynchronize whichever tab is active after an overflow.
 
     try:
         await listener.add_listener(CHANNEL, on_notification)
@@ -102,6 +102,8 @@ async def admin_event_stream(
             # Client reloads the current tab at connection establishment / reconnect.
             yield "retry: 2000\n\n" + _sse("ready")
             while not await request.is_disconnected():
+                if listener.is_closed():
+                    return  # EventSource reconnects and re-synchronizes.
                 try:
                     topic = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
                 except asyncio.TimeoutError:
