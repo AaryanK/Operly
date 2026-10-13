@@ -20,9 +20,10 @@ from packages.agent_runtime.context import ContextItem, ContextKind
 from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeDisabled
-from packages.agent_runtime.telemetry import runtime_trace
+from packages.agent_runtime.telemetry import collect_inference_usage, runtime_trace
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.database.agent_chat_models import AgentChatConversation, AgentChatMessage
+from packages.database.model_trace_models import ModelRuntimeTrace
 from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import (
     ExecutionContext,
@@ -195,14 +196,15 @@ async def _run(
 
     run_id = f"chat-{uuid4()}"
     try:
-        result = await _agent().run(
-            db,
-            context=context,
-            message=message,
-            kernel=kernel,
-            context_items=context_items,
-            run_id=run_id,
-        )
+        with collect_inference_usage() as model_usage:
+            result = await _agent().run(
+                db,
+                context=context,
+                message=message,
+                kernel=kernel,
+                context_items=context_items,
+                run_id=run_id,
+            )
     except AgentRuntimeDisabled as error:
         runtime_trace("request.failed", run_id=run_id, error_code="agent_runtime_disabled")
         await db.rollback()
@@ -226,6 +228,29 @@ async def _run(
             detail={"code": error.code, "message": str(error), "retryable": error.retryable},
         ) from error
 
+    # Persist provider-reported counts from every successful model call for admin usage.
+    for model_call in model_usage:
+        db.add(
+            ModelRuntimeTrace(
+                run_id=run_id,
+                conversation_id=conversation.id,
+                tenant_id=context.workspace_id if not context.is_personal else None,
+                user_id=context.user_id,
+                principal_id=context.principal_id,
+                channel="chat",
+                surface="personal" if context.is_personal else "workspace",
+                attempt_id=str(uuid4()),
+                phase="success",
+                resource_id=model_call["model"],
+                provider=model_call["provider"],
+                provider_model_id=model_call["model"],
+                attempt=1,
+                payload_json=json.dumps({
+                    "traceVersion": 2,
+                    "payload": {"output": {"usage": model_call["usage"]}},
+                }),
+            )
+        )
     db.add(
         AgentChatMessage(
             conversation_id=conversation.id,
