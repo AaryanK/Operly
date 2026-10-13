@@ -1582,3 +1582,26 @@ body { margin: 0; }
  .landing-page .hero-actions {align-items:flex-start;flex-wrap:wrap;}
  .landing-page .operly-runtime-preview {min-height:0 !important;}
 }
+
+
+/* Admin control-plane readability and empty-state layout */
+.admin-react-shell aside nav button { min-height: 64px; gap: 12px; padding: 11px 12px !important; }
+.admin-react-shell aside nav button strong { font-size: 13px; line-height: 1.35; }
+.admin-react-shell aside nav button small { font-size: 10px; line-height: 1.4; white-space: normal; }
+.admin-nav-caption { font-size: 10px; }
+.admin-brand small, .admin-user > button { font-size: 11px !important; }
+.admin-react-shell > main > header p { font-size: 12px; line-height: 1.5; }
+.admin-live-pill { font-size: 11px; }
+.admin-overview-intro p, .admin-section-heading p { font-size: 12px; line-height: 1.5; }
+.admin-usage-range button { font-size: 11px; min-width: 48px; min-height: 35px; }
+.admin-usage-coverage > span, .admin-usage-coverage small, .admin-usage-error { font-size: 11px; }
+.admin-model-head { font-size: 10px; }
+.admin-model-row, .admin-model-row > div:first-child strong, .admin-model-row > strong { font-size: 12px; }
+.admin-model-row > div:first-child small, .admin-model-share > span, .admin-model-note { font-size: 10px; }
+.admin-chart-empty { min-height: 120px; font-size: 12px; line-height: 1.5; }
+.admin-token-panel:has(.admin-chart-empty) .admin-chart-empty { min-height: 130px; }
+.admin-model-panel:has(.admin-chart-empty) .admin-chart-empty { min-height: 110px; }
+.admin-token-panel:has(.admin-chart-empty) { margin-bottom: 12px; }
+@media (max-width: 900px) {
+  .admin-react-shell aside nav button { min-height: 52px; }
+}
