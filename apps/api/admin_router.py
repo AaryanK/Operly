@@ -174,11 +174,13 @@ async def admin_events(
 ):
     # The authenticated dependency has finished checking this session. Release
     # its read transaction before opening a potentially long-lived SSE response.
+    session_id = account.session.id
+    admin_email = _configured_admin_email()
     await db.rollback()
     return await admin_event_stream(
         request,
-        session_id=account.session.id,
-        admin_email=_configured_admin_email(),
+        session_id=session_id,
+        admin_email=admin_email,
     )
 
 
