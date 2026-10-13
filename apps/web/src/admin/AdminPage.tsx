@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { OperlyMark } from "../ui/OperlyMark";
@@ -441,8 +441,6 @@ function WorkspacesTab({ workspaces }: { workspaces: any[] }) {
   );
 }
 
-const ADMIN_REFRESH_INTERVAL_MS = 15_000;
-
 export function AdminPage() {
   const [session, setSession] = useState<AdminSession | null>(null);
   const [initialError, setInitialError] = useState("");
@@ -456,6 +454,9 @@ export function AdminPage() {
   const [query, setQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshCycle, setRefreshCycle] = useState(0);
+  const [liveConnected, setLiveConnected] = useState(false);
+  const activeTabRef = useRef<Tab>(tab);
+  activeTabRef.current = tab;
   const [dataError, setDataError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Partial<Record<Tab, string>>>({});
 
@@ -472,34 +473,18 @@ export function AdminPage() {
   }, []);
 
 
+
+  // Data is fetched only on navigation, manual refresh or a server event.
+  // The 15-second API polling loop has been removed.
   useEffect(() => {
     if (!session) return;
-
     let cancelled = false;
-    let inFlight = false;
-    let pending: AbortController | null = null;
-    let timer: number | undefined;
+    const controller = new AbortController();
+    setRefreshing(true);
+    setDataError("");
+    const options: RequestInit = { signal: controller.signal, cache: "no-store" };
 
-    const clearTimer = () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      timer = undefined;
-    };
-    const schedule = () => {
-      clearTimer();
-      if (!cancelled && !document.hidden && navigator.onLine) {
-        // Schedule after completion so a slow API cannot accumulate requests.
-        timer = window.setTimeout(() => { void load(); }, ADMIN_REFRESH_INTERVAL_MS);
-      }
-    };
     const load = async () => {
-      if (cancelled || inFlight || document.hidden || !navigator.onLine) return;
-      inFlight = true;
-      const controller = new AbortController();
-      pending = controller;
-      setRefreshing(true);
-      setDataError("");
-      const options: RequestInit = { signal: controller.signal, cache: "no-store" };
-
       try {
         if (tab === "overview") {
           const result = await api<Overview>("/admin/overview", options);
@@ -522,33 +507,88 @@ export function AdminPage() {
           setDataError(error instanceof Error ? error.message : "Admin data could not be refreshed.");
         }
       } finally {
-        inFlight = false;
-        pending = null;
-        if (!cancelled) {
-          setRefreshing(false);
-          schedule();
-        }
+        if (!cancelled) setRefreshing(false);
       }
     };
-    const resume = () => {
-      clearTimer();
-      if (!cancelled && !document.hidden && navigator.onLine && !inFlight) void load();
-    };
-
-    // Revalidate immediately on tab/range change, on focus, and when connectivity returns.
-    resume();
-    document.addEventListener("visibilitychange", resume);
-    window.addEventListener("focus", resume);
-    window.addEventListener("online", resume);
+    void load();
     return () => {
       cancelled = true;
-      clearTimer();
-      pending?.abort();
-      document.removeEventListener("visibilitychange", resume);
-      window.removeEventListener("focus", resume);
-      window.removeEventListener("online", resume);
+      controller.abort();
     };
   }, [session, tab, usageRange, refreshCycle]);
+
+  useEffect(() => {
+    if (!session) return;
+    let source: EventSource | null = null;
+    let debounce: number | undefined;
+    let stopped = false;
+
+    const invalidate = () => {
+      if (stopped || document.hidden) return;
+      // Coalesce bursts of writes before hitting expensive analytics endpoints.
+      if (debounce !== undefined) return;
+      debounce = window.setTimeout(() => {
+        debounce = undefined;
+        if (!stopped && !document.hidden) setRefreshCycle((cycle) => cycle + 1);
+      }, 600);
+    };
+    const disconnect = () => {
+      source?.close();
+      source = null;
+      setLiveConnected(false);
+    };
+    const connect = () => {
+      if (stopped || document.hidden || !navigator.onLine || source) return;
+      // EventSource automatically reconnects after network interruptions.
+      source = new EventSource("/api/admin/events", { withCredentials: true });
+      source.addEventListener("ready", () => {
+        if (stopped) return;
+        setLiveConnected(true);
+        invalidate(); // Re-sync after any event backlog was missed.
+      });
+      source.addEventListener("invalidate", (event: MessageEvent) => {
+        try {
+          const message = JSON.parse(event.data) as { scope?: Tab | "all" };
+          if (message.scope === "all" || message.scope === activeTabRef.current) invalidate();
+        } catch {
+          // Malformed transport notifications cannot replace authorized API data.
+        }
+      });
+      source.addEventListener("auth-expired", () => {
+        disconnect();
+        window.dispatchEvent(new Event("operly:logout"));
+        setSession(null);
+      });
+      source.onerror = () => {
+        if (!stopped) setLiveConnected(false);
+      };
+    };
+    const visibility = () => {
+      if (document.hidden || !navigator.onLine) disconnect();
+      else connect();
+    };
+    const focus = () => {
+      if (!document.hidden && navigator.onLine) {
+        connect();
+        invalidate();
+      }
+    };
+
+    connect();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("online", visibility);
+    window.addEventListener("offline", visibility);
+    window.addEventListener("focus", focus);
+    return () => {
+      stopped = true;
+      disconnect();
+      if (debounce !== undefined) window.clearTimeout(debounce);
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("online", visibility);
+      window.removeEventListener("offline", visibility);
+      window.removeEventListener("focus", focus);
+    };
+  }, [session]);
 
   function refresh() {
     // Invalidates the current request and asks the active tab's API for fresh data.
@@ -584,7 +624,7 @@ export function AdminPage() {
       <main>
         <header>
           <div><span className="eyebrow">Operly platform</span><h1>{activeTab.label}</h1><p>{activeTab.copy}</p></div>
-          <div className="admin-top-actions"><span className="admin-live-pill" role="status"><i /> {refreshing ? "Syncing from API…" : dataError ? "Sync failed · retrying" : lastUpdated[tab] ? `${time(lastUpdated[tab])} · auto 15s` : "Auto refresh · 15s"}</span><button className="secondary-button" disabled={refreshing} onClick={refresh}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button></div>
+          <div className="admin-top-actions"><span className="admin-live-pill" role="status"><i /> {dataError ? "Sync failed" : liveConnected ? refreshing ? "Live · updating…" : "Live · SSE" : "Connecting live…"}{lastUpdated[tab] ? ` · ${time(lastUpdated[tab])}` : ""}</span><button className="secondary-button" disabled={refreshing} onClick={refresh}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button></div>
         </header>
         {dataError && tab !== "ai-usage" && <div className="admin-usage-error" role="alert">Refresh failed: {dataError}. The last successful data is still displayed.</div>}
         {tab === "overview" && <OverviewTab overview={overview} />}
