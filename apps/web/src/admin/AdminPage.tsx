@@ -441,6 +441,8 @@ function WorkspacesTab({ workspaces }: { workspaces: any[] }) {
   );
 }
 
+const ADMIN_REFRESH_INTERVAL_MS = 15_000;
+
 export function AdminPage() {
   const [session, setSession] = useState<AdminSession | null>(null);
   const [initialError, setInitialError] = useState("");
@@ -449,13 +451,15 @@ export function AdminPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [aiUsage, setAiUsage] = useState<AIUsage | null>(null);
   const [usageRange, setUsageRange] = useState<UsageRange>("24h");
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [usageError, setUsageError] = useState("");
   const [users, setUsers] = useState<any[]>([]);
   const [workspaces, setWorkspaces] = useState<any[]>([]);
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshCycle, setRefreshCycle] = useState(0);
+  const [dataError, setDataError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<Partial<Record<Tab, string>>>({});
 
+  const currentUsage = aiUsage?.range === usageRange ? aiUsage : null;
   const activeTab = tabs.find((item) => item.id === tab) || tabs[0];
 
   useEffect(() => {
@@ -467,42 +471,88 @@ export function AdminPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!session) return;
-    if (tab === "overview") api<Overview>("/admin/overview").then(setOverview).catch(() => undefined);
-    if (tab === "users" && !users.length) api<any[]>("/admin/users?limit=500").then(setUsers).catch(() => undefined);
-    if (tab === "workspaces" && !workspaces.length) api<any[]>("/admin/workspaces?limit=500").then(setWorkspaces).catch(() => undefined);
-  }, [session, tab]);
 
   useEffect(() => {
-    if (!session || tab !== "ai-usage") return;
+    if (!session) return;
+
     let cancelled = false;
-    setUsageLoading(true);
-    setUsageError("");
-    api<AIUsage>(`/admin/ai-usage?range=${encodeURIComponent(usageRange)}`)
-      .then((result) => { if (!cancelled) setAiUsage(result); })
-      .catch((error) => { if (!cancelled) setUsageError(error instanceof Error ? error.message : "AI usage could not be loaded."); })
-      .finally(() => { if (!cancelled) setUsageLoading(false); });
-    return () => { cancelled = true; };
-  }, [session, tab, usageRange]);
+    let inFlight = false;
+    let pending: AbortController | null = null;
+    let timer: number | undefined;
 
-  async function refresh() {
-    if (!session) return;
-    setBusy(true);
-    try {
-      if (tab === "overview") setOverview(await api<Overview>("/admin/overview"));
-      if (tab === "ai-usage") {
-        setUsageLoading(true);
-        setUsageError("");
-        try { setAiUsage(await api<AIUsage>(`/admin/ai-usage?range=${encodeURIComponent(usageRange)}`)); }
-        catch (error) { setUsageError(error instanceof Error ? error.message : "AI usage could not be loaded."); }
-        finally { setUsageLoading(false); }
+    const clearTimer = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = () => {
+      clearTimer();
+      if (!cancelled && !document.hidden && navigator.onLine) {
+        // Schedule after completion so a slow API cannot accumulate requests.
+        timer = window.setTimeout(() => { void load(); }, ADMIN_REFRESH_INTERVAL_MS);
       }
-      if (tab === "users") setUsers(await api<any[]>("/admin/users?limit=500"));
-      if (tab === "workspaces") setWorkspaces(await api<any[]>("/admin/workspaces?limit=500"));
-    } finally {
-      setBusy(false);
-    }
+    };
+    const load = async () => {
+      if (cancelled || inFlight || document.hidden || !navigator.onLine) return;
+      inFlight = true;
+      const controller = new AbortController();
+      pending = controller;
+      setRefreshing(true);
+      setDataError("");
+      const options: RequestInit = { signal: controller.signal, cache: "no-store" };
+
+      try {
+        if (tab === "overview") {
+          const result = await api<Overview>("/admin/overview", options);
+          if (!cancelled) setOverview(result);
+        } else if (tab === "ai-usage") {
+          const result = await api<AIUsage>("/admin/ai-usage?range=" + encodeURIComponent(usageRange), options);
+          if (!cancelled) setAiUsage(result);
+        } else if (tab === "users") {
+          const result = await api<any[]>("/admin/users?limit=500", options);
+          if (!cancelled) setUsers(result);
+        } else {
+          const result = await api<any[]>("/admin/workspaces?limit=500", options);
+          if (!cancelled) setWorkspaces(result);
+        }
+        if (!cancelled) {
+          setLastUpdated((current) => ({ ...current, [tab]: new Date().toISOString() }));
+        }
+      } catch (error) {
+        if (!cancelled && !controller.signal.aborted) {
+          setDataError(error instanceof Error ? error.message : "Admin data could not be refreshed.");
+        }
+      } finally {
+        inFlight = false;
+        pending = null;
+        if (!cancelled) {
+          setRefreshing(false);
+          schedule();
+        }
+      }
+    };
+    const resume = () => {
+      clearTimer();
+      if (!cancelled && !document.hidden && navigator.onLine && !inFlight) void load();
+    };
+
+    // Revalidate immediately on tab/range change, on focus, and when connectivity returns.
+    resume();
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    window.addEventListener("online", resume);
+    return () => {
+      cancelled = true;
+      clearTimer();
+      pending?.abort();
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("online", resume);
+    };
+  }, [session, tab, usageRange, refreshCycle]);
+
+  function refresh() {
+    // Invalidates the current request and asks the active tab's API for fresh data.
+    setRefreshCycle((cycle) => cycle + 1);
   }
 
   async function logout() {
@@ -534,10 +584,11 @@ export function AdminPage() {
       <main>
         <header>
           <div><span className="eyebrow">Operly platform</span><h1>{activeTab.label}</h1><p>{activeTab.copy}</p></div>
-          <div className="admin-top-actions"><span className="admin-live-pill"><i /> Secure admin session</span><button className="secondary-button" disabled={busy} onClick={refresh}>{busy ? "Refreshing…" : "↻ Refresh"}</button></div>
+          <div className="admin-top-actions"><span className="admin-live-pill" role="status"><i /> {refreshing ? "Syncing from API…" : dataError ? "Sync failed · retrying" : lastUpdated[tab] ? `${time(lastUpdated[tab])} · auto 15s` : "Auto refresh · 15s"}</span><button className="secondary-button" disabled={refreshing} onClick={refresh}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button></div>
         </header>
+        {dataError && tab !== "ai-usage" && <div className="admin-usage-error" role="alert">Refresh failed: {dataError}. The last successful data is still displayed.</div>}
         {tab === "overview" && <OverviewTab overview={overview} />}
-        {tab === "ai-usage" && <AIUsageTab usage={aiUsage} range={usageRange} setRange={setUsageRange} loading={usageLoading} error={usageError} />}
+        {tab === "ai-usage" && <AIUsageTab usage={currentUsage} range={usageRange} setRange={setUsageRange} loading={refreshing && !currentUsage} error={dataError} />}
         {tab === "users" && <UsersTab users={users} query={query} setQuery={setQuery} />}
         {tab === "workspaces" && <WorkspacesTab workspaces={workspaces} />}
       </main>
