@@ -116,6 +116,18 @@ for (const preauthPath of ["/auth/signup", "/auth/login", "/session/login", "/au
   assert(apiClient.includes(`"${preauthPath}"`), `React API client must recognize ${preauthPath} as a pre-auth CSRF path`);
 }
 assert(adminPage.includes('type Tab = "overview" | "ai-usage" | "users" | "workspaces"'), "React admin must keep its canonical tabs");
+
+assert(adminPage.includes("const ADMIN_REFRESH_INTERVAL_MS = 15_000"), "Admin must automatically poll at a bounded live interval");
+assert(adminPage.includes('cache: "no-store"'), "Admin refresh must fetch uncached API data");
+for (const endpoint of ["/admin/overview", "/admin/ai-usage?range=", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
+  assert(adminPage.includes(endpoint), `Admin refresh must cover ${endpoint}`);
+}
+assert(adminPage.includes('document.addEventListener("visibilitychange", resume)'), "Admin refresh must pause and resume with tab visibility");
+assert(adminPage.includes('window.addEventListener("focus", resume)'), "Admin refresh must revalidate when focused");
+assert(adminPage.includes('window.addEventListener("online", resume)'), "Admin refresh must resume once connectivity returns");
+assert(adminPage.includes("pending?.abort()"), "Admin refresh must cancel obsolete requests");
+assert(adminPage.includes("if (cancelled || inFlight || document.hidden || !navigator.onLine) return"), "Admin must not duplicate or run hidden/offline polling");
+
 assert(legalPage.includes("Privacy Policy") && legalPage.includes("Terms of Service"), "Legal surfaces must remain present");
 assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
 
