@@ -48,3 +48,74 @@ html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outlin
 .minimal-card,.minimal-account-card,.minimal-info-grid article{background:#111722;border-color:rgba(255,255,255,.10)}
 .minimal-button-primary,.minimal-button-primary:hover{background:linear-gradient(105deg,#8a96ff,#c993ff);color:#080b11}
 .minimal-kicker,.minimal-card-links a,.minimal-card > a{color:#c993ff}
+
+/* Surface audit: Operly marketing uses a separate, hard-coded purple design system.
+   Match DragonZpyder's charcoal / periwinkle / lavender tokens there too. */
+.landing-page,.react-public-page.landing-page {
+  --operly-brand-bg:#07090d;
+  --operly-brand-surface:#0c1018;
+  --operly-brand-panel:#111722;
+  --operly-brand-border:rgba(255,255,255,.12);
+  --operly-brand-lavender:#c993ff;
+  --operly-brand-blue:#8a96ff;
+  color:#f5f6f8;
+  background:radial-gradient(circle at 73% 0%,rgba(124,140,255,.13),transparent 34%),#07090d;
+}
+.landing-page .react-public-header {
+  background:rgba(7,9,13,.94);
+  border-color:rgba(255,255,255,.10);
+}
+.landing-page .react-hero h1,
+.landing-page .public-section h2 { color:#f5f6f8; }
+.landing-page :is(.react-hero h1 em,.public-section h2 em) {
+  color:#c993ff;
+}
+.landing-page :is(.react-hero p,.public-section p,.public-grid p) {color:#aeb8c8;}
+.landing-page :is(.operly-runtime-preview,.runtime-card,.capability-grid > article,.control-grid > article,.studio-flow > article,.public-grid article,.request-grid > span) {
+  background:linear-gradient(160deg,#111722,#0c1018);
+  color:#f5f6f8;
+  border-color:rgba(255,255,255,.12);
+}
+.landing-page :is(.public-status-chip,.runtime-pill) {
+  color:#d9ddff;
+  background:rgba(138,150,255,.12);
+  border-color:rgba(138,150,255,.24);
+}
+.landing-page .primary-button,
+.landing-page .primary-button:hover,
+.public-cta .primary-button,
+.react-public-header .primary-button {
+  background:linear-gradient(105deg,#8a96ff,#c993ff) !important;
+  color:#090b10 !important;
+  border-color:rgba(201,147,255,.22) !important;
+  box-shadow:0 14px 40px rgba(124,140,255,.15) !important;
+}
+.landing-page .secondary-button,
+.react-public-header .secondary-button {
+  background:rgba(255,255,255,.035) !important;
+  color:#d9ddff !important;
+  border-color:rgba(255,255,255,.15) !important;
+}
+.landing-page :is(.capability-grid > article,.control-grid > article,.studio-flow > article,.public-grid article):hover {
+  border-color:rgba(138,150,255,.34);
+}
+/* Keep the established dark treatment on explicitly branded auth routes. */
+.auth-public-page :is(.react-auth-card,.auth-runtime-stack,.auth-visual,.auth-provider-panel) {
+  border-color:rgba(255,255,255,.12);
+}
+.auth-public-page :is(input,select,textarea) {
+  accent-color:#8a96ff;
+}
+.auth-public-page :is(input,select,textarea):focus-visible {
+  outline:2px solid #8a96ff;
+  outline-offset:2px;
+}
+/* Ensure standalone admin dashboards use the same neutral canvas and panels. */
+html[data-theme="dark"] :is(.admin-react-shell,.admin-react-shell > main,.admin-tab-content) {
+  background:#07090d;color:#f5f6f8;
+}
+html[data-theme="dark"] :is(.admin-panel,.admin-workspace-card,.admin-metric,.admin-model-panel) {
+  background:#111722;color:#f5f6f8;border-color:rgba(255,255,255,.12);
+}
+/* Semantic states, third-party provider brand marks and warning/error palettes
+   deliberately remain distinct for accessibility and status clarity. */
