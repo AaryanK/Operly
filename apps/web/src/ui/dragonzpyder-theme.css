@@ -3,23 +3,23 @@
  --ui-canvas:#07090d;--ui-panel:#0c1018;--ui-panel-muted:#111722;--ui-panel-glass:rgba(12,16,24,.9);
  --ui-ink:#f5f6f8;--ui-muted:#aeb8c8;--ui-muted-2:#8190a3;
  --ui-line:rgba(255,255,255,.10);--ui-line-strong:rgba(255,255,255,.17);
- --ui-accent:#8a96ff;--ui-accent-strong:#c993ff;--ui-accent-soft:rgba(138,150,255,.14);
- --ui-accent-cyan:#b5a5ff;--ui-accent-pink:#c993ff;
- --ui-accent-gradient:linear-gradient(105deg,#d9ddff,#b8a7ff 55%,#c993ff);
+ --ui-accent:#8da1e1;--ui-accent-strong:#b8c5ec;--ui-accent-soft:rgba(141,161,225,.14);
+ --ui-accent-cyan:#a9b9e5;--ui-accent-pink:#b8c5ec;
+ --ui-accent-gradient:linear-gradient(105deg,#e0e7f7,#bcc9ed 55%,#b8c5ec);
  --ui-rail:#07090d;--ui-nav:#090c13;--ui-nav-ink:#f5f6f8;
- --ui-glow:0 0 0 1px rgba(138,150,255,.13),0 18px 55px rgba(124,140,255,.12);
+ --ui-glow:0 0 0 1px rgba(141,161,225,.13),0 18px 55px rgba(120,148,202,.12);
 }
 html[data-theme="dark"],html[data-theme="dark"] body{background:#07090d;color:var(--ui-ink)}
-html[data-theme="dark"] body,html[data-theme="dark"] .authenticated-shell{background:radial-gradient(circle at 72% -15%,rgba(124,140,255,.14),transparent 32%),#07090d}
+html[data-theme="dark"] body,html[data-theme="dark"] .authenticated-shell{background:radial-gradient(circle at 72% -15%,rgba(120,148,202,.14),transparent 32%),#07090d}
 html[data-theme="dark"] .surface-header{background:rgba(12,16,24,.94)}
 html[data-theme="dark"] .personal-surface,html[data-theme="dark"] .ai-chat-panel,html[data-theme="dark"] .workspace-page{background:var(--ui-canvas)}
 html[data-theme="dark"] .conversation-stage{background:linear-gradient(180deg,#0c1018,#07090d)}
 html[data-theme="dark"] .personal-history,html[data-theme="dark"] .conversation-list-panel,html[data-theme="dark"] .account-settings-nav{background:linear-gradient(180deg,#111722,#0c1018)}
 html[data-theme="dark"] :is(.metric-card,.destination-card,.data-card,.plugin-card,.solution-card,.connector-card,.role-card,.presence-card,.solution-compose-card,.solutions-library,.info-banner,.inline-form,.settings-callout,.create-workspace-card,.account-identity,.personal-connector-card,.suggestion-grid button,.workspace-settings-list > button,.settings-boundary-grid > div){background:linear-gradient(180deg,#111722,#0c1018);border-color:var(--ui-line)}
-html[data-theme="dark"] :is(.destination-card,.plugin-card,.solution-card,.connector-card):hover{border-color:rgba(138,150,255,.42);background:#151a29}
-html[data-theme="dark"] .primary-button{background:#8a96ff;color:#080b11}
+html[data-theme="dark"] :is(.destination-card,.plugin-card,.solution-card,.connector-card):hover{border-color:rgba(141,161,225,.42);background:#151a29}
+html[data-theme="dark"] .primary-button{background:#8da1e1;color:#080b11}
 html[data-theme="dark"] .primary-button:hover{background:#a1aaff}
-html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outline:2px solid #c993ff;outline-offset:2px}
+html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outline:2px solid #b8c5ec;outline-offset:2px}
 /* Public, legal, marketing and authentication surfaces. */
 .react-public-page,.react-legal-page,.auth-public-page,.react-public-header,.react-legal-topbar,.react-public-footer,.react-legal-footer{background:#07090d;color:#f5f6f8;border-color:rgba(255,255,255,.10)}
 .react-public-header,.react-legal-topbar{background:rgba(7,9,13,.92)}
@@ -27,27 +27,27 @@ html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outlin
 .react-hero p,.public-grid p,.public-cta p,.react-auth-card > p,.react-legal-hero p,.react-legal-content p,.react-legal-content li,.not-found-react p{color:#aeb8c8}
 .public-grid article,.request-grid span,.react-auth-card,.react-legal-callout,.runtime-card{background:#111722;color:#f5f6f8;border-color:rgba(255,255,255,.10)}
 .dark-band{background:#0c1018}.dark-band .public-grid article{background:#111722;border-color:rgba(255,255,255,.10)}
-.public-cta{background:linear-gradient(135deg,#151b2b,#211a35);color:#f5f6f8}
+.public-cta{background:linear-gradient(135deg,#151b2b,#161c2b);color:#f5f6f8}
 .react-auth-card label{color:#d6dbeb}
 .react-auth-card input{background:#0c1018;color:#f5f6f8;border-color:rgba(255,255,255,.17)}
-.react-auth-card input:focus{border-color:#8a96ff;box-shadow:0 0 0 3px rgba(138,150,255,.17)}
-.react-password-field button{background:#1b2230;color:#d9ddff}
-.react-legal-callout{border-left-color:#8a96ff}
+.react-auth-card input:focus{border-color:#8da1e1;box-shadow:0 0 0 3px rgba(141,161,225,.17)}
+.react-password-field button{background:#1b2230;color:#e0e7f7}
+.react-legal-callout{border-left-color:#8da1e1}
 /* Account settings retains its existing layout, including Discord-style controls. */
 .discord-settings-overlay,.discord-settings-backdrop,.discord-settings,.discord-settings-main{background:#0c1018;color:#f5f6f8}
 .discord-settings-sidebar{background:#090c13;border-right-color:rgba(255,255,255,.10)}
 .discord-settings-header{background:linear-gradient(180deg,#0c1018 75%,rgba(12,16,24,.94))}
 .discord-settings-sidebar > button{color:#aeb8c8}
 .discord-settings-sidebar > button:hover{background:#151b29;color:#f5f6f8}
-.discord-settings-sidebar > button.active{background:#252344;color:#f5f6f8}
+.discord-settings-sidebar > button.active{background:#222b3e;color:#f5f6f8}
 .discord-settings-separator{background:rgba(255,255,255,.10)}
-.discord-settings-avatar{background:linear-gradient(145deg,#8a96ff,#c993ff)}
+.discord-settings-avatar{background:linear-gradient(145deg,#8da1e1,#b8c5ec)}
 .discord-settings-group-label,.discord-settings-profile-mini small,.discord-settings-header small{color:#98a3b3}
 .discord-settings-copy,.discord-settings-section-head p{color:#aeb8c8}
-.minimal-page{background:radial-gradient(circle at 72% -15%,rgba(124,140,255,.16),transparent 32rem),linear-gradient(180deg,#0c1018,#07090d)}
+.minimal-page{background:radial-gradient(circle at 72% -15%,rgba(120,148,202,.16),transparent 32rem),linear-gradient(180deg,#0c1018,#07090d)}
 .minimal-card,.minimal-account-card,.minimal-info-grid article{background:#111722;border-color:rgba(255,255,255,.10)}
-.minimal-button-primary,.minimal-button-primary:hover{background:linear-gradient(105deg,#8a96ff,#c993ff);color:#080b11}
-.minimal-kicker,.minimal-card-links a,.minimal-card > a{color:#c993ff}
+.minimal-button-primary,.minimal-button-primary:hover{background:linear-gradient(105deg,#8da1e1,#b8c5ec);color:#080b11}
+.minimal-kicker,.minimal-card-links a,.minimal-card > a{color:#b8c5ec}
 
 /* Surface audit: Operly marketing uses a separate, hard-coded purple design system.
    Match DragonZpyder's charcoal / periwinkle / lavender tokens there too. */
@@ -56,10 +56,10 @@ html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outlin
   --operly-brand-surface:#0c1018;
   --operly-brand-panel:#111722;
   --operly-brand-border:rgba(255,255,255,.12);
-  --operly-brand-lavender:#c993ff;
-  --operly-brand-blue:#8a96ff;
+  --operly-brand-lavender:#b8c5ec;
+  --operly-brand-blue:#8da1e1;
   color:#f5f6f8;
-  background:radial-gradient(circle at 73% 0%,rgba(124,140,255,.13),transparent 34%),#07090d;
+  background:radial-gradient(circle at 73% 0%,rgba(120,148,202,.13),transparent 34%),#07090d;
 }
 .landing-page .react-public-header {
   background:rgba(7,9,13,.94);
@@ -68,7 +68,7 @@ html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outlin
 .landing-page .react-hero h1,
 .landing-page .public-section h2 { color:#f5f6f8; }
 .landing-page :is(.react-hero h1 em,.public-section h2 em) {
-  color:#c993ff;
+  color:#b8c5ec;
 }
 .landing-page :is(.react-hero p,.public-section p,.public-grid p) {color:#aeb8c8;}
 .landing-page :is(.operly-runtime-preview,.runtime-card,.capability-grid > article,.control-grid > article,.studio-flow > article,.public-grid article,.request-grid > span) {
@@ -77,37 +77,37 @@ html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outlin
   border-color:rgba(255,255,255,.12);
 }
 .landing-page :is(.public-status-chip,.runtime-pill) {
-  color:#d9ddff;
-  background:rgba(138,150,255,.12);
-  border-color:rgba(138,150,255,.24);
+  color:#e0e7f7;
+  background:rgba(141,161,225,.12);
+  border-color:rgba(141,161,225,.24);
 }
 .landing-page .primary-button,
 .landing-page .primary-button:hover,
 .public-cta .primary-button,
 .react-public-header .primary-button {
-  background:linear-gradient(105deg,#8a96ff,#c993ff) !important;
+  background:linear-gradient(105deg,#8da1e1,#b8c5ec) !important;
   color:#090b10 !important;
-  border-color:rgba(201,147,255,.22) !important;
-  box-shadow:0 14px 40px rgba(124,140,255,.15) !important;
+  border-color:rgba(184,197,236,.22) !important;
+  box-shadow:0 14px 40px rgba(120,148,202,.15) !important;
 }
 .landing-page .secondary-button,
 .react-public-header .secondary-button {
   background:rgba(255,255,255,.035) !important;
-  color:#d9ddff !important;
+  color:#e0e7f7 !important;
   border-color:rgba(255,255,255,.15) !important;
 }
 .landing-page :is(.capability-grid > article,.control-grid > article,.studio-flow > article,.public-grid article):hover {
-  border-color:rgba(138,150,255,.34);
+  border-color:rgba(141,161,225,.34);
 }
 /* Keep the established dark treatment on explicitly branded auth routes. */
 .auth-public-page :is(.react-auth-card,.auth-runtime-stack,.auth-visual,.auth-provider-panel) {
   border-color:rgba(255,255,255,.12);
 }
 .auth-public-page :is(input,select,textarea) {
-  accent-color:#8a96ff;
+  accent-color:#8da1e1;
 }
 .auth-public-page :is(input,select,textarea):focus-visible {
-  outline:2px solid #8a96ff;
+  outline:2px solid #8da1e1;
   outline-offset:2px;
 }
 /* Ensure standalone admin dashboards use the same neutral canvas and panels. */
