@@ -14,9 +14,9 @@ function isThemePreference(value: string | null): value is ThemePreference {
 export function readThemePreference(): ThemePreference {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    return isThemePreference(stored) ? stored : "system";
+    return isThemePreference(stored) ? stored : "dark";
   } catch {
-    return "system";
+    return "dark";
   }
 }
 
@@ -31,7 +31,7 @@ export function applyTheme(preference: ThemePreference): ResolvedTheme {
   document.documentElement.dataset.themePreference = preference;
   document.documentElement.style.colorScheme = resolved;
   const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) meta.content = resolved === "dark" ? "#0b0f18" : "#f6f7fb";
+  if (meta) meta.content = resolved === "dark" ? "#07090d" : "#f6f7fb";
   return resolved;
 }
 

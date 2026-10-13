@@ -1,0 +1,50 @@
+/* Shared DragonZpyder visual language. Imported last across Operly web routes. */
+:root,html[data-theme="dark"] {
+ --ui-canvas:#07090d;--ui-panel:#0c1018;--ui-panel-muted:#111722;--ui-panel-glass:rgba(12,16,24,.9);
+ --ui-ink:#f5f6f8;--ui-muted:#aeb8c8;--ui-muted-2:#8190a3;
+ --ui-line:rgba(255,255,255,.10);--ui-line-strong:rgba(255,255,255,.17);
+ --ui-accent:#8a96ff;--ui-accent-strong:#c993ff;--ui-accent-soft:rgba(138,150,255,.14);
+ --ui-accent-cyan:#b5a5ff;--ui-accent-pink:#c993ff;
+ --ui-accent-gradient:linear-gradient(105deg,#d9ddff,#b8a7ff 55%,#c993ff);
+ --ui-rail:#07090d;--ui-nav:#090c13;--ui-nav-ink:#f5f6f8;
+ --ui-glow:0 0 0 1px rgba(138,150,255,.13),0 18px 55px rgba(124,140,255,.12);
+}
+html[data-theme="dark"],html[data-theme="dark"] body{background:#07090d;color:var(--ui-ink)}
+html[data-theme="dark"] body,html[data-theme="dark"] .authenticated-shell{background:radial-gradient(circle at 72% -15%,rgba(124,140,255,.14),transparent 32%),#07090d}
+html[data-theme="dark"] .surface-header{background:rgba(12,16,24,.94)}
+html[data-theme="dark"] .personal-surface,html[data-theme="dark"] .ai-chat-panel,html[data-theme="dark"] .workspace-page{background:var(--ui-canvas)}
+html[data-theme="dark"] .conversation-stage{background:linear-gradient(180deg,#0c1018,#07090d)}
+html[data-theme="dark"] .personal-history,html[data-theme="dark"] .conversation-list-panel,html[data-theme="dark"] .account-settings-nav{background:linear-gradient(180deg,#111722,#0c1018)}
+html[data-theme="dark"] :is(.metric-card,.destination-card,.data-card,.plugin-card,.solution-card,.connector-card,.role-card,.presence-card,.solution-compose-card,.solutions-library,.info-banner,.inline-form,.settings-callout,.create-workspace-card,.account-identity,.personal-connector-card,.suggestion-grid button,.workspace-settings-list > button,.settings-boundary-grid > div){background:linear-gradient(180deg,#111722,#0c1018);border-color:var(--ui-line)}
+html[data-theme="dark"] :is(.destination-card,.plugin-card,.solution-card,.connector-card):hover{border-color:rgba(138,150,255,.42);background:#151a29}
+html[data-theme="dark"] .primary-button{background:#8a96ff;color:#080b11}
+html[data-theme="dark"] .primary-button:hover{background:#a1aaff}
+html[data-theme="dark"] :is(input,textarea,select,button,a):focus-visible{outline:2px solid #c993ff;outline-offset:2px}
+/* Public, legal, marketing and authentication surfaces. */
+.react-public-page,.react-legal-page,.auth-public-page,.react-public-header,.react-legal-topbar,.react-public-footer,.react-legal-footer{background:#07090d;color:#f5f6f8;border-color:rgba(255,255,255,.10)}
+.react-public-header,.react-legal-topbar{background:rgba(7,9,13,.92)}
+.public-brand,.react-legal-brand{color:#f5f6f8}
+.react-hero p,.public-grid p,.public-cta p,.react-auth-card > p,.react-legal-hero p,.react-legal-content p,.react-legal-content li,.not-found-react p{color:#aeb8c8}
+.public-grid article,.request-grid span,.react-auth-card,.react-legal-callout,.runtime-card{background:#111722;color:#f5f6f8;border-color:rgba(255,255,255,.10)}
+.dark-band{background:#0c1018}.dark-band .public-grid article{background:#111722;border-color:rgba(255,255,255,.10)}
+.public-cta{background:linear-gradient(135deg,#151b2b,#211a35);color:#f5f6f8}
+.react-auth-card label{color:#d6dbeb}
+.react-auth-card input{background:#0c1018;color:#f5f6f8;border-color:rgba(255,255,255,.17)}
+.react-auth-card input:focus{border-color:#8a96ff;box-shadow:0 0 0 3px rgba(138,150,255,.17)}
+.react-password-field button{background:#1b2230;color:#d9ddff}
+.react-legal-callout{border-left-color:#8a96ff}
+/* Account settings retains its existing layout, including Discord-style controls. */
+.discord-settings-overlay,.discord-settings-backdrop,.discord-settings,.discord-settings-main{background:#0c1018;color:#f5f6f8}
+.discord-settings-sidebar{background:#090c13;border-right-color:rgba(255,255,255,.10)}
+.discord-settings-header{background:linear-gradient(180deg,#0c1018 75%,rgba(12,16,24,.94))}
+.discord-settings-sidebar > button{color:#aeb8c8}
+.discord-settings-sidebar > button:hover{background:#151b29;color:#f5f6f8}
+.discord-settings-sidebar > button.active{background:#252344;color:#f5f6f8}
+.discord-settings-separator{background:rgba(255,255,255,.10)}
+.discord-settings-avatar{background:linear-gradient(145deg,#8a96ff,#c993ff)}
+.discord-settings-group-label,.discord-settings-profile-mini small,.discord-settings-header small{color:#98a3b3}
+.discord-settings-copy,.discord-settings-section-head p{color:#aeb8c8}
+.minimal-page{background:radial-gradient(circle at 72% -15%,rgba(124,140,255,.16),transparent 32rem),linear-gradient(180deg,#0c1018,#07090d)}
+.minimal-card,.minimal-account-card,.minimal-info-grid article{background:#111722;border-color:rgba(255,255,255,.10)}
+.minimal-button-primary,.minimal-button-primary:hover{background:linear-gradient(105deg,#8a96ff,#c993ff);color:#080b11}
+.minimal-kicker,.minimal-card-links a,.minimal-card > a{color:#c993ff}
