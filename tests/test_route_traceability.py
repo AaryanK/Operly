@@ -54,6 +54,7 @@ class RouteTraceabilityTests(unittest.TestCase):
             {row["operation"] for row in rows},
             {
                 "GET /api/admin/session",
+                "GET /api/admin/events",
                 "GET /api/admin/overview",
                 "GET /api/admin/users",
                 "GET /api/admin/workspaces",

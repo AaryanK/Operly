@@ -117,16 +117,18 @@ for (const preauthPath of ["/auth/signup", "/auth/login", "/session/login", "/au
 }
 assert(adminPage.includes('type Tab = "overview" | "ai-usage" | "users" | "workspaces"'), "React admin must keep its canonical tabs");
 
-assert(adminPage.includes("const ADMIN_REFRESH_INTERVAL_MS = 15_000"), "Admin must automatically poll at a bounded live interval");
-assert(adminPage.includes('cache: "no-store"'), "Admin refresh must fetch uncached API data");
+assert(!adminPage.includes("ADMIN_REFRESH_INTERVAL_MS"), "Old 15-second admin polling must be removed");
+assert(adminPage.includes('new EventSource("/api/admin/events"'), "Admin must subscribe through SSE");
+assert(adminPage.includes('source.addEventListener("invalidate"'), "Admin must handle event invalidations");
+assert(adminPage.includes('source.addEventListener("auth-expired"'), "Admin must close revoked admin sessions");
+assert(adminPage.includes('source.addEventListener("ready"'), "Admin must revalidate after SSE reconnect");
+assert(adminPage.includes('source?.close()'), "Admin must clean up its SSE connection");
+assert(adminPage.includes('document.addEventListener("visibilitychange", visibility)'), "Admin must pause hidden SSE connections");
+assert(adminPage.includes('controller.abort()'), "Admin must cancel obsolete API requests");
+assert(adminPage.includes('cache: "no-store"'), "Admin revalidation must fetch uncached API data");
 for (const endpoint of ["/admin/overview", "/admin/ai-usage?range=", "/admin/users?limit=500", "/admin/workspaces?limit=500"]) {
-  assert(adminPage.includes(endpoint), `Admin refresh must cover ${endpoint}`);
+  assert(adminPage.includes(endpoint), `Live admin refresh must cover ${endpoint}`);
 }
-assert(adminPage.includes('document.addEventListener("visibilitychange", resume)'), "Admin refresh must pause and resume with tab visibility");
-assert(adminPage.includes('window.addEventListener("focus", resume)'), "Admin refresh must revalidate when focused");
-assert(adminPage.includes('window.addEventListener("online", resume)'), "Admin refresh must resume once connectivity returns");
-assert(adminPage.includes("pending?.abort()"), "Admin refresh must cancel obsolete requests");
-assert(adminPage.includes("if (cancelled || inFlight || document.hidden || !navigator.onLine) return"), "Admin must not duplicate or run hidden/offline polling");
 
 assert(legalPage.includes("Privacy Policy") && legalPage.includes("Terms of Service"), "Legal surfaces must remain present");
 assert(legalPage.includes("Google API Services User Data Policy"), "Google Limited Use disclosure must remain present");
