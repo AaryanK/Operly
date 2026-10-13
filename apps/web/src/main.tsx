@@ -9,6 +9,7 @@ import "./ui/experience.css";
 import "./ui/personal.css";
 import "./ui/public-surfaces.css";
 import "./ui/account-overrides.css";
+import "./ui/dragonzpyder-theme.css";
 
 const INVITE_KEY = "operly:workspace-invite";
 const INVITE_MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
