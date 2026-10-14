@@ -10,14 +10,16 @@ from typing import Any
 # newly reviewed AI ingress and restored platform-admin control plane as exact surfaces.
 # This avoids weakening the route gate merely because Runtime 1.0 or the admin console
 # intentionally adds reviewed operations.
-EXPECTED_BASE_ROUTE_COUNT = 156
+EXPECTED_BASE_ROUTE_COUNT = 154
 EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"  # pragma: allowlist secret
 EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
 EXPECTED_ADMIN_ROUTE_COUNT = 7
+EXPECTED_DRAGONZPYDER_SSO_ROUTE_COUNT = 2
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
     + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
     + EXPECTED_ADMIN_ROUTE_COUNT
+    + EXPECTED_DRAGONZPYDER_SSO_ROUTE_COUNT
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -27,6 +29,15 @@ _AGENT_RUNTIME_SOURCES = frozenset(
     {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
 )
 _ADMIN_SOURCES = frozenset({"admin_router"})
+_SSO_SOURCES = frozenset({"dragonzpyder_sso_router"})
+_EXPECTED_SSO_ROUTES = frozenset({
+    ("GET /api/identities/dragonzpyder/start",
+     "apps.api.dragonzpyder_sso_router:start",
+     "dragonzpyder_sso_router"),
+    ("GET /api/identities/dragonzpyder/callback",
+     "apps.api.dragonzpyder_sso_router:callback",
+     "dragonzpyder_sso_router"),
+})
 _EXPECTED_AGENT_RUNTIME_ROUTES = frozenset(
     {
         (
@@ -313,10 +324,11 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
 
     agent_rows = [row for row in rows if str(row.get("source") or "") in _AGENT_RUNTIME_SOURCES]
     admin_rows = [row for row in rows if str(row.get("source") or "") in _ADMIN_SOURCES]
+    sso_rows = [row for row in rows if str(row.get("source") or "") in _SSO_SOURCES]
     base_rows = [
         row
         for row in rows
-        if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES)
+        if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES | _SSO_SOURCES)
     ]
     if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(
@@ -360,6 +372,17 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
             f"missing={missing!r} extra={extra!r}"
         )
 
+    actual_sso_routes = frozenset((
+        str(row.get("operation") or ""),
+        str(row.get("endpoint") or ""),
+        str(row.get("source") or ""),
+    ) for row in sso_rows)
+    if actual_sso_routes != _EXPECTED_SSO_ROUTES:
+        errors.append(
+            "DragonZpyder identity login routes changed; review and repin "
+            f"missing={sorted(_EXPECTED_SSO_ROUTES - actual_sso_routes)!r} "
+            f"extra={sorted(actual_sso_routes - _EXPECTED_SSO_ROUTES)!r}"
+        )
     seen: set[tuple[str, str]] = set()
     for row in rows:
         key = (str(row.get("operation") or ""), str(row.get("endpoint") or ""))
@@ -394,6 +417,7 @@ __all__ = [
     "EXPECTED_BASE_ROUTE_DIGEST",
     "EXPECTED_AGENT_RUNTIME_ROUTE_COUNT",
     "EXPECTED_ADMIN_ROUTE_COUNT",
+    "EXPECTED_DRAGONZPYDER_SSO_ROUTE_COUNT",
     "EXPECTED_ROUTE_COUNT",
     "EXPECTED_ROUTE_DIGEST",
     "RouteTraceability",
