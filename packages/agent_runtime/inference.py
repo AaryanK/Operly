@@ -109,13 +109,21 @@ class InferenceRoute:
 
         base_url, key_name, default_model = fixed[requested]
         if requested == "dragonzpyder":
+            # The per-app credential selects the isolated, scope-limited provider
+            # gateway. Existing deployments can continue using /internal/v1
+            # until their token and endpoint are migrated together.
+            dedicated = os.getenv("DRAGONZPYDER_OPERLY_GATEWAY_TOKEN", "").strip()
+            if dedicated:
+                key_name = "DRAGONZPYDER_OPERLY_GATEWAY_TOKEN"
+                base_url = "http://dragonzpyder-api.railway.internal/internal/provider"
             base_url = os.getenv("DRAGONZPYDER_INFERENCE_BASE_URL", "").strip().rstrip("/") or base_url
             parsed = urlsplit(base_url)
             public = parsed.scheme == "https" and parsed.hostname in {"dragonzpyder.xyz", "www.dragonzpyder.xyz", "api.dragonzpyder.xyz"}
             private = parsed.scheme == "http" and parsed.hostname in {"dragonzpyder-web.railway.internal", "dragonzpyder-api.railway.internal"}
+            expected_path = "/internal/provider" if dedicated else "/internal/v1"
             if (
                 not (public or private)
-                or parsed.path != "/internal/v1"
+                or parsed.path != expected_path
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
             ):
                 raise AgentInferenceError("Invalid DragonZpyder service origin", code="inference_not_configured")
