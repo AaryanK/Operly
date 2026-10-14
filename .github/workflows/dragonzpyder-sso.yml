@@ -1,0 +1,28 @@
+name: DragonZpyder SSO security tests
+on:
+  pull_request:
+    paths:
+      - apps/api/dragonzpyder_sso_router.py
+      - packages/security/dragonzpyder_oidc.py
+      - tests/test_dragonzpyder_oidc_sso.py
+      - .github/workflows/dragonzpyder-sso.yml
+  push:
+    branches: [codex/dragonzpyder-central-sso]
+    paths:
+      - apps/api/dragonzpyder_sso_router.py
+      - packages/security/dragonzpyder_oidc.py
+      - tests/test_dragonzpyder_oidc_sso.py
+      - .github/workflows/dragonzpyder-sso.yml
+jobs:
+  oidc-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest tests.test_dragonzpyder_oidc_sso -v
