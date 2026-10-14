@@ -86,7 +86,7 @@ class InferenceRoute:
             "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", "meta/llama-3.1-70b-instruct"),
             "ollama": ("http://127.0.0.1:11434/v1", "", "qwen3:8b"),
             "dragonzpyder": (
-                "https://dragonzpyder.xyz/internal/v1",
+                "https://api.dragonzpyder.xyz/internal/v1",
                 "DRAGONZPYDER_RUNTIME_TOKEN",
                 "openai/gpt-oss-120b",
             ),
@@ -111,8 +111,8 @@ class InferenceRoute:
         if requested == "dragonzpyder":
             base_url = os.getenv("DRAGONZPYDER_INFERENCE_BASE_URL", "").strip().rstrip("/") or base_url
             parsed = urlsplit(base_url)
-            public = parsed.scheme == "https" and parsed.hostname in {"dragonzpyder.xyz", "www.dragonzpyder.xyz"}
-            private = parsed.scheme == "http" and parsed.hostname == "dragonzpyder-web.railway.internal"
+            public = parsed.scheme == "https" and parsed.hostname in {"dragonzpyder.xyz", "www.dragonzpyder.xyz", "api.dragonzpyder.xyz"}
+            private = parsed.scheme == "http" and parsed.hostname in {"dragonzpyder-web.railway.internal", "dragonzpyder-api.railway.internal"}
             if (
                 not (public or private)
                 or parsed.path != "/internal/v1"
