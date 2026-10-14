@@ -148,3 +148,16 @@ Do not put the token into browser code. Migrate and test one inference entry poi
 before other Studio/provider routes; do not change current production provider
 until the service health and compatibility checks pass. DragonZpyder's model API
 is an inference-only interface and does not grant Operly new business authority.
+
+
+### Production API service cutover
+
+The dedicated DragonZpyder API process has its own hostname
+`api.dragonzpyder.xyz` (after DNS verification) and a private Railway
+address `http://dragonzpyder-api.railway.internal/internal/v1`.
+Operly should use the private Railway endpoint, not the public hostname,
+inside the same project. The previous web-hosted endpoint remains temporarily
+available as a rollback until the new gateway has passed a provider call.
+The inference adapter host allowlist includes the new service, but not
+arbitrary user-supplied URLs. This patch does not change business execution
+permissions or workspace data ownership.
