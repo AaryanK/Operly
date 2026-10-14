@@ -129,3 +129,22 @@ The next implementation slices should continue without weakening the Kernel boun
 The historical `/api/agent` and business-brain paths are not the new runtime and must not be re-mounted as part of this work. They predate the current TrustedIngress/ExecutionContext/Kernel authority model. Conversation history or model-routing utilities may be migrated selectively, but execution authority must stay in the Kernel.
 
 Likewise, old model-runtime branches and the removed `packages/model_runtime` tree are reference material only. Any useful provider-neutral contracts or qualification ideas must be re-evaluated and reimplemented against Kernel-v3 rather than merged back as a legacy runtime.
+
+
+## DragonZpyder upstream inference provider (migration)
+
+DragonZpyder owns the AI provider keys, model inference and routing. Operly calls
+an authenticated internal API, while retaining its business data, tenancy,
+permissions, connectors, approval workflows and business-specific orchestration.
+
+To explicitly opt the Operly agent runtime into DragonZpyder inference:
+
+    OPERLY_AGENT_MODEL_PROVIDER=dragonzpyder
+    OPERLY_AGENT_MODEL_ID=openai/gpt-oss-120b
+    DRAGONZPYDER_INFERENCE_BASE_URL=https://dragonzpyder.xyz/internal/v1
+    DRAGONZPYDER_RUNTIME_TOKEN=(secret reference to DragonZpyder service)
+
+Do not put the token into browser code. Migrate and test one inference entry point
+before other Studio/provider routes; do not change current production provider
+until the service health and compatibility checks pass. DragonZpyder's model API
+is an inference-only interface and does not grant Operly new business authority.

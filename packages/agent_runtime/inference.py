@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -84,6 +85,11 @@ class InferenceRoute:
             "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
             "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", "meta/llama-3.1-70b-instruct"),
             "ollama": ("http://127.0.0.1:11434/v1", "", "qwen3:8b"),
+            "dragonzpyder": (
+                "https://dragonzpyder.xyz/internal/v1",
+                "DRAGONZPYDER_RUNTIME_TOKEN",
+                "openai/gpt-oss-120b",
+            ),
         }
         requested = os.getenv("OPERLY_AGENT_MODEL_PROVIDER", "").strip().lower()
         if not requested:
@@ -102,6 +108,17 @@ class InferenceRoute:
             )
 
         base_url, key_name, default_model = fixed[requested]
+        if requested == "dragonzpyder":
+            base_url = os.getenv("DRAGONZPYDER_INFERENCE_BASE_URL", "").strip().rstrip("/") or base_url
+            parsed = urlsplit(base_url)
+            public = parsed.scheme == "https" and parsed.hostname in {"dragonzpyder.xyz", "www.dragonzpyder.xyz"}
+            private = parsed.scheme == "http" and parsed.hostname == "dragonzpyder-web.railway.internal"
+            if (
+                not (public or private)
+                or parsed.path != "/internal/v1"
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+            ):
+                raise AgentInferenceError("Invalid DragonZpyder service origin", code="inference_not_configured")
         api_key = os.getenv(key_name, "").strip() if key_name else None
         if requested != "ollama" and not api_key:
             raise AgentInferenceError(
