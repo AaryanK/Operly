@@ -46,7 +46,7 @@ class DragonZpyderInferenceProviderTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(request.headers.get("authorization"), "Bearer operly-test-token")
             return httpx.Response(200, json={
-                "choices": [{"message": {"role": "assistant", "content": "{\\"ok\\":true}"}}],
+                "choices": [{"message": {"role": "assistant", "content": '{"ok":true}'}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5},
             })
         original = httpx.AsyncClient
