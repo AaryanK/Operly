@@ -21,6 +21,7 @@ from apps.api.agent_runtime_router import (
 from apps.api.artifact_router import router as artifact_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.discord_auth_router import router as discord_auth_router
+from apps.api.dragonzpyder_sso_router import router as dragonzpyder_sso_router
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
@@ -226,6 +227,7 @@ app.add_middleware(
 app.include_router(session_router)
 app.include_router(admin_router)
 app.include_router(discord_auth_router)
+app.include_router(dragonzpyder_sso_router)
 app.include_router(personal_agent_runtime_router)
 app.include_router(workspace_agent_runtime_router)
 app.include_router(personal_connectors_router)
