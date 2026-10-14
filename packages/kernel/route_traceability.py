@@ -10,7 +10,7 @@ from typing import Any
 # newly reviewed AI ingress and restored platform-admin control plane as exact surfaces.
 # This avoids weakening the route gate merely because Runtime 1.0 or the admin console
 # intentionally adds reviewed operations.
-EXPECTED_BASE_ROUTE_COUNT = 154
+EXPECTED_BASE_ROUTE_COUNT = 156
 EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"  # pragma: allowlist secret
 EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
 EXPECTED_ADMIN_ROUTE_COUNT = 7
@@ -137,7 +137,7 @@ class RouteTraceability:
 
 # These source-level classifications are intentionally paired with exact route
 # fingerprints. A newly added operation cannot silently inherit a broad source rule.
-_AUTH_SOURCES = frozenset({"session_router", "discord_auth_router"})
+_AUTH_SOURCES = frozenset({"session_router", "discord_auth_router", "dragonzpyder_sso_router"})
 _CONTROL_PLANE_SOURCES = frozenset(
     {
         "access_router",
