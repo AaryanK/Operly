@@ -29,10 +29,27 @@ class RouteTraceabilityTests(unittest.TestCase):
             "personal_agent_runtime_router",
             "workspace_agent_runtime_router",
             "admin_router",
+            "dragonzpyder_sso_router",
         }
         base_rows = [row for row in self.rows if row["source"] not in isolated_sources]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
+
+    def test_dragonzpyder_sso_routes_are_exact_and_never_business_triggers(self):
+        rows = [row for row in self.rows if row["source"] == "dragonzpyder_sso_router"]
+        self.assertEqual(
+            {row["operation"] for row in rows},
+            {
+                "GET /api/identities/dragonzpyder/start",
+                "GET /api/identities/dragonzpyder/callback",
+            },
+        )
+        for row in rows:
+            route = classify_route(row)
+            self.assertIsNotNone(route)
+            self.assertEqual(route.category, "auth_transport")
+            self.assertFalse(route.workflow_trigger_identity)
+            self.assertFalse(route.semantic_event_source)
 
     def test_runtime_1_ingress_is_exact_and_not_mislabeled_as_direct_kernel_transport(self):
         agent_sources = {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
