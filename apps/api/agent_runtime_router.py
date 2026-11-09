@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from apps.api.dependencies import (
 )
 from packages.agent_runtime.context import ContextItem, ContextKind
 from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
+from packages.agent_runtime.remote_harness import run_dragonzpyder_harness, RemoteHarnessUnavailable
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeDisabled
 from packages.agent_runtime.telemetry import collect_inference_usage, runtime_trace
@@ -196,15 +198,34 @@ async def _run(
 
     run_id = f"chat-{uuid4()}"
     try:
-        with collect_inference_usage() as model_usage:
-            result = await _agent().run(
-                db,
-                context=context,
-                message=message,
-                kernel=kernel,
-                context_items=context_items,
-                run_id=run_id,
+        if os.getenv("OPERLY_AGENT_HARNESS_OWNER", "operly") == "dragonzpyder":
+            # DragonZpyder owns model reasoning; Operly keeps the actual scoped
+            # provider tools, approval checks, and durable account authority.
+            available = await kernel.available_capabilities(
+                db, context=context, query=message, limit=40,
             )
+            model_usage = []  # Usage is booked at the DragonZpyder model gateway.
+            result = await run_dragonzpyder_harness(
+                context=context, message=message, conversation_id=conversation.id,
+                run_id=run_id, capabilities=available,
+            )
+        else:
+            with collect_inference_usage() as model_usage:
+                result = await _agent().run(
+                    db,
+                    context=context,
+                    message=message,
+                    kernel=kernel,
+                    context_items=context_items,
+                    run_id=run_id,
+                )
+    except RemoteHarnessUnavailable as error:
+        runtime_trace("request.failed", run_id=run_id, error_code="dragonzpyder_unavailable")
+        await db.rollback()
+        raise HTTPException(
+            503, detail={"code": "DRAGONZPYDER_HARNESS_UNAVAILABLE",
+                         "message": "DragonZpyder agent service is unavailable. No legacy fallback was executed."},
+        ) from error
     except AgentRuntimeDisabled as error:
         runtime_trace("request.failed", run_id=run_id, error_code="agent_runtime_disabled")
         await db.rollback()
