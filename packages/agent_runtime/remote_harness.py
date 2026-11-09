@@ -49,7 +49,7 @@ def issue_readonly_lease(context: ExecutionContext, *, run_id: str, capabilities
     """Mint authority for only already-available read-only capabilities."""
     key = _secret("OPERLY_DRAGONZPYDER_DELEGATION_KEY").encode()
     allowed = sorted({spec.id for spec in capabilities
-                      if spec.risk is CapabilityRisk.READ_ONLY and _ID.fullmatch(spec.id)})[:40]
+                      if spec.risk is CapabilityRisk.READ_ONLY and _ID.fullmatch(spec.id)})[:20]
     if not context.user_id or (context.is_workspace and not context.workspace_id):
         raise RemoteHarnessUnavailable("A valid human principal is required")
     now = int(time.time())
