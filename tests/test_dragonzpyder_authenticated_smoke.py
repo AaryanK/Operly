@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from apps.api.dragonzpyder_broker_router import router as broker_router
 from packages.agent_runtime.remote_harness import issue_readonly_lease
 from packages.database.db import SessionFactory, init_db
-from packages.database.models import AppUser, Task
+from packages.database.models import AppUser, Tenant, TenantMember
 from packages.kernel.bootstrap import build_kernel_runtime
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
@@ -142,6 +142,60 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(revoked.status_code, 403)
+
+    async def test_workspace_scope_rechecks_live_membership(self):
+        workspace_id = str(uuid4())
+        member_id = str(uuid4())
+        async with SessionFactory() as db:
+            db.add(Tenant(id=workspace_id, name="Delegation smoke business"))
+            db.add(TenantMember(
+                id=member_id, tenant_id=workspace_id, user_id=self.user_id,
+                role="owner",
+            ))
+            await db.commit()
+        context = ExecutionContext(
+            workspace_id=workspace_id,
+            user_id=self.user_id,
+            membership_id=member_id,
+            role="owner",
+            permissions=frozenset({"workspace:read"}),
+            channel="web",
+            surface=SurfaceKind.WORKSPACE_PRIVATE,
+            scope_kind=ScopeKind.WORKSPACE,
+            principal_id="user:" + self.user_id,
+        )
+        lease = issue_readonly_lease(
+            context, run_id="workspace-smoke-" + workspace_id,
+            capabilities=[build_kernel_runtime().registry.get("system.runtime.status")],
+        )
+        headers = dict(self.headers, **{"X-Operly-Agent-Lease": lease})
+        response = await self.client.post(
+            "/api/internal/agent-tools/execute",
+            headers=headers,
+            json={
+                "capability_id": "system.runtime.status", "arguments": {},
+                "request_id": "workspace-read-" + workspace_id,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text[:300])
+        self.assertTrue(response.json()["ok"], response.text[:300])
+        self.assertEqual(response.json()["result"]["scope_kind"], "workspace")
+        self.assertEqual(response.json()["result"]["workspace_mode"], "full")
+
+        async with SessionFactory() as db:
+            membership = await db.get(TenantMember, member_id)
+            await db.delete(membership)
+            await db.commit()
+        revoked = await self.client.post(
+            "/api/internal/agent-tools/execute",
+            headers=headers,
+            json={
+                "capability_id": "system.runtime.status", "arguments": {},
+                "request_id": "workspace-revoked-" + workspace_id,
+            },
+        )
+        self.assertEqual(revoked.status_code, 403)
+
 
 
 if __name__ == "__main__":
