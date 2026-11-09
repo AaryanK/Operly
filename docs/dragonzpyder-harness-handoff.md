@@ -73,3 +73,29 @@ boundary between user intent and consequential real-world actions.
   **durable definition registry + Hatchet wakeup + fresh run-time delegation**
   have passed end-to-end. Do not advertise a successful schedule after a
   mere preview. Do not delete workflow records or migrations.
+
+
+## Wrapper context and persistent goals
+
+Operly `/api/internal/agent-tools/search` now also returns
+`source=operly`, `scope_kind` and a minimal current
+`workspace_context` (name, timezone, membership role and workspace mode).
+The context is resolved from Operly's live identity and membership tables
+and is injected by DragonZpyder's harness, not by the browser. This response
+is untrusted model **data**, never an authorization token. A revoked user
+or removed Workspace member can no longer retrieve it.
+
+`packages/workflow/dragonzpyder_goals.py` delegates `register`, `get`
+and `cancel` to DragonZpyder's service-only encrypted PostgreSQL goal store,
+using the authenticated Operly `ExecutionContext`. The adapter has no
+local agent planner, queue or cron. For now this is only an internal API
+integration: registering a goal does not schedule or execute it.
+Pending Hatchet wakeups and renewed authorization, do not replace Operly's
+working workflow creation with this partial implementation or remove its
+business data models.
+
+**Destination architecture:** Operly remains an OS-like business/workspace
+provider; DragonZpyder owns the reusable intelligence, Personal connectors,
+MCP hub, personal computer broker, memory, schedules, jobs and workflows.
+NaySchool can be another app wrapper with its own independently authenticated
+learner context, never borrowed Operly authority.
