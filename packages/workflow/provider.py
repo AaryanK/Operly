@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -1021,6 +1022,20 @@ class WorkflowProvider:
 
     async def _schedule_preview(self, db: AsyncSession, context: ExecutionContext, arguments: dict[str, Any]) -> CapabilityExecutionResult:
         del db, context
+        if os.getenv("OPERLY_WORKFLOW_HARNESS_OWNER", "operly") == "dragonzpyder":
+            from packages.workflow.dragonzpyder_client import preview_remote_schedule
+            count = max(1, min(int(arguments.get("count") or 5), 10))
+            # Unlike legacy, there is no silent fallback to an independent
+            # workflow engine after a remote error.
+            result = await preview_remote_schedule(
+                schedule=arguments["schedule"], count=count,
+            )
+            return CapabilityExecutionResult(value={
+                "schedule": result["schedule"],
+                "occurrences": result["occurrences"],
+                "engine": "dragonzpyder",
+                "execution_started": False,
+            })
         schedule = validate_schedule(arguments["schedule"])
         if schedule is None:
             return CapabilityExecutionResult(value={"schedule": None, "occurrences": []})
