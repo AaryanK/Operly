@@ -90,6 +90,9 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
             json={"query": "runtime status"},
         )
         self.assertEqual(discovered.status_code, 200, discovered.text[:300])
+        self.assertEqual(discovered.json()["source"], "operly")
+        self.assertEqual(discovered.json()["scope_kind"], "personal")
+        self.assertIsNone(discovered.json()["workspace_context"])
         visible = {tool["id"] for tool in discovered.json()["tools"]}
         self.assertIn("system.runtime.status", visible)
         self.assertNotIn("tasks.create", visible)
@@ -142,6 +145,12 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(revoked.status_code, 403)
+        no_context = await self.client.post(
+            "/api/internal/agent-tools/search",
+            headers=headers,
+            json={"query": ""},
+        )
+        self.assertEqual(no_context.status_code, 403)
 
     async def test_workspace_scope_rechecks_live_membership(self):
         workspace_id = str(uuid4())
@@ -169,6 +178,18 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
             capabilities=[build_kernel_runtime().registry.get("system.runtime.status")],
         )
         headers = dict(self.headers, **{"X-Operly-Agent-Lease": lease})
+        context_reply = await self.client.post(
+            "/api/internal/agent-tools/search",
+            headers=headers,
+            json={"query": ""},
+        )
+        self.assertEqual(context_reply.status_code, 200)
+        info = context_reply.json()
+        self.assertEqual(info["scope_kind"], "workspace")
+        self.assertEqual(info["source"], "operly")
+        self.assertEqual(info["workspace_context"]["name"], "Delegation smoke business")
+        self.assertEqual(info["workspace_context"]["role"], "owner")
+        self.assertEqual(info["workspace_context"]["timezone"], "UTC")
         response = await self.client.post(
             "/api/internal/agent-tools/execute",
             headers=headers,
