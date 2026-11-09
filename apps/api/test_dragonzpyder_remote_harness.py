@@ -64,3 +64,23 @@ def test_untrusted_endpoint_rejected(keys, monkeypatch):
         bridge.dragonzpyder_endpoint()
     monkeypatch.setenv("OPERLY_DRAGONZPYDER_AGENT_URL", "https://api.dragonzpyder.xyz/internal/agents/operly/run")
     assert bridge.dragonzpyder_endpoint().startswith("https://api.dragonzpyder.xyz/")
+
+
+def test_broker_requires_independent_service_secret_and_feature_flag(keys, monkeypatch):
+    from fastapi import HTTPException
+    from apps.api.dragonzpyder_broker_router import _authorize
+
+    lease = bridge.issue_readonly_lease(_context(), run_id="run-4", capabilities=[])
+    monkeypatch.setenv("OPERLY_DRAGONZPYDER_BROKER_TOKEN", "b" * 48)
+    monkeypatch.delenv("OPERLY_DRAGONZPYDER_AGENT_BROKER_ENABLED", raising=False)
+    with pytest.raises(HTTPException) as disabled:
+        _authorize("Bearer " + "b" * 48, lease)
+    assert disabled.value.status_code == 401
+
+    monkeypatch.setenv("OPERLY_DRAGONZPYDER_AGENT_BROKER_ENABLED", "1")
+    with pytest.raises(HTTPException) as wrong:
+        _authorize("Bearer wrong", lease)
+    assert wrong.value.status_code == 401
+    claims = _authorize("Bearer " + "b" * 48, lease)
+    assert claims["user_id"] == "user-a"
+    assert claims["capability_ids"] == []
