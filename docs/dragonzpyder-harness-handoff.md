@@ -52,3 +52,24 @@ approval-resume and end-to-end independently verified outcomes.
 
 The **Operly Kernel is not obsolete**: deleting it would remove the security
 boundary between user intent and consequential real-world actions.
+
+
+## Workflow-wrapper migration in this PR
+
+- Generic workflow language and schedule/cron calculations have been moved
+  to `DragonZpyder/api/agent_platform/workflows/spec.py`.
+- DragonZpyder now also owns a bounded LangGraph read-only workflow runner,
+  capability hub, and operator-reviewed MCP adapter.
+- Operly's `WorkflowProvider._schedule_preview` calls DragonZpyder's
+  authenticated `/internal/workflows/preview` when
+  `OPERLY_WORKFLOW_HARNESS_OWNER=dragonzpyder`; default remains `operly`.
+- `packages/workflow/dragonzpyder_client.py` is the authenticated wrapper;
+  no browser credentials, session cookies, OAuth secrets, workspace database
+  connections or arbitrary endpoint URLs are forwarded.
+- DragonZpyder's `DRAGONZPYDER_WORKFLOW_HUB_ENABLED=1` flag is required;
+  its service token must match `OPERLY_DRAGONZPYDER_AGENT_TOKEN`.
+- All actual, legacy Operly workflow creation, due-time dispatch, event
+  triggers, approvals and stored runs remain local until DragonZpyder's
+  **durable definition registry + Hatchet wakeup + fresh run-time delegation**
+  have passed end-to-end. Do not advertise a successful schedule after a
+  mere preview. Do not delete workflow records or migrations.
