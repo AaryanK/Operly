@@ -25,6 +25,7 @@ from packages.security.execution_context import (
 )
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
+from packages.database.models import Tenant
 
 router = APIRouter(prefix="/api/internal/agent-tools", tags=["agent-tools-internal"])
 
@@ -96,7 +97,22 @@ async def search_delegated_tools(
     claims = _authorize(authorization, x_operly_agent_lease)
     runtime, context = await _runtime_and_context(db, claims)
     candidates = await _allowed(db, runtime, context, claims, payload.query or None)
-    return {"tools": [{
+    # The business context travels as scoped, non-authoritative data alongside
+    # the authorized capability list. Membership is rechecked on every request;
+    # the agent cannot supply a workspace or infer access from this metadata.
+    workspace_context = None
+    if context.is_workspace:
+        tenant = await db.get(Tenant, context.workspace_id)
+        if tenant is None:
+            raise HTTPException(403, "Delegated workspace is unavailable")
+        workspace_context = {
+            "name": "".join(c if c.isprintable() else " " for c in tenant.name)[:120],
+            "timezone": tenant.timezone[:80],
+            "role": context.role[:30],
+            "workspace_mode": context.workspace_mode,
+        }
+    return {"source": "operly", "scope_kind": context.scope_kind.value,
+            "workspace_context": workspace_context, "tools": [{
         "id": spec.id, "description": spec.description[:700],
         "display_name": spec.display_name,
         "input_schema": dict(spec.input_schema),
