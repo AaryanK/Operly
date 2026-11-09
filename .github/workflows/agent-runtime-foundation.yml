@@ -40,6 +40,8 @@ on:
       - "tests/test_dragonzpyder_remote_harness.py"
       - "tests/test_dragonzpyder_authenticated_smoke.py"
       - "tests/test_dragonzpyder_workflow_adapter.py"
+      - "tests/test_dragonzpyder_goal_adapter.py"
+      - "packages/workflow/dragonzpyder_goals.py"
       - "packages/workflow/dragonzpyder_client.py"
       - "packages/workflow/provider.py"
       - "docs/unified-agent-runtime.md"
@@ -119,6 +121,8 @@ jobs:
             tests/test_dragonzpyder_remote_harness.py \
             tests/test_dragonzpyder_authenticated_smoke.py \
             tests/test_dragonzpyder_workflow_adapter.py \
+            tests/test_dragonzpyder_goal_adapter.py \
+            packages/workflow/dragonzpyder_goals.py \
             packages/workflow/dragonzpyder_client.py
       - name: Run foundation adversarial tests
         run: |
@@ -141,6 +145,7 @@ jobs:
           python -m unittest tests.test_dragonzpyder_inference_provider -v
           python -m unittest tests.test_dragonzpyder_remote_harness -v
           python -m unittest tests.test_dragonzpyder_workflow_adapter -v
+          python -m unittest tests.test_dragonzpyder_goal_adapter -v
       - name: Authenticated broker -> real Kernel capability smoke (no inference)
         env:
           OPERLY_ENV: development
