@@ -38,6 +38,7 @@ on:
       - "tests/test_agent_runtime_uncertain.py"
       - "tests/test_dragonzpyder_inference_provider.py"
       - "tests/test_dragonzpyder_remote_harness.py"
+      - "tests/test_dragonzpyder_authenticated_smoke.py"
       - "docs/unified-agent-runtime.md"
       - ".github/workflows/agent-runtime-foundation.yml"
 
@@ -112,7 +113,8 @@ jobs:
             tests/test_agent_runtime_races.py \
             tests/test_agent_runtime_uncertain.py \
             tests/test_dragonzpyder_inference_provider.py \
-            tests/test_dragonzpyder_remote_harness.py
+            tests/test_dragonzpyder_remote_harness.py \
+            tests/test_dragonzpyder_authenticated_smoke.py
       - name: Run foundation adversarial tests
         run: |
           python -m unittest tests.test_agent_runtime_foundation -v
@@ -133,6 +135,13 @@ jobs:
           python -m unittest tests.test_agent_runtime_uncertain -v
           python -m unittest tests.test_dragonzpyder_inference_provider -v
           python -m unittest tests.test_dragonzpyder_remote_harness -v
+      - name: Authenticated broker -> real Kernel capability smoke (no inference)
+        env:
+          OPERLY_ENV: development
+          DATABASE_URL: sqlite+aiosqlite:///./dragonzpyder-authenticated-smoke.db
+        run: |
+          rm -f dragonzpyder-authenticated-smoke.db
+          python -m unittest tests.test_dragonzpyder_authenticated_smoke -v
       - name: Validate clean database migration
         run: |
           rm -f /tmp/operly-agent-runtime-foundation.db
