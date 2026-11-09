@@ -147,7 +147,7 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(revoked.status_code, 403)
         no_context = await self.client.post(
             "/api/internal/agent-tools/search",
-            headers=headers,
+            headers=self.headers,
             json={"query": ""},
         )
         self.assertEqual(no_context.status_code, 403)
