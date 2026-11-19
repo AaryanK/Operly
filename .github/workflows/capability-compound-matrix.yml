@@ -10,6 +10,7 @@ on:
       - "packages/workflow/**"
       - "packages/workspace_modules/**"
       - "tests/test_capability_compound_workflow_matrix.py"
+      - "tests/test_real_operly_kernel_business_canary.py"
   push:
     branches:
       - main
@@ -57,4 +58,6 @@ jobs:
         run: python -m py_compile tests/test_capability_compound_workflow_matrix.py
 
       - name: Run capability-wide compound workflows
-        run: python -m unittest discover -s tests -p "test_capability_compound_workflow_matrix.py" -v
+        run: |
+          python -m unittest discover -s tests -p "test_capability_compound_workflow_matrix.py" -v
+          python -m unittest discover -s tests -p "test_real_operly_kernel_business_canary.py" -v
