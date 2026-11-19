@@ -441,12 +441,17 @@ class WorkspaceControlProvider:
                 statement = statement.where(criterion)
             return int(await db.scalar(statement) or 0)
 
+        enabled_modules = 0
+        for key in MODULE_CATALOG:
+            if await _module_enabled(db, tenant_id, key):
+                enabled_modules += 1
+
         return CapabilityExecutionResult(
             value={
                 "catalog_items": await count(CatalogItem),
                 "low_stock": await count(CatalogItem, CatalogItem.active.is_(True), CatalogItem.stock_qty <= CatalogItem.reorder_level),
                 "members": int(await db.scalar(select(func.count(TenantMember.id)).where(TenantMember.tenant_id == tenant_id)) or 0),
-                "modules_enabled": sum(1 for key in MODULE_CATALOG if await _module_enabled(db, tenant_id, key)),
+                "modules_enabled": enabled_modules,
                 "modules_total": len(MODULE_CATALOG),
                 "generated_at": datetime.utcnow().isoformat(),
             },
