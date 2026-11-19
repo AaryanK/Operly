@@ -1,0 +1,12 @@
+# Internal Railway staging-only execution of real Operly business provider code
+# against a disposable in-memory SQLite database. No production credentials.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && useradd --create-home --uid 10001 operly-canary
+COPY . /app
+RUN chown -R operly-canary:operly-canary /app
+USER operly-canary
+CMD ["python", "-m", "packages.workspace_modules.tools.canary_cli"]
