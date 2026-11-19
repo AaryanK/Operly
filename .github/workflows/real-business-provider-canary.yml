@@ -1,0 +1,30 @@
+name: Real Operly Business Provider Canary
+
+on:
+  pull_request:
+    paths:
+      - "tests/test_real_operly_business_provider_canary.py"
+      - ".github/workflows/real-business-provider-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-business-read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      OPERLY_ENV: development
+      SESSION_SECRET: isolated-operly-test-only
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile real business integration test
+        run: python -m py_compile tests/test_real_operly_business_provider_canary.py
+      - name: Execute actual Workspace Kernel handlers on isolated SQLite
+        run: python -m unittest tests.test_real_operly_business_provider_canary -v
