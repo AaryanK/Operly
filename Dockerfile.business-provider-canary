@@ -1,0 +1,12 @@
+# Isolated real Operly business-provider cron — NO production connectivity.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && useradd --create-home --uid 10001 operly
+COPY . /app
+RUN chown -R operly:operly /app
+USER operly
+ENV OPERLY_ENV=development DATABASE_URL=sqlite+aiosqlite:///:memory:
+CMD ["python", "-m", "unittest", "tests.test_real_operly_business_provider_canary", "-v"]
