@@ -1,0 +1,40 @@
+name: Temporary patched Vite lockfile refresh
+on:
+  push:
+    branches:
+      - fix/operly-dependency-audits-20261120
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Upgrade Vite using npm's native resolver
+        working-directory: apps/web
+        run: |
+          npm install --save-dev --save-exact --package-lock-only --ignore-scripts vite@8.3.8
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+          npm run build
+      - name: Commit reviewed package manifest and generated lockfile
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/package.json apps/web/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already current"
+            exit 0
+          fi
+          git commit -m "fix(security): resolve Vite high-severity advisories with npm lock"
+          git push origin HEAD:fix/operly-dependency-audits-20261120
