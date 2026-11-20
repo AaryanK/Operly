@@ -218,6 +218,95 @@ class AuthenticatedDelegationSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(revoked.status_code, 403)
 
 
+    async def test_platform_native_multi_tool_discovery_and_user_isolation(self):
+        """Search and execute real native account capabilities with seeded private data.
+
+        These are real HTTP/Kernel/SQL calls, but NO hosted LLM and NO live account.
+        """
+        from packages.database.models import Task
+
+        outsider = str(uuid4())
+        own_title = "Synthetic project research follow-up"
+        other_title = "OTHER USER SECRET TEST TASK"
+        async with SessionFactory() as db:
+            db.add(AppUser(
+                id=outsider, email="outsider-" + outsider + "@example.invalid",
+                display_name="Other isolated identity", active=True,
+            ))
+            db.add(Task(tenant_id=None, owner_user_id=self.user_id,
+                        title=own_title, status="open"))
+            db.add(Task(tenant_id=None, owner_user_id=outsider,
+                        title=other_title, status="open"))
+            await db.commit()
+
+        context = ExecutionContext(
+            workspace_id=None, user_id=self.user_id, membership_id=None,
+            role="personal_owner",
+            permissions=frozenset({"workspace:read", "tasks:read"}),
+            channel="web", surface=SurfaceKind.PERSONAL_PRIVATE,
+            scope_kind=ScopeKind.PERSONAL,
+            principal_id="user:" + self.user_id,
+        )
+        registry = build_kernel_runtime().registry
+        lease = issue_readonly_lease(
+            context, run_id="native-multitool-" + self.user_id,
+            capabilities=[
+                registry.get("system.runtime.status"),
+                registry.get("tasks.list"),
+                registry.get("tasks.create"),
+            ],
+        )
+        headers = dict(self.headers, **{"X-Operly-Agent-Lease": lease})
+
+        # Discovery is contextual, scoped, and yields schemas, not raw secrets.
+        for query, expected in (
+            ("runtime status", "system.runtime.status"),
+            ("my tasks", "tasks.list"),
+        ):
+            response = await self.client.post(
+                "/api/internal/agent-tools/search",
+                headers=headers, json={"query": query},
+            )
+            self.assertEqual(response.status_code, 200, response.text[:300])
+            discovered = {t["id"]: t for t in response.json()["tools"]}
+            self.assertIn(expected, discovered)
+            self.assertEqual(discovered[expected]["risk"], "read_only")
+            self.assertEqual(discovered[expected]["input_schema"]["type"], "object")
+            self.assertNotIn("tasks.create", discovered)
+
+        status = await self.client.post(
+            "/api/internal/agent-tools/execute",
+            headers=headers,
+            json={"capability_id": "system.runtime.status", "arguments": {},
+                  "request_id": "native-status-" + self.user_id},
+        )
+        self.assertEqual(status.status_code, 200, status.text[:300])
+        self.assertTrue(status.json()["result"]["kernel_runtime_enabled"])
+        self.assertEqual(status.json()["result"]["scope_kind"], "personal")
+
+        tasks = await self.client.post(
+            "/api/internal/agent-tools/execute",
+            headers=headers,
+            json={"capability_id": "tasks.list",
+                  "arguments": {"status": "open", "limit": 20},
+                  "request_id": "native-list-" + self.user_id},
+        )
+        self.assertEqual(tasks.status_code, 200, tasks.text[:300])
+        self.assertTrue(tasks.json()["ok"])
+        titles = {row["title"] for row in tasks.json()["result"]["tasks"]}
+        self.assertIn(own_title, titles)
+        self.assertNotIn(other_title, titles)
+
+        mutation = await self.client.post(
+            "/api/internal/agent-tools/execute",
+            headers=headers,
+            json={"capability_id": "tasks.create",
+                  "arguments": {"title": "FORBIDDEN WRITE"},
+                  "request_id": "native-mutating-" + self.user_id},
+        )
+        self.assertEqual(mutation.status_code, 403)
+
+
 
 if __name__ == "__main__":
     unittest.main()
