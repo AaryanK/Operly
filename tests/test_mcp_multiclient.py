@@ -84,6 +84,45 @@ class MultiClientMcpTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     registered_clients()
 
+    def test_remote_mcp_metadata_and_unauthenticated_tool_access(self):
+        """Actual ASGI endpoints advertise discovery but never leak tools anonymously."""
+        import asyncio
+        import httpx
+        from fastapi import FastAPI
+        from apps.api.dependencies import get_db
+        from apps.api.mcp_router import router
+
+        async def fake_db():
+            yield None
+
+        async def run():
+            app = FastAPI()
+            app.include_router(router)
+            app.dependency_overrides[get_db] = fake_db
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="https://mcp.operly.example",
+            ) as client:
+                meta = await client.get("/.well-known/oauth-authorization-server")
+                self.assertEqual(meta.status_code, 200)
+                self.assertIn("none", meta.json()["token_endpoint_auth_methods_supported"])
+                self.assertIn("client_secret_post", meta.json()["token_endpoint_auth_methods_supported"])
+                protected = await client.get("/.well-known/oauth-protected-resource/mcp")
+                self.assertEqual(protected.status_code, 200)
+                self.assertEqual(protected.json()["resource"], "https://mcp.operly.example/mcp")
+                unauth = await client.post("/mcp", json={
+                    "jsonrpc": "2.0", "id": 7, "method": "tools/list",
+                })
+                self.assertEqual(unauth.status_code, 401)
+                self.assertIn("resource_metadata", unauth.headers["www-authenticate"])
+
+        with self.config(
+            PUBLIC_BASE_URL="https://mcp.operly.example",
+            OPERLY_MCP_DRAGONZPYDER_SECRET="s" * 48,
+        ):
+            asyncio.run(run())
+
+
     def test_no_accidental_new_client_without_explicit_configuration(self):
         with patch.dict(os.environ, {
             "CHATGPT_MCP_REDIRECT_URIS": CHATGPT,
