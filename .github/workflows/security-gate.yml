@@ -66,6 +66,9 @@ jobs:
             apps/api/request_safety.py \
             apps/api/security_headers.py \
             apps/api/mcp_router.py \
+            apps/api/access_router.py \
+            packages/mcp/clients.py \
+            tests/test_mcp_multiclient.py \
             packages/kernel/approvals.py \
             packages/kernel/contracts.py \
             packages/kernel/idempotency.py \
@@ -86,6 +89,7 @@ jobs:
         run: |
           python -m unittest tests.test_admin_sse_contract -v
           python -m unittest tests.test_mcp_request_safety -v
+          python -m unittest tests.test_mcp_multiclient -v
           python -m unittest tests.test_security_hardening -v
           python -m unittest tests.test_pre_agent_runtime_gate -v
           python -m unittest tests.test_pre_agent_runtime_security -v
