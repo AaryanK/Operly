@@ -36,7 +36,7 @@ class RealWorkspaceMcpSmoke(unittest.IsolatedAsyncioTestCase):
         self.environment = patch.dict(os.environ, {
             "OPERLY_ENV": "development",
             "PUBLIC_BASE_URL": ORIGIN,
-            "OPERLY_MCP_TOKEN_SECRET": "isolated-test-signing-key-" + "z" * 48,
+            "OPERLY_MCP_TOKEN_SECRET": "isolated-test-signing-key-" + "z" * 48,  # pragma: allowlist secret (nonproduction test fixture)
             "OPERLY_MCP_CLIENTS_JSON": json.dumps({
                 "dragonzpyder": {"name": "DragonZpyder staging",
                                  "redirect_uris": [CALLBACK]},
