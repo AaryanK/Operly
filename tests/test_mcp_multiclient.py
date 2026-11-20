@@ -6,16 +6,16 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from apps.api.mcp_router import _allowed_redirect_uris, _verify_client
-from packages.mcp.clients import external_client_catalog, get_registered_client, registered_clients
+from packages.mcp.clients import external_client_catalog, get_registered_client, redirect_allowed, registered_clients
 
 CHATGPT = "https://chatgpt.com/connector_platform_oauth_redirect"
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
-CODEX = "http://127.0.0.1:57341/callback"
+CODEX = "http://127.0.0.1/callback"
 DRAGONZPYDER = "https://dragonzpyder.xyz/oauth/operly/callback"
 
 DEFINITIONS = json.dumps({
     "claude": {"name": "Claude", "redirect_uris": [CLAUDE]},
-    "codex": {"name": "Codex", "redirect_uris": [CODEX]},
+    "codex": {"name": "Codex", "redirect_uris": [CODEX], "allow_loopback_dynamic_port": True},
     "dragonzpyder": {"name": "DragonZpyder", "redirect_uris": [DRAGONZPYDER],
                      "secret_env": "OPERLY_MCP_DRAGONZPYDER_SECRET"},  # pragma: allowlist secret
 })
@@ -37,6 +37,12 @@ class MultiClientMcpTests(unittest.TestCase):
             self.assertEqual(set(clients), {"chatgpt", "claude", "codex", "dragonzpyder"})
             self.assertEqual(_allowed_redirect_uris("claude"), {CLAUDE})
             self.assertEqual(_allowed_redirect_uris("codex"), {CODEX})
+            self.assertTrue(redirect_allowed("codex", "http://127.0.0.1:57341/callback"))
+            self.assertTrue(redirect_allowed("codex", "http://127.0.0.1:57213/callback"))
+            self.assertFalse(redirect_allowed("codex", "http://localhost:57341/callback"))
+            self.assertFalse(redirect_allowed("codex", "http://127.0.0.1:57341/other"))
+            self.assertFalse(redirect_allowed("codex", "http://127.0.0.1:57341/callback?x=1"))
+            self.assertFalse(redirect_allowed("claude", "http://127.0.0.1:57341/callback"))
             self.assertEqual(_allowed_redirect_uris("dragonzpyder"), {DRAGONZPYDER})
             self.assertEqual(_allowed_redirect_uris("chatgpt"), {CHATGPT})
             self.assertEqual(_allowed_redirect_uris("unknown"), set())
