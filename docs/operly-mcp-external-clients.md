@@ -30,7 +30,8 @@ list). For example:
   },
   "codex": {
     "name": "Codex",
-    "redirect_uris": ["https://YOUR-VERIFIED-CODEX-CALLBACK.example/callback"]
+    "redirect_uris": ["http://127.0.0.1/callback"],
+    "allow_loopback_dynamic_port": true
   },
   "dragonzpyder": {
     "name": "DragonZpyder",
@@ -39,11 +40,12 @@ list). For example:
 }
 ```
 
-**Replace the illustrative Codex/DragonZpyder callback URLs** with the exact
-callbacks actually configured by those OAuth clients. Do not deploy placeholders
-or guess client callback endpoints. A locally running Codex client can instead
-use an explicitly approved `http://127.0.0.1:<port>/callback`; ports are exact,
-not wildcarded. Claude's callback is documented by Anthropic, but verify it
+**Replace the illustrative DragonZpyder callback URL** with the exact callback
+actually configured in that client. Do not deploy placeholders. For a local
+Codex client, `allow_loopback_dynamic_port` explicitly enables the RFC 8252
+loopback exception: only the ephemeral port may change. The scheme, host,
+callback path, PKCE requirement, and exact code/redirect binding remain fixed.
+If Codex uses a different callback path, explicitly register that path. Claude's callback is documented by Anthropic, but verify it
 against the client used in your environment.
 
 For a confidential DragonZpyder OAuth client, provision the separate
