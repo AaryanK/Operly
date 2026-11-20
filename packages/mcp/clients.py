@@ -23,6 +23,7 @@ class RegisteredMcpClient:
     name: str
     redirect_uris: frozenset[str]
     secret_env: str | None = None
+    allow_loopback_dynamic_port: bool = False
 
     @property
     def client_secret(self) -> str:
@@ -69,23 +70,32 @@ def registered_clients() -> dict[str, RegisteredMcpClient]:
     for client_id, spec in definitions.items():
         if (not isinstance(client_id, str) or not _ID.fullmatch(client_id)
                 or client_id == "chatgpt" or not isinstance(spec, dict)
-                or set(spec) - {"name", "redirect_uris", "secret_env"}):
+                or set(spec) - {"name", "redirect_uris", "secret_env", "allow_loopback_dynamic_port"}):
             raise ValueError("Invalid MCP client definition")
         uris = spec.get("redirect_uris", [])
         name = spec.get("name", client_id)
         secret_env = spec.get("secret_env")
-        if (not isinstance(uris, list) or len(uris) > 12
+        allow_loopback_dynamic_port = spec.get("allow_loopback_dynamic_port", False)
+        if (not isinstance(allow_loopback_dynamic_port, bool)
+                or not isinstance(uris, list) or len(uris) > 12
                 or not isinstance(name, str) or not 1 <= len(name) <= 80
                 or (secret_env is not None and
                     (not isinstance(secret_env, str)
                      or not _SECRET_ENV.fullmatch(secret_env)))):
             raise ValueError("Invalid MCP client configuration")
         redirects = frozenset(_validate_redirect(uri) for uri in uris)
+        if allow_loopback_dynamic_port and not any(
+            urlsplit(uri).scheme == "http" and urlsplit(uri).port is None
+            and urlsplit(uri).hostname in {"localhost", "127.0.0.1", "::1"}
+            for uri in redirects
+        ):
+            raise ValueError("Dynamic port requires a loopback callback without a fixed port")
         if len(redirects) != len(uris):
             raise ValueError("Duplicate MCP redirect URI")
         clients[client_id] = RegisteredMcpClient(
             client_id=client_id, name=name,
             redirect_uris=redirects, secret_env=secret_env,
+            allow_loopback_dynamic_port=allow_loopback_dynamic_port,
         )
     return clients
 
@@ -100,3 +110,36 @@ def external_client_catalog() -> list[dict]:
          "owner_managed": True, "configured": bool(client.redirect_uris)}
         for client in registered_clients().values()
     ]
+
+
+def redirect_allowed(client_id: str, redirect_uri: str) -> bool:
+    """RFC 8252 loopback-port allowance, only if explicitly registered.
+
+    The scheme, loopback host and path remain exact; only the ephemeral port
+    may vary. Every OAuth authorization code still binds the full URI and S256
+    PKCE verifier, so the token exchange cannot substitute another redirect.
+    """
+    client = get_registered_client(client_id)
+    if client is None or not isinstance(redirect_uri, str):
+        return False
+    if redirect_uri in client.redirect_uris:
+        return True
+    if not client.allow_loopback_dynamic_port:
+        return False
+    try:
+        candidate = urlsplit(_validate_redirect(redirect_uri))
+        if (candidate.scheme != "http"
+                or candidate.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or candidate.port is None):
+            return False
+        for original in client.redirect_uris:
+            base = urlsplit(original)
+            if (base.scheme == candidate.scheme
+                    and base.hostname == candidate.hostname
+                    and base.port is None
+                    and base.path == candidate.path
+                    and base.query == candidate.query == ""):
+                return True
+    except ValueError:
+        return False
+    return False
