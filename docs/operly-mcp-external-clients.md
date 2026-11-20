@@ -129,3 +129,10 @@ interoperability-tested against official SDK clients before public launch.
 
 The starting point is the existing `/mcp` endpoint; **do not deploy a duplicate
 MCP server in front of the same Kernel**.
+
+## Release safety
+
+The audited dependency remediation is tracked separately in PR #380 and
+must be part of the merge base before promoting this MCP change.
+Production OAuth client registrations and Workspace owner grants are NOT
+created by a code merge. No anonymous tool discovery is allowed.
