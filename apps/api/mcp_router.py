@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.models import TenantMember
 from packages.database.principal_models import ClientGrant, Principal
-from packages.mcp.clients import get_registered_client, registered_clients
+from packages.mcp.clients import get_registered_client, redirect_allowed, registered_clients
 from packages.mcp.gateway import McpGateway, McpGatewayError, McpRequestContext, narrow_scope_rules
 from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -158,8 +158,7 @@ async def authorize_chatgpt(
         raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
     if code_challenge_method != "S256":
         raise HTTPException(400, "PKCE S256 is required")
-    allowed_redirects = _allowed_redirect_uris(client_id)
-    if not allowed_redirects or redirect_uri not in allowed_redirects:
+    if not redirect_allowed(client_id, redirect_uri):
         raise HTTPException(400, "OAuth redirect URI is not allowed")
     if auth.role != "owner":
         raise HTTPException(403, "Only the workspace owner can authorize an external AI client")
