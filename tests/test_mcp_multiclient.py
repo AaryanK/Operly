@@ -17,7 +17,7 @@ DEFINITIONS = json.dumps({
     "claude": {"name": "Claude", "redirect_uris": [CLAUDE]},
     "codex": {"name": "Codex", "redirect_uris": [CODEX]},
     "dragonzpyder": {"name": "DragonZpyder", "redirect_uris": [DRAGONZPYDER],
-                     "secret_env": "OPERLY_MCP_DRAGONZPYDER_SECRET"},
+                     "secret_env": "OPERLY_MCP_DRAGONZPYDER_SECRET"},  # pragma: allowlist secret
 })
 
 
@@ -72,10 +72,10 @@ class MultiClientMcpTests(unittest.TestCase):
             {"evil": {"redirect_uris": ["http://evil.example/cb"]}},
             {"evil": {"redirect_uris": ["https://a.example/cb#fragment"]}},
             {"evil": {"redirect_uris": ["https://a.example/cb?next=1"]}},
-            {"evil": {"redirect_uris": ["https://user:pass@a.example/cb"]}},
+            {"evil": {"redirect_uris": ["https://user@a.example/cb"]}},
             {"chatgpt": {"redirect_uris": [CLAUDE]}},
             {"codex": {"redirect_uris": [CODEX, CODEX]}},
-            {"codex": {"redirect_uris": [CODEX], "secret_env": "SESSION_SECRET"}},
+            {"codex": {"redirect_uris": [CODEX], "secret_env": "SESSION_SECRET"}},  # pragma: allowlist secret
         )
         for item in samples:
             with self.subTest(item=item), self.config(
