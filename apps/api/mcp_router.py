@@ -168,14 +168,14 @@ async def authorize_chatgpt(
         select(ClientGrant).where(
             ClientGrant.principal_id == principal.id,
             ClientGrant.tenant_id == auth.tenant.id,
-            ClientGrant.client_id == CHATGPT_CLIENT_ID,
+            ClientGrant.client_id == client_id,
             ClientGrant.status == "active",
         )
     )
     if grant is None:
-        raise HTTPException(403, "Enable ChatGPT MCP access in Operly before connecting it")
+        raise HTTPException(403, "Enable this MCP client for the Workspace before connecting it")
     if grant.expires_at is not None and grant.expires_at <= datetime.utcnow():
-        raise HTTPException(403, "The ChatGPT MCP grant has expired")
+        raise HTTPException(403, "The MCP client grant has expired")
 
     granted_scopes = _grant_scopes(grant)
     requested = frozenset(item.strip().lower() for item in scope.split() if item and item != "offline_access")
