@@ -34,8 +34,7 @@ list). For example:
   },
   "dragonzpyder": {
     "name": "DragonZpyder",
-    "redirect_uris": ["https://YOUR-DRAGONZPYDER-OAUTH-CALLBACK.example/callback"],
-    "secret_env": "OPERLY_MCP_DRAGONZPYDER_SECRET"
+    "redirect_uris": ["https://YOUR-DRAGONZPYDER-OAUTH-CALLBACK.example/callback"]
   }
 }
 ```
