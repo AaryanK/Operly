@@ -32,16 +32,16 @@ list). For example:
     "name": "Codex",
     "redirect_uris": ["http://127.0.0.1/callback"],
     "allow_loopback_dynamic_port": true
-  },
-  "dragonzpyder": {
-    "name": "DragonZpyder",
-    "redirect_uris": ["https://YOUR-DRAGONZPYDER-OAUTH-CALLBACK.example/callback"]
   }
 }
 ```
 
-**Replace the illustrative DragonZpyder callback URL** with the exact callback
-actually configured in that client. Do not deploy placeholders. For a local
+For a **confidential** DragonZpyder client, add a separate `dragonzpyder`
+entry containing its verified OAuth redirect URI and a `secret_env` property
+pointing to a dedicated Railway secret variable (for example,
+`OPERLY_MCP_DRAGONZPYDER_SECRET`). Without that property the client is
+public; do not accidentally deploy an unprotected first-party credential.
+Do not guess or deploy placeholder OAuth callbacks. For a local
 Codex client, `allow_loopback_dynamic_port` explicitly enables the RFC 8252
 loopback exception: only the ephemeral port may change. The scheme, host,
 callback path, PKCE requirement, and exact code/redirect binding remain fixed.
