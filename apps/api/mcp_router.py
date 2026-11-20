@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.models import TenantMember
 from packages.database.principal_models import ClientGrant, Principal
+from packages.mcp.clients import get_registered_client, registered_clients
 from packages.mcp.gateway import McpGateway, McpGatewayError, McpRequestContext, narrow_scope_rules
 from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -47,26 +48,27 @@ def _resource(request: Request) -> str:
 
 
 def _client_secret() -> str:
-    return os.getenv("CHATGPT_MCP_CLIENT_SECRET", "").strip()
+    """Legacy ChatGPT convenience; tokens are verified per registered client."""
+    client = get_registered_client(CHATGPT_CLIENT_ID)
+    return client.client_secret if client else ""
 
 
-def _allowed_redirect_uris() -> set[str]:
-    return {
-        item.strip()
-        for item in os.getenv("CHATGPT_MCP_REDIRECT_URIS", "").split(",")
-        if item.strip()
-    }
+def _allowed_redirect_uris(client_id: str = CHATGPT_CLIENT_ID) -> set[str]:
+    client = get_registered_client(client_id)
+    return set(client.redirect_uris) if client else set()
 
 
 def _verify_client(client_id: str, client_secret: str | None) -> None:
-    if client_id != CHATGPT_CLIENT_ID:
+    client = get_registered_client(client_id)
+    if client is None or not client.redirect_uris:
+        raise HTTPException(401, "Unregistered MCP OAuth client")
+    # A configured confidential client cannot silently become a public client
+    # when its secret environment variable has not been provisioned.
+    if client.secret_env and not client.client_secret:
+        raise HTTPException(401, "MCP OAuth client is not fully configured")
+    expected = client.client_secret
+    if expected and (not client_secret or not secrets.compare_digest(expected, client_secret)):
         raise HTTPException(401, "Invalid MCP OAuth client")
-    expected = _client_secret()
-    # PKCE + exact redirect binding allows ChatGPT to operate as a public OAuth
-    # client when no secret is configured. If Operly has a client secret, require it.
-    if expected:
-        if not client_secret or not secrets.compare_digest(expected, client_secret):
-            raise HTTPException(401, "Invalid MCP OAuth client")
 
 
 def _redirect_with_query(uri: str, values: dict[str, str]) -> str:
@@ -91,7 +93,7 @@ def _grant_scopes(grant: ClientGrant) -> frozenset[str]:
     return frozenset(str(item).strip().lower() for item in values if str(item).strip())
 
 
-async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str = CHATGPT_CLIENT_ID) -> ClientGrant:
+async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str) -> ClientGrant:
     row = await db.scalar(
         select(ClientGrant).where(
             ClientGrant.id == grant_id,
@@ -109,7 +111,8 @@ async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str = CHA
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_metadata(request: Request):
     base = _public_base_url(request)
-    auth_methods = ["client_secret_post"] if _client_secret() else ["none"]
+    auth_methods = sorted({("client_secret_post" if (v.secret_env or v.client_secret) else "none")
+                           for v in registered_clients().values()})
     return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
@@ -149,13 +152,13 @@ async def authorize_chatgpt(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if response_type != "code" or client_id != CHATGPT_CLIENT_ID:
+    if response_type != "code" or get_registered_client(client_id) is None:
         raise HTTPException(400, "Unsupported OAuth request")
     if resource != _resource(request):
         raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
     if code_challenge_method != "S256":
         raise HTTPException(400, "PKCE S256 is required")
-    allowed_redirects = _allowed_redirect_uris()
+    allowed_redirects = _allowed_redirect_uris(client_id)
     if not allowed_redirects or redirect_uri not in allowed_redirects:
         raise HTTPException(400, "OAuth redirect URI is not allowed")
     if auth.role != "owner":
@@ -190,7 +193,7 @@ async def authorize_chatgpt(
         grant_id=grant.id,
         principal_id=principal.id,
         tenant_id=auth.tenant.id,
-        client_id=CHATGPT_CLIENT_ID,
+        client_id=client_id,
         redirect_uri=redirect_uri,
         scopes=effective_scopes,
         code_challenge=code_challenge,
@@ -287,7 +290,7 @@ async def _request_context(
     except McpOAuthError as error:
         raise HTTPException(401, str(error), headers=challenge) from error
     client_id = str(payload.get("client_id") or "")
-    if client_id != CHATGPT_CLIENT_ID or payload.get("resource") != _resource(request):
+    if get_registered_client(client_id) is None or payload.get("resource") != _resource(request):
         raise HTTPException(401, "Invalid MCP client or token audience", headers=challenge)
 
     try:
