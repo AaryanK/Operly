@@ -126,6 +126,7 @@ class RealWorkspaceMcpSmoke(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(init.status_code, 200, init.text[:300])
         self.assertIn("result", init.json())
+        self.assertEqual(init.json()["result"]["protocolVersion"], "2025-06-18")
         listed = await self._rpc("tools/list")
         self.assertEqual(listed.status_code, 200, listed.text[:300])
         tool_names = {tool["name"] for tool in listed.json()["result"]["tools"]}
@@ -146,6 +147,23 @@ class RealWorkspaceMcpSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(modules.json()["result"].get("isError"),
                          modules.text[:300])
         self.assertIsInstance(modules.json()["result"]["structuredContent"]["modules"], list)
+
+    async def test_native_sdk_version_is_negotiated(self):
+        result = await self.http.post("/mcp", json={
+            "jsonrpc": "2.0", "id": "init-modern",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "sdk-test", "version": "0.1"},
+            },
+        }, headers={
+            "Authorization": "Bearer " + self.access,
+            "Accept": "application/json, text/event-stream",
+        })
+        self.assertEqual(result.status_code, 200, result.text[:300])
+        self.assertEqual(result.json()["result"]["protocolVersion"], "2025-11-25")
+        self.assertEqual(result.headers["mcp-protocol-version"], "2025-11-25")
 
     async def test_revocation_applies_to_next_tool_call(self):
         first = await self._rpc("tools/list")
