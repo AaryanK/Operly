@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.models import TenantMember
 from packages.database.principal_models import ClientGrant, Principal
+from packages.mcp.clients import get_registered_client, redirect_allowed, registered_clients
 from packages.mcp.gateway import McpGateway, McpGatewayError, McpRequestContext, narrow_scope_rules
 from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -34,7 +35,7 @@ gateway = McpGateway()
 CHATGPT_CLIENT_ID = "chatgpt"
 MCP_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_MCP_PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, LEGACY_MCP_PROTOCOL_VERSION}
+SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-11-25", LEGACY_MCP_PROTOCOL_VERSION}
 
 
 def _public_base_url(request: Request) -> str:
@@ -47,26 +48,27 @@ def _resource(request: Request) -> str:
 
 
 def _client_secret() -> str:
-    return os.getenv("CHATGPT_MCP_CLIENT_SECRET", "").strip()
+    """Legacy ChatGPT convenience; tokens are verified per registered client."""
+    client = get_registered_client(CHATGPT_CLIENT_ID)
+    return client.client_secret if client else ""
 
 
-def _allowed_redirect_uris() -> set[str]:
-    return {
-        item.strip()
-        for item in os.getenv("CHATGPT_MCP_REDIRECT_URIS", "").split(",")
-        if item.strip()
-    }
+def _allowed_redirect_uris(client_id: str = CHATGPT_CLIENT_ID) -> set[str]:
+    client = get_registered_client(client_id)
+    return set(client.redirect_uris) if client else set()
 
 
 def _verify_client(client_id: str, client_secret: str | None) -> None:
-    if client_id != CHATGPT_CLIENT_ID:
+    client = get_registered_client(client_id)
+    if client is None or not client.redirect_uris:
+        raise HTTPException(401, "Unregistered MCP OAuth client")
+    # A configured confidential client cannot silently become a public client
+    # when its secret environment variable has not been provisioned.
+    if client.secret_env and not client.client_secret:
+        raise HTTPException(401, "MCP OAuth client is not fully configured")
+    expected = client.client_secret
+    if expected and (not client_secret or not secrets.compare_digest(expected, client_secret)):
         raise HTTPException(401, "Invalid MCP OAuth client")
-    expected = _client_secret()
-    # PKCE + exact redirect binding allows ChatGPT to operate as a public OAuth
-    # client when no secret is configured. If Operly has a client secret, require it.
-    if expected:
-        if not client_secret or not secrets.compare_digest(expected, client_secret):
-            raise HTTPException(401, "Invalid MCP OAuth client")
 
 
 def _redirect_with_query(uri: str, values: dict[str, str]) -> str:
@@ -91,7 +93,7 @@ def _grant_scopes(grant: ClientGrant) -> frozenset[str]:
     return frozenset(str(item).strip().lower() for item in values if str(item).strip())
 
 
-async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str = CHATGPT_CLIENT_ID) -> ClientGrant:
+async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str) -> ClientGrant:
     row = await db.scalar(
         select(ClientGrant).where(
             ClientGrant.id == grant_id,
@@ -109,7 +111,8 @@ async def _active_grant(db: AsyncSession, grant_id: str, *, client_id: str = CHA
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_metadata(request: Request):
     base = _public_base_url(request)
-    auth_methods = ["client_secret_post"] if _client_secret() else ["none"]
+    auth_methods = sorted({("client_secret_post" if (v.secret_env or v.client_secret) else "none")
+                           for v in registered_clients().values()})
     return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
@@ -149,14 +152,13 @@ async def authorize_chatgpt(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if response_type != "code" or client_id != CHATGPT_CLIENT_ID:
+    if response_type != "code" or get_registered_client(client_id) is None:
         raise HTTPException(400, "Unsupported OAuth request")
     if resource != _resource(request):
         raise HTTPException(400, "OAuth resource does not match the Operly MCP server")
     if code_challenge_method != "S256":
         raise HTTPException(400, "PKCE S256 is required")
-    allowed_redirects = _allowed_redirect_uris()
-    if not allowed_redirects or redirect_uri not in allowed_redirects:
+    if not redirect_allowed(client_id, redirect_uri):
         raise HTTPException(400, "OAuth redirect URI is not allowed")
     if auth.role != "owner":
         raise HTTPException(403, "Only the workspace owner can authorize an external AI client")
@@ -166,14 +168,14 @@ async def authorize_chatgpt(
         select(ClientGrant).where(
             ClientGrant.principal_id == principal.id,
             ClientGrant.tenant_id == auth.tenant.id,
-            ClientGrant.client_id == CHATGPT_CLIENT_ID,
+            ClientGrant.client_id == client_id,
             ClientGrant.status == "active",
         )
     )
     if grant is None:
-        raise HTTPException(403, "Enable ChatGPT MCP access in Operly before connecting it")
+        raise HTTPException(403, "Enable this MCP client for the Workspace before connecting it")
     if grant.expires_at is not None and grant.expires_at <= datetime.utcnow():
-        raise HTTPException(403, "The ChatGPT MCP grant has expired")
+        raise HTTPException(403, "The MCP client grant has expired")
 
     granted_scopes = _grant_scopes(grant)
     requested = frozenset(item.strip().lower() for item in scope.split() if item and item != "offline_access")
@@ -190,7 +192,7 @@ async def authorize_chatgpt(
         grant_id=grant.id,
         principal_id=principal.id,
         tenant_id=auth.tenant.id,
-        client_id=CHATGPT_CLIENT_ID,
+        client_id=client_id,
         redirect_uri=redirect_uri,
         scopes=effective_scopes,
         code_challenge=code_challenge,
@@ -287,7 +289,7 @@ async def _request_context(
     except McpOAuthError as error:
         raise HTTPException(401, str(error), headers=challenge) from error
     client_id = str(payload.get("client_id") or "")
-    if client_id != CHATGPT_CLIENT_ID or payload.get("resource") != _resource(request):
+    if get_registered_client(client_id) is None or payload.get("resource") != _resource(request):
         raise HTTPException(401, "Invalid MCP client or token audience", headers=challenge)
 
     try:
@@ -333,17 +335,17 @@ def _rpc_error(request_id, code: int, message: str, data: dict | None = None):
     return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
-def _mcp_response(payload: dict, *, status_code: int = 200, cache: bool = False) -> JSONResponse:
+def _mcp_response(payload: dict, *, status_code: int = 200, cache: bool = False, negotiated_version: str | None = None) -> JSONResponse:
     headers = {
-        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        "MCP-Protocol-Version": negotiated_version or MCP_PROTOCOL_VERSION,
         "Cache-Control": "private, max-age=5" if cache else "no-store",
     }
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
-def _server_discovery() -> dict:
+def _server_discovery(*, negotiated_version: str = MCP_PROTOCOL_VERSION) -> dict:
     return {
-        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "protocolVersion": negotiated_version,
         "serverInfo": {"name": "operly", "version": "0.7.0-mcp"},
         "capabilities": {"tools": {"listChanged": False}},
         "instructions": (
@@ -378,9 +380,20 @@ async def mcp_endpoint(
     context = await _request_context(request, authorization, db)
 
     if method == "notifications/initialized":
-        return Response(status_code=204, headers={"MCP-Protocol-Version": MCP_PROTOCOL_VERSION})
+        return Response(status_code=204, headers={
+            "MCP-Protocol-Version": protocol_version or MCP_PROTOCOL_VERSION
+        })
     if method in {"initialize", "server/discover"}:
-        return _mcp_response(_rpc_result(request_id, _server_discovery()))
+        params = payload.get("params") or {}
+        offered = (params.get("protocolVersion") if isinstance(params, dict) else None)
+        # Match an SDK-supported client protocol when possible; returning a
+        # newer unsupported version causes conforming clients to disconnect.
+        selected = (offered if offered in SUPPORTED_PROTOCOL_VERSIONS
+                    else MCP_PROTOCOL_VERSION)
+        return _mcp_response(
+            _rpc_result(request_id, _server_discovery(negotiated_version=selected)),
+            negotiated_version=selected,
+        )
     if method == "ping":
         return _mcp_response(_rpc_result(request_id, {}))
 
