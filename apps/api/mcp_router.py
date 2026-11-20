@@ -35,7 +35,7 @@ gateway = McpGateway()
 CHATGPT_CLIENT_ID = "chatgpt"
 MCP_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_MCP_PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, LEGACY_MCP_PROTOCOL_VERSION}
+SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-11-25", LEGACY_MCP_PROTOCOL_VERSION}
 
 
 def _public_base_url(request: Request) -> str:
@@ -335,17 +335,17 @@ def _rpc_error(request_id, code: int, message: str, data: dict | None = None):
     return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
-def _mcp_response(payload: dict, *, status_code: int = 200, cache: bool = False) -> JSONResponse:
+def _mcp_response(payload: dict, *, status_code: int = 200, cache: bool = False, negotiated_version: str | None = None) -> JSONResponse:
     headers = {
-        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        "MCP-Protocol-Version": negotiated_version or MCP_PROTOCOL_VERSION,
         "Cache-Control": "private, max-age=5" if cache else "no-store",
     }
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
-def _server_discovery() -> dict:
+def _server_discovery(*, negotiated_version: str = MCP_PROTOCOL_VERSION) -> dict:
     return {
-        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "protocolVersion": negotiated_version,
         "serverInfo": {"name": "operly", "version": "0.7.0-mcp"},
         "capabilities": {"tools": {"listChanged": False}},
         "instructions": (
@@ -380,9 +380,20 @@ async def mcp_endpoint(
     context = await _request_context(request, authorization, db)
 
     if method == "notifications/initialized":
-        return Response(status_code=204, headers={"MCP-Protocol-Version": MCP_PROTOCOL_VERSION})
+        return Response(status_code=204, headers={
+            "MCP-Protocol-Version": protocol_version or MCP_PROTOCOL_VERSION
+        })
     if method in {"initialize", "server/discover"}:
-        return _mcp_response(_rpc_result(request_id, _server_discovery()))
+        params = payload.get("params") or {}
+        offered = (params.get("protocolVersion") if isinstance(params, dict) else None)
+        # Match an SDK-supported client protocol when possible; returning a
+        # newer unsupported version causes conforming clients to disconnect.
+        selected = (offered if offered in SUPPORTED_PROTOCOL_VERSIONS
+                    else MCP_PROTOCOL_VERSION)
+        return _mcp_response(
+            _rpc_result(request_id, _server_discovery(negotiated_version=selected)),
+            negotiated_version=selected,
+        )
     if method == "ping":
         return _mcp_response(_rpc_result(request_id, {}))
 
