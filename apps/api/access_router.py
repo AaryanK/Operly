@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import AuthContext, get_auth_context, get_db
 from packages.database.principal_models import ClientGrant, WorkspaceToolExposure
+from packages.mcp.clients import external_client_catalog, get_registered_client
 from packages.mcp.gateway import McpGateway, McpRequestContext
 from packages.security.permissions import resolve_workspace_permissions
 from packages.security.principals import PrincipalService
@@ -82,7 +83,7 @@ def _scopes(row: ClientGrant) -> list[str]:
 @router.get("/external-clients")
 async def external_clients(auth: AuthContext = Depends(get_auth_context)):
     del auth
-    return list(SUPPORTED_EXTERNAL_CLIENTS.values())
+    return external_client_catalog()
 
 
 @router.get("/me")
@@ -159,7 +160,7 @@ async def create_client_grant(
 ):
     _require_owner(auth)
     client_id = payload.client_id.strip().lower()
-    if client_id not in SUPPORTED_EXTERNAL_CLIENTS:
+    if (client := get_registered_client(client_id)) is None or not client.redirect_uris:
         raise HTTPException(400, "Unsupported external AI client")
     if not payload.workspace_only:
         raise HTTPException(400, "External AI grants must be scoped to the active workspace")
