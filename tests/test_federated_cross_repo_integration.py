@@ -273,20 +273,20 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
                     "SELECT count(*) FROM identity_browser_sessions WHERE revoked_at IS NULL"
                 ) == 1
 
+            # Chromium uses an independent Operly session; close previous
+            # SQLite reader before the browser callback creates a new one.
+            await _chromium_browser_acceptance(
+                operly_app=operly_app, dz_app=dz_app,
+                email=email, password=password,
+                account_id=account_id, tenant_id=tenant_id,
+            )
+
             async with session_factory() as db:
                 sessions = (await db.scalars(select(AuthSession))).all()
-                assert len(sessions) == 1
-                assert sessions[0].user_id == account_id
-                assert sessions[0].tenant_id == tenant_id
+                assert len(sessions) == 2
+                assert all(s.user_id == account_id for s in sessions)
+                assert all(s.tenant_id == tenant_id for s in sessions)
 
-                # Exercise the actual browser UI, JavaScript, cookies and
-                # cross-origin redirects against the same real issuer/client
-                # handlers, not test-only stand-ins for authentication.
-                await _chromium_browser_acceptance(
-                    operly_app=operly_app, dz_app=dz_app,
-                    email=email, password=password,
-                    account_id=account_id, tenant_id=tenant_id,
-                )
 
                 # Live membership is rechecked even with a valid browser session.
                 member = await db.scalar(select(TenantMember))
@@ -377,6 +377,10 @@ async def _chromium_browser_acceptance(*, operly_app, dz_app, email, password,
             await page.goto(
                 OPERLY + "/api/auth/dragonzpyder/start",
                 wait_until="domcontentloaded",
+            )
+            assert await page.locator("#signin").count() == 1, (
+                "Browser did not reach issuer UI: "
+                + page.url + " " + (await page.content())[:1200]
             )
             await expect(page.locator("#signin")).to_be_visible()
             await expect(page.locator("#consent")).to_be_hidden()
