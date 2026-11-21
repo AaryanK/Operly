@@ -168,6 +168,25 @@ def _artifact_context(items: list[dict]) -> ContextItem | None:
     )
 
 
+def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
+    """Use DragonZpyder only for explicit signed-in Personal canary users.
+
+    A global owner flag alone must not redirect every Personal account.
+    Workspace contexts are never routed through a Personal delegation.
+    """
+    allowed_users = {
+        value.strip()
+        for value in os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
+        if value.strip()
+    }
+    return (
+        context.is_personal
+        and bool(context.user_id)
+        and context.user_id in allowed_users
+        and os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"
+    )
+
+
 async def _run(
     db: AsyncSession,
     *,
@@ -203,8 +222,7 @@ async def _run(
 
     run_id = f"chat-{uuid4()}"
     try:
-        if (context.is_personal and
-                os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"):
+        if _use_dragonzpyder_personal_harness(context):
             if personal_session_id is None:
                 raise DragonZpyderPersonalUnavailable("Authenticated Personal session required")
             if extra_context:
