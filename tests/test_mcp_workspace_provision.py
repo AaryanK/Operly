@@ -174,6 +174,18 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises((PermissionError, LookupError, RuntimeError)):
                 await self.gateway.list_tools(db, forged)
 
+        # A new SQLAlchemy session is a separate readback after the Kernel
+        # committed both POST-like mutations; this is not model self-report.
+        async with SessionFactory() as fresh_db:
+            persisted = await self.gateway.call_tool(
+                fresh_db, workspace_scope,
+                tool_id="workspace_os.crm.contacts.list", arguments={"limit": 100},
+            )
+            self.assertTrue(persisted["ok"], persisted)
+            self.assertIn(contact_id, {
+                row["id"] for row in persisted["result"]["items"]
+            })
+
     async def test_feature_disabled_does_not_expose_creation(self):
         with patch.dict(os.environ, {"OPERLY_PERSONAL_MCP_WORKSPACE_CREATE_ENABLED": "0"}):
             async with SessionFactory() as db:
