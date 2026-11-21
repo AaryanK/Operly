@@ -38,3 +38,21 @@ def test_personal_harness_receipts_fail_closed_on_missing_or_invalid_counts():
     ).as_dict()
     assert serialized["execution_receipts"] == got
     assert serialized["objective_verified"] is False
+
+
+def test_harness_http_error_codes_are_strictly_allowlisted():
+    import httpx
+    from packages.agent_runtime.dragonzpyder_personal import classify_harness_http_error
+    assert classify_harness_http_error(httpx.Response(503, json={
+        "detail": {"code": "INFERENCE_LIMIT_REACHED", "message": "untrusted"}})) == "INFERENCE_LIMIT_REACHED"
+    assert classify_harness_http_error(httpx.Response(503, json={
+        "detail": {"code": "INFERENCE_PROVIDER_UNAVAILABLE"}})) == "INFERENCE_PROVIDER_UNAVAILABLE"
+    for status, body in [
+        (503, {"detail": {"code": "MY_FAKE_CODE", "message": "secret"}}),
+        (401, {"detail": {"code": "INFERENCE_LIMIT_REACHED"}}),
+        (503, {"detail": {"code": ["INFERENCE_LIMIT_REACHED"]}}),
+        (503, {"detail": {"code": "INFERENCE_LIMIT_REACHED", "message": "x" * 5000}}),
+    ]:
+        assert classify_harness_http_error(httpx.Response(status, json=body)) == (
+            "DRAGONZPYDER_PERSONAL_UNAVAILABLE"
+        )
