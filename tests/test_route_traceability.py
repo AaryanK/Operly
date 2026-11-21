@@ -7,6 +7,7 @@ from packages.kernel.route_traceability import (
     EXPECTED_BASE_ROUTE_COUNT,
     EXPECTED_BASE_ROUTE_DIGEST,
     EXPECTED_FIRST_PARTY_ROUTE,
+    EXPECTED_APPROVED_WORKSPACE_ROUTE,
     EXPECTED_ROUTE_COUNT,
     classify_route,
     validate_route_traceability,
@@ -36,6 +37,8 @@ class RouteTraceabilityTests(unittest.TestCase):
             if row["source"] not in isolated_sources
             and (row["operation"], row["endpoint"], row["source"])
             != EXPECTED_FIRST_PARTY_ROUTE
+            and (row["operation"], row["endpoint"], row["source"])
+            != EXPECTED_APPROVED_WORKSPACE_ROUTE
         ]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
@@ -52,6 +55,18 @@ class RouteTraceabilityTests(unittest.TestCase):
         self.assertFalse(classified.kernel_governed)
         self.assertFalse(classified.semantic_event_source)
         self.assertFalse(classified.workflow_trigger_identity)
+
+    def test_reviewed_workspace_approval_continuation_is_exact_kernel_transport(self):
+        matched = [
+            row for row in self.rows
+            if (row["operation"], row["endpoint"], row["source"])
+            == EXPECTED_APPROVED_WORKSPACE_ROUTE
+        ]
+        self.assertEqual(len(matched), 1)
+        classification = classify_route(matched[0])
+        self.assertEqual(classification.category, "kernel_governed")
+        self.assertTrue(classification.kernel_governed)
+        self.assertFalse(classification.workflow_trigger_identity)
 
     def test_runtime_1_ingress_is_exact_and_not_mislabeled_as_direct_kernel_transport(self):
         agent_sources = {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
