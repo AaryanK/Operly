@@ -14,10 +14,12 @@ EXPECTED_BASE_ROUTE_COUNT = 154
 EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"  # pragma: allowlist secret
 EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
 EXPECTED_ADMIN_ROUTE_COUNT = 7
+EXPECTED_DRAGONZPYDER_BROKER_ROUTE_COUNT = 2
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
     + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
     + EXPECTED_ADMIN_ROUTE_COUNT
+    + EXPECTED_DRAGONZPYDER_BROKER_ROUTE_COUNT
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -27,6 +29,20 @@ _AGENT_RUNTIME_SOURCES = frozenset(
     {"personal_agent_runtime_router", "workspace_agent_runtime_router"}
 )
 _ADMIN_SOURCES = frozenset({"admin_router"})
+_DRAGONZPYDER_BROKER_SOURCES = frozenset({"dragonzpyder_broker_router"})
+_EXPECTED_DRAGONZPYDER_BROKER_ROUTES = frozenset({
+    (
+        "POST /api/internal/agent-tools/search",
+        "apps.api.dragonzpyder_broker_router:search_delegated_tools",
+        "dragonzpyder_broker_router",
+    ),
+    (
+        "POST /api/internal/agent-tools/execute",
+        "apps.api.dragonzpyder_broker_router:execute_delegated_tool",
+        "dragonzpyder_broker_router",
+    ),
+})
+
 _EXPECTED_AGENT_RUNTIME_ROUTES = frozenset(
     {
         (
@@ -193,6 +209,24 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
             ),
         )
 
+    if source in _DRAGONZPYDER_BROKER_SOURCES:
+        # Separate exact, pinned service-to-service surface. The execute
+        # endpoint ultimately invokes Kernel, while search merely projects
+        # a lease-filtered, currently permitted tool inventory.
+        if method == "POST" and path == "/api/internal/agent-tools/execute":
+            return RouteTraceability(
+                category="kernel_governed", kernel_governed=True,
+                semantic_event_source=False, workflow_trigger_identity=False,
+                reason="Authenticated signed-lease tool call reauthorized through Kernel.",
+            )
+        if method == "POST" and path == "/api/internal/agent-tools/search":
+            return RouteTraceability(
+                category="read_projection", kernel_governed=False,
+                semantic_event_source=False, workflow_trigger_identity=False,
+                reason="Signed-lease permission-filtered capability inventory.",
+            )
+        return None
+
     if source in _KERNEL_SOURCES:
         return RouteTraceability(
             category="kernel_governed",
@@ -313,10 +347,11 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
 
     agent_rows = [row for row in rows if str(row.get("source") or "") in _AGENT_RUNTIME_SOURCES]
     admin_rows = [row for row in rows if str(row.get("source") or "") in _ADMIN_SOURCES]
+    broker_rows = [row for row in rows if str(row.get("source") or "") in _DRAGONZPYDER_BROKER_SOURCES]
     base_rows = [
         row
         for row in rows
-        if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES)
+        if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES | _DRAGONZPYDER_BROKER_SOURCES)
     ]
     if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(
@@ -326,6 +361,21 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
     if base_digest != EXPECTED_BASE_ROUTE_DIGEST:
         errors.append(
             f"base route fingerprint changed: expected {EXPECTED_BASE_ROUTE_DIGEST}, found {base_digest}; review and repin"
+        )
+
+    actual_broker_routes = frozenset(
+        (
+            str(row.get("operation") or ""),
+            str(row.get("endpoint") or ""),
+            str(row.get("source") or ""),
+        )
+        for row in broker_rows
+    )
+    if actual_broker_routes != _EXPECTED_DRAGONZPYDER_BROKER_ROUTES:
+        errors.append(
+            "DragonZpyder broker route surface changed; review and repin "
+            f"missing={sorted(_EXPECTED_DRAGONZPYDER_BROKER_ROUTES - actual_broker_routes)!r} "
+            f"extra={sorted(actual_broker_routes - _EXPECTED_DRAGONZPYDER_BROKER_ROUTES)!r}"
         )
 
     actual_agent_routes = frozenset(
@@ -394,6 +444,7 @@ __all__ = [
     "EXPECTED_BASE_ROUTE_DIGEST",
     "EXPECTED_AGENT_RUNTIME_ROUTE_COUNT",
     "EXPECTED_ADMIN_ROUTE_COUNT",
+    "EXPECTED_DRAGONZPYDER_BROKER_ROUTE_COUNT",
     "EXPECTED_ROUTE_COUNT",
     "EXPECTED_ROUTE_DIGEST",
     "RouteTraceability",

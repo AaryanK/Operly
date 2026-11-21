@@ -29,6 +29,7 @@ class RouteTraceabilityTests(unittest.TestCase):
             "personal_agent_runtime_router",
             "workspace_agent_runtime_router",
             "admin_router",
+            "dragonzpyder_broker_router",
         }
         base_rows = [row for row in self.rows if row["source"] not in isolated_sources]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
@@ -46,6 +47,18 @@ class RouteTraceabilityTests(unittest.TestCase):
                 self.assertFalse(classification.kernel_governed)
                 self.assertFalse(classification.semantic_event_source)
                 self.assertFalse(classification.workflow_trigger_identity)
+
+    def test_delegated_agent_broker_has_exact_scope_and_classification(self):
+        broker = [row for row in self.rows if row["source"] == "dragonzpyder_broker_router"]
+        self.assertEqual(
+            {row["operation"] for row in broker},
+            {"POST /api/internal/agent-tools/search",
+             "POST /api/internal/agent-tools/execute"},
+        )
+        by_operation = {row["operation"]: classify_route(row) for row in broker}
+        self.assertEqual(by_operation["POST /api/internal/agent-tools/search"].category, "read_projection")
+        self.assertEqual(by_operation["POST /api/internal/agent-tools/execute"].category, "kernel_governed")
+        self.assertFalse(any(item.workflow_trigger_identity for item in by_operation.values()))
 
     def test_restored_platform_admin_surface_is_exact_control_plane(self):
         rows = [row for row in self.rows if row["source"] == "admin_router"]
