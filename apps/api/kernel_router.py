@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import AccountAuthContext, get_account_auth_context, get_db
 from packages.database.kernel_models import KernelApproval, KernelEventRecord, KernelRun, KernelRunStep
 from packages.kernel import RuntimeExecutionError, build_kernel_runtime
-from packages.kernel.approvals import ApprovalError, approval_json, decide_approval
+from packages.kernel.approvals import ApprovalError, approval_for_context, approval_json, decide_approval
 from packages.kernel.contracts import RuntimeRequest
+from packages.personal_modules.runtime import build_personal_runtime
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.security.execution_context import ExecutionContext, ScopeKind
 from packages.security.surfaces import SurfaceKind
@@ -206,6 +207,66 @@ async def personal_approval_decision(
     )
     await db.commit()
     return approval_json(row, include_arguments=True)
+
+
+@router.post("/personal/approvals/{approval_id}/execute")
+async def execute_approved_personal_workspace_provision(
+    approval_id: str,
+    account: AccountAuthContext = Depends(get_account_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """Execute a frozen, already-human-approved MCP provisioning request.
+
+    This is invoked by DragonZpyder's same-origin browser after the owner
+    approves an MCP-generated Kernel request. No client-supplied arguments,
+    user IDs, request IDs, goal or Workspace authority are accepted here.
+    Idempotency still belongs to the Kernel. Only workspace.create is enabled.
+    """
+    from packages.mcp.first_party import enabled as personal_mcp_enabled
+    import os
+
+    if (not personal_mcp_enabled()
+            or os.getenv("OPERLY_PERSONAL_MCP_WORKSPACE_CREATE_ENABLED") != "1"):
+        raise HTTPException(403, "Personal MCP workspace provisioning is unavailable")
+    context = await _personal_context(db, account)
+    try:
+        row = await approval_for_context(
+            db, context=context, approval_id=approval_id, lock=False,
+        )
+    except ApprovalError as error:
+        raise HTTPException(404, "Personal approval unavailable") from error
+    if (row.capability_id != "workspace.create" or row.status != "approved"
+            or row.requested_by_user_id != account.user.id
+            or row.requested_by_principal_id != context.principal_id
+            or not row.request_id or not row.conversation_id):
+        raise HTTPException(409, "Workspace approval is not executable")
+    try:
+        arguments = json.loads(row.arguments_json)
+    except (ValueError, TypeError):
+        raise HTTPException(409, "Workspace approval arguments are invalid") from None
+    if not isinstance(arguments, dict):
+        raise HTTPException(409, "Workspace approval arguments are invalid")
+    # Reconstruct the same user/conversation context as the originating MCP
+    # invocation, binding ownership from the authenticated browser session.
+    execution_context = await _personal_context(db, account, row.conversation_id)
+    runtime = build_personal_runtime()
+    try:
+        outcome = await runtime.execute(
+            db, context=execution_context,
+            request=RuntimeRequest(
+                capability_id=row.capability_id,
+                goal="",
+                arguments=arguments,
+                conversation_id=row.conversation_id,
+                request_id=row.request_id,
+                approval_id=row.id,
+            ),
+        )
+    except RuntimeExecutionError as error:
+        raise HTTPException(error.status_code, detail={
+            "code": error.code, "message": str(error), "run_id": error.run_id,
+        }) from error
+    return outcome.as_dict()
 
 
 @router.get("/personal/runs/{run_id}")
