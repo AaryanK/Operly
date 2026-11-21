@@ -13,6 +13,18 @@ depends_on = None
 
 
 def upgrade():
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table("federated_identity_maps"):
+        columns = {c["name"] for c in inspector.get_columns("federated_identity_maps")}
+        required = {"issuer", "subject", "operly_user_id", "status", "created_at", "activated_at"}
+        if not required.issubset(columns):
+            raise RuntimeError("Existing federation table has incompatible columns")
+        primary = set(inspector.get_pk_constraint("federated_identity_maps").get("constrained_columns") or [])
+        if primary != {"issuer", "subject"}:
+            raise RuntimeError("Existing federation primary key is incompatible")
+        # Compatible table may have been created by Base.metadata.create_all
+        # during an older SQLite/dev bootstrap. Do not drop or duplicate it.
+        return
     op.create_table(
         "federated_identity_maps",
         sa.Column("issuer", sa.String(length=255), nullable=False),
