@@ -52,6 +52,34 @@ class PersonalAgentResult:
         }
 
 
+def sanitize_execution_receipts(response: dict) -> dict:
+    """Allow only finite tool-name/count evidence from signed first-party calls."""
+    # The harness is a trusted first-party backend, but its output is still
+    # validated and capped before it reaches the browser. No tool arguments,
+    # provider payloads, content or private paths are included.
+    raw_receipts = response.get("execution_receipts")
+    receipts = raw_receipts if isinstance(raw_receipts, dict) else {}
+    raw_names = receipts.get("tool_names")
+    receipt_names = []
+    if isinstance(raw_names, list):
+        receipt_names = [
+            name for name in raw_names[:40]
+            if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,79}", name)
+        ]
+    def bounded_count(key: str, ceiling: int) -> int:
+        value = receipts.get(key, 0)
+        return min(value, ceiling) if type(value) is int and value >= 0 else 0
+
+    safe_receipts = {
+        "tool_names": receipt_names,
+        "failed_tool_count": bounded_count("failed_tool_count", 100),
+        "artifact_readback_count": bounded_count("artifact_readback_count", 30),
+        "status": response["status"],
+        "objective_verified": False,
+    }
+    return safe_receipts
+
+
 def _endpoint() -> str:
     raw = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_RUN_URL", "").strip()
     parsed = urlsplit(raw)
@@ -112,29 +140,7 @@ async def run_personal_harness(
             response.get("status") not in ("completed", "incomplete") or
             not isinstance(response.get("answer"), str)):
         raise DragonZpyderPersonalUnavailable("Invalid Personal harness response")
-    # The harness is a trusted first-party backend, but its output is still
-    # validated and capped before it reaches the browser. No tool arguments,
-    # provider payloads, content or private paths are included.
-    raw_receipts = response.get("execution_receipts")
-    receipts = raw_receipts if isinstance(raw_receipts, dict) else {}
-    raw_names = receipts.get("tool_names")
-    receipt_names = []
-    if isinstance(raw_names, list):
-        receipt_names = [
-            name for name in raw_names[:40]
-            if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,79}", name)
-        ]
-    def bounded_count(key: str, ceiling: int) -> int:
-        value = receipts.get(key, 0)
-        return min(value, ceiling) if type(value) is int and value >= 0 else 0
-
-    safe_receipts = {
-        "tool_names": receipt_names,
-        "failed_tool_count": bounded_count("failed_tool_count", 100),
-        "artifact_readback_count": bounded_count("artifact_readback_count", 30),
-        "status": response["status"],
-        "objective_verified": False,
-    }
+    safe_receipts = sanitize_execution_receipts(response)
     names = response.get("successful_tools", [])
     if not isinstance(names, list):
         names = []
