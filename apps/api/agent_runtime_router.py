@@ -568,14 +568,17 @@ async def _messages(db: AsyncSession, *, context: ExecutionContext, conversation
         requested_id=conversation_id,
         first_message="",
     )
-    rows = (
+    # Fetch the newest bounded window, then restore chronological order.
+    # The previous ascending query returned the *oldest* 300 messages,
+    # causing active conversations to appear to lose their latest turns.
+    rows = list(reversed((
         await db.scalars(
             select(AgentChatMessage)
             .where(AgentChatMessage.conversation_id == conversation.id)
-            .order_by(AgentChatMessage.created_at)
+            .order_by(desc(AgentChatMessage.created_at), desc(AgentChatMessage.id))
             .limit(300)
         )
-    ).all()
+    ).all()))
     return [
         {
             "id": row.id,
