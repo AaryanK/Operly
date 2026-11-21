@@ -9,6 +9,7 @@ from packages.kernel.route_traceability import (
     EXPECTED_FIRST_PARTY_ROUTE,
     EXPECTED_APPROVED_WORKSPACE_ROUTE,
     EXPECTED_ROUTE_COUNT,
+    EXPECTED_FEDERATED_ROUTES,
     classify_route,
     validate_route_traceability,
 )
@@ -35,6 +36,7 @@ class RouteTraceabilityTests(unittest.TestCase):
         base_rows = [
             row for row in self.rows
             if row["source"] not in isolated_sources
+            and (row["operation"], row["endpoint"], row["source"]) not in EXPECTED_FEDERATED_ROUTES
             and (row["operation"], row["endpoint"], row["source"])
             != EXPECTED_FIRST_PARTY_ROUTE
             and (row["operation"], row["endpoint"], row["source"])
@@ -42,6 +44,19 @@ class RouteTraceabilityTests(unittest.TestCase):
         ]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
+
+    def test_new_federated_routes_are_pinned_as_non_kernel_auth_transports(self):
+        rows = [
+            row for row in self.rows
+            if (row["operation"], row["endpoint"], row["source"]) in EXPECTED_FEDERATED_ROUTES
+        ]
+        self.assertEqual(len(rows), len(EXPECTED_FEDERATED_ROUTES))
+        for row in rows:
+            classified = classify_route(row)
+            self.assertIsNotNone(classified)
+            self.assertEqual(classified.category, "auth_transport")
+            self.assertFalse(classified.kernel_governed)
+            self.assertFalse(classified.workflow_trigger_identity)
 
     def test_first_party_personal_delegation_is_exact_and_not_a_workflow_trigger(self):
         matched = [

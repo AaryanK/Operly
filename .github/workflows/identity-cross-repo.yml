@@ -1,0 +1,59 @@
+name: Cross-Repository OIDC Acceptance
+
+on:
+  pull_request:
+    paths:
+      - "tests/test_federated_cross_repo_integration.py"
+      - ".github/workflows/identity-cross-repo.yml"
+      - "apps/api/federated_login.py"
+      - "packages/database/federated_*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-repo-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: identity_test
+          POSTGRES_PASSWORD: disposable_ci_only # pragma: allowlist secret -- disposable CI DB only
+          POSTGRES_DB: identity_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U identity_test -d identity_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DRAGONZPYDER_IDENTITY_TEST_DSN: postgresql://identity_test:disposable_ci_only@localhost:5432/identity_test # pragma: allowlist secret -- disposable localhost DB only
+      DRAGONZPYDER_IDENTITY_API_PATH: _cross_repo_dragonzpyder/api
+    steps:
+      - name: Checkout Operly PR
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Checkout reviewed DragonZpyder identity phase
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: AaryanK/DragonZpyder
+          ref: d32ca66027a8f791a5a9f2076ad37c183aacc1fe # pragma: allowlist secret -- public immutable source commit
+          path: _cross_repo_dragonzpyder
+          persist-credentials: false
+      - name: Use Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Install locked identity test dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install pytest pytest-asyncio "playwright==1.56.0"
+          python -m pip check
+      - name: Install Chromium for real-browser UI test
+        run: python -m playwright install --with-deps chromium
+      - name: Execute real two-repository SSO acceptance
+        run: |
+          python -m pytest -q -s tests/test_federated_cross_repo_integration.py

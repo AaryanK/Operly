@@ -268,7 +268,7 @@ class AgentRuntimeStoreTests(unittest.IsolatedAsyncioTestCase):
                 await transition_run(db, run_id="state-run", to_status="running")
 
     def test_schema_head_advances_with_runtime_chat_history(self):
-        self.assertEqual(ALEMBIC_HEAD, "0059_admin_sse_events")
+        self.assertEqual(ALEMBIC_HEAD, "0061_federated_login_attempt")
 
 
 if __name__ == "__main__":
