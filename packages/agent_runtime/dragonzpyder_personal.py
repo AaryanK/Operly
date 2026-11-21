@@ -21,7 +21,10 @@ RUN_PATH = "/internal/agents/operly/personal/run"
 
 
 class DragonZpyderPersonalUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, *, public_code: str = "DRAGONZPYDER_PERSONAL_UNAVAILABLE"):
+        super().__init__(message)
+        # This code never originates from model prose or a user-supplied tool.
+        self.public_code = public_code
 
 
 @dataclass(frozen=True)
@@ -132,7 +135,18 @@ async def run_personal_harness(
                 },
             )
         if reply.status_code != 200 or len(reply.content) > 64_000:
-            raise DragonZpyderPersonalUnavailable("DragonZpyder rejected Personal execution")
+            code = "DRAGONZPYDER_PERSONAL_UNAVAILABLE"
+            if reply.status_code == 503 and len(reply.content) <= 2048:
+                try:
+                    detail = reply.json().get("detail", {})
+                    candidate = detail.get("code") if isinstance(detail, dict) else None
+                    if candidate in ("INFERENCE_LIMIT_REACHED", "INFERENCE_PROVIDER_UNAVAILABLE"):
+                        code = candidate
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            raise DragonZpyderPersonalUnavailable(
+                "DragonZpyder rejected Personal execution", public_code=code,
+            )
         response = reply.json()
     except (httpx.HTTPError, ValueError) as error:
         raise DragonZpyderPersonalUnavailable("DragonZpyder Personal harness unavailable") from error
