@@ -138,7 +138,7 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
             # record capability. Membership and permissions are re-resolved.
             workspace_scope = McpRequestContext(
                 tenant_id=workspace_id, user_id=self.user_id,
-                client_id="dragonzpyder",
+                client_id="dragonzpyder", grant_id="isolated-test-grant",
                 token_scopes=frozenset({"workspace:*"}),
                 conversation_id=self.conversation_id,
                 enforce_exposure=False, scope_kind=ScopeKind.WORKSPACE,
