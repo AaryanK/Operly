@@ -7,6 +7,11 @@ from packages.personal_modules.google_provider import (
     PersonalGoogleProvider,
     personal_google_capabilities,
 )
+from packages.personal_modules.workspace_provision import (
+    PROVIDER_ID as PERSONAL_WORKSPACE_PROVIDER_ID,
+    PersonalWorkspaceProvisionProvider,
+    personal_workspace_capabilities,
+)
 from packages.workflow import (
     PROVIDER_ID as WORKFLOW_PROVIDER_ID,
     WorkflowProvider,
@@ -34,8 +39,11 @@ def build_personal_runtime() -> PersonalRuntime:
     )
     for spec in personal_google_capabilities():
         runtime.registry.register(spec)
+    for spec in personal_workspace_capabilities():
+        runtime.registry.register(spec)
     for spec in personal_workflow_capabilities():
         runtime.registry.register(spec)
     runtime.providers.register(PERSONAL_GOOGLE_PROVIDER_ID, PersonalGoogleProvider())
     runtime.providers.register(WORKFLOW_PROVIDER_ID, WorkflowProvider())
+    runtime.providers.register(PERSONAL_WORKSPACE_PROVIDER_ID, PersonalWorkspaceProvisionProvider())
     return runtime
