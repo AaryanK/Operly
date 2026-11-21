@@ -50,8 +50,10 @@ jobs:
       - name: Install locked identity test dependencies
         run: |
           python -m pip install -r requirements.lock
-          python -m pip install pytest pytest-asyncio
+          python -m pip install pytest pytest-asyncio "playwright==1.56.0"
           python -m pip check
+      - name: Install Chromium for real-browser UI test
+        run: python -m playwright install --with-deps chromium
       - name: Execute real two-repository SSO acceptance
         run: |
           python -m pytest -q -s tests/test_federated_cross_repo_integration.py
