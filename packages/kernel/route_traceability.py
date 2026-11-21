@@ -29,6 +29,14 @@ EXPECTED_APPROVED_WORKSPACE_ROUTE = (
     "kernel_router",
 )
 EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT = 1
+# New opt-in auth transport: pinned separately, preserving the legacy base digest.
+EXPECTED_FEDERATED_ROUTES = frozenset({
+    ("GET /api/auth/dragonzpyder/start",
+     "apps.api.federated_login:start_federated_login", "federated_login_router"),
+    ("GET /api/auth/dragonzpyder/callback",
+     "apps.api.federated_login:complete_federated_login", "federated_login_router"),
+})
+EXPECTED_FEDERATED_ROUTE_COUNT = len(EXPECTED_FEDERATED_ROUTES)
 
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
@@ -36,6 +44,7 @@ EXPECTED_ROUTE_COUNT = (
     + EXPECTED_ADMIN_ROUTE_COUNT
     + EXPECTED_FIRST_PARTY_ROUTE_COUNT
     + EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT
+    + EXPECTED_FEDERATED_ROUTE_COUNT
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -258,6 +267,18 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
             reason="Verified webhook ingress creates a durable DigitalEvent mirrored to a scoped Kernel semantic event.",
         )
 
+    if source == "federated_login_router":
+        triple = (str(row.get("operation") or ""), str(row.get("endpoint") or ""), source)
+        if triple not in EXPECTED_FEDERATED_ROUTES:
+            return None
+        return RouteTraceability(
+            category="auth_transport",
+            kernel_governed=False,
+            semantic_event_source=False,
+            workflow_trigger_identity=False,
+            reason="Verified OIDC browser login and callback; never a Kernel tool or workflow trigger.",
+        )
+
     if source in _AUTH_SOURCES:
         return RouteTraceability(
             category="auth_transport",
@@ -360,10 +381,24 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
     ]
     if len(approved_workspace_rows) != EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT:
         errors.append("Reviewed Kernel workspace approval continuation missing or duplicated")
+    federated_rows = [
+        row for row in rows
+        if (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
+            str(row.get("source") or "")) in EXPECTED_FEDERATED_ROUTES
+    ]
+    actual_federated = frozenset(
+        (row["operation"], row["endpoint"], row["source"])
+        for row in rows if row.get("source") == "federated_login_router"
+    )
+    if actual_federated != EXPECTED_FEDERATED_ROUTES or len(federated_rows) != EXPECTED_FEDERATED_ROUTE_COUNT:
+        errors.append("Federated OIDC browser transport changed; review and repin exact endpoints")
+
     base_rows = [
         row
         for row in rows
         if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES)
+        and (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
+             str(row.get("source") or "")) not in EXPECTED_FEDERATED_ROUTES
         and (
             str(row.get("operation") or ""),
             str(row.get("endpoint") or ""),
@@ -452,6 +487,8 @@ __all__ = [
     "EXPECTED_ADMIN_ROUTE_COUNT",
     "EXPECTED_ROUTE_COUNT",
     "EXPECTED_ROUTE_DIGEST",
+    "EXPECTED_FEDERATED_ROUTES",
+    "EXPECTED_FEDERATED_ROUTE_COUNT",
     "RouteTraceability",
     "classify_route",
     "validate_route_traceability",
