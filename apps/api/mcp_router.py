@@ -517,6 +517,7 @@ async def first_party_personal_delegation(
             user_id=str(payload.get("user_id") or ""),
             conversation_id=str(payload.get("conversation_id") or ""),
             resource=_resource(request),
+            query=str(payload.get("query") or "")[:200],
         )
     except PersonalDelegationDenied as error:
         raise HTTPException(403, str(error)) from error
