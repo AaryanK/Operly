@@ -248,13 +248,21 @@ async def _run(
                     run_id=run_id,
                 )
     except (DragonZpyderPersonalUnavailable, PersonalDelegationDenied) as error:
-        runtime_trace("request.failed", run_id=run_id,
-                      error_code="dragonzpyder_personal_unavailable")
+        # Only the server-authenticated first-party harness may supply these
+        # two authored diagnosis categories. Never expose raw provider errors.
+        code = getattr(error, "public_code", "")
+        messages = {
+            "INFERENCE_LIMIT_REACHED": "Inference rate or test quota reached. Try again after the allowance resets.",
+            "INFERENCE_PROVIDER_UNAVAILABLE": "Model provider unavailable or returned an invalid response. Retry later.",
+        }
+        if code not in messages:
+            code = "DRAGONZPYDER_PERSONAL_UNAVAILABLE"
+        runtime_trace("request.failed", run_id=run_id, error_code=code.lower())
         await db.rollback()
         raise HTTPException(
             503, detail={
-                "code": "DRAGONZPYDER_PERSONAL_UNAVAILABLE",
-                "message": "The authorized Personal agent harness is unavailable.",
+                "code": code,
+                "message": messages.get(code, "The authorized Personal agent harness is unavailable."),
             },
         ) from error
     except AgentRuntimeDisabled as error:
