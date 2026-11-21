@@ -144,7 +144,7 @@ async def test_browser_callback_maps_existing_user_and_establishes_operly_sessio
         async def post(self, uri, *, data, headers):
             assert uri == ISSUER + "/identity/v1/token"
             assert data["grant_type"] == "authorization_code"
-            assert data["code"] == "synthetic-code"
+            assert data["code"] == "c" * 64
             assert data["client_id"] == CLIENT
             assert data["redirect_uri"] == OPERLY_URL + "/api/auth/dragonzpyder/callback"
             access, identity = signed_pair(key, state_nonce["nonce"])
@@ -165,7 +165,7 @@ async def test_browser_callback_maps_existing_user_and_establishes_operly_sessio
         state_nonce["nonce"] = data["nonce"][0]
         callback = client.get(
             "/api/auth/dragonzpyder/callback?state=" + data["state"][0]
-            + "&code=synthetic-code", follow_redirects=False
+            + "&code=" + "c" * 64, follow_redirects=False
         )
         assert callback.status_code == 303
         assert callback.headers["location"] == "/"
