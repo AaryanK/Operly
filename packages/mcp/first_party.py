@@ -84,6 +84,16 @@ async def issue_personal_delegation(
         query=str(query or "")[:200] or None,
         limit=MAX_TOOLS,
     )
+    # A user's ordinary conversation text is not a capability prerequisite.
+    # The search index may correctly find no match for "hi", while the user
+    # still has a valid signed-in session. Discover the same user's bounded
+    # authorized catalog without a text filter instead of rejecting chat.
+    # No new scopes are granted: READ_ONLY policy and session-bound signing
+    # below still apply to every returned tool.
+    if not specs and query:
+        specs = await runtime.available_capabilities(
+            db, context=context, query=None, limit=MAX_TOOLS,
+        )
     mutations = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_MCP_MUTATIONS_ENABLED") == "1"
     approved = frozenset(
         spec.id for spec in specs
