@@ -21,11 +21,21 @@ EXPECTED_FIRST_PARTY_ROUTE = (
     "mcp_router",
 )
 EXPECTED_FIRST_PARTY_ROUTE_COUNT = 1
+# Explicitly reviewed Kernel approval continuation; not a new public tool
+# transport and not a workflow trigger. Keep the earlier base fingerprint.
+EXPECTED_APPROVED_WORKSPACE_ROUTE = (
+    "POST /api/kernel/personal/approvals/{approval_id}/execute",
+    "apps.api.kernel_router:execute_approved_personal_workspace_provision",
+    "kernel_router",
+)
+EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT = 1
+
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
     + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
     + EXPECTED_ADMIN_ROUTE_COUNT
     + EXPECTED_FIRST_PARTY_ROUTE_COUNT
+    + EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -343,6 +353,13 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
     ]
     if len(first_party_rows) != EXPECTED_FIRST_PARTY_ROUTE_COUNT:
         errors.append("First-party Personal delegation route was removed or duplicated")
+    approved_workspace_rows = [
+        row for row in rows
+        if (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
+            str(row.get("source") or "")) == EXPECTED_APPROVED_WORKSPACE_ROUTE
+    ]
+    if len(approved_workspace_rows) != EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT:
+        errors.append("Reviewed Kernel workspace approval continuation missing or duplicated")
     base_rows = [
         row
         for row in rows
@@ -352,6 +369,8 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
             str(row.get("endpoint") or ""),
             str(row.get("source") or ""),
         ) != EXPECTED_FIRST_PARTY_ROUTE
+        and (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
+             str(row.get("source") or "")) != EXPECTED_APPROVED_WORKSPACE_ROUTE
     ]
     if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(
@@ -425,6 +444,8 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
 
 __all__ = [
     "ALLOWED_CATEGORIES",
+    "EXPECTED_APPROVED_WORKSPACE_ROUTE",
+    "EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT",
     "EXPECTED_BASE_ROUTE_COUNT",
     "EXPECTED_BASE_ROUTE_DIGEST",
     "EXPECTED_AGENT_RUNTIME_ROUTE_COUNT",
