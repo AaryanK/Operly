@@ -27,11 +27,11 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
         self.flags = patch.dict(os.environ, {
             "OPERLY_ENV": "development",
             "PUBLIC_BASE_URL": "https://operly-workspace-provision.test",
-            "OPERLY_MCP_TOKEN_SECRET": "ci-workspace-provision-fixture-" + "q" * 48,
+            "OPERLY_MCP_TOKEN_SECRET": "ci-workspace-provision-fixture-" + "q" * 48,  # pragma: allowlist secret
             "OPERLY_DRAGONZPYDER_PERSONAL_MCP_ENABLED": "1",
             "OPERLY_DRAGONZPYDER_PERSONAL_MCP_MUTATIONS_ENABLED": "0",
             "OPERLY_PERSONAL_MCP_WORKSPACE_CREATE_ENABLED": "1",
-            "OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET": "ci-provision-service-proof-" + "q" * 48,
+            "OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET": "ci-provision-service-proof-" + "q" * 48,  # pragma: allowlist secret
         })
         self.flags.start()
         self.addCleanup(self.flags.stop)
