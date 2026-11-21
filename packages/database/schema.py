@@ -1,10 +1,11 @@
 """Shared schema registration and URL helpers for runtime and Alembic."""
 
-ALEMBIC_HEAD = "0059_admin_sse_events"
+ALEMBIC_HEAD = "0060_federated_identity_map"
 
 
 def import_all_models() -> None:
     from packages.database import models  # noqa: F401
+    from packages.database import federated_identity_models  # noqa: F401
     from packages.database import operations_models  # noqa: F401
     from packages.database import agent_models  # noqa: F401
     from packages.database import agent_runtime_models  # noqa: F401
