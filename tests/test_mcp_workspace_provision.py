@@ -179,3 +179,28 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_first_party_mcp_idempotency_namespaces_are_conversation_bound():
+    from packages.kernel.idempotency import _ingress_namespace, IdempotencyConflict
+    from packages.security.execution_context import ExecutionContext
+    base = dict(
+        workspace_id=None, user_id="user-1", membership_id=None,
+        role="personal_owner", permissions=frozenset({"workspace:create"}),
+        channel="mcp", scope_kind=ScopeKind.PERSONAL,
+        metadata={"ingress": "operly_mcp", "mcp_client_id": "dragonzpyder_first_party",
+                  "mcp_grant_id": ""},
+    )
+    first = ExecutionContext(**base, conversation_id="conversation-a")
+    second = ExecutionContext(**base, conversation_id="conversation-b")
+    assert _ingress_namespace(first) != _ingress_namespace(second)
+    with unittest.TestCase().assertRaises(IdempotencyConflict):
+        _ingress_namespace(ExecutionContext(**base, conversation_id=None))
+    forged = ExecutionContext(
+        **{**base, "metadata": {"ingress": "operly_mcp",
+                                "mcp_client_id": "unapproved_external_client",
+                                "mcp_grant_id": ""}},
+        conversation_id="conversation-a",
+    )
+    with unittest.TestCase().assertRaises(IdempotencyConflict):
+        _ingress_namespace(forged)
