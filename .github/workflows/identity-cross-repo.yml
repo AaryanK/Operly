@@ -21,7 +21,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: identity_test
-          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_PASSWORD: disposable_ci_only # pragma: allowlist secret -- disposable CI DB only
           POSTGRES_DB: identity_test
         ports:
           - 5432:5432
@@ -31,7 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DRAGONZPYDER_IDENTITY_TEST_DSN: postgresql://identity_test:disposable_ci_only@localhost:5432/identity_test
+      DRAGONZPYDER_IDENTITY_TEST_DSN: postgresql://identity_test:disposable_ci_only@localhost:5432/identity_test # pragma: allowlist secret -- disposable localhost DB only
       DRAGONZPYDER_IDENTITY_API_PATH: _cross_repo_dragonzpyder/api
     steps:
       - name: Checkout Operly PR
@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: AaryanK/DragonZpyder
-          ref: 2bfc17d3d4af68da86c317555b6d6177b9da514e
+          ref: 2bfc17d3d4af68da86c317555b6d6177b9da514e # pragma: allowlist secret -- public immutable source commit
           path: _cross_repo_dragonzpyder
           persist-credentials: false
       - name: Use Python 3.12
