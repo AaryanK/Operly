@@ -41,7 +41,7 @@ class PersonalAgentResult:
             "error_code": self.error_code,
             "capability_calls": list(self.capability_calls),
             "approval_id": None,
-            "objective_verified": self.error_code is None,
+            "objective_verified": False,  # Tool completion is not objective verification.
         }
 
 
