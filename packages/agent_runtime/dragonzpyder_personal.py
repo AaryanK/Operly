@@ -21,7 +21,10 @@ RUN_PATH = "/internal/agents/operly/personal/run"
 
 
 class DragonZpyderPersonalUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, *, public_code: str = "DRAGONZPYDER_PERSONAL_UNAVAILABLE"):
+        super().__init__(message)
+        # This code never originates from model prose or a user-supplied tool.
+        self.public_code = public_code
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,21 @@ def sanitize_execution_receipts(response: dict) -> dict:
     return safe_receipts
 
 
+def classify_harness_http_error(reply: httpx.Response) -> str:
+    """Only two small, authored codes are eligible for browser propagation."""
+    code = "DRAGONZPYDER_PERSONAL_UNAVAILABLE"
+    if reply.status_code == 503 and len(reply.content) <= 2048:
+        try:
+            value = reply.json()
+            detail = value.get("detail", {}) if isinstance(value, dict) else {}
+            candidate = detail.get("code") if isinstance(detail, dict) else None
+            if candidate in ("INFERENCE_LIMIT_REACHED", "INFERENCE_PROVIDER_UNAVAILABLE"):
+                code = candidate
+        except (ValueError, AttributeError, TypeError):
+            pass
+    return code
+
+
 def _endpoint() -> str:
     raw = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_RUN_URL", "").strip()
     parsed = urlsplit(raw)
@@ -132,7 +150,10 @@ async def run_personal_harness(
                 },
             )
         if reply.status_code != 200 or len(reply.content) > 64_000:
-            raise DragonZpyderPersonalUnavailable("DragonZpyder rejected Personal execution")
+            code = classify_harness_http_error(reply)
+            raise DragonZpyderPersonalUnavailable(
+                "DragonZpyder rejected Personal execution", public_code=code,
+            )
         response = reply.json()
     except (httpx.HTTPError, ValueError) as error:
         raise DragonZpyderPersonalUnavailable("DragonZpyder Personal harness unavailable") from error
