@@ -124,6 +124,39 @@ class PersonalMcpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.status_code, 200)
         self.assertTrue(blocked.json()["result"]["isError"])
 
+    async def test_first_party_renewal_issuer_requires_backend_proof_and_live_matching_user(self):
+        payload = {
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "conversation_id": str(uuid4()),
+            "query": "list my tasks",
+        }
+        missing = await self.client.post(
+            "/api/internal/dragonzpyder/personal-mcp-delegation", json=payload,
+        )
+        self.assertEqual(missing.status_code, 403)
+        proof = {
+            "X-Operly-Agent-Service": os.environ[
+                "OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET"
+            ]
+        }
+        forged = await self.client.post(
+            "/api/internal/dragonzpyder/personal-mcp-delegation",
+            json={**payload, "user_id": self.other_id},
+            headers=proof,
+        )
+        self.assertEqual(forged.status_code, 403)
+        accepted = await self.client.post(
+            "/api/internal/dragonzpyder/personal-mcp-delegation",
+            json=payload, headers=proof,
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text[:350])
+        data = accepted.json()
+        self.assertEqual(data["scope_kind"], "personal")
+        self.assertIn("tasks.list", data["approved_tool_names"])
+        self.assertNotIn("tasks.create", data["approved_tool_names"])
+        self.assertNotIn("refresh_token", data)
+
     async def test_service_proof_required_even_with_valid_bearer(self):
         response = await self._mcp("tools/list", proof=False)
         self.assertEqual(response.status_code, 401)
