@@ -279,6 +279,15 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
                 assert sessions[0].user_id == account_id
                 assert sessions[0].tenant_id == tenant_id
 
+                # Exercise the actual browser UI, JavaScript, cookies and
+                # cross-origin redirects against the same real issuer/client
+                # handlers, not test-only stand-ins for authentication.
+                await _chromium_browser_acceptance(
+                    operly_app=operly_app, dz_app=dz_app,
+                    email=email, password=password,
+                    account_id=account_id, tenant_id=tenant_id,
+                )
+
                 # Live membership is rechecked even with a valid browser session.
                 member = await db.scalar(select(TenantMember))
                 await db.delete(member)
@@ -289,3 +298,107 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
         await operly_db.dispose()
         await admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await admin.close()
+
+
+async def _chromium_browser_acceptance(*, operly_app, dz_app, email, password,
+                                       account_id, tenant_id):
+    """Real Chromium page / JS / origin + cookie semantics; in-process HTTP IO.
+
+    Network interception prevents contacting the public DragonZpyder and Operly
+    domains. Only the HTTP transport is virtualized. Auth, DB, cryptography,
+    browser navigation, DOM, and JavaScript remain real.
+    """
+    from http.cookies import SimpleCookie
+    from playwright.async_api import async_playwright, expect
+
+    async with async_playwright() as play:
+        browser = await play.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(ignore_https_errors=True)
+
+            async def intercept(route):
+                req = route.request
+                parsed = urlsplit(req.url)
+                origin = parsed.scheme + "://" + parsed.netloc
+                if parsed.scheme != "https" or origin not in (ISSUER, OPERLY):
+                    await route.abort("blockedbyclient")
+                    return
+                target = dz_app if origin == ISSUER else operly_app
+                headers = dict(await req.all_headers())
+                for key in ("host", "content-length", "accept-encoding"):
+                    headers.pop(key, None)
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=target),
+                    base_url=origin,
+                    follow_redirects=False,
+                ) as proxy:
+                    response = await proxy.request(
+                        req.method, req.url, headers=headers,
+                        content=req.post_data_buffer,
+                    )
+                # Playwright's route.fulfill accepts a flat header mapping,
+                # not multiple Set-Cookie headers; materialize each cookie in
+                # the actual Chromium cookie store with its original origin
+                # and security flags. Never weaken the issuer's cookie values.
+                for item in response.headers.get_list("set-cookie"):
+                    jar = SimpleCookie()
+                    jar.load(item)
+                    additions = []
+                    for name, cookie in jar.items():
+                        if cookie["max-age"] == "0":
+                            await context.clear_cookies(name=name)
+                            continue
+                        same_site = cookie["samesite"].capitalize() if cookie["samesite"] else "Lax"
+                        additions.append({
+                            "name": name, "value": cookie.value,
+                            "url": origin, "secure": bool(cookie["secure"]),
+                            "httpOnly": bool(cookie["httponly"]),
+                            "sameSite": same_site,
+                        })
+                    if additions:
+                        await context.add_cookies(additions)
+                out_headers = {
+                    key: value for key, value in response.headers.items()
+                    if key.lower() not in (
+                        "set-cookie", "content-length", "content-encoding",
+                        "transfer-encoding",
+                    )
+                }
+                await route.fulfill(
+                    status=response.status_code,
+                    headers=out_headers,
+                    body=response.content,
+                )
+
+            await context.route("**/*", intercept)
+            page = await context.new_page()
+            # A real Chromium navigation starts at Operly and is redirected
+            # to the same-origin JavaScript login + consent page.
+            await page.goto(
+                OPERLY + "/api/auth/dragonzpyder/start",
+                wait_until="domcontentloaded",
+            )
+            await expect(page.locator("#signin")).to_be_visible()
+            await expect(page.locator("#consent")).to_be_hidden()
+            await page.get_by_label("Email").fill(email)
+            await page.get_by_label("Password").fill(password)
+            await page.get_by_role("button", name="Sign in").click()
+            await expect(page.locator("#consent")).to_be_visible(timeout=20000)
+            await expect(page.locator("#signin")).to_be_hidden()
+            await page.get_by_role("button", name="Continue").click()
+            await page.wait_for_url(OPERLY + "/", timeout=20000)
+            cookies = await context.cookies()
+            by_name = {cookie["name"]: cookie for cookie in cookies}
+            assert "operly_session" in by_name
+            assert by_name["operly_session"]["domain"] == "operly.dragonzpyder.xyz"
+            assert by_name["operly_session"]["httpOnly"] is True
+            assert by_name["operly_session"]["secure"] is True
+            assert by_name["__Host-dz_identity"]["domain"] == "api.dragonzpyder.xyz"
+            assert by_name["__Host-dz_identity"]["httpOnly"] is True
+            assert by_name["__Host-dz_identity"]["secure"] is True
+            await page.goto(OPERLY + "/test/private")
+            await expect(page.locator("body")).to_contain_text(account_id)
+            assert tenant_id in await page.locator("body").inner_text()
+            await context.close()
+        finally:
+            await browser.close()
