@@ -24,7 +24,7 @@ from packages.security.surfaces import SurfaceKind
 
 CLIENT_ID = "dragonzpyder_first_party"
 MAX_TOKEN_AGE_SECONDS = 240
-MAX_TOOLS = 40
+MAX_TOOLS = 20
 
 
 class PersonalDelegationDenied(PermissionError):
@@ -62,6 +62,7 @@ async def issue_personal_delegation(
     db: AsyncSession, *, session_id: str, user_id: str,
     conversation_id: str,
     resource: str,
+    query: str = "",
 ) -> tuple[str, frozenset[str]]:
     if not enabled():
         raise PersonalDelegationDenied("Personal MCP delegation is disabled")
@@ -79,7 +80,9 @@ async def issue_personal_delegation(
     )
     runtime = build_personal_runtime()
     specs = await runtime.available_capabilities(
-        db, context=context, limit=50,
+        db, context=context,
+        query=str(query or "")[:200] or None,
+        limit=MAX_TOOLS,
     )
     mutations = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_MCP_MUTATIONS_ENABLED") == "1"
     approved = frozenset(
