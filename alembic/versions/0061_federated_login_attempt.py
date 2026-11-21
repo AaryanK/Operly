@@ -13,6 +13,17 @@ depends_on = None
 
 
 def upgrade():
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table("federated_login_attempts"):
+        columns = {c["name"] for c in inspector.get_columns("federated_login_attempts")}
+        required = {"state_hash", "binding_hash", "verifier", "nonce",
+                    "expires_at", "consumed_at", "created_at"}
+        if not required.issubset(columns):
+            raise RuntimeError("Existing federation attempt table is incompatible")
+        primary = set(inspector.get_pk_constraint("federated_login_attempts").get("constrained_columns") or [])
+        if primary != {"state_hash"}:
+            raise RuntimeError("Existing federation attempt primary key is incompatible")
+        return
     op.create_table(
         "federated_login_attempts",
         sa.Column("state_hash", sa.String(length=64), primary_key=True),
