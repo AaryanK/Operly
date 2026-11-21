@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from apps.api.mcp_router import router
 from packages.database.db import SessionFactory, init_db
-from packages.database.models import AppUser, AuthSession
+from packages.database.models import AppUser, AuthSession, Task
 from packages.mcp.first_party import (
     PersonalDelegationDenied,
     issue_personal_delegation,
@@ -55,6 +55,15 @@ class PersonalMcpSessionTests(unittest.IsolatedAsyncioTestCase):
                 expires_at=datetime.utcnow() + timedelta(hours=4),
                 revoked_at=None,
             ))
+            self.own_task_id, self.other_task_id = str(uuid4()), str(uuid4())
+            db.add(Task(
+                id=self.own_task_id, owner_user_id=self.user_id,
+                tenant_id=None, title="Owner A private test task", status="open",
+            ))
+            db.add(Task(
+                id=self.other_task_id, owner_user_id=self.other_id,
+                tenant_id=None, title="Owner B private test task", status="open",
+            ))
             await db.commit()
             self.token, approved = await issue_personal_delegation(
                 db, user_id=self.user_id, session_id=self.session_id,
@@ -70,7 +79,7 @@ class PersonalMcpSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self.client.aclose)
 
-    async def _mcp(self, method, *, proof=True):
+    async def _mcp(self, method, *, proof=True, params=None):
         headers = {
             "Authorization": "Bearer " + self.token,
             "Accept": "application/json, text/event-stream",
@@ -80,9 +89,10 @@ class PersonalMcpSessionTests(unittest.IsolatedAsyncioTestCase):
             headers["X-Operly-Agent-Service"] = os.environ[
                 "OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET"
             ]
-        return await self.client.post("/mcp", json={
-            "jsonrpc": "2.0", "id": 17, "method": method,
-        }, headers=headers)
+        payload = {"jsonrpc": "2.0", "id": 17, "method": method}
+        if params is not None:
+            payload["params"] = params
+        return await self.client.post("/mcp", json=payload, headers=headers)
 
     async def test_session_grants_exact_personal_read_tools_not_workspace_or_writes(self):
         self.assertIn("tasks.list", self.approved)
@@ -94,6 +104,25 @@ class PersonalMcpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tasks.create", names)
         self.assertNotIn("workspace.describe", names)
         self.assertTrue(names.issubset(self.approved))
+
+    async def test_actual_kernel_tasks_list_only_returns_signed_in_users_items(self):
+        result = await self._mcp("tools/call", params={
+            "name": "tasks.list", "arguments": {"limit": 100},
+        })
+        self.assertEqual(result.status_code, 200, result.text[:600])
+        call = result.json()["result"]
+        self.assertFalse(call["isError"], call)
+        ids = {task["id"] for task in call["structuredContent"]["tasks"]}
+        self.assertIn(self.own_task_id, ids)
+        self.assertNotIn(self.other_task_id, ids)
+
+        # No MCP prompt can elevate itself to a write or Workspace operation.
+        blocked = await self._mcp("tools/call", params={
+            "name": "tasks.create",
+            "arguments": {"title": "Forbidden write"},
+        })
+        self.assertEqual(blocked.status_code, 200)
+        self.assertTrue(blocked.json()["result"]["isError"])
 
     async def test_service_proof_required_even_with_valid_bearer(self):
         response = await self._mcp("tools/list", proof=False)
