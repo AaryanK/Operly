@@ -13,6 +13,7 @@ from packages.database.kernel_models import KernelApproval, KernelEventRecord, K
 from packages.kernel import RuntimeExecutionError, build_kernel_runtime
 from packages.kernel.approvals import ApprovalError, approval_for_context, approval_json, decide_approval
 from packages.kernel.contracts import RuntimeRequest
+from packages.database.models import Tenant, TenantMember
 from packages.personal_modules.runtime import build_personal_runtime
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.security.execution_context import ExecutionContext, ScopeKind
@@ -266,7 +267,21 @@ async def execute_approved_personal_workspace_provision(
         raise HTTPException(error.status_code, detail={
             "code": error.code, "message": str(error), "run_id": error.run_id,
         }) from error
-    return outcome.as_dict()
+    response = outcome.as_dict()
+    created_id = (response.get("result") or {}).get("id")
+    owned = await db.scalar(select(Tenant.id).join(
+        TenantMember, TenantMember.tenant_id == Tenant.id,
+    ).where(Tenant.id == created_id, TenantMember.user_id == account.user.id,
+            TenantMember.role == "owner"))
+    if owned != created_id:
+        # Never retry an unknown create response; an owner can inspect the
+        # workspace list to reconcile any partially successful operation.
+        raise HTTPException(503, detail={
+            "code": "WORKSPACE_READBACK_UNVERIFIED",
+            "message": "Workspace execution returned but ownership readback failed.",
+        })
+    response["workspace_ownership_verified"] = True
+    return response
 
 
 @router.get("/personal/runs/{run_id}")
