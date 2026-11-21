@@ -25,6 +25,9 @@ class ScopeKind(StrEnum):
 PERSONAL_EXECUTION_PERMISSIONS = frozenset(
     {
         "workspace:read",
+        # Personal provisioning is account-owned; it never grants a Workspace
+        # execution context or permission to mutate existing tenants.
+        "workspace:create",
         "tasks:read",
         "tasks:write",
         "model:invoke",
