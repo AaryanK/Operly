@@ -57,6 +57,19 @@ async def validate_personal_session(
     return session
 
 
+async def discover_scoped_capabilities(runtime, db, *, context, query: str):
+    """Match tools relevant to a message; fallback to scoped catalog for chat."""
+    specs = await runtime.available_capabilities(
+        db, context=context, query=str(query or "")[:200] or None,
+        limit=MAX_TOOLS,
+    )
+    if not specs and query:
+        specs = await runtime.available_capabilities(
+            db, context=context, query=None, limit=MAX_TOOLS,
+        )
+    return specs
+
+
 async def issue_personal_delegation(
     db: AsyncSession, *, session_id: str, user_id: str,
     conversation_id: str,
@@ -79,10 +92,8 @@ async def issue_personal_delegation(
     )
     from packages.personal_modules.runtime import build_personal_runtime
     runtime = build_personal_runtime()
-    specs = await runtime.available_capabilities(
-        db, context=context,
-        query=str(query or "")[:200] or None,
-        limit=MAX_TOOLS,
+    specs = await discover_scoped_capabilities(
+        runtime, db, context=context, query=query,
     )
     mutations = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_MCP_MUTATIONS_ENABLED") == "1"
     approved = frozenset(
