@@ -60,7 +60,7 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
     account_id = str(uuid4())  # canonical UUID is unchanged across both systems
     tenant_id = str(uuid4())
     email = "synthetic-sso@example.test"
-    password = "CI-Ephemeral-Passphrase-Only!" + secrets.token_hex(8)
+    password = "CI-Ephemeral-Passphrase-Only!" + secrets.token_hex(8)  # pragma: allowlist secret -- random test input
     signing_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     pem = signing_key.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
@@ -207,7 +207,7 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             assert no_login_grant.status_code == 403
             wrong_password = await identity.post(
                 "/identity/v1/password/login",
-                json={"email": email, "password": "incorrect"},
+                json={"email": email, "password": "incorrect"},  # pragma: allowlist secret -- invalid test credential
                 headers={"Origin": ISSUER},
             )
             assert wrong_password.status_code == 401
