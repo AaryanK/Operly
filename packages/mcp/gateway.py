@@ -12,7 +12,6 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec, RuntimeReq
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.kernel.runtime import RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext, ScopeKind
-from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
@@ -186,6 +185,7 @@ class McpGateway:
     def _runtime_for(self, request: McpRequestContext):
         if request.scope_kind is ScopeKind.PERSONAL:
             if self._personal_runtime is None:
+                from packages.personal_modules.runtime import build_personal_runtime
                 self._personal_runtime = build_personal_runtime()
             return self._personal_runtime
         return self._runtime
