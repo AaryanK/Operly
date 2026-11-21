@@ -1,0 +1,39 @@
+name: Federated Identity Contract
+on:
+  pull_request:
+    paths:
+      - "apps/api/federated_login.py"
+      - "packages/security/federated_*.py"
+      - "packages/database/federated_*.py"
+      - "alembic/versions/0060_*.py"
+      - "alembic/versions/0061_*.py"
+      - "tests/test_federated_*.py"
+      - "requirements.txt"
+      - "requirements.lock"
+      - ".github/workflows/federated-identity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/federated_login.py"
+      - "packages/security/federated_*.py"
+      - "packages/database/federated_*.py"
+      - "alembic/versions/0061_*.py"
+      - "tests/test_federated_*.py"
+jobs:
+  federation-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies and test harness
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install pytest pytest-asyncio
+      - name: Compile federation and run synthetic account/login contracts
+        run: |
+          python -m compileall -q apps/api/federated_login.py packages/security/federated_identity.py packages/security/federated_token.py packages/database/federated_identity_models.py packages/database/federated_login_models.py
+          pytest -q tests/test_federated_identity_map.py tests/test_federated_token.py tests/test_federated_browser_sso.py
