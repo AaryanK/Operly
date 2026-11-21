@@ -134,6 +134,40 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
             # No automatic tenant-scoped execution permission follows provisioning.
             self.assertNotIn("workspace.describe", visible)
 
+            # Separate Workspace authority: existing Workspace OS POST-to-MCP
+            # record capability. Membership and permissions are re-resolved.
+            workspace_scope = McpRequestContext(
+                tenant_id=workspace_id, user_id=self.user_id,
+                client_id="dragonzpyder",
+                token_scopes=frozenset({"workspace:*"}),
+                conversation_id=self.conversation_id,
+                enforce_exposure=False, scope_kind=ScopeKind.WORKSPACE,
+            )
+            workspace_tools = {t["name"] for t in await self.gateway.list_tools(db, workspace_scope)}
+            self.assertIn("workspace_os.crm.contacts.create", workspace_tools)
+            contact = await self.gateway.call_tool(
+                db, workspace_scope, tool_id="workspace_os.crm.contacts.create",
+                arguments={"name": "MCP Example Contact " + self.user_id[:8]},
+                request_id="ci-contact:" + str(uuid4()),
+            )
+            self.assertTrue(contact["ok"], contact)
+            contact_id = contact["result"]["id"]
+            listed_contacts = await self.gateway.call_tool(
+                db, workspace_scope, tool_id="workspace_os.crm.contacts.list",
+                arguments={"limit": 100},
+            )
+            self.assertTrue(listed_contacts["ok"], listed_contacts)
+            self.assertIn(contact_id, {i["id"] for i in listed_contacts["result"]["items"]})
+            # Prevent forged principal from reading this workspace even if it
+            # supplies a valid workspace ID and a blanket token-scopes hint.
+            forged = McpRequestContext(
+                tenant_id=workspace_id, user_id=self.other_user_id,
+                client_id="dragonzpyder", token_scopes=frozenset({"workspace:*"}),
+                enforce_exposure=False, scope_kind=ScopeKind.WORKSPACE,
+            )
+            with self.assertRaises((PermissionError, LookupError, RuntimeError)):
+                await self.gateway.list_tools(db, forged)
+
     async def test_feature_disabled_does_not_expose_creation(self):
         with patch.dict(os.environ, {"OPERLY_PERSONAL_MCP_WORKSPACE_CREATE_ENABLED": "0"}):
             async with SessionFactory() as db:
