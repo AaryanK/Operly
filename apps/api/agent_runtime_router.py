@@ -203,8 +203,16 @@ async def _run(
 
     run_id = f"chat-{uuid4()}"
     try:
+        # Production rollout must be user-scoped. A global owner switch alone
+        # must never redirect every signed-in Personal user to a new harness.
+        canary_user_ids = {
+            uid.strip() for uid in
+            os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
+            if uid.strip()
+        }
         if (context.is_personal and
-                os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"):
+                os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"
+                and context.user_id in canary_user_ids):
             if personal_session_id is None:
                 raise DragonZpyderPersonalUnavailable("Authenticated Personal session required")
             if extra_context:
