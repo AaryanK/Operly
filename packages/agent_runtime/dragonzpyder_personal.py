@@ -7,6 +7,7 @@ no browser cookies, OAuth provider secrets, or user tokens are stored in prompts
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -31,6 +32,7 @@ class PersonalAgentResult:
     dispatch: str = "dragonzpyder_personal_mcp"
     objective_kind: str = "personal_goal"
     error_code: str | None = None
+    execution_receipts: dict | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -40,6 +42,11 @@ class PersonalAgentResult:
             "objective_kind": self.objective_kind,
             "error_code": self.error_code,
             "capability_calls": list(self.capability_calls),
+            "execution_receipts": self.execution_receipts or {
+                "tool_names": [], "failed_tool_count": 0,
+                "artifact_readback_count": 0,
+                "status": "unknown", "objective_verified": False,
+            },
             "approval_id": None,
             "objective_verified": False,  # Tool completion is not objective verification.
         }
@@ -105,6 +112,29 @@ async def run_personal_harness(
             response.get("status") not in ("completed", "incomplete") or
             not isinstance(response.get("answer"), str)):
         raise DragonZpyderPersonalUnavailable("Invalid Personal harness response")
+    # The harness is a trusted first-party backend, but its output is still
+    # validated and capped before it reaches the browser. No tool arguments,
+    # provider payloads, content or private paths are included.
+    raw_receipts = response.get("execution_receipts")
+    receipts = raw_receipts if isinstance(raw_receipts, dict) else {}
+    raw_names = receipts.get("tool_names")
+    receipt_names = []
+    if isinstance(raw_names, list):
+        receipt_names = [
+            name for name in raw_names[:40]
+            if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,79}", name)
+        ]
+    def bounded_count(key: str, ceiling: int) -> int:
+        value = receipts.get(key, 0)
+        return min(value, ceiling) if type(value) is int and value >= 0 else 0
+
+    safe_receipts = {
+        "tool_names": receipt_names,
+        "failed_tool_count": bounded_count("failed_tool_count", 100),
+        "artifact_readback_count": bounded_count("artifact_readback_count", 30),
+        "status": response["status"],
+        "objective_verified": False,
+    }
     names = response.get("successful_tools", [])
     if not isinstance(names, list):
         names = []
@@ -115,4 +145,5 @@ async def run_personal_harness(
         )[:40],
         run_id=run_id,
         error_code=None if response["status"] == "completed" else "agent_incomplete",
+        execution_receipts=safe_receipts,
     )
