@@ -14,10 +14,18 @@ EXPECTED_BASE_ROUTE_COUNT = 154
 EXPECTED_BASE_ROUTE_DIGEST = "73abc3940eb67cee0caf8898ba1a4704862f33a5db22a1c1ae5d32f34a155599"  # pragma: allowlist secret
 EXPECTED_AGENT_RUNTIME_ROUTE_COUNT = 8
 EXPECTED_ADMIN_ROUTE_COUNT = 7
+# Exact first-party Personal session renewal endpoint: pinned independently.
+EXPECTED_FIRST_PARTY_ROUTE = (
+    "POST /api/internal/dragonzpyder/personal-mcp-delegation",
+    "apps.api.mcp_router:first_party_personal_delegation",
+    "mcp_router",
+)
+EXPECTED_FIRST_PARTY_ROUTE_COUNT = 1
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
     + EXPECTED_AGENT_RUNTIME_ROUTE_COUNT
     + EXPECTED_ADMIN_ROUTE_COUNT
+    + EXPECTED_FIRST_PARTY_ROUTE_COUNT
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -203,6 +211,18 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
         )
 
     if source == "mcp_router":
+        if method == "POST" and path == "/api/internal/dragonzpyder/personal-mcp-delegation":
+            return RouteTraceability(
+                category="auth_transport",
+                kernel_governed=False,
+                semantic_event_source=False,
+                workflow_trigger_identity=False,
+                reason=(
+                    "Private server-secret protected Personal delegation issuer. "
+                    "Revalidates the live authenticated user session, and is not "
+                    "a Kernel tool or a public workflow trigger."
+                ),
+            )
         if method == "POST" and path == "/mcp":
             return RouteTraceability(
                 category="kernel_governed",
@@ -313,10 +333,25 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
 
     agent_rows = [row for row in rows if str(row.get("source") or "") in _AGENT_RUNTIME_SOURCES]
     admin_rows = [row for row in rows if str(row.get("source") or "") in _ADMIN_SOURCES]
+    first_party_rows = [
+        row for row in rows
+        if (
+            str(row.get("operation") or ""),
+            str(row.get("endpoint") or ""),
+            str(row.get("source") or ""),
+        ) == EXPECTED_FIRST_PARTY_ROUTE
+    ]
+    if len(first_party_rows) != EXPECTED_FIRST_PARTY_ROUTE_COUNT:
+        errors.append("First-party Personal delegation route was removed or duplicated")
     base_rows = [
         row
         for row in rows
         if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES)
+        and (
+            str(row.get("operation") or ""),
+            str(row.get("endpoint") or ""),
+            str(row.get("source") or ""),
+        ) != EXPECTED_FIRST_PARTY_ROUTE
     ]
     if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(

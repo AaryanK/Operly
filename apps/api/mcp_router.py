@@ -16,6 +16,14 @@ from packages.database.models import TenantMember
 from packages.database.principal_models import ClientGrant, Principal
 from packages.mcp.clients import get_registered_client, redirect_allowed, registered_clients
 from packages.mcp.gateway import McpGateway, McpGatewayError, McpRequestContext, narrow_scope_rules
+from packages.mcp.first_party import (
+    CLIENT_ID as FIRST_PARTY_CLIENT,
+    PersonalDelegationDenied,
+    issue_personal_delegation,
+    require_service_proof,
+    validate_personal_delegation,
+)
+from packages.security.execution_context import ScopeKind
 from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
     McpOAuthError,
@@ -279,6 +287,7 @@ async def _request_context(
     request: Request,
     authorization: str | None,
     db: AsyncSession,
+    service_proof: str | None = None,
 ) -> McpRequestContext:
     challenge = _oauth_challenge(request)
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -289,6 +298,24 @@ async def _request_context(
     except McpOAuthError as error:
         raise HTTPException(401, str(error), headers=challenge) from error
     client_id = str(payload.get("client_id") or "")
+    if client_id == FIRST_PARTY_CLIENT:
+        try:
+            user_id, token_scopes, conversation_id = await validate_personal_delegation(
+                db, claims=payload, resource=_resource(request),
+                service_proof=service_proof,
+            )
+        except PersonalDelegationDenied as error:
+            raise HTTPException(401, str(error), headers=challenge) from error
+        return McpRequestContext(
+            tenant_id=None,
+            user_id=user_id,
+            client_id=FIRST_PARTY_CLIENT,
+            token_scopes=token_scopes,
+            objective="Authenticated DragonZpyder Personal request",
+            conversation_id=conversation_id,
+            enforce_exposure=False,
+            scope_kind=ScopeKind.PERSONAL,
+        )
     if get_registered_client(client_id) is None or payload.get("resource") != _resource(request):
         raise HTTPException(401, "Invalid MCP client or token audience", headers=challenge)
 
@@ -360,6 +387,7 @@ async def mcp_endpoint(
     request: Request,
     payload: dict,
     authorization: str | None = Header(default=None),
+    service_proof: str | None = Header(default=None, alias="X-Operly-Agent-Service"),
     protocol_version: str | None = Header(default=None, alias="MCP-Protocol-Version"),
     routed_method: str | None = Header(default=None, alias="Mcp-Method"),
     routed_name: str | None = Header(default=None, alias="Mcp-Name"),
@@ -377,7 +405,7 @@ async def mcp_endpoint(
             status_code=400,
         )
     method = body_method or header_method
-    context = await _request_context(request, authorization, db)
+    context = await _request_context(request, authorization, db, service_proof)
 
     if method == "notifications/initialized":
         return Response(status_code=204, headers={
@@ -469,3 +497,34 @@ async def mcp_endpoint(
         return _mcp_response(_rpc_result(request_id, body))
 
     return _mcp_response(_rpc_error(request_id, -32601, "Method not found"), status_code=404)
+
+
+# This endpoint is NOT exposed to browser scripts, third-party OAuth clients,
+# or a model. Only an independently authenticated Operly-to-DragonZpyder
+# backend can renew the same live Personal session's short-lived delegation.
+@router.post("/api/internal/dragonzpyder/personal-mcp-delegation")
+async def first_party_personal_delegation(
+    request: Request,
+    payload: dict,
+    service_proof: str | None = Header(default=None, alias="X-Operly-Agent-Service"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        require_service_proof(service_proof)
+        token, approved = await issue_personal_delegation(
+            db,
+            session_id=str(payload.get("session_id") or ""),
+            user_id=str(payload.get("user_id") or ""),
+            conversation_id=str(payload.get("conversation_id") or ""),
+            resource=_resource(request),
+            query=str(payload.get("query") or "")[:200],
+        )
+    except PersonalDelegationDenied as error:
+        raise HTTPException(403, str(error)) from error
+    return {
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": 240,
+        "approved_tool_names": sorted(approved),
+        "scope_kind": "personal",
+    }

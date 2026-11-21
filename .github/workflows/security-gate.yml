@@ -70,6 +70,9 @@ jobs:
             packages/mcp/clients.py \
             tests/test_mcp_multiclient.py \
             tests/test_mcp_real_workspace_smoke.py \
+            tests/test_mcp_personal_first_party.py \
+            packages/mcp/first_party.py \
+            packages/agent_runtime/dragonzpyder_personal.py \
             packages/kernel/approvals.py \
             packages/kernel/contracts.py \
             packages/kernel/idempotency.py \
@@ -92,6 +95,7 @@ jobs:
           python -m unittest tests.test_mcp_request_safety -v
           python -m unittest tests.test_mcp_multiclient -v
           python -m unittest tests.test_mcp_real_workspace_smoke -v
+          python -m unittest tests.test_mcp_personal_first_party -v
           python -m unittest tests.test_security_hardening -v
           python -m unittest tests.test_pre_agent_runtime_gate -v
           python -m unittest tests.test_pre_agent_runtime_security -v

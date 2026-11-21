@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from uuid import uuid4
 
@@ -17,6 +18,11 @@ from apps.api.dependencies import (
     get_db,
 )
 from packages.agent_runtime.context import ContextItem, ContextKind
+from packages.agent_runtime.dragonzpyder_personal import (
+    DragonZpyderPersonalUnavailable,
+    run_personal_harness,
+)
+from packages.mcp.first_party import PersonalDelegationDenied
 from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
 from packages.agent_runtime.interactive import Runtime1Agent
 from packages.agent_runtime.runtime import AgentRuntimeDisabled
@@ -169,6 +175,7 @@ async def _run(
     message: str,
     conversation: AgentChatConversation,
     extra_context: list[ContextItem] | None = None,
+    personal_session_id: str | None = None,
 ):
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
@@ -196,15 +203,42 @@ async def _run(
 
     run_id = f"chat-{uuid4()}"
     try:
-        with collect_inference_usage() as model_usage:
-            result = await _agent().run(
-                db,
-                context=context,
+        if (context.is_personal and
+                os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"):
+            if personal_session_id is None:
+                raise DragonZpyderPersonalUnavailable("Authenticated Personal session required")
+            if extra_context:
+                raise DragonZpyderPersonalUnavailable(
+                    "Attachment-bearing Personal runs are not enabled for the remote harness"
+                )
+            # Operly, not DragonZpyder, resolves user authority and tool
+            # availability; its backend signs the short-lived delegation.
+            result = await run_personal_harness(
+                db, context=context, session_id=personal_session_id,
+                conversation_id=conversation.id, run_id=run_id,
                 message=message,
-                kernel=kernel,
-                context_items=context_items,
-                run_id=run_id,
             )
+            model_usage = []  # DragonZpyder accounts for metered inference.
+        else:
+            with collect_inference_usage() as model_usage:
+                result = await _agent().run(
+                    db,
+                    context=context,
+                    message=message,
+                    kernel=kernel,
+                    context_items=context_items,
+                    run_id=run_id,
+                )
+    except (DragonZpyderPersonalUnavailable, PersonalDelegationDenied) as error:
+        runtime_trace("request.failed", run_id=run_id,
+                      error_code="dragonzpyder_personal_unavailable")
+        await db.rollback()
+        raise HTTPException(
+            503, detail={
+                "code": "DRAGONZPYDER_PERSONAL_UNAVAILABLE",
+                "message": "The authorized Personal agent harness is unavailable.",
+            },
+        ) from error
     except AgentRuntimeDisabled as error:
         runtime_trace("request.failed", run_id=run_id, error_code="agent_runtime_disabled")
         await db.rollback()
@@ -382,7 +416,10 @@ async def personal_chat(
         conversation_id=conversation.id,
         focus_workspace_id=payload.selected_workspace_id,
     )
-    return await _run(db, context=context, message=payload.message, conversation=conversation)
+    return await _run(
+        db, context=context, message=payload.message,
+        conversation=conversation, personal_session_id=auth.session.id,
+    )
 
 
 @workspace_router.post("/chat-with-attachments")
@@ -472,7 +509,10 @@ async def personal_chat_with_attachments(
         conversation_id=conversation.id,
     )
     extra = [item for item in [_artifact_context(uploads)] if item is not None]
-    result = await _run(db, context=context, message=text, conversation=conversation, extra_context=extra)
+    result = await _run(
+        db, context=context, message=text, conversation=conversation,
+        extra_context=extra, personal_session_id=auth.session.id,
+    )
     result["attachment_processing"] = {
         "accepted": [item["filename"] for item in uploads],
         "artifacts": uploads,
