@@ -143,8 +143,14 @@ class WorkspaceProvisionMcpTests(unittest.IsolatedAsyncioTestCase):
                 conversation_id=self.conversation_id,
                 enforce_exposure=False, scope_kind=ScopeKind.WORKSPACE,
             )
-            workspace_tools = {t["name"] for t in await self.gateway.list_tools(db, workspace_scope)}
-            self.assertIn("workspace_os.crm.contacts.create", workspace_tools)
+            # The default MCP list is bounded; exact-name tool resolution must
+            # still independently authorize an already-known capability. A
+            # separate paginated-discovery feature is required for broad catalogs.
+            verified_context, verified_spec = await self.gateway._available_spec(
+                db, workspace_scope, "workspace_os.crm.contacts.create"
+            )
+            self.assertEqual(verified_spec.id, "workspace_os.crm.contacts.create")
+            self.assertEqual(verified_context.workspace_id, workspace_id)
             contact = await self.gateway.call_tool(
                 db, workspace_scope, tool_id="workspace_os.crm.contacts.create",
                 arguments={"name": "MCP Example Contact " + self.user_id[:8]},
