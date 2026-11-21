@@ -28,6 +28,7 @@ from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
+from apps.api.federated_login import router as federated_login_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.agent_runtime.evaluation import run_startup_objective_eval_if_enabled
@@ -224,6 +225,7 @@ app.add_middleware(
 )
 
 app.include_router(session_router)
+app.include_router(federated_login_router)
 app.include_router(admin_router)
 app.include_router(discord_auth_router)
 app.include_router(personal_agent_runtime_router)
