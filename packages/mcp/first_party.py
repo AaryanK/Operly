@@ -99,7 +99,9 @@ async def issue_personal_delegation(
     approved = frozenset(
         spec.id for spec in specs
         if "personal" in spec.scopes
-        and (mutations or spec.risk is CapabilityRisk.READ_ONLY)
+        and (mutations or spec.risk is CapabilityRisk.READ_ONLY
+             or (spec.id == "workspace.create"
+                 and os.getenv("OPERLY_PERSONAL_MCP_WORKSPACE_CREATE_ENABLED") == "1"))
     )
     if not approved:
         raise PersonalDelegationDenied("No authorized Personal tools are available")
