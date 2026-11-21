@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.database.models import AppUser, AuthSession
 from packages.kernel.contracts import CapabilityRisk
 from packages.mcp.oauth import issue_access_token
-from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import resolve_personal_execution_context
 from packages.security.surfaces import SurfaceKind
 
@@ -78,6 +77,7 @@ async def issue_personal_delegation(
         surface=SurfaceKind.PERSONAL_PRIVATE,
         conversation_id=conversation_id,
     )
+    from packages.personal_modules.runtime import build_personal_runtime
     runtime = build_personal_runtime()
     specs = await runtime.available_capabilities(
         db, context=context,
