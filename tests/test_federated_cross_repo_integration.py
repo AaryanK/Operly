@@ -314,7 +314,7 @@ async def _chromium_browser_acceptance(*, operly_app, dz_app, email, password,
     async with async_playwright() as play:
         browser = await play.chromium.launch(headless=True)
         try:
-            context = await browser.new_context(ignore_https_errors=True)
+            context = await browser.new_context(ignore_https_errors=True, offline=True, service_workers="block")
 
             async def intercept(route):
                 req = route.request
@@ -364,20 +364,53 @@ async def _chromium_browser_acceptance(*, operly_app, dz_app, email, password,
                         "transfer-encoding",
                     )
                 }
-                await route.fulfill(
-                    status=response.status_code,
-                    headers=out_headers,
-                    body=response.content,
-                )
+                # Chromium's mocked 302 responses may follow redirects
+                # outside the interception route; never allow a live request
+                # to production. The actual backend 303 is already asserted
+                # in the HTTP integration test. Return only a test landing
+                # document for the completed callback in this browser test.
+                if (origin == OPERLY
+                        and parsed.path == "/api/auth/dragonzpyder/callback"
+                        and response.status_code == 303):
+                    await route.fulfill(
+                        status=200,
+                        headers={"Content-Type": "text/html",
+                                 "Cache-Control": "no-store"},
+                        body="<html><body>SSO callback completed</body></html>",
+                    )
+                else:
+                    await route.fulfill(
+                        status=response.status_code,
+                        headers=out_headers,
+                        body=response.content,
+                    )
 
             await context.route("**/*", intercept)
             page = await context.new_page()
-            # A real Chromium navigation starts at Operly and is redirected
-            # to the same-origin JavaScript login + consent page.
-            await page.goto(
-                OPERLY + "/api/auth/dragonzpyder/start",
-                wait_until="domcontentloaded",
-            )
+            # Resolve the FIRST 302 in-process because Playwright fulfill()
+            # redirects may bypass request interception. Preserve the actual
+            # Operly browser-binding cookie and navigate Chromium to the
+            # registered issuer authorization URL; offline mode prohibits
+            # any unintended request to the real public production hosts.
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=operly_app),
+                base_url=OPERLY, follow_redirects=False,
+            ) as start_client:
+                started = await start_client.get("/api/auth/dragonzpyder/start")
+            assert started.status_code == 302
+            starter_cookies = SimpleCookie()
+            for item in started.headers.get_list("set-cookie"):
+                starter_cookies.load(item)
+            await context.add_cookies([
+                {"name": name, "value": cookie.value, "url": OPERLY,
+                 "secure": bool(cookie["secure"]),
+                 "httpOnly": bool(cookie["httponly"]),
+                 "sameSite": "Lax"}
+                for name, cookie in starter_cookies.items()
+            ])
+            start_destination = started.headers["location"]
+            assert start_destination.startswith(ISSUER + "/identity/v1/authorize?")
+            await page.goto(start_destination, wait_until="domcontentloaded")
             assert await page.locator("#signin").count() == 1, (
                 "Browser did not reach issuer UI: "
                 + page.url + " " + (await page.content())[:1200]
@@ -390,7 +423,8 @@ async def _chromium_browser_acceptance(*, operly_app, dz_app, email, password,
             await expect(page.locator("#consent")).to_be_visible(timeout=20000)
             await expect(page.locator("#signin")).to_be_hidden()
             await page.get_by_role("button", name="Continue").click()
-            await page.wait_for_url(OPERLY + "/", timeout=20000)
+            await page.wait_for_url(CALLBACK + "?*", timeout=20000)
+            await expect(page.locator("body")).to_contain_text("SSO callback completed")
             cookies = await context.cookies()
             by_name = {cookie["name"]: cookie for cookie in cookies}
             assert "operly_session" in by_name
