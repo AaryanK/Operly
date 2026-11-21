@@ -53,9 +53,20 @@ def _ingress_namespace(context: ExecutionContext) -> str:
         return ""
     client_id = str(metadata.get("mcp_client_id") or "").strip()
     grant_id = str(metadata.get("mcp_grant_id") or "").strip()
-    if not client_id or not grant_id:
+    if client_id == "dragonzpyder_first_party" and context.is_personal and not grant_id:
+        # The first-party short-lived delegation is not a Workspace OAuth
+        # grant. MCP ingress already verifies signed claims, service proof,
+        # live Personal session and bound conversation. Bind its idempotency
+        # namespace to that exact trusted Personal conversation instead.
+        conversation_id = str(context.conversation_id or "").strip()
+        if not conversation_id:
+            raise IdempotencyConflict("Personal MCP request is missing conversation identity")
+        identity = f"{client_id}:personal:{context.user_id}:{conversation_id}"
+    elif client_id and grant_id:
+        identity = f"{client_id}:grant:{grant_id}"
+    else:
         raise IdempotencyConflict("MCP request is missing its authenticated client/grant identity")
-    digest = hashlib.sha256(f"{client_id}\0{grant_id}".encode("utf-8")).hexdigest()[:24]
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     return f":mcp:{digest}"
 
 
