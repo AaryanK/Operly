@@ -12,6 +12,7 @@ from packages.kernel.contracts import CapabilityRisk, CapabilitySpec, RuntimeReq
 from packages.kernel.ingress import TrustedIngress, resolve_ingress_context
 from packages.kernel.runtime import RuntimeExecutionError
 from packages.security.execution_context import ExecutionContext, ScopeKind
+from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
@@ -24,7 +25,7 @@ class McpRequestContext:
     provider availability and approvals are re-resolved by Operly for every request.
     """
 
-    tenant_id: str
+    tenant_id: str | None
     user_id: str
     client_id: str
     token_scopes: frozenset[str]
@@ -32,6 +33,7 @@ class McpRequestContext:
     objective: str = "Operly MCP request"
     conversation_id: str | None = None
     enforce_exposure: bool = True
+    scope_kind: ScopeKind = ScopeKind.WORKSPACE
 
 
 class McpGatewayError(RuntimeError):
@@ -177,18 +179,34 @@ def tool_definition(spec: CapabilitySpec) -> dict[str, Any]:
 class McpGateway:
     """MCP projection of the canonical governed Workspace runtime."""
 
-    def __init__(self, runtime=None) -> None:
+    def __init__(self, runtime=None, *, personal_runtime=None) -> None:
         self._runtime = runtime if runtime is not None else build_workspace_runtime()
+        self._personal_runtime = personal_runtime
+
+    def _runtime_for(self, request: McpRequestContext):
+        if request.scope_kind is ScopeKind.PERSONAL:
+            if self._personal_runtime is None:
+                self._personal_runtime = build_personal_runtime()
+            return self._personal_runtime
+        return self._runtime
+
+    @staticmethod
+    def _resource_allowed(spec: CapabilitySpec, request: McpRequestContext) -> bool:
+        if request.scope_kind is ScopeKind.PERSONAL:
+            return "personal" in spec.scopes and spec.resource_scope != "workspace"
+        return spec.resource_scope == "workspace"
 
     async def execution_context(self, db: AsyncSession, request: McpRequestContext) -> ExecutionContext:
         return await resolve_ingress_context(
             db,
             TrustedIngress(
-                scope_kind=ScopeKind.WORKSPACE,
+                scope_kind=request.scope_kind,
                 user_id=request.user_id,
                 workspace_id=request.tenant_id,
                 channel="mcp",
-                surface=SurfaceKind.MCP_CLIENT,
+                surface=(SurfaceKind.PERSONAL_PRIVATE
+                         if request.scope_kind is ScopeKind.PERSONAL
+                         else SurfaceKind.MCP_CLIENT),
                 conversation_id=request.conversation_id,
                 metadata={
                     "ingress": "operly_mcp",
@@ -199,7 +217,7 @@ class McpGateway:
         )
 
     async def _exposure_map(self, db: AsyncSession, request: McpRequestContext) -> dict[str, bool]:
-        if not request.enforce_exposure:
+        if not request.enforce_exposure or request.scope_kind is ScopeKind.PERSONAL:
             return {}
         rows = (
             await db.scalars(
@@ -219,7 +237,7 @@ class McpGateway:
         query: str | None = None,
     ) -> tuple[CapabilitySpec, ...]:
         context = await self.execution_context(db, request)
-        specs = await self._runtime.available_capabilities(
+        specs = await self._runtime_for(request).available_capabilities(
             db,
             context=context,
             query=query,
@@ -229,7 +247,7 @@ class McpGateway:
         allowed = [
             spec
             for spec in specs
-            if spec.resource_scope == "workspace"
+            if self._resource_allowed(spec, request)
             and scope_allows(spec, request.token_scopes)
             and exposure.get(spec.id.lower(), True)
         ]
@@ -248,12 +266,12 @@ class McpGateway:
         if not normalized:
             raise McpGatewayError("tool_not_found", "MCP tool name is required")
         context = await self.execution_context(db, request)
-        specs = await self._runtime.available_capabilities(db, context=context, query=normalized, limit=100)
+        specs = await self._runtime_for(request).available_capabilities(db, context=context, query=normalized, limit=100)
         exposure = await self._exposure_map(db, request)
         for spec in specs:
             if (
                 spec.id == normalized
-                and spec.resource_scope == "workspace"
+                and self._resource_allowed(spec, request)
                 and scope_allows(spec, request.token_scopes)
                 and exposure.get(spec.id.lower(), True)
             ):
@@ -280,7 +298,7 @@ class McpGateway:
         context, spec = await self._available_spec(db, request, tool_id)
         stable_request_id = request_id or f"mcp:{request.client_id}:{uuid4()}"
         try:
-            response = await self._runtime.execute(
+            response = await self._runtime_for(request).execute(
                 db,
                 context=context,
                 request=RuntimeRequest(
