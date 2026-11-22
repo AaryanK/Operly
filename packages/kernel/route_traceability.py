@@ -38,7 +38,7 @@ EXPECTED_FEDERATED_ROUTES = frozenset({
 })
 EXPECTED_FEDERATED_ROUTE_COUNT = len(EXPECTED_FEDERATED_ROUTES)
 EXPECTED_WORKFLOW_HANDOFF_ROUTE = (
-    "POST /api/internal/dragonzpyder/workflow-dispatch",
+    "POST /api/internal/dragonzpyder/workflow-pulse",
     "apps.api.workflow_handoff:dispatch_workflows",
     "workflow_handoff_router",
 )

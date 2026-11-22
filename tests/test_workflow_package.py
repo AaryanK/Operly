@@ -201,8 +201,8 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
         from packages.workflow.dispatch_driver import DriverForbidden, DriverUnavailable
         proof = "x" * 48
         with patch.dict("os.environ", {
-            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
-            "OPERLY_WORKFLOW_HANDOFF_SECRET": proof,
+            "OPERLY_WORKFLOW_DRIVER": "hatchet",
+            "OPERLY_HATCHET_WORKFLOW_DISPATCH_SECRET": proof,
         }, clear=True):
             await self.driver.start()
             self.scheduler.start.assert_not_awaited()
@@ -215,10 +215,9 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
                 await self.driver.remote_tick(proof)
             self.scheduler.status.return_value = {"running": False, "active_workers": 1}
             receipt = await self.driver.remote_tick(proof)
-            self.assertEqual(receipt["dispatch"], "accepted")
-            self.assertEqual(receipt["queued_events"], 2)
-            self.assertEqual(receipt["active_workers"], 1)
-            self.assertFalse(receipt["completion_verified"])
+            self.assertEqual(receipt["state"], "dispatched")
+            self.assertEqual(receipt["event_runs_queued"], 2)
+            self.assertEqual(receipt["claimed_runs"], 0)
             self.events.tick.assert_awaited_once()
             self.scheduler.tick.assert_awaited_once()
             await self.driver.stop()
@@ -227,7 +226,7 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         from packages.workflow.dispatch_driver import DriverUnavailable
         with patch.dict("os.environ", {
-            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
+            "OPERLY_WORKFLOW_DRIVER": "hatchet",
         }, clear=True):
             with self.assertRaises(DriverUnavailable):
                 await self.driver.start()
@@ -236,7 +235,6 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_overlapping_dispatch_rejected(self):
         import asyncio
         from unittest.mock import patch
-        from packages.workflow.dispatch_driver import DriverBusy
         entered, release = asyncio.Event(), asyncio.Event()
         async def slow_tick():
             entered.set()
@@ -244,15 +242,15 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
         self.scheduler.tick.side_effect = slow_tick
         proof = "x" * 48
         with patch.dict("os.environ", {
-            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
-            "OPERLY_WORKFLOW_HANDOFF_SECRET": proof,
+            "OPERLY_WORKFLOW_DRIVER": "hatchet",
+            "OPERLY_HATCHET_WORKFLOW_DISPATCH_SECRET": proof,
         }, clear=True):
             await self.driver.start()
             pending = asyncio.create_task(self.driver.remote_tick(proof))
             await entered.wait()
             try:
-                with self.assertRaises(DriverBusy):
-                    await self.driver.remote_tick(proof)
+                receipt = await self.driver.remote_tick(proof)
+                self.assertEqual(receipt, {"state": "busy", "claimed_runs": 0, "event_runs_queued": 0})
             finally:
                 release.set()
                 await pending

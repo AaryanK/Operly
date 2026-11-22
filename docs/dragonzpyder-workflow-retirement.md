@@ -1,43 +1,43 @@
-# Workflow ownership migration: compatibility handoff (phase 1)
+# Workflow migration — verified clock handoff, not execution retirement
 
-Target: DragonZpyder owns user workflow definitions, durable execution and
-Hatchet scheduling; Operly remains the scoped business-capability authority.
-Do not delete workflow tables, versions, run/step attempts, approvals, event
-cursors, or scheduled work. Do not enable a new dispatcher before providing
-a verified replacement.
+DragonZpyder's existing `operly_workflow_dispatch.py` is the **only**
+Hatchet workflow pulse adapter; do not register the duplicate experimental
+`workflow_compat_dispatch.py` task. The canonical task sends a fixed
+POST /api/internal/dragonzpyder/workflow-pulse with the exact
+X-DragonZpyder-Workflow-Dispatch header and expects
+{state,claimed_runs,event_runs_queued}. These represent dispatched work,
+**not business completion**.
 
-This change only transfers the wake clock, not actual workflow execution.
-Default `OPERLY_WORKFLOW_DISPATCH_DRIVER=local` preserves existing behaviour.
-In explicitly configured `dragonzpyder` mode, neither local polling loop
-starts; a server-only authenticated wake calls the existing event cursor and
-leased run dispatcher once. Existing workflow APIs and Kernel decisions are
-unchanged. Each response is dispatch evidence, not completion evidence.
-The old executor and its PostgreSQL leases remain required.
+Operly defaults to `OPERLY_WORKFLOW_DRIVER=local`, continuing its
+two-second scheduler and event pollers. Opt-in `hatchet` mode disables
+both local loops on startup; the protected route then runs one legacy
+reconciliation tick via the existing transactional concurrency scheduler.
+All workflow definitions, versions, event cursors, approvals, waits, run
+history and Kernel permissions remain in Operly. No data is discarded.
 
-## Activation gates (not performed here)
-1. Count and back up all definitions/versions/schedules/triggers/runs,
-   including pending approvals and uncertain external effects.
-2. Test the paired DragonZpyder Hatchet task on an isolated database with
-   synthetic Personal and Workspace workflows, event triggers, waits,
-   approvals, retries and duplicate wakes. Compare against legacy results.
-3. Install a single explicitly authorized named Hatchet minute cron.
-   Confirm it is registered and healthy. Remote calls in local mode fail
-   closed. The changed polling frequency can delay immediate/event/wait
-   workflows by a minute; accept or address this before cutover.
-4. Configure the dedicated shared secret via environment references or a
-   secret manager, never model context. Set remote mode only after deployment
-   readiness, and drain older replicas before calling the new endpoint.
-5. Verify live scheduler tick receipts AND existing workflow completion and
-   trace counts; do not equate HTTP success with completed workflows.
-6. Roll back by stopping the remote cron, draining remote ticks and restoring
-   local mode. Retain all DB rows and leases; use normal orphan recovery and
-   audit uncertain actions. Do not force-replay mutations.
+## Readiness / rollback
+- Deploy the two repositories with local mode unchanged.
+- Back up production DB and count queued, running, waiting, waiting approval,
+  and terminal runs. Reconcile owner permissions and scheduled next-fire times.
+- Configure matching *independent* service proof
+  `OPERLY_HATCHET_WORKFLOW_DISPATCH_SECRET` and
+  `DRAGONZPYDER_OPERLY_WORKFLOW_DISPATCH_SECRET` via secret references.
+- Use a synthetic environment to prove exact signed dispatch, duplicate
+  pulses, event deduplication, scope checks, approval, cancellation, failure,
+  network ambiguity and restart recovery. Verify business effects and history.
+- Have one authorized operator register the named DragonZpyder Hatchet minute
+  cron, once. Do not auto-register at deploy; confirm it is healthy.
+- Drain all local poller replicas before setting
+  `OPERLY_WORKFLOW_DRIVER=hatchet`; prevent dual-scheduler overlap.
+- Minute wakes increase latency compared with today's two-second polling.
+  Do not cut over if the measured event/wait delay is unacceptable.
+- On rollback stop the cron, drain remote pulses, restore local driver and
+  reconcile leases. Never auto-replay uncertain mutations.
 
-## Final retirement is a separate milestone
-Port versioned plan/trigger semantics and user-scoped durable authority to
-DragonZpyder's existing execution graph/harness. Use its native registry and
-MCP broker, with live Operly Kernel checks for business effects. Import
-definitions in shadow mode, reconcile schedules, pending approvals, history
-and action idempotency, then cut over ownership and remove this temporary
-compatibility route and legacy run executor. No database destruction is
-part of this migration.
+## Final retirement
+This adapter does not yet move workflow *execution* into DragonZpyder.
+Next move versioned DAG state, trigger authority, idempotency and receipts
+to one native LangGraph/Deep Agents execution contract using Hatchet as
+scheduler. Operly stays a business MCP and permissions authority. Prove
+shadow equivalence before retiring the legacy engine. No destructive
+schema operation is authorized by this change.

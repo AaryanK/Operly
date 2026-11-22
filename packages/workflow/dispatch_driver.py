@@ -1,15 +1,15 @@
-"""Reversible handoff of legacy workflow wake ownership to DragonZpyder.
+"""Compatibility wake transport from DragonZpyder Hatchet to Operly's leased workflow engine.
 
-Operly's existing database, Kernel authorization, leases, and worker execution
-remain authoritative during the transition. This does not migrate definitions
-or declare a dispatched run completed. No schedule is installed at import.
+The native Hatchet worker owns the clock; all workflow definitions, approvals,
+permissions, action execution and run history stay governed by Operly until
+separately verified and migrated. Never infer completion from dispatch counts.
 """
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import hmac
 import os
-from datetime import datetime, timezone
 
 
 class DriverUnavailable(RuntimeError):
@@ -18,24 +18,6 @@ class DriverUnavailable(RuntimeError):
 
 class DriverForbidden(RuntimeError):
     pass
-
-
-class DriverBusy(RuntimeError):
-    pass
-
-
-def configured_driver() -> str:
-    value = os.getenv("OPERLY_WORKFLOW_DISPATCH_DRIVER", "local").strip()
-    if value not in {"local", "dragonzpyder"}:
-        raise DriverUnavailable("invalid_workflow_dispatch_driver")
-    if value == "dragonzpyder" and not _proof_secret():
-        raise DriverUnavailable("workflow_handoff_secret_not_configured")
-    return value
-
-
-def _proof_secret() -> str:
-    value = os.getenv("OPERLY_WORKFLOW_HANDOFF_SECRET", "")
-    return value if 40 <= len(value) <= 512 and value.isascii() else ""
 
 
 class WorkflowDispatchDriver:
@@ -60,7 +42,6 @@ class WorkflowDispatchDriver:
         self._mode = mode
 
     async def stop(self) -> None:
-        # Reject new remote ticks before draining the current dispatch operation.
         self._mode = None
         async with self._tick_lock:
             try:
@@ -77,7 +58,7 @@ class WorkflowDispatchDriver:
         }
 
     async def remote_tick(self, proof: str | None) -> dict:
-        if self._mode != "dragonzpyder":
+        if self._mode != "hatchet":
             raise DriverUnavailable("remote_workflow_driver_inactive")
         expected = _proof_secret()
         if (not expected or not isinstance(proof, str)
@@ -85,25 +66,35 @@ class WorkflowDispatchDriver:
                 or not hmac.compare_digest(expected, proof)):
             raise DriverForbidden("workflow_driver_authentication_failed")
         if self._tick_lock.locked():
-            raise DriverBusy("workflow_dispatch_in_progress")
+            return {"state": "busy", "claimed_runs": 0, "event_runs_queued": 0}
         async with self._tick_lock:
-            if self._mode != "dragonzpyder":
+            if self._mode != "hatchet":
                 raise DriverUnavailable("remote_workflow_driver_inactive")
-            if (self.scheduler.status().get("running")
-                    or self.events.status().get("running")):
+            if self.scheduler.status().get("running") or self.events.status().get("running"):
                 raise DriverUnavailable("local_workflow_driver_still_running")
-            # Existing transactional event cursors and run leases enforce
-            # cross-replica deduplication. Do not bypass scope authority.
-            queued_events = await self.events.tick()
-            await self.scheduler.tick()
+            # HA event cursors, DB leases and Kernel authority remain unchanged.
+            events = await self.events.tick()
+            claims = await self.scheduler.tick()
             self._last_remote_tick = datetime.now(timezone.utc).isoformat()
-            return {
-                "driver": "dragonzpyder",
-                "dispatch": "accepted",
-                "queued_events": int(queued_events),
-                "active_workers": int(self.scheduler.status()["active_workers"]),
-                "completion_verified": False,
-            }
+            if type(events) is not int or not 0 <= events:
+                raise DriverUnavailable("invalid_event_dispatcher_count")
+            if type(claims) is not int or not 0 <= claims <= 25:
+                raise DriverUnavailable("invalid_workflow_claim_count")
+            return {"state": "dispatched", "claimed_runs": claims, "event_runs_queued": events}
+
+
+def _proof_secret() -> str:
+    value = os.getenv("OPERLY_HATCHET_WORKFLOW_DISPATCH_SECRET", "")
+    return value if 40 <= len(value) <= 512 and value.isascii() else ""
+
+
+def configured_driver() -> str:
+    value = os.getenv("OPERLY_WORKFLOW_DRIVER", "local").strip()
+    if value not in {"local", "hatchet"}:
+        raise DriverUnavailable("invalid_workflow_dispatch_driver")
+    if value == "hatchet" and not _proof_secret():
+        raise DriverUnavailable("workflow_handoff_secret_not_configured")
+    return value
 
 
 from packages.workflow import workflow_event_dispatcher, workflow_scheduler
