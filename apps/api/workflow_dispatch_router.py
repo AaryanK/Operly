@@ -105,8 +105,8 @@ async def workflow_dispatch_pulse(
             {"key": _PULSE_LOCK},
         )
         if not acquired:
-            return {"state": "busy", "claimed_runs": 0, "events_processed": 0}
+            return {"state": "busy", "claimed_runs": 0, "event_runs_queued": 0}
         events = await workflow_event_dispatcher.tick()
         count = await workflow_scheduler.dispatch_external_batch()
         return {"state": "dispatched", "claimed_runs": count,
-                "events_processed": events}
+                "event_runs_queued": events}
