@@ -169,11 +169,18 @@ async def lifespan(app: FastAPI):
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
     await workflow_dispatch_driver.start()
-    objective_eval_task = asyncio.create_task(run_startup_objective_eval_if_enabled())
+    # No independent objective/model-evaluation work is allowed to start
+    # inside Operly after the native DragonZpyder cutover.
+    local_agent_retired = (
+        os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
+        or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1"
+    )
+    objective_eval_task = (None if local_agent_retired else
+        asyncio.create_task(run_startup_objective_eval_if_enabled()))
     try:
         yield
     finally:
-        if not objective_eval_task.done():
+        if objective_eval_task is not None and not objective_eval_task.done():
             objective_eval_task.cancel()
             with suppress(asyncio.CancelledError):
                 await objective_eval_task
