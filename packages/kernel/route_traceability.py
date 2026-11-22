@@ -453,6 +453,8 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
         if str(row.get("source") or "") not in (_AGENT_RUNTIME_SOURCES | _ADMIN_SOURCES)
         and (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
              str(row.get("source") or "")) not in EXPECTED_FEDERATED_ROUTES
+        and (str(row.get("operation") or ""),str(row.get("endpoint") or ""),
+             str(row.get("source") or "")) not in EXPECTED_DISCORD_MOBILE_ROUTES
         and (
             str(row.get("operation") or ""),
             str(row.get("endpoint") or ""),
