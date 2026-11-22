@@ -28,7 +28,6 @@ from apps.api.dependencies import (
     get_db,
 )
 from apps.api.google_auth import GoogleAuthenticationError, verify_google_credential
-from apps.api.discord_mobile_auth import enabled as _discord_mobile_enabled
 from apps.api.schemas import (
     ChallengeInput,
     ChangePasswordInput,
@@ -442,6 +441,7 @@ async def _validate_challenge(
 async def auth_bootstrap(response: Response):
     # Lazy import avoids the federation/session module dependency cycle.
     from apps.api.federated_login import federated_login_available, dragonzpyder_web_login_available
+    from apps.api.discord_mobile_auth import enabled as _discord_mobile_enabled
 
     csrf = random_token()
     nonce = random_token()
