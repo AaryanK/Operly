@@ -37,6 +37,13 @@ EXPECTED_FEDERATED_ROUTES = frozenset({
      "apps.api.federated_login:complete_federated_login", "federated_login_router"),
 })
 EXPECTED_FEDERATED_ROUTE_COUNT = len(EXPECTED_FEDERATED_ROUTES)
+# Only the exact authenticated dispatch control-plane operations are added.
+EXPECTED_WORKFLOW_DISPATCH_ROUTES = frozenset({
+    ("GET /api/internal/dragonzpyder/workflow-pulse",
+     "apps.api.workflow_dispatch_router:workflow_dispatch_readiness", "workflow_dispatch_router"),
+    ("POST /api/internal/dragonzpyder/workflow-pulse",
+     "apps.api.workflow_dispatch_router:workflow_dispatch_pulse", "workflow_dispatch_router"),
+})
 
 EXPECTED_ROUTE_COUNT = (
     EXPECTED_BASE_ROUTE_COUNT
@@ -45,6 +52,7 @@ EXPECTED_ROUTE_COUNT = (
     + EXPECTED_FIRST_PARTY_ROUTE_COUNT
     + EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT
     + EXPECTED_FEDERATED_ROUTE_COUNT
+    + len(EXPECTED_WORKFLOW_DISPATCH_ROUTES)
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
 # surface; Runtime 1.0 ingress and platform administration are pinned independently.
@@ -288,6 +296,16 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
             reason="Authentication/session transport is intentionally outside workflow trigger identity.",
         )
 
+    if source == "workflow_dispatch_router":
+        triple=(str(row.get("operation") or ""), str(row.get("endpoint") or ""), source)
+        if triple not in EXPECTED_WORKFLOW_DISPATCH_ROUTES:
+            return None
+        return RouteTraceability(
+            category="control_plane", kernel_governed=False,
+            semantic_event_source=False, workflow_trigger_identity=False,
+            reason="Dedicated server-secret-protected dispatch control plane; all business effects remain governed by the existing workflow engine.",
+        )
+
     if source in _CONTROL_PLANE_SOURCES:
         return RouteTraceability(
             category="control_plane",
@@ -393,6 +411,16 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
     if actual_federated != EXPECTED_FEDERATED_ROUTES or len(federated_rows) != EXPECTED_FEDERATED_ROUTE_COUNT:
         errors.append("Federated OIDC browser transport changed; review and repin exact endpoints")
 
+    dispatch_rows = [
+        row for row in rows if row.get("source") == "workflow_dispatch_router"
+    ]
+    actual_dispatch = frozenset(
+        (row["operation"], row["endpoint"], row["source"]) for row in dispatch_rows
+    )
+    if (actual_dispatch != EXPECTED_WORKFLOW_DISPATCH_ROUTES
+            or len(dispatch_rows) != len(EXPECTED_WORKFLOW_DISPATCH_ROUTES)):
+        errors.append("Workflow dispatch control-plane surface changed; review exact routes")
+
     base_rows = [
         row
         for row in rows
@@ -406,6 +434,8 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
         ) != EXPECTED_FIRST_PARTY_ROUTE
         and (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
              str(row.get("source") or "")) != EXPECTED_APPROVED_WORKSPACE_ROUTE
+        and (str(row.get("operation") or ""), str(row.get("endpoint") or ""),
+             str(row.get("source") or "")) not in EXPECTED_WORKFLOW_DISPATCH_ROUTES
     ]
     if len(base_rows) != EXPECTED_BASE_ROUTE_COUNT:
         errors.append(
@@ -489,6 +519,7 @@ __all__ = [
     "EXPECTED_ROUTE_DIGEST",
     "EXPECTED_FEDERATED_ROUTES",
     "EXPECTED_FEDERATED_ROUTE_COUNT",
+    "EXPECTED_WORKFLOW_DISPATCH_ROUTES",
     "RouteTraceability",
     "classify_route",
     "validate_route_traceability",
