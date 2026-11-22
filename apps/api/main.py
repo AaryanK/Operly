@@ -25,7 +25,7 @@ from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.workflow_dispatch_router import (
     router as workflow_dispatch_router, start_workflow_driver,
-    stop_workflow_driver, workflow_driver,
+    stop_workflow_driver, validate_workflow_driver, workflow_driver,
 )
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
@@ -163,6 +163,7 @@ def validate_runtime_configuration() -> None:
 async def lifespan(app: FastAPI):
     del app
     validate_runtime_configuration()
+    validate_workflow_driver()
     await init_db()
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
