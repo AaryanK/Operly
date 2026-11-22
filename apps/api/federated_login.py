@@ -179,7 +179,7 @@ async def _start_login(settings, db: AsyncSession):
     nonce = secrets.token_urlsafe(40)
     verifier = _oidc_verifier()
     db.add(FederatedLoginAttempt(
-        state_hash=hash_token(state, purpose="oidc:state"),
+        state_hash=hash_token(state, purpose="oidc:state:" + client_id),
         binding_hash=hash_token(binding, purpose="oidc:binding"),
         verifier=verifier, nonce=nonce, expires_at=datetime.utcnow() + timedelta(seconds=MAX_AGE),
     ))
@@ -228,7 +228,7 @@ async def _complete_login(settings, success_path: str, request: Request, db: Asy
         raise HTTPException(400, "Invalid callback")
     row = await db.scalar(
         select(FederatedLoginAttempt).where(
-            FederatedLoginAttempt.state_hash == hash_token(state, purpose="oidc:state"),
+            FederatedLoginAttempt.state_hash == hash_token(state, purpose="oidc:state:" + client_id),
         ).with_for_update()
     )
     if (row is None or row.consumed_at is not None
