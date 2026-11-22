@@ -87,6 +87,14 @@ class PersonalHarnessCanaryRoutingTests(unittest.TestCase):
                         user_id="user", principal_id="user:user"),
                     conversation_id="conversation", run_id="test", message="hi"))
 
+    def test_old_scheduled_planner_is_rejected_but_business_kernel_is_not_deleted(self):
+        from packages.agent_runtime.runtime import GovernedAgentRuntime, AgentRuntimeDisabled
+        instance = object.__new__(GovernedAgentRuntime)
+        instance.settings = SimpleNamespace(enabled=True)
+        with patch.dict("os.environ", {"OPERLY_AI_EXECUTION_OWNER": "dragonzpyder"}):
+            with self.assertRaises(AgentRuntimeDisabled):
+                instance.require_enabled()
+
     def test_operly_default_owner_does_not_route(self):
         with patch.dict("os.environ", {
             "OPERLY_PERSONAL_HARNESS_OWNER": "operly",
