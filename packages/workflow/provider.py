@@ -1040,4 +1040,5 @@ class WorkflowProvider:
         from packages.workflow.scheduler import workflow_scheduler
         from packages.workflow.triggers import workflow_event_dispatcher
 
-        return CapabilityExecutionResult(value={"scheduler": workflow_scheduler.status(), "event_dispatcher": workflow_event_dispatcher.status()})
+        from packages.workflow.dispatch_driver import workflow_dispatch_driver
+        return CapabilityExecutionResult(value={"scheduler": workflow_scheduler.status(), "event_dispatcher": workflow_event_dispatcher.status(), "dispatch_driver": workflow_dispatch_driver.status()})
