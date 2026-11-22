@@ -165,6 +165,13 @@ async def _bind_workspace(message: discord.Message, reference: str) -> None:
 
 
 async def _runtime_test(message: discord.Message, prompt: str) -> None:
+    if _native_intelligence_owner():
+        # The dry-run's semantic scorer also belongs to the retired local
+        # agent architecture. Do not execute it in Workspace-only mode.
+        await message.reply(
+            "Discord Agent diagnostics require the DragonZpyder channel bridge."
+        )
+        return
     clean_prompt = " ".join(str(prompt or "").split()).strip()
     if not clean_prompt:
         await message.reply(
