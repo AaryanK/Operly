@@ -23,6 +23,10 @@ from apps.api.csrf import CSRFMiddleware
 from apps.api.discord_auth_router import router as discord_auth_router
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
+from apps.api.workflow_dispatch_router import (
+    router as workflow_dispatch_router, start_workflow_driver,
+    stop_workflow_driver, workflow_driver,
+)
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
 from apps.api.request_safety import AuthRequestSafetyMiddleware
 from apps.api.security import hash_password
@@ -162,8 +166,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
-    await workflow_scheduler.start()
-    await workflow_event_dispatcher.start()
+    active_workflow_driver = await start_workflow_driver()
     objective_eval_task = asyncio.create_task(run_startup_objective_eval_if_enabled())
     try:
         yield
@@ -172,8 +175,7 @@ async def lifespan(app: FastAPI):
             objective_eval_task.cancel()
             with suppress(asyncio.CancelledError):
                 await objective_eval_task
-        await workflow_event_dispatcher.stop()
-        await workflow_scheduler.stop()
+        await stop_workflow_driver(active_workflow_driver)
         await discord_bot_lifecycle.stop()
 
 
@@ -248,6 +250,7 @@ app.include_router(runtime_egress_router)
 app.include_router(agent_computer_router)
 app.include_router(access_router)
 app.include_router(mcp_router)
+app.include_router(workflow_dispatch_router)
 app.include_router(kernel_router)
 app.include_router(studio_public_router)
 
@@ -284,6 +287,7 @@ async def health():
         "untrusted_plugin_execution_in_control_plane": False,
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
+        "workflow_dispatch_driver": workflow_driver(),
         "workflow_scheduler": workflow_scheduler.status(),
         "workflow_event_dispatcher": workflow_event_dispatcher.status(),
         "workflow_event_triggers_enabled": True,
@@ -340,6 +344,7 @@ async def rebuild_status():
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
+        "workflow_dispatch_driver": workflow_driver(),
         "workflow_scheduler": workflow_scheduler.status(),
         "workflow_event_dispatcher": workflow_event_dispatcher.status(),
         "workflow_event_triggers": "kernel-semantic-events-same-scope-only",
