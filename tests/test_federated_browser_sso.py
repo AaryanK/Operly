@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.dependencies import get_db
 from apps.api.federated_login import (
-    SSORejected, router, verify_callback_tokens,
+    SSORejected, router, verify_callback_tokens, federated_login_available,
 )
 from packages.database.db import Base
 from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
@@ -104,8 +104,25 @@ def test_reject_bad_nonce_wrong_client_and_subject(signing):
         )
 
 
+def test_readiness_gate_requires_complete_production_config(monkeypatch, signing):
+    _, pem = signing
+    configure(monkeypatch, pem)
+    assert federated_login_available()
+    monkeypatch.setenv("OPERLY_ENV", "production")
+    monkeypatch.delenv("OPERLY_DRAGONZPYDER_SSO_PRODUCTION", raising=False)
+    assert not federated_login_available()
+    monkeypatch.setenv("OPERLY_DRAGONZPYDER_SSO_PRODUCTION", "1")
+    assert federated_login_available()
+    monkeypatch.setenv("OPERLY_FEDERATED_CLIENT_ID", "clïent")
+    assert not federated_login_available()
+    monkeypatch.setenv("OPERLY_FEDERATED_CLIENT_ID", CLIENT)
+    monkeypatch.setenv("OPERLY_FEDERATED_PUBLIC_KEY_PEM", "invalid")
+    assert not federated_login_available()
+
+
 def test_login_routes_are_invisible_until_explicit_opt_in(monkeypatch):
     monkeypatch.delenv("OPERLY_DRAGONZPYDER_SSO_ENABLED", raising=False)
+    assert not federated_login_available()
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
