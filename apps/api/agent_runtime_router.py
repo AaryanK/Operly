@@ -22,6 +22,7 @@ from packages.agent_runtime.dragonzpyder_personal import (
     DragonZpyderPersonalUnavailable,
     run_personal_harness,
 )
+from packages.agent_runtime.dragonzpyder_workspace import run_workspace_harness
 from packages.mcp.first_party import PersonalDelegationDenied
 from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
 from packages.agent_runtime.interactive import Runtime1Agent
@@ -211,15 +212,6 @@ async def _run(
     extra_context: list[ContextItem] | None = None,
     personal_session_id: str | None = None,
 ):
-    if _strict_dragonzpyder_only() and not context.is_personal:
-        # Workspace membership and MCP scopes must be delegated separately,
-        # never smuggled through the Personal user JWT or service credential.
-        raise HTTPException(
-            503, detail={
-                "code": "DRAGONZPYDER_WORKSPACE_DELEGATION_REQUIRED",
-                "message": "Workspace AI is unavailable until signed DragonZpyder workspace delegation is configured.",
-            },
-        )
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
         role="user",
@@ -238,15 +230,27 @@ async def _run(
     if extra_context:
         context_items.extend(extra_context)
 
-    if context.is_personal:
-        kernel = build_personal_runtime()
-    else:
-        facade = build_workspace_runtime()
-        kernel = await facade.request_runtime(db, context=context)
+    # In strict mode Operly supplies only validated identity and business
+    # authority. It must not even initialize its former LLM runtime.
+    kernel = None
+    if not _strict_dragonzpyder_only():
+        if context.is_personal:
+            kernel = build_personal_runtime()
+        else:
+            facade = build_workspace_runtime()
+            kernel = await facade.request_runtime(db, context=context)
 
     run_id = f"chat-{uuid4()}"
     try:
-        if _use_dragonzpyder_personal_harness(context):
+        if _strict_dragonzpyder_only() and context.is_workspace:
+            # No Personal token or delegated rights are reused for a Workspace.
+            # The endpoint is model-only until its own signed MCP authority is reviewed.
+            result = await run_workspace_harness(
+                context=context, conversation_id=conversation.id,
+                run_id=run_id, message=message,
+            )
+            model_usage = []
+        elif _use_dragonzpyder_personal_harness(context):
             if personal_session_id is None:
                 raise DragonZpyderPersonalUnavailable("Authenticated Personal session required")
             if extra_context:
