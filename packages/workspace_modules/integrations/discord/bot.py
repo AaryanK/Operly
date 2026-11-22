@@ -79,17 +79,6 @@ async def _bind_workspace(message: discord.Message, reference: str) -> None:
     if not bool(message.author.guild_permissions.manage_guild):
         await message.reply("Discord Manage Server permission is required to bind this server.")
         return
-    if _native_intelligence_owner():
-        # Discord channel identity and guest authority cannot be sent through
-        # a browser-scoped Personal/Workspace token. Never fall back to the
-        # retired local model or fabricate a workspace permission.
-        await _reply_chunks(
-            message,
-            "Operly's intelligence now runs on DragonZpyder. "
-            "Discord AI requires a separately authorized channel connection. "
-            "Use the Operly web workspace until that connection is enabled.",
-        )
-        return
     user_id = await _linked_operly_user_id(message.author.id)
     if not user_id:
         await message.reply(
@@ -477,6 +466,17 @@ async def on_message(message: discord.Message) -> None:
         )
         return
 
+    if _native_intelligence_owner():
+        # Discord channel identity and guest authority cannot be sent through
+        # a browser-scoped Personal/Workspace token. Never fall back to the
+        # retired local model or fabricate a workspace permission.
+        await _reply_chunks(
+            message,
+            "Operly's intelligence now runs on DragonZpyder. "
+            "Discord AI requires a separately authorized channel connection. "
+            "Use the Operly web workspace until that connection is enabled.",
+        )
+        return
     user_id = await _linked_operly_user_id(message.author.id)
     run_id = f"discord-{message.id}"
     runtime_trace(
