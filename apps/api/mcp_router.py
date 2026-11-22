@@ -23,6 +23,11 @@ from packages.mcp.first_party import (
     require_service_proof,
     validate_personal_delegation,
 )
+from packages.mcp.first_party_workspace import (
+    WORKSPACE_CLIENT_ID as FIRST_PARTY_WORKSPACE_CLIENT,
+    WorkspaceDelegationDenied,
+    validate_workspace_delegation,
+)
 from packages.security.execution_context import ScopeKind
 from packages.mcp.oauth import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -315,6 +320,24 @@ async def _request_context(
             conversation_id=conversation_id,
             enforce_exposure=False,
             scope_kind=ScopeKind.PERSONAL,
+        )
+    if client_id == FIRST_PARTY_WORKSPACE_CLIENT:
+        try:
+            user_id, workspace_id, tool_ids, conversation_id = await validate_workspace_delegation(
+                db, claims=payload, resource=_resource(request),
+                service_proof=service_proof,
+            )
+        except WorkspaceDelegationDenied:
+            raise HTTPException(401, "Workspace MCP delegation rejected", headers=challenge) from None
+        return McpRequestContext(
+            tenant_id=workspace_id,
+            user_id=user_id,
+            client_id=FIRST_PARTY_WORKSPACE_CLIENT,
+            token_scopes=tool_ids,
+            objective="Authenticated DragonZpyder Workspace request",
+            conversation_id=conversation_id,
+            enforce_exposure=True,
+            scope_kind=ScopeKind.WORKSPACE,
         )
     if get_registered_client(client_id) is None or payload.get("resource") != _resource(request):
         raise HTTPException(401, "Invalid MCP client or token audience", headers=challenge)

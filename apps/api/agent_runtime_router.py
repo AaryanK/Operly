@@ -22,6 +22,11 @@ from packages.agent_runtime.dragonzpyder_personal import (
     DragonZpyderPersonalUnavailable,
     run_personal_harness,
 )
+from packages.agent_runtime.dragonzpyder_workspace import (
+    DragonZpyderWorkspaceUnavailable,
+    run_workspace_harness,
+)
+from packages.mcp.first_party_workspace import WorkspaceDelegationDenied
 from packages.mcp.first_party import PersonalDelegationDenied
 from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
 from packages.agent_runtime.interactive import Runtime1Agent
@@ -190,6 +195,22 @@ def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
     return context.user_id in allowed_users
 
 
+def _use_dragonzpyder_workspace_harness(context: ExecutionContext) -> bool:
+    if (not context.is_workspace or context.is_guest_workspace
+            or not context.user_id or not context.workspace_id
+            or os.getenv("OPERLY_WORKSPACE_HARNESS_OWNER", "operly") != "dragonzpyder"):
+        return False
+    if os.getenv("OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_ENABLED") == "1":
+        if os.getenv("OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_APPROVED") != "1":
+            raise DragonZpyderWorkspaceUnavailable("Workspace migration not approved")
+        return True
+    allowed = set(filter(None, (
+        user.strip()
+        for user in os.getenv("OPERLY_DRAGONZPYDER_WORKSPACE_CANARY_USER_IDS", "").split(",")
+    )))
+    return context.user_id in allowed
+
+
 async def _run(
     db: AsyncSession,
     *,
@@ -198,6 +219,7 @@ async def _run(
     conversation: AgentChatConversation,
     extra_context: list[ContextItem] | None = None,
     personal_session_id: str | None = None,
+    workspace_session_id: str | None = None,
 ):
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
@@ -240,6 +262,20 @@ async def _run(
                 message=message,
             )
             model_usage = []  # DragonZpyder accounts for metered inference.
+        elif _use_dragonzpyder_workspace_harness(context):
+            if workspace_session_id is None or extra_context:
+                raise DragonZpyderWorkspaceUnavailable(
+                    "Workspace session or artifact transport is unavailable"
+                )
+            result = await run_workspace_harness(
+                db, context=context, session_id=workspace_session_id,
+                conversation_id=conversation.id, run_id=run_id, message=message,
+            )
+            model_usage = []
+        elif os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1":
+            # A failed or unapproved remote delegation is never replaced by
+            # another model path; mutations could otherwise run twice.
+            raise DragonZpyderWorkspaceUnavailable("Local agent executor retired")
         else:
             with collect_inference_usage() as model_usage:
                 result = await _agent().run(
@@ -250,6 +286,12 @@ async def _run(
                     context_items=context_items,
                     run_id=run_id,
                 )
+    except (DragonZpyderWorkspaceUnavailable, WorkspaceDelegationDenied) as error:
+        await db.rollback()
+        raise HTTPException(503, detail={
+            "code": "DRAGONZPYDER_WORKSPACE_UNAVAILABLE",
+            "message": "The authorized Workspace agent is unavailable.",
+        }) from error
     except (DragonZpyderPersonalUnavailable, PersonalDelegationDenied) as error:
         # Only the server-authenticated first-party harness may supply these
         # two authored diagnosis categories. Never expose raw provider errors.
@@ -414,7 +456,10 @@ async def workspace_chat(
         conversation_id=conversation.id,
         require_membership=True,
     )
-    return await _run(db, context=context, message=payload.message, conversation=conversation)
+    return await _run(
+        db, context=context, message=payload.message, conversation=conversation,
+        workspace_session_id=auth.session.id if auth.session else None,
+    )
 
 
 @personal_router.post("/chat")
