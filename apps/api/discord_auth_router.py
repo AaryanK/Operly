@@ -13,6 +13,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.auth_cookies import production, set_session_cookies
+from apps.api.discord_mobile_auth import (
+    MOBILE_COOKIE, is_mobile_callback, lookup_callback,
+    complete_callback, clear_mobile_cookie,
+)
 from apps.api.dependencies import get_db
 from apps.api.security import EmailAddressError, normalize_email
 from apps.api.session import (
@@ -93,7 +97,8 @@ async def discord_callback(
     db: AsyncSession = Depends(get_db),
 ):
     client_id, client_secret, redirect_uri = _config()
-    expected_state = request.cookies.get(DISCORD_OAUTH_STATE_COOKIE, "")
+    mobile_flow = is_mobile_callback(request, state)
+    expected_state = request.cookies.get(MOBILE_COOKIE if mobile_flow else DISCORD_OAUTH_STATE_COOKIE, "")
 
     if error:
         response = _error("Discord sign-in was cancelled or denied.")
@@ -108,6 +113,7 @@ async def discord_callback(
         _clear_state_cookie(response)
         return response
 
+    mobile_challenge = await lookup_callback(request, db, state) if mobile_flow else None
     await _rate_limit(db, "discord_oauth_callback", request, combined_limit=30, ip_limit=30)
 
     try:
@@ -210,6 +216,21 @@ async def discord_callback(
         await db.rollback()
         response = _error("This Operly account is unavailable.")
         _clear_state_cookie(response)
+        return response
+
+    if mobile_challenge is not None:
+        # No browser session is created for native login. A one-time ticket
+        # bound to the Android PKCE proof is redeemed through the native API.
+        if new_account:
+            _audit(db, "signup_completed", "succeeded", request, user_id=user.id,
+                   metadata={"provider": "discord", "scope": "personal"})
+        try:
+            response = await complete_callback(db, request, mobile_challenge, user, state)
+        except IntegrityError:
+            await db.rollback()
+            raise auth_error(409, "MOBILE_AUTH_CONFLICT", "Discord mobile sign-in conflicted")
+        if new_account:
+            await _send_welcome(db, user, request, None)
         return response
 
     membership = await _first_membership(db, user.id)
