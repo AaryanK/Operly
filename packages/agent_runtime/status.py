@@ -1,33 +1,36 @@
-"""Shared configuration status for public runtime discovery endpoints."""
-from packages.agent_runtime.inference import AgentInferenceError, InferenceRoute
-from packages.agent_runtime.runtime import AgentRuntimeSettings
+"""DragonZpyder-only delegated agent availability (not local model status)."""
+import os
+
+from packages.agent_runtime.dragonzpyder_personal import (
+    DragonZpyderPersonalUnavailable, _endpoint as personal_endpoint,
+)
+from packages.agent_runtime.dragonzpyder_workspace import (
+    DragonZpyderWorkspaceUnavailable, _endpoint as workspace_endpoint,
+)
 
 
 def agent_runtime_status() -> dict[str, object]:
-    enabled = AgentRuntimeSettings.from_environment().enabled
-    if not enabled:
-        return {
-            "enabled": False,
-            "configured": False,
-            "provider": None,
-            "model": None,
-            "reason": "OPERLY_AGENT_RUNTIME_ENABLED is off",
-        }
+    service_token = os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_AGENT_TOKEN", "")
+    service_proof = os.getenv("OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET", "")
+    has_proof = len(service_token) >= 40 and len(service_proof) >= 40
     try:
-        route = InferenceRoute.from_environment()
-    except AgentInferenceError as error:
-        return {
-            "enabled": True,
-            "configured": False,
-            "provider": None,
-            "model": None,
-            "reason": str(error),
-        }
+        personal_endpoint()
+        personal = has_proof
+    except DragonZpyderPersonalUnavailable:
+        personal = False
+    try:
+        workspace_endpoint()
+        workspace = has_proof
+    except DragonZpyderWorkspaceUnavailable:
+        workspace = False
     return {
         "enabled": True,
-        "configured": True,
-        "provider": route.provider,
-        "model": route.model_id,
-        "reason": None,
+        "configured": personal and workspace,
+        "provider": "dragonzpyder",
+        "model": None,
+        "personal_configured": personal,
+        "workspace_configured": workspace,
+        "reason": None if personal and workspace else (
+            "DragonZpyder delegated endpoint or service credentials unavailable"
+        ),
     }
-

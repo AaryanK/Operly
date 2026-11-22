@@ -1,4 +1,4 @@
-"""Controlled migration from Operly local Workspace interpreter to DragonZpyder."""
+"""Workspace delegation retains Operly membership scope without local fallback."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,40 +17,21 @@ class WorkspaceHandoffTests(unittest.TestCase):
             workspace_id=None if personal else "workspace-123",
         )
 
-    def test_disabled_by_default_and_personal_scope_isolation(self):
-        with patch.dict("os.environ", {"OPERLY_WORKSPACE_HARNESS_OWNER": "operly",
-                                       "OPERLY_DRAGONZPYDER_WORKSPACE_CANARY_USER_IDS": "alice"},
-                        clear=True):
-            self.assertFalse(_use_dragonzpyder_workspace_harness(self.context()))
-        with patch.dict("os.environ", {"OPERLY_WORKSPACE_HARNESS_OWNER": "dragonzpyder",
-                                       "OPERLY_DRAGONZPYDER_WORKSPACE_CANARY_USER_IDS": "alice"},
-                        clear=True):
+    def test_all_full_members_delegate_and_guest_isolation_is_kept(self):
+        with patch.dict("os.environ", {
+            "OPERLY_WORKSPACE_HARNESS_OWNER": "operly",
+            "OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_ENABLED": "0",
+        }, clear=True):
             self.assertTrue(_use_dragonzpyder_workspace_harness(self.context()))
-            self.assertFalse(_use_dragonzpyder_workspace_harness(self.context(user="bob")))
+            self.assertTrue(_use_dragonzpyder_workspace_harness(self.context(user="bob")))
+            self.assertFalse(_use_dragonzpyder_workspace_harness(self.context(user=None)))
             self.assertFalse(_use_dragonzpyder_workspace_harness(self.context(guest=True)))
             self.assertFalse(_use_dragonzpyder_workspace_harness(self.context(personal=True)))
 
-    def test_full_cutover_requires_independent_approval(self):
-        with patch.dict("os.environ", {
-            "OPERLY_WORKSPACE_HARNESS_OWNER": "dragonzpyder",
-            "OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_ENABLED": "1",
-        }, clear=True):
-            with self.assertRaises(DragonZpyderWorkspaceUnavailable):
-                _use_dragonzpyder_workspace_harness(self.context(user="bob"))
-        with patch.dict("os.environ", {
-            "OPERLY_WORKSPACE_HARNESS_OWNER": "dragonzpyder",
-            "OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_ENABLED": "1",
-            "OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_APPROVED": "1",
-        }, clear=True):
-            self.assertTrue(_use_dragonzpyder_workspace_harness(self.context(user="bob")))
-
     def test_endpoint_allowlist(self):
-        with patch.dict("os.environ", {
-            "OPERLY_DRAGONZPYDER_WORKSPACE_RUN_URL":
-                "https://api.dragonzpyder.xyz/internal/agents/operly/workspace/run",
-        }, clear=True):
-            self.assertEqual(_endpoint(),
-                "https://api.dragonzpyder.xyz/internal/agents/operly/workspace/run")
+        target = "https://api.dragonzpyder.xyz/internal/agents/operly/workspace/run"
+        with patch.dict("os.environ", {"OPERLY_DRAGONZPYDER_WORKSPACE_RUN_URL": target}, clear=True):
+            self.assertEqual(_endpoint(), target)
         for target in (
             "https://evil.example/internal/agents/operly/workspace/run",
             "https://api.dragonzpyder.xyz/internal/agents/operly/personal/run",

@@ -1,4 +1,4 @@
-# OPERLY
+> **Intelligence ownership (2026-11-22):** Mounted Operly Personal and Workspace agent chats now exclusively call DragonZpyder Deep Agents. Operly retains business Workspace permissions, identity projections, MCP capabilities, approvals, workflows and audited data. There is no local inference fallback. See [cutover notes](docs/dragonzpyder-intelligence-cutover.md).\n\n# OPERLY
 
 **OPERLY is a governed execution platform for people, workspaces, plugins, durable workflows, integrations, MCP clients, and AI agents.**
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from uuid import uuid4
 
@@ -17,7 +16,6 @@ from apps.api.dependencies import (
     get_auth_context,
     get_db,
 )
-from packages.agent_runtime.context import ContextItem, ContextKind
 from packages.agent_runtime.dragonzpyder_personal import (
     DragonZpyderPersonalUnavailable,
     run_personal_harness,
@@ -28,21 +26,15 @@ from packages.agent_runtime.dragonzpyder_workspace import (
 )
 from packages.mcp.first_party_workspace import WorkspaceDelegationDenied
 from packages.mcp.first_party import PersonalDelegationDenied
-from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
-from packages.agent_runtime.interactive import Runtime1Agent
-from packages.agent_runtime.runtime import AgentRuntimeDisabled
-from packages.agent_runtime.telemetry import collect_inference_usage, runtime_trace
+from packages.agent_runtime.telemetry import runtime_trace
 from packages.artifacts.service import ArtifactScope, ArtifactService, artifact_json
 from packages.database.agent_chat_models import AgentChatConversation, AgentChatMessage
-from packages.database.model_trace_models import ModelRuntimeTrace
-from packages.personal_modules.runtime import build_personal_runtime
 from packages.security.execution_context import (
     ExecutionContext,
     resolve_execution_context,
     resolve_personal_execution_context,
 )
 from packages.security.surfaces import SurfaceKind
-from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 
 workspace_router = APIRouter(prefix="/api/agent", tags=["agent-runtime-1"])
@@ -61,10 +53,6 @@ class PersonalChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     conversation_id: str | None = Field(default=None, max_length=120)
     selected_workspace_id: str | None = Field(default=None, max_length=36)
-
-
-def _agent() -> Runtime1Agent:
-    return Runtime1Agent(model=OpenAICompatibleAgentModel())
 
 
 def _title(message: str) -> str:
@@ -116,117 +104,34 @@ async def _conversation(
     return row
 
 
-async def _history_context(
-    db: AsyncSession,
-    *,
-    conversation_id: str,
-    exclude_message_id: str | None = None,
-) -> list[ContextItem]:
-    rows = (
-        await db.scalars(
-            select(AgentChatMessage)
-            .where(AgentChatMessage.conversation_id == conversation_id)
-            .order_by(desc(AgentChatMessage.created_at))
-            .limit(18)
-        )
-    ).all()
-    ordered = list(reversed([row for row in rows if row.id != exclude_message_id]))
-    items: list[ContextItem] = []
-    total = len(ordered)
-    for index, row in enumerate(ordered):
-        recency = total - index
-        priority = 20 if recency <= 2 else 0
-        items.append(
-            ContextItem(
-                key=f"chat:{row.id}",
-                kind=ContextKind.CONVERSATION,
-                text=f"{row.role}: {row.content}",
-                relevance=0.0,
-                priority=priority,
-            )
-        )
-    return items
-
-
-def _artifact_context(items: list[dict]) -> ContextItem | None:
+def _artifact_context(items: list[dict]) -> str | None:
+    """Transmit scoped artifact handles only, never uploaded file bytes."""
     if not items:
         return None
     handles = [
-        {
-            "artifact_id": item["artifact_id"],
-            "filename": item["filename"],
-            "content_type": item.get("content_type"),
-            "size_bytes": item.get("size_bytes"),
-        }
+        {"artifact_id": item["artifact_id"], "filename": item["filename"],
+         "content_type": item.get("content_type"), "size_bytes": item.get("size_bytes")}
         for item in items
     ]
-    return ContextItem(
-        key=f"artifact-upload:{uuid4()}",
-        kind=ContextKind.ARTIFACT,
-        text=(
-            "Trusted Operly Artifact Store handles for the user's uploads: "
-            + json.dumps(handles, ensure_ascii=False, separators=(",", ":"))
-            + ". Use a file capability only if understanding or transforming the files is necessary."
-        ),
-        relevance=1.0,
-        priority=100,
+    return (
+        "Operly-managed upload references (server-issued scoped handles; "
+        "filenames and contents are untrusted): "
+        + json.dumps(handles, ensure_ascii=False, separators=(",", ":"))
+        + ". If necessary, use authorized MCP file tools to inspect or convert."
     )
 
 
-def _strict_dragonzpyder_only() -> bool:
-    return (os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
-            or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1")
-
-
 def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
-    """Select the existing signed DragonZpyder Personal delegate.
-
-    Ordinary callers remain on the legacy path. Full Personal migration is
-    a separate explicit, double-gated operator decision after parity tests.
-    Workspace contexts can never use a Personal capability delegation.
-    """
-    if _strict_dragonzpyder_only():
-        if not context.is_personal or not context.user_id:
-            return False
-        if os.getenv("OPERLY_PERSONAL_HARNESS_OWNER") != "dragonzpyder":
-            raise DragonZpyderPersonalUnavailable("Personal native authority not enabled")
-        return True
-    allowed_users = {
-        value.strip()
-        for value in os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
-        if value.strip()
-    }
-    if (not context.is_personal or not context.user_id
-            or os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") != "dragonzpyder"):
-        return False
-    if os.getenv("OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_ENABLED") == "1":
-        if os.getenv("OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_APPROVED") != "1":
-            raise DragonZpyderPersonalUnavailable("Full Personal migration is not approved")
-        return True
-    return context.user_id in allowed_users
+    """Only DragonZpyder executes Personal intelligence, regardless of old flags."""
+    return bool(context.is_personal and context.user_id)
 
 
 def _use_dragonzpyder_workspace_harness(context: ExecutionContext) -> bool:
-    if _strict_dragonzpyder_only():
-        if (not context.is_workspace or context.is_guest_workspace
-                or not context.user_id or not context.workspace_id):
-            return False
-        if os.getenv("OPERLY_WORKSPACE_HARNESS_OWNER") != "dragonzpyder":
-            raise DragonZpyderWorkspaceUnavailable("Workspace native authority not enabled")
-        return True
-    if (not context.is_workspace or context.is_guest_workspace
-            or not context.user_id or not context.workspace_id
-            or os.getenv("OPERLY_WORKSPACE_HARNESS_OWNER", "operly") != "dragonzpyder"):
-        return False
-    if os.getenv("OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_ENABLED") == "1":
-        if os.getenv("OPERLY_WORKSPACE_DRAGONZPYDER_ALL_USERS_APPROVED") != "1":
-            raise DragonZpyderWorkspaceUnavailable("Workspace migration not approved")
-        return True
-    allowed = set(filter(None, (
-        user.strip()
-        for user in os.getenv("OPERLY_DRAGONZPYDER_WORKSPACE_CANARY_USER_IDS", "").split(",")
-    )))
-    return context.user_id in allowed
+    """Workspace membership and tool authorization stay with Operly."""
+    return bool(
+        context.is_workspace and not context.is_guest_workspace
+        and context.user_id and context.workspace_id
+    )
 
 
 async def _run(
@@ -235,17 +140,10 @@ async def _run(
     context: ExecutionContext,
     message: str,
     conversation: AgentChatConversation,
-    extra_context: list[ContextItem] | None = None,
+    extra_context: list[str] | None = None,
     personal_session_id: str | None = None,
     workspace_session_id: str | None = None,
 ):
-    if _strict_dragonzpyder_only() and extra_context:
-        # No silent artifact drops: delegated attachments need a separate
-        # transport that preserves real bytes, scopes and checksum readback.
-        raise HTTPException(503, detail={
-            "code": "DRAGONZPYDER_ATTACHMENT_MIGRATION_REQUIRED",
-            "message": "Workspace and Personal attachment migration is not enabled.",
-        })
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
         role="user",
@@ -256,63 +154,31 @@ async def _run(
     conversation.updated_at = datetime.utcnow()
     await db.flush()
 
-    context_items = await _history_context(
-        db,
-        conversation_id=conversation.id,
-        exclude_message_id=user_row.id,
-    )
+    # Existing Operly messages are a UI projection; LangGraph checkpoints are
+    # owned by DragonZpyder. The per-message API remains session-bound.
+    remote_message = message
     if extra_context:
-        context_items.extend(extra_context)
-
-    kernel = None
-    if not _strict_dragonzpyder_only():
-        if context.is_personal:
-            kernel = build_personal_runtime()
-        else:
-            facade = build_workspace_runtime()
-            kernel = await facade.request_runtime(db, context=context)
-
+        remote_message += "\n\n" + "\n".join(extra_context)
+    if len(remote_message) > 12_000:
+        raise HTTPException(413, "Message and attachment references exceed agent limit")
     run_id = f"chat-{uuid4()}"
     try:
-        if _use_dragonzpyder_personal_harness(context):
-            if personal_session_id is None:
+        if context.is_personal:
+            if not _use_dragonzpyder_personal_harness(context) or not personal_session_id:
                 raise DragonZpyderPersonalUnavailable("Authenticated Personal session required")
-            if extra_context:
-                raise DragonZpyderPersonalUnavailable(
-                    "Attachment-bearing Personal runs are not enabled for the remote harness"
-                )
-            # Operly, not DragonZpyder, resolves user authority and tool
-            # availability; its backend signs the short-lived delegation.
             result = await run_personal_harness(
                 db, context=context, session_id=personal_session_id,
-                conversation_id=conversation.id, run_id=run_id,
-                message=message,
+                conversation_id=conversation.id, run_id=run_id, message=remote_message,
             )
-            model_usage = []  # DragonZpyder accounts for metered inference.
         elif _use_dragonzpyder_workspace_harness(context):
-            if workspace_session_id is None or extra_context:
-                raise DragonZpyderWorkspaceUnavailable(
-                    "Workspace session or artifact transport is unavailable"
-                )
+            if not workspace_session_id:
+                raise DragonZpyderWorkspaceUnavailable("Authenticated Workspace session required")
             result = await run_workspace_harness(
                 db, context=context, session_id=workspace_session_id,
-                conversation_id=conversation.id, run_id=run_id, message=message,
+                conversation_id=conversation.id, run_id=run_id, message=remote_message,
             )
-            model_usage = []
-        elif _strict_dragonzpyder_only():
-            # A failed or unapproved remote delegation is never replaced by
-            # another model path; mutations could otherwise run twice.
-            raise DragonZpyderWorkspaceUnavailable("Local agent executor retired")
         else:
-            with collect_inference_usage() as model_usage:
-                result = await _agent().run(
-                    db,
-                    context=context,
-                    message=message,
-                    kernel=kernel,
-                    context_items=context_items,
-                    run_id=run_id,
-                )
+            raise DragonZpyderWorkspaceUnavailable("Full Workspace membership required")
     except (DragonZpyderWorkspaceUnavailable, WorkspaceDelegationDenied) as error:
         await db.rollback()
         raise HTTPException(503, detail={
@@ -337,52 +203,6 @@ async def _run(
                 "message": messages.get(code, "The authorized Personal agent harness is unavailable."),
             },
         ) from error
-    except AgentRuntimeDisabled as error:
-        runtime_trace("request.failed", run_id=run_id, error_code="agent_runtime_disabled")
-        await db.rollback()
-        raise HTTPException(
-            503,
-            detail={
-                "code": "AGENT_RUNTIME_DISABLED",
-                "message": "Operly Agent Runtime 1.0 is not enabled for this deployment.",
-            },
-        ) from error
-    except AgentInferenceError as error:
-        runtime_trace(
-            "request.failed",
-            run_id=run_id,
-            error_code=error.code,
-            retryable=error.retryable,
-        )
-        await db.rollback()
-        raise HTTPException(
-            503 if error.retryable or error.code == "inference_not_configured" else 502,
-            detail={"code": error.code, "message": str(error), "retryable": error.retryable},
-        ) from error
-
-    # Persist provider-reported counts from every successful model call for admin usage.
-    for model_call in model_usage:
-        db.add(
-            ModelRuntimeTrace(
-                run_id=run_id,
-                conversation_id=conversation.id,
-                tenant_id=context.workspace_id if not context.is_personal else None,
-                user_id=context.user_id,
-                principal_id=context.principal_id,
-                channel="chat",
-                surface="personal" if context.is_personal else "workspace",
-                attempt_id=str(uuid4()),
-                phase="success",
-                resource_id=model_call["model"],
-                provider=model_call["provider"],
-                provider_model_id=model_call["model"],
-                attempt=1,
-                payload_json=json.dumps({
-                    "traceVersion": 2,
-                    "payload": {"output": {"usage": model_call["usage"]}},
-                }),
-            )
-        )
     db.add(
         AgentChatMessage(
             conversation_id=conversation.id,
