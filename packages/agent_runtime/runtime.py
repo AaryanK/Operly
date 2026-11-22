@@ -66,6 +66,11 @@ class GovernedAgentRuntime:
         self.settings = settings or AgentRuntimeSettings.from_environment()
 
     def require_enabled(self) -> None:
+        if os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder":
+            # MCP's governed business Kernel remains fully independent;
+            # only the duplicate Operly-originated agent plan runner retires.
+            raise AgentRuntimeDisabled(
+                "Legacy Operly agent planner is retired; resume through DragonZpyder Hatchet")
         if not self.settings.enabled:
             raise AgentRuntimeDisabled("Agent runtime is disabled")
 
