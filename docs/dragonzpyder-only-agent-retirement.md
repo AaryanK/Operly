@@ -18,34 +18,48 @@
 Personal agent messages into the signed DragonZpyder Personal delegate, for
 **all** Personal users irrespective of the old UUID canary list.
 
-Workspace messages use a separate signed service-only delegate via
-`packages/agent_runtime/dragonzpyder_workspace.py`; it runs DragonZpyder
-Deep Agents with NO workspace tools until the independently permissioned
-Workspace MCP grant is delivered.
+Workspace messages use the existing session-bound, separately signed Workspace
+MCP delegation in `packages/agent_runtime/dragonzpyder_workspace.py`.
+Operly resolves current membership and selected tool permissions, issues a
+short-lived Workspace-specific MCP token, and delegates to DragonZpyder's
+existing `/internal/agents/operly/workspace/run`. Business tool calls still
+pass through the Operly Kernel and approval checks. These capabilities are
+**not** available to a user merely because DragonZpyder authenticated them.
+
+`OPERLY_IDENTITY_OWNER=dragonzpyder` (OFF by default) blocks new local
+Operly password/Google/Discord identities and local administrative account
+bootstrap. DragonZpyder OIDC login remains the account entry path. Existing
+`AppUser` rows remain local Workspace membership foreign-key projections,
+linked to DragonZpyder issuer subject by an audited one-to-one mapping.
 
 `Runtime1Agent.run` refuses to invoke Operly's old interactive model loop
 when strict mode is enabled. No automatic return to legacy inference occurs
 on destination error. Attachment-bearing chat fails closed until signed
 artifact transport exists. The flags are not set in production.
 
-## New Workspace env pairing (DO NOT ACTIVATE YET)
+## Existing signed Workspace configuration (DO NOT ACTIVATE YET)
 
-Operly:
-- `OPERLY_DRAGONZPYDER_WORKSPACE_RUN_URL` = exact URL ending in
-  `/internal/agents/operly/workspace/run`
-- `OPERLY_DRAGONZPYDER_WORKSPACE_AGENT_TOKEN` = separate random 40+ char secret
-- `OPERLY_DRAGONZPYDER_WORKSPACE_SERVICE_SECRET` = distinct random 40+ char proof
+Operly uses the already implemented `OPERLY_DRAGONZPYDER_WORKSPACE_RUN_URL`
+endpoint and the existing `OPERLY_DRAGONZPYDER_PERSONAL_AGENT_TOKEN` and
+`OPERLY_DRAGONZPYDER_MCP_SERVICE_SECRET` service credentials. It also
+requires `OPERLY_DRAGONZPYDER_WORKSPACE_MCP_ENABLED=1` for issuing
+current-membership Workspace MCP grants.
 
-DragonZpyder API:
-- `DRAGONZPYDER_OPERLY_WORKSPACE_AGENT_TOKEN` = same TOKEN through sealed
-  server-only Railway reference
-- `DRAGONZPYDER_OPERLY_WORKSPACE_SERVICE_SECRET` = same PROOF
-- `DRAGONZPYDER_WORKSPACE_DELEGATION_ENABLED=1` only after integration tests
-- Existing agent gateway, production-mode checks and budget controls must pass
+DragonZpyder accepts those same backend proofs using
+`DRAGONZPYDER_OPERLY_PERSONAL_AGENT_TOKEN` and
+`DRAGONZPYDER_OPERLY_MCP_SERVICE_SECRET` and independently enables the
+Workspace path with `DRAGONZPYDER_OPERLY_WORKSPACE_HARNESS_ENABLED=1`.
+The existing model gateway, budget and runtime gates apply. Do not use
+invented alternate Workspace secret variable names.
 
-No browser should obtain the service secrets. No shared Personal/Workspace
-delegations are allowed. Guest principals are rejected until an independent
-guest-scope contract has been reviewed.
+Retirement further requires `OPERLY_AI_EXECUTION_OWNER=dragonzpyder`,
+`OPERLY_PERSONAL_HARNESS_OWNER=dragonzpyder`,
+`OPERLY_WORKSPACE_HARNESS_OWNER=dragonzpyder`, and separately
+`OPERLY_IDENTITY_OWNER=dragonzpyder`, only after identity mappings,
+artifacts, approvals, scheduled goals, and client paths are proven.
+
+No browser may receive these service credentials. A guest principal never
+inherits another member's Workspace grants.
 
 ## Proper retirement sequence
 
@@ -70,7 +84,4 @@ approval/audit system, or business endpoints.** They are not competing AI
 harnesses; they are the business capabilities the single DragonZpyder harness
 needs to call.
 
-**DO NOT turn on strict owner now:** Workspace MCP execution and artifact
-transport are not yet integrated; the new Workspace delegate is intentionally
-tool-free. In this state, enabling strict mode on existing business users
-would break legitimate actions even though inference would route correctly.
+**DO NOT turn on strict owner now:** The Workspace MCP delegate exists and is tool-capable, but complete account migration, attachment transport, Discord channel authority, workflow execution, and end-to-end parity are still unverified. Enabling strict mode early can interrupt legitimate work.
