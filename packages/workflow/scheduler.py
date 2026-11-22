@@ -112,12 +112,36 @@ class WorkflowScheduler:
             except asyncio.TimeoutError:
                 pass
 
-    async def tick(self) -> None:
+    async def reconcile(self) -> None:
+        """Single business-state reconciliation used by either dispatch driver."""
         self._last_tick_at = datetime.utcnow()
         await self._release_decided_approvals_and_waits()
         await self._mark_orphaned_running_runs()
         await self._enqueue_due_schedules()
 
+    async def dispatch_external_batch(self) -> int:
+        """Execute a bounded leased batch under the external driver's wake.
+
+        No local polling or detached workflow tasks. The internal API holds
+        the cross-replica pulse lock; normal engine authority, wait and approval
+        handling, concurrency policies and lease heartbeats remain unchanged.
+        """
+        if self._task is not None and not self._task.done():
+            raise RuntimeError("Local scheduler must be stopped")
+        if any(not task.done() for task in self._workers):
+            raise RuntimeError("Local workflow workers must be drained")
+        await self.reconcile()
+        claims = await self._claim_runs(limit=min(self._max_workers, 25))
+        if claims:
+            await asyncio.gather(*(
+                self._execute_claimed_run(run_id, lease_token)
+                for run_id, lease_token in claims
+            ))
+        self._last_error = None
+        return len(claims)
+
+    async def tick(self) -> None:
+        await self.reconcile()
         active = sum(1 for task in self._workers if not task.done())
         capacity = max(0, self._max_workers - active)
         if capacity < 1:
