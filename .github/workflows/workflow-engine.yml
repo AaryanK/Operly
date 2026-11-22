@@ -15,6 +15,8 @@ on:
       - "apps/api/artifact_router.py"
       - "apps/api/dependencies.py"
       - "apps/api/main.py"
+      - "apps/api/workflow_dispatch_router.py"
+      - "tests/test_workflow_hatchet_dispatch.py"
       - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
@@ -71,6 +73,8 @@ on:
       - "apps/api/artifact_router.py"
       - "apps/api/dependencies.py"
       - "apps/api/main.py"
+      - "apps/api/workflow_dispatch_router.py"
+      - "tests/test_workflow_hatchet_dispatch.py"
       - "apps/api/mcp_router.py"
       - "apps/sandbox_runner/**"
       - "apps/web/package.json"
@@ -175,7 +179,9 @@ jobs:
           python -m py_compile alembic/versions/0052_mcp_agent_gateway.py
 
       - name: Run MCP agent capability tests
-        run: python -m unittest discover -s tests -p "test_mcp_gateway.py" -v
+        run: |
+          python -m unittest discover -s tests -p "test_mcp_gateway.py" -v
+          python -m unittest discover -s tests -p "test_workflow_hatchet_dispatch.py" -v
 
   personal-capabilities:
     runs-on: ubuntu-latest

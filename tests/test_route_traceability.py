@@ -10,6 +10,7 @@ from packages.kernel.route_traceability import (
     EXPECTED_APPROVED_WORKSPACE_ROUTE,
     EXPECTED_ROUTE_COUNT,
     EXPECTED_FEDERATED_ROUTES,
+    EXPECTED_WORKFLOW_DISPATCH_ROUTES,
     classify_route,
     validate_route_traceability,
 )
@@ -41,9 +42,23 @@ class RouteTraceabilityTests(unittest.TestCase):
             != EXPECTED_FIRST_PARTY_ROUTE
             and (row["operation"], row["endpoint"], row["source"])
             != EXPECTED_APPROVED_WORKSPACE_ROUTE
+            and (row["operation"], row["endpoint"], row["source"]) not in EXPECTED_WORKFLOW_DISPATCH_ROUTES
         ]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
+
+    def test_workflow_dispatch_is_exact_control_plane_not_a_trigger(self):
+        rows = [r for r in self.rows if r["source"] == "workflow_dispatch_router"]
+        self.assertEqual({(r["operation"],r["endpoint"],r["source"]) for r in rows},
+                         EXPECTED_WORKFLOW_DISPATCH_ROUTES)
+        for row in rows:
+            classification = classify_route(row)
+            self.assertEqual(classification.category, "control_plane")
+            self.assertFalse(classification.kernel_governed)
+            self.assertFalse(classification.semantic_event_source)
+            self.assertFalse(classification.workflow_trigger_identity)
+        unexpected = dict(rows[0], operation="DELETE /api/internal/dragonzpyder/workflow-pulse")
+        self.assertIsNone(classify_route(unexpected))
 
     def test_new_federated_routes_are_pinned_as_non_kernel_auth_transports(self):
         rows = [
