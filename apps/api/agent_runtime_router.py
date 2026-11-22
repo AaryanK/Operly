@@ -262,7 +262,9 @@ async def _save_uploads(
             metadata={"conversation_id": conversation_id, "ingress": "agent_runtime_1"},
         )
         stored.append(artifact_json(row))
-    await db.flush()
+    # The remote MCP gateway uses another DB connection. Uploaded handles and
+    # their owning conversation must be committed before delegating to it.
+    await db.commit()
     runtime_trace(
         "attachments.stored",
         conversation_id=conversation_id,
