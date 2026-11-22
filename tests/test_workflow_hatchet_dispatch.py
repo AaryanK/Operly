@@ -8,7 +8,8 @@ from fastapi import HTTPException
 from apps.api import workflow_dispatch_router as driver
 from packages.workflow.scheduler import WorkflowScheduler
 
-SECRET = "workflow-dispatch-test-" + "x" * 40
+# Synthetic test-only fixture; no configured or reusable credential.
+SECRET = "workflow-dispatch-test-" + "x" * 40  # pragma: allowlist secret
 
 
 class DriverTests(unittest.IsolatedAsyncioTestCase):
