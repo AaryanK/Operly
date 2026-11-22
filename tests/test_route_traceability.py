@@ -10,6 +10,7 @@ from packages.kernel.route_traceability import (
     EXPECTED_APPROVED_WORKSPACE_ROUTE,
     EXPECTED_ROUTE_COUNT,
     EXPECTED_FEDERATED_ROUTES,
+    EXPECTED_DISCORD_MOBILE_ROUTES,
     EXPECTED_WORKFLOW_HANDOFF_ROUTE,
     classify_route,
     validate_route_traceability,
@@ -38,6 +39,7 @@ class RouteTraceabilityTests(unittest.TestCase):
             row for row in self.rows
             if row["source"] not in isolated_sources
             and (row["operation"], row["endpoint"], row["source"]) not in EXPECTED_FEDERATED_ROUTES
+            and (row["operation"], row["endpoint"], row["source"]) not in EXPECTED_DISCORD_MOBILE_ROUTES
             and (row["operation"], row["endpoint"], row["source"])
             != EXPECTED_FIRST_PARTY_ROUTE
             and (row["operation"], row["endpoint"], row["source"])
@@ -68,6 +70,22 @@ class RouteTraceabilityTests(unittest.TestCase):
             classified = classify_route(row)
             self.assertIsNotNone(classified)
             self.assertEqual(classified.category, "auth_transport")
+            self.assertFalse(classified.kernel_governed)
+            self.assertFalse(classified.workflow_trigger_identity)
+
+    def test_discord_mobile_routes_are_exact_auth_transports(self):
+        rows=[
+            row for row in self.rows
+            if row["source"] == "discord_mobile_router"
+        ]
+        self.assertEqual(
+            {(r["operation"],r["endpoint"],r["source"]) for r in rows},
+            EXPECTED_DISCORD_MOBILE_ROUTES,
+        )
+        for row in rows:
+            classified=classify_route(row)
+            self.assertIsNotNone(classified)
+            self.assertEqual(classified.category,"auth_transport")
             self.assertFalse(classified.kernel_governed)
             self.assertFalse(classified.workflow_trigger_identity)
 
