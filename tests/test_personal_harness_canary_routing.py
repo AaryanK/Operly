@@ -25,6 +25,27 @@ class PersonalHarnessCanaryRoutingTests(unittest.TestCase):
             self.assertFalse(_use_dragonzpyder_personal_harness(SimpleNamespace(is_personal=True, user_id="user-c")))
             self.assertFalse(_use_dragonzpyder_personal_harness(SimpleNamespace(is_personal=False, user_id="user-a")))
 
+    def test_all_users_migration_requires_both_independent_gates(self):
+        from packages.agent_runtime.dragonzpyder_personal import DragonZpyderPersonalUnavailable
+        personal = SimpleNamespace(is_personal=True, user_id="user-c")
+        workspace = SimpleNamespace(is_personal=False, user_id="user-c")
+        with patch.dict("os.environ", {
+            "OPERLY_PERSONAL_HARNESS_OWNER": "dragonzpyder",
+            "OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS": "",
+            "OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_ENABLED": "1",
+            "OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_APPROVED": "0",
+        }, clear=True):
+            with self.assertRaises(DragonZpyderPersonalUnavailable):
+                _use_dragonzpyder_personal_harness(personal)
+            self.assertFalse(_use_dragonzpyder_personal_harness(workspace))
+        with patch.dict("os.environ", {
+            "OPERLY_PERSONAL_HARNESS_OWNER": "dragonzpyder",
+            "OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_ENABLED": "1",
+            "OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_APPROVED": "1",
+        }, clear=True):
+            self.assertTrue(_use_dragonzpyder_personal_harness(personal))
+            self.assertFalse(_use_dragonzpyder_personal_harness(workspace))
+
     def test_operly_default_owner_does_not_route(self):
         with patch.dict("os.environ", {
             "OPERLY_PERSONAL_HARNESS_OWNER": "operly",
