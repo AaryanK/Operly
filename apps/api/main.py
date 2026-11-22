@@ -21,6 +21,7 @@ from apps.api.agent_runtime_router import (
 from apps.api.artifact_router import router as artifact_router
 from apps.api.csrf import CSRFMiddleware
 from apps.api.discord_auth_router import router as discord_auth_router
+from apps.api.discord_mobile_auth import router as discord_mobile_router
 from apps.api.kernel_router import router as kernel_router
 from apps.api.mcp_router import router as mcp_router
 from apps.api.public_safety import PublicEndpointSafetyMiddleware
@@ -243,6 +244,7 @@ app.include_router(federated_login_router)
 app.include_router(workflow_handoff_router)
 app.include_router(admin_router)
 app.include_router(discord_auth_router)
+app.include_router(discord_mobile_router)
 app.include_router(personal_agent_runtime_router)
 app.include_router(workspace_agent_runtime_router)
 app.include_router(personal_connectors_router)
