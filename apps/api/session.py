@@ -28,6 +28,7 @@ from apps.api.dependencies import (
     get_db,
 )
 from apps.api.google_auth import GoogleAuthenticationError, verify_google_credential
+from apps.api.discord_mobile_auth import enabled as _discord_mobile_enabled
 from apps.api.schemas import (
     ChallengeInput,
     ChangePasswordInput,
@@ -453,6 +454,7 @@ async def auth_bootstrap(response: Response):
         "google_client_id": os.getenv("GOOGLE_AUTH_CLIENT_ID", "").strip() or None,
         "dragonzpyder_sso_available": federated_login_available(),
         "dragonzpyder_web_sso_available": dragonzpyder_web_login_available(),
+        "discord_mobile_enabled": _discord_mobile_enabled(),
     }
 
 
