@@ -9,6 +9,9 @@ on:
       - "apps/web/src/workspace/WorkspaceOperly.tsx"
       - "apps/web/src/workspace-lite/WorkspaceSafeApp.tsx"
       - "packages/agent_runtime/**"
+      - "packages/mcp/first_party_workspace.py"
+      - "tests/test_dragonzpyder_workspace_delegation.py"
+      - "tests/test_dragonzpyder_workspace_handoff.py"
       - "packages/kernel/capability_search.py"
       - "packages/kernel/registry.py"
       - "packages/kernel/runtime_availability.py"
@@ -69,6 +72,7 @@ jobs:
           python -m py_compile \
             apps/api/agent_runtime_router.py \
             apps/api/main.py \
+            apps/api/identity_owner_gate.py \
             packages/agent_runtime/__init__.py \
             packages/agent_runtime/context.py \
             packages/agent_runtime/contracts.py \
@@ -81,6 +85,8 @@ jobs:
             packages/agent_runtime/store.py \
             packages/agent_runtime/orchestrator.py \
             packages/agent_runtime/telemetry.py \
+            packages/mcp/first_party_workspace.py \
+            packages/agent_runtime/dragonzpyder_workspace.py \
             packages/kernel/capability_search.py \
             packages/kernel/registry.py \
             packages/kernel/runtime_availability.py \
@@ -127,6 +133,10 @@ jobs:
           python -m unittest tests.test_agent_runtime_races -v
           python -m unittest tests.test_agent_runtime_uncertain -v
           python -m unittest tests.test_dragonzpyder_inference_provider -v
+          python -m unittest tests.test_dragonzpyder_workspace_delegation -v
+          python -m unittest tests.test_dragonzpyder_workspace_handoff -v
+          python -m unittest tests.test_personal_harness_canary_routing -v
+          python -m unittest tests.test_dragonzpyder_identity_owner -v
       - name: Validate clean database migration
         run: |
           rm -f /tmp/operly-agent-runtime-foundation.db
