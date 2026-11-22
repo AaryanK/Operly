@@ -67,25 +67,25 @@ class PersonalHarnessCanaryRoutingTests(unittest.TestCase):
                 _use_dragonzpyder_personal_harness(
                     SimpleNamespace(is_personal=True, user_id="fresh-user"))
 
-    def test_strict_owner_disables_workspace_inference_without_signed_delegation(self):
+    def test_strict_owner_disables_local_llm_and_requires_signed_workspace_context(self):
         import asyncio
-        from fastapi import HTTPException
-        from apps.api.agent_runtime_router import _run
         from packages.agent_runtime.interactive import Runtime1Agent
         from packages.agent_runtime.runtime import AgentRuntimeDisabled
+        from packages.agent_runtime.dragonzpyder_workspace import run_workspace_harness
+        from packages.agent_runtime.dragonzpyder_personal import DragonZpyderPersonalUnavailable
         with patch.dict("os.environ", {"OPERLY_AI_EXECUTION_OWNER": "dragonzpyder"}):
-            with self.assertRaises(HTTPException) as blocked:
-                asyncio.run(_run(
-                    db=None, context=SimpleNamespace(is_personal=False),
-                    message="work", conversation=None))
-            self.assertEqual(blocked.exception.status_code, 503)
-            self.assertEqual(blocked.exception.detail["code"],
-                             "DRAGONZPYDER_WORKSPACE_DELEGATION_REQUIRED")
             with self.assertRaises(AgentRuntimeDisabled):
                 asyncio.run(Runtime1Agent.run(
                     object.__new__(Runtime1Agent), None,
                     context=SimpleNamespace(), message="hello",
                     kernel=None, run_id="test"))
+            # An empty/invalid Workspace authority is never delegated to DZ.
+            with self.assertRaises(DragonZpyderPersonalUnavailable):
+                asyncio.run(run_workspace_harness(
+                    context=SimpleNamespace(
+                        is_workspace=True, workspace_id="workspace",
+                        user_id="user", principal_id="user:user"),
+                    conversation_id="conversation", run_id="test", message="hi"))
 
     def test_operly_default_owner_does_not_route(self):
         with patch.dict("os.environ", {
