@@ -8,6 +8,7 @@ DRAGONZPYDER_IDENTITY_TEST_DSN must target a disposable identity_test DB.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sys
 from contextlib import asynccontextmanager
@@ -94,7 +95,8 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
     try:
         await admin.execute(f"SET search_path TO {schema}")
         for filename in ("schema_staging.sql", "schema_sessions_staging.sql",
-                         "schema_oauth_staging.sql", "schema_login_staging.sql"):
+                         "schema_oauth_staging.sql", "schema_login_staging.sql",
+                         "schema_consent_staging.sql"):
             await admin.execute((dzroot / "identity" / filename).read_text("utf-8"))
         # Safely simulate activation *only* inside this randomly named disposable
         # schema. The real migration still prohibits ACTIVE status everywhere.
@@ -224,6 +226,30 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             assert displayed.status_code == 200
             assert 'id="consent" ' in displayed.text
             assert 'id="consent" hidden' not in displayed.text
+            ticket_match = re.search(
+                r'<meta name="dz-consent-ticket" content="([A-Za-z0-9_-]{32,160})">',
+                displayed.text,
+            )
+            assert ticket_match is not None
+            consent_ticket = ticket_match.group(1)
+            missing_consent = await identity.post(
+                "/identity/v1/authorize",
+                json={k:v[0] for k,v in params.items()},
+                headers={"Origin": ISSUER,
+                         "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
+                         "Accept": "application/json"},
+            )
+            assert missing_consent.status_code == 403
+            tampered = {k:v[0] for k,v in params.items()}
+            tampered["state"] = "f" * 48
+            tampered["consent_ticket"] = consent_ticket
+            rejected = await identity.post(
+                "/identity/v1/authorize", json=tampered,
+                headers={"Origin": ISSUER,
+                         "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
+                         "Accept": "application/json"},
+            )
+            assert rejected.status_code == 403
 
             wrong_csrf = await identity.post(
                 "/identity/v1/authorize", json={k:v[0] for k,v in params.items()},
@@ -231,7 +257,8 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             )
             assert wrong_csrf.status_code == 403
             consent = await identity.post(
-                "/identity/v1/authorize", json={k:v[0] for k,v in params.items()},
+                "/identity/v1/authorize",
+                json={**{k:v[0] for k,v in params.items()}, "consent_ticket": consent_ticket},
                 headers={"Origin": ISSUER,
                          "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
                          "Accept": "application/json"},
@@ -243,6 +270,14 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             assert callback_query["state"] == params["state"]
             assert "id_token" not in consent.json()
             assert "access_token" not in consent.json()
+            consent_replay = await identity.post(
+                "/identity/v1/authorize",
+                json={**{k:v[0] for k,v in params.items()}, "consent_ticket": consent_ticket},
+                headers={"Origin": ISSUER,
+                         "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
+                         "Accept": "application/json"},
+            )
+            assert consent_replay.status_code == 403
 
             # A forged state cannot establish a local session.
             forged = await operly.get(CALLBACK + "?code=" + callback_query["code"][0]
