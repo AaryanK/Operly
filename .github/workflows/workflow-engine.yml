@@ -54,6 +54,8 @@ on:
       - "tests/test_plugin_platform.py"
       - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
+      - "tests/test_dragonzpyder_migration_inventory.py"
+      - "scripts/dragonzpyder_migration_inventory.py"
       - "tests/test_workflow_stress_matrix.py"
   push:
     branches:
@@ -110,6 +112,8 @@ on:
       - "tests/test_plugin_platform.py"
       - "tests/test_plugin_sandbox_reconciler.py"
       - "tests/test_workflow_package.py"
+      - "tests/test_dragonzpyder_migration_inventory.py"
+      - "scripts/dragonzpyder_migration_inventory.py"
       - "tests/test_workflow_stress_matrix.py"
 
 concurrency:
@@ -148,6 +152,7 @@ jobs:
       - name: Run Workflow package tests
         run: |
           python -m unittest discover -s tests -p "test_workflow_package.py" -v
+          python -m unittest discover -s tests -p "test_dragonzpyder_migration_inventory.py" -v
           python -m pytest -q tests/test_workflow_handoff_http.py
           python -m unittest discover -s tests -p "test_workflow_stress_matrix.py" -v
 
