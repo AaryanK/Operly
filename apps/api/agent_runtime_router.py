@@ -212,6 +212,13 @@ async def _run(
     extra_context: list[ContextItem] | None = None,
     personal_session_id: str | None = None,
 ):
+    if _strict_dragonzpyder_only() and extra_context:
+        # Do not pretend that uploaded artifacts were transferred to the
+        # DragonZpyder checkpoint. Signed, owner-scoped file transport is
+        # a mandatory separate migration before attachment cutover.
+        raise HTTPException(
+            503, detail={"code": "DRAGONZPYDER_ATTACHMENT_MIGRATION_REQUIRED",
+                         "message": "Attachment-bearing AI requests require native artifact transfer."})
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
         role="user",
