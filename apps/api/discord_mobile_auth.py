@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from html import escape
 import os
 import re
 import secrets
@@ -14,7 +15,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +59,7 @@ def is_mobile_callback(request:Request,state:str|None)->bool:
     return bool(state and saved and hmac.compare_digest(state,saved))
 
 
-def clear_mobile_cookie(response:RedirectResponse)->None:
+def clear_mobile_cookie(response:Response)->None:
     response.delete_cookie(MOBILE_COOKIE,path="/")
 
 
@@ -120,7 +121,7 @@ async def lookup_callback(request:Request,db:AsyncSession,state:str|None)->AuthC
 
 
 async def complete_callback(db:AsyncSession,request:Request,challenge:AuthChallenge,
-                            user:AppUser, state:str)->RedirectResponse:
+                            user:AppUser, state:str)->Response:
     ticket=secrets.token_urlsafe(40)
     original_hash=challenge.secret_hash
     outcome=await db.execute(update(AuthChallenge).where(
@@ -135,10 +136,33 @@ async def complete_callback(db:AsyncSession,request:Request,challenge:AuthChalle
     _audit(db,"discord_mobile_callback","succeeded",request,user_id=user.id,metadata={"scope":"personal"})
     await db.commit()
     deep_link="dragonzpyder://auth/discord?"+urlencode({"state":state,"ticket":ticket})
-    response=RedirectResponse(deep_link,status_code=303)
+    safe_link=escape(deep_link,quote=True)
+    # Chrome blocks some automatic cross-app redirects after provider OAuth.
+    # A user-activated link guarantees an explicit handoff without JavaScript
+    # or copying browser cookies into native storage.
+    page=("""<!doctype html><html lang="en"><head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Return to DragonZpyder</title>
+    <style>body{background:#0e0f11;color:#f6f4f1;font:16px system-ui;margin:0;min-height:100vh;
+    display:grid;place-items:center}main{padding:28px;max-width:420px;width:86%;text-align:center;
+    border:1px solid #665047;border-radius:22px;background:#242124}
+    strong{font-size:26px}p{color:#c2b8b0;line-height:1.5}
+    a{display:block;background:#b94a21;color:white;padding:16px;border-radius:14px;
+    margin-top:28px;text-decoration:none;font-weight:700}
+    small{display:block;margin-top:18px;color:#ada39d}</style></head>
+    <body><main><strong>DragonZpyder</strong><h1>Discord confirmed</h1>
+    <p>Your Discord identity was verified. Return to the Android app to finish securing your session.</p>
+    <a href="""+chr(34)+safe_link+chr(34)+""">Return to DragonZpyder</a>
+    <small>This link expires after ten minutes and works only on your initiating device.</small>
+    </main></body></html>""")
+    response=HTMLResponse(page,status_code=200)
     clear_mobile_cookie(response)
     response.headers["Cache-Control"]="no-store"
     response.headers["Referrer-Policy"]="no-referrer"
+    response.headers["Content-Security-Policy"]=(
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'; connect-src 'none'"
+    )
     return response
 
 
