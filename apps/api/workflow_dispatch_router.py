@@ -66,7 +66,7 @@ async def stop_workflow_driver(driver: str) -> None:
 
 def _authorized(proof: str) -> bool:
     key = _secret()
-    return len(key) >= 40 and secrets.compare_digest(key, proof or "")
+    return len(key) >= 40 and secrets.compare_digest(key.encode("utf-8"), (proof or "").encode("utf-8"))
 
 
 @router.get("/api/internal/dragonzpyder/workflow-pulse")
