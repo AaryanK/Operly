@@ -234,7 +234,7 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             consent_ticket = ticket_match.group(1)
             missing_consent = await identity.post(
                 "/identity/v1/authorize",
-                json={**{k:v[0] for k,v in params.items()}, "consent_ticket": consent_ticket},
+                json={k:v[0] for k,v in params.items()},
                 headers={"Origin": ISSUER,
                          "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
                          "Accept": "application/json"},
@@ -257,7 +257,8 @@ async def test_full_cross_repo_browser_sso_lifecycle(monkeypatch):
             )
             assert wrong_csrf.status_code == 403
             consent = await identity.post(
-                "/identity/v1/authorize", json={k:v[0] for k,v in params.items()},
+                "/identity/v1/authorize",
+                json={**{k:v[0] for k,v in params.items()}, "consent_ticket": consent_ticket},
                 headers={"Origin": ISSUER,
                          "x-dz-csrf": identity.cookies["__Host-dz_csrf"],
                          "Accept": "application/json"},
