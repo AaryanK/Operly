@@ -30,6 +30,11 @@ from packages.workspace_modules.tools.runtime import build_workspace_runtime
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 
 
+def _native_intelligence_owner() -> bool:
+    return (os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
+            or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1")
+
+
 def _runtime_agent() -> Runtime1Agent:
     return Runtime1Agent(model=OpenAICompatibleAgentModel())
 
@@ -73,6 +78,17 @@ async def _bind_workspace(message: discord.Message, reference: str) -> None:
         return
     if not bool(message.author.guild_permissions.manage_guild):
         await message.reply("Discord Manage Server permission is required to bind this server.")
+        return
+    if _native_intelligence_owner():
+        # Discord channel identity and guest authority cannot be sent through
+        # a browser-scoped Personal/Workspace token. Never fall back to the
+        # retired local model or fabricate a workspace permission.
+        await _reply_chunks(
+            message,
+            "Operly's intelligence now runs on DragonZpyder. "
+            "Discord AI requires a separately authorized channel connection. "
+            "Use the Operly web workspace until that connection is enabled.",
+        )
         return
     user_id = await _linked_operly_user_id(message.author.id)
     if not user_id:
