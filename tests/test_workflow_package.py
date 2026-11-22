@@ -239,6 +239,7 @@ class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
         async def slow_tick():
             entered.set()
             await release.wait()
+            return 0
         self.scheduler.tick.side_effect = slow_tick
         proof = "x" * 48
         with patch.dict("os.environ", {
