@@ -173,6 +173,11 @@ def _artifact_context(items: list[dict]) -> ContextItem | None:
     )
 
 
+def _strict_dragonzpyder_only() -> bool:
+    return (os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
+            or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1")
+
+
 def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
     """Select the existing signed DragonZpyder Personal delegate.
 
@@ -180,6 +185,12 @@ def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
     a separate explicit, double-gated operator decision after parity tests.
     Workspace contexts can never use a Personal capability delegation.
     """
+    if _strict_dragonzpyder_only():
+        if not context.is_personal or not context.user_id:
+            return False
+        if os.getenv("OPERLY_PERSONAL_HARNESS_OWNER") != "dragonzpyder":
+            raise DragonZpyderPersonalUnavailable("Personal native authority not enabled")
+        return True
     allowed_users = {
         value.strip()
         for value in os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
@@ -196,6 +207,13 @@ def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
 
 
 def _use_dragonzpyder_workspace_harness(context: ExecutionContext) -> bool:
+    if _strict_dragonzpyder_only():
+        if (not context.is_workspace or context.is_guest_workspace
+                or not context.user_id or not context.workspace_id):
+            return False
+        if os.getenv("OPERLY_WORKSPACE_HARNESS_OWNER") != "dragonzpyder":
+            raise DragonZpyderWorkspaceUnavailable("Workspace native authority not enabled")
+        return True
     if (not context.is_workspace or context.is_guest_workspace
             or not context.user_id or not context.workspace_id
             or os.getenv("OPERLY_WORKSPACE_HARNESS_OWNER", "operly") != "dragonzpyder"):
@@ -221,6 +239,13 @@ async def _run(
     personal_session_id: str | None = None,
     workspace_session_id: str | None = None,
 ):
+    if _strict_dragonzpyder_only() and extra_context:
+        # No silent artifact drops: delegated attachments need a separate
+        # transport that preserves real bytes, scopes and checksum readback.
+        raise HTTPException(503, detail={
+            "code": "DRAGONZPYDER_ATTACHMENT_MIGRATION_REQUIRED",
+            "message": "Workspace and Personal attachment migration is not enabled.",
+        })
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
         role="user",
@@ -239,11 +264,13 @@ async def _run(
     if extra_context:
         context_items.extend(extra_context)
 
-    if context.is_personal:
-        kernel = build_personal_runtime()
-    else:
-        facade = build_workspace_runtime()
-        kernel = await facade.request_runtime(db, context=context)
+    kernel = None
+    if not _strict_dragonzpyder_only():
+        if context.is_personal:
+            kernel = build_personal_runtime()
+        else:
+            facade = build_workspace_runtime()
+            kernel = await facade.request_runtime(db, context=context)
 
     run_id = f"chat-{uuid4()}"
     try:
@@ -272,7 +299,7 @@ async def _run(
                 conversation_id=conversation.id, run_id=run_id, message=message,
             )
             model_usage = []
-        elif os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1":
+        elif _strict_dragonzpyder_only():
             # A failed or unapproved remote delegation is never replaced by
             # another model path; mutations could otherwise run twice.
             raise DragonZpyderWorkspaceUnavailable("Local agent executor retired")
