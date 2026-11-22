@@ -69,23 +69,36 @@ class PersonalHarnessCanaryRoutingTests(unittest.TestCase):
 
     def test_strict_owner_disables_local_llm_and_requires_signed_workspace_context(self):
         import asyncio
+        from apps.api.agent_runtime_router import _use_dragonzpyder_workspace_harness
         from packages.agent_runtime.interactive import Runtime1Agent
         from packages.agent_runtime.runtime import AgentRuntimeDisabled
-        from packages.agent_runtime.dragonzpyder_workspace import run_workspace_harness
-        from packages.agent_runtime.dragonzpyder_personal import DragonZpyderPersonalUnavailable
-        with patch.dict("os.environ", {"OPERLY_AI_EXECUTION_OWNER": "dragonzpyder"}):
+        from packages.agent_runtime.dragonzpyder_workspace import DragonZpyderWorkspaceUnavailable
+        context = SimpleNamespace(
+            is_workspace=True, is_guest_workspace=False,
+            workspace_id="workspace-123", user_id="user-123")
+        with patch.dict("os.environ", {
+            "OPERLY_AI_EXECUTION_OWNER": "dragonzpyder",
+            "OPERLY_WORKSPACE_HARNESS_OWNER": "dragonzpyder",
+        }, clear=True):
+            self.assertTrue(_use_dragonzpyder_workspace_harness(context))
             with self.assertRaises(AgentRuntimeDisabled):
                 asyncio.run(Runtime1Agent.run(
                     object.__new__(Runtime1Agent), None,
                     context=SimpleNamespace(), message="hello",
                     kernel=None, run_id="test"))
-            # An empty/invalid Workspace authority is never delegated to DZ.
-            with self.assertRaises(DragonZpyderPersonalUnavailable):
-                asyncio.run(run_workspace_harness(
-                    context=SimpleNamespace(
-                        is_workspace=True, workspace_id="workspace",
-                        user_id="user", principal_id="user:user"),
-                    conversation_id="conversation", run_id="test", message="hi"))
+        with patch.dict("os.environ", {
+            "OPERLY_AI_EXECUTION_OWNER": "dragonzpyder",
+            "OPERLY_WORKSPACE_HARNESS_OWNER": "operly",
+        }, clear=True):
+            with self.assertRaises(DragonZpyderWorkspaceUnavailable):
+                _use_dragonzpyder_workspace_harness(context)
+        with patch.dict("os.environ", {
+            "OPERLY_AI_EXECUTION_OWNER": "dragonzpyder",
+            "OPERLY_WORKSPACE_HARNESS_OWNER": "dragonzpyder",
+        }, clear=True):
+            self.assertFalse(_use_dragonzpyder_workspace_harness(
+                SimpleNamespace(is_workspace=True, is_guest_workspace=True,
+                                workspace_id="workspace-123", user_id="user-123")))
 
     def test_old_scheduled_planner_is_rejected_but_business_kernel_is_not_deleted(self):
         from packages.agent_runtime.runtime import GovernedAgentRuntime, AgentRuntimeDisabled
