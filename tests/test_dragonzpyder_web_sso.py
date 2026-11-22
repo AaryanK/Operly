@@ -61,13 +61,14 @@ def test_web_callback_uses_separate_client_and_redirect(monkeypatch):
         import httpx
         from uuid import uuid4
         from sqlalchemy import select
-        from packages.database.models import AppUser, AuthSession
+        from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
         from packages.database.federated_identity_models import FederatedIdentityMap
         user_id = str(uuid4())
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, tables=[
                 FederatedLoginAttempt.__table__, AppUser.__table__,
-                AuthSession.__table__, FederatedIdentityMap.__table__,
+                AuthSession.__table__, Tenant.__table__, TenantMember.__table__,
+                FederatedIdentityMap.__table__,
             ])
         maker = async_sessionmaker(engine, expire_on_commit=False)
         async with maker() as db:
