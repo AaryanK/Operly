@@ -40,6 +40,13 @@ EXPECTED_FEDERATED_ROUTES = frozenset({
     ("GET /api/auth/dragonzpyder/web/callback",
      "apps.api.federated_login:complete_dragonzpyder_web_login", "federated_login_router"),
 })
+EXPECTED_DISCORD_MOBILE_ROUTES = frozenset({
+    ("GET /api/identities/discord/mobile/start",
+     "apps.api.discord_mobile_auth:start", "discord_mobile_router"),
+    ("POST /api/identities/discord/mobile/redeem",
+     "apps.api.discord_mobile_auth:redeem", "discord_mobile_router"),
+})
+EXPECTED_DISCORD_MOBILE_ROUTE_COUNT = len(EXPECTED_DISCORD_MOBILE_ROUTES)
 EXPECTED_FEDERATED_ROUTE_COUNT = len(EXPECTED_FEDERATED_ROUTES)
 EXPECTED_WORKFLOW_HANDOFF_ROUTE = (
     "POST /api/internal/dragonzpyder/workflow-pulse",
@@ -54,6 +61,7 @@ EXPECTED_ROUTE_COUNT = (
     + EXPECTED_FIRST_PARTY_ROUTE_COUNT
     + EXPECTED_APPROVED_WORKSPACE_ROUTE_COUNT
     + EXPECTED_FEDERATED_ROUTE_COUNT
+    + EXPECTED_DISCORD_MOBILE_ROUTE_COUNT
     + 1
 )
 # Backwards-compatible export: this digest intentionally refers to the pinned base
@@ -299,6 +307,18 @@ def classify_route(row: dict[str, Any]) -> RouteTraceability | None:
             reason="Verified OIDC browser login and callback; never a Kernel tool or workflow trigger.",
         )
 
+    if source == "discord_mobile_router":
+        triple=(str(row.get("operation") or ""), str(row.get("endpoint") or ""), source)
+        if triple not in EXPECTED_DISCORD_MOBILE_ROUTES:
+            return None
+        return RouteTraceability(
+            category="auth_transport",
+            kernel_governed=False,
+            semantic_event_source=False,
+            workflow_trigger_identity=False,
+            reason="Opt-in PKCE-bound native sign-in exchange; never a Kernel action or workflow trigger.",
+        )
+
     if source in _AUTH_SOURCES:
         return RouteTraceability(
             category="auth_transport",
@@ -413,6 +433,13 @@ def validate_route_traceability(rows: list[dict[str, Any]], *, digest: str) -> l
     if actual_federated != EXPECTED_FEDERATED_ROUTES or len(federated_rows) != EXPECTED_FEDERATED_ROUTE_COUNT:
         errors.append("Federated OIDC browser transport changed; review and repin exact endpoints")
 
+    actual_mobile_routes=frozenset(
+        (row.get("operation"),row.get("endpoint"),row.get("source"))
+        for row in rows if row.get("source") == "discord_mobile_router"
+    )
+    if actual_mobile_routes != EXPECTED_DISCORD_MOBILE_ROUTES:
+        errors.append("Discord native auth route surface changed; review and repin exact endpoints")
+
     handoff_rows = [row for row in rows if row.get("source") == "workflow_handoff_router"]
     if len(handoff_rows) != 1 or any(
         (row.get("operation"), row.get("endpoint"), row.get("source"))
@@ -517,6 +544,8 @@ __all__ = [
     "EXPECTED_ROUTE_COUNT",
     "EXPECTED_ROUTE_DIGEST",
     "EXPECTED_FEDERATED_ROUTES",
+    "EXPECTED_DISCORD_MOBILE_ROUTES",
+    "EXPECTED_DISCORD_MOBILE_ROUTE_COUNT",
     "EXPECTED_FEDERATED_ROUTE_COUNT",
     "EXPECTED_WORKFLOW_HANDOFF_ROUTE",
     "RouteTraceability",
