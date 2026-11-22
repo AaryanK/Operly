@@ -33,7 +33,7 @@ def test_web_client_requires_distinct_registered_client(monkeypatch):
         assert not dragonzpyder_web_login_available()
 
 def test_web_callback_uses_separate_client_and_redirect(monkeypatch):
-    from tests.test_federated_browser_sso import signing, configure
+    from apps.api.federated_login import _settings
     # This test does not depend on any live provider or database.
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -41,7 +41,15 @@ def test_web_callback_uses_separate_client_and_redirect(monkeypatch):
     pem = key.public_key().public_bytes(
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode()
-    configure(monkeypatch, pem)
+    monkeypatch.setenv("OPERLY_DRAGONZPYDER_SSO_ENABLED", "1")
+    monkeypatch.setenv("OPERLY_ENV", "test")
+    monkeypatch.setenv("PUBLIC_BASE_URL", OPERLY)
+    monkeypatch.setenv("OPERLY_FEDERATED_ISSUER", ISSUER)
+    monkeypatch.setenv("OPERLY_FEDERATED_CLIENT_ID", "operly-web")
+    monkeypatch.setenv("OPERLY_FEDERATED_RESOURCE_AUDIENCE", "operly-api")
+    monkeypatch.setenv("OPERLY_FEDERATED_SIGNING_KID", "synthetic-kid")
+    monkeypatch.setenv("OPERLY_FEDERATED_PUBLIC_KEY_PEM", pem)
+    monkeypatch.setenv("AUTH_TOKEN_PEPPER", "synthetic-one-login-pepper-" + "z" * 48)
     monkeypatch.setenv("OPERLY_DRAGONZPYDER_WEB_SSO_ENABLED", "1")
     monkeypatch.setenv("OPERLY_FEDERATED_DRAGONZPYDER_WEB_CLIENT_ID", "dragonzpyder-web")
     assert dragonzpyder_web_login_available()
