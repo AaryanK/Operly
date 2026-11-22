@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from apps.api.dependencies import get_db
 from apps.api.federated_login import (
     SSORejected, router, verify_callback_tokens, federated_login_available,
+    dragonzpyder_web_login_available,
 )
 from packages.database.db import Base
 from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
@@ -123,11 +124,14 @@ def test_readiness_gate_requires_complete_production_config(monkeypatch, signing
 def test_login_routes_are_invisible_until_explicit_opt_in(monkeypatch):
     monkeypatch.delenv("OPERLY_DRAGONZPYDER_SSO_ENABLED", raising=False)
     assert not federated_login_available()
+    assert not dragonzpyder_web_login_available()
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
         assert client.get("/api/auth/dragonzpyder/start").status_code == 404
         assert client.get("/api/auth/dragonzpyder/callback").status_code == 404
+        assert client.get("/api/auth/dragonzpyder/web/start").status_code == 404
+        assert client.get("/api/auth/dragonzpyder/web/callback").status_code == 404
 
 
 @pytest.mark.asyncio

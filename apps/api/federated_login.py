@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -33,6 +34,7 @@ from packages.security.federated_identity import FederationDenied, resolve_feder
 from packages.security.federated_token import FederatedTokenDenied, verify_federated_access_token
 
 router = APIRouter(tags=["authentication"])
+_LOG = logging.getLogger("operly.federated_login")
 COOKIE = "__Host-operly_oidc"
 SCOPES = "openid operly:access"
 MAX_AGE = 300
@@ -76,6 +78,29 @@ def federated_login_available() -> bool:
     """Expose only the local readiness gate, never keys, user data or token material."""
     try:
         _settings()
+    except HTTPException:
+        return False
+    return True
+
+
+def _web_settings():
+    # DragonZpyder Web is a distinct OIDC relying party, not a shared cookie.
+    # Only the existing reviewed first-party https origin may be used.
+    issuer, _, existing_client, audience, kid, public = _settings()
+    if os.getenv("OPERLY_DRAGONZPYDER_WEB_SSO_ENABLED") != "1":
+        raise HTTPException(404, "Not found")
+    client_id = os.getenv("OPERLY_FEDERATED_DRAGONZPYDER_WEB_CLIENT_ID", "")
+    if (re.fullmatch(r"[A-Za-z0-9_-]{3,100}", client_id) is None
+            or client_id == existing_client):
+        raise HTTPException(503, "Web relying party not configured")
+    return (issuer,
+            "https://dragonzpyder.xyz/api/auth/dragonzpyder/web/callback",
+            client_id, audience, kid, public)
+
+
+def dragonzpyder_web_login_available() -> bool:
+    try:
+        _web_settings()
     except HTTPException:
         return False
     return True
@@ -141,13 +166,22 @@ def verify_callback_tokens(
 
 @router.get("/api/auth/dragonzpyder/start", include_in_schema=False)
 async def start_federated_login(db: AsyncSession = Depends(get_db)):
-    issuer, redirect, client_id, _, _, _ = _settings()
+    return await _start_login(_settings(), db)
+
+
+@router.get("/api/auth/dragonzpyder/web/start", include_in_schema=False)
+async def start_dragonzpyder_web_login(db: AsyncSession = Depends(get_db)):
+    return await _start_login(_web_settings(), db)
+
+
+async def _start_login(settings, db: AsyncSession):
+    issuer, redirect, client_id, _, _, _ = settings
     state = secrets.token_urlsafe(48)
     binding = secrets.token_urlsafe(48)
     nonce = secrets.token_urlsafe(40)
     verifier = _oidc_verifier()
     db.add(FederatedLoginAttempt(
-        state_hash=hash_token(state, purpose="oidc:state"),
+        state_hash=hash_token(state, purpose="oidc:state:" + client_id),
         binding_hash=hash_token(binding, purpose="oidc:binding"),
         verifier=verifier, nonce=nonce, expires_at=datetime.utcnow() + timedelta(seconds=MAX_AGE),
     ))
@@ -172,7 +206,18 @@ async def start_federated_login(db: AsyncSession = Depends(get_db)):
 
 @router.get("/api/auth/dragonzpyder/callback", include_in_schema=False)
 async def complete_federated_login(request: Request, db: AsyncSession = Depends(get_db)):
-    issuer, redirect, client_id, audience, key_id, public = _settings()
+    return await _complete_login(_settings(), "/", request, db)
+
+
+@router.get("/api/auth/dragonzpyder/web/callback", include_in_schema=False)
+async def complete_dragonzpyder_web_login(
+    request: Request, db: AsyncSession = Depends(get_db),
+):
+    return await _complete_login(_web_settings(), "/app", request, db)
+
+
+async def _complete_login(settings, success_path: str, request: Request, db: AsyncSession):
+    issuer, redirect, client_id, audience, key_id, public = settings
     params = request.query_params
     if (len(params.multi_items()) != len(set(params.keys()))
             or set(params.keys()) != {"code", "state"}):
@@ -185,7 +230,7 @@ async def complete_federated_login(request: Request, db: AsyncSession = Depends(
         raise HTTPException(400, "Invalid callback")
     row = await db.scalar(
         select(FederatedLoginAttempt).where(
-            FederatedLoginAttempt.state_hash == hash_token(state, purpose="oidc:state"),
+            FederatedLoginAttempt.state_hash == hash_token(state, purpose="oidc:state:" + client_id),
         ).with_for_update()
     )
     if (row is None or row.consumed_at is not None
@@ -231,9 +276,11 @@ async def complete_federated_login(request: Request, db: AsyncSession = Depends(
         db, request, user.id, membership.tenant_id if membership else None,
     )
     await db.commit()
-    response = RedirectResponse("/", status_code=303, headers={
+    response = RedirectResponse(success_path, status_code=303, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
     })
     set_session_cookies(response, secret, csrf)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    # Only fixed public audit labels; never log identity, tokens, state or credentials.
+    _LOG.info("oidc_login_success relying_party=%s", "dragonzpyder_web" if success_path == "/app" else "operly")
     return response

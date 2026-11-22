@@ -35,6 +35,10 @@ EXPECTED_FEDERATED_ROUTES = frozenset({
      "apps.api.federated_login:start_federated_login", "federated_login_router"),
     ("GET /api/auth/dragonzpyder/callback",
      "apps.api.federated_login:complete_federated_login", "federated_login_router"),
+    ("GET /api/auth/dragonzpyder/web/start",
+     "apps.api.federated_login:start_dragonzpyder_web_login", "federated_login_router"),
+    ("GET /api/auth/dragonzpyder/web/callback",
+     "apps.api.federated_login:complete_dragonzpyder_web_login", "federated_login_router"),
 })
 EXPECTED_FEDERATED_ROUTE_COUNT = len(EXPECTED_FEDERATED_ROUTES)
 EXPECTED_WORKFLOW_HANDOFF_ROUTE = (
