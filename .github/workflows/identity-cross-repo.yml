@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: AaryanK/DragonZpyder
-          ref: d32ca66027a8f791a5a9f2076ad37c183aacc1fe # pragma: allowlist secret -- public immutable source commit
+          ref: f0eceb5d2b7adf9d335579e8e85cd097c2029695 # pragma: allowlist secret -- public immutable source commit
           path: _cross_repo_dragonzpyder
           persist-credentials: false
       - name: Use Python 3.12
