@@ -304,6 +304,9 @@ class Runtime1Agent:
         context_items: Sequence[ContextItem] = (),
         run_id: str,
     ) -> Runtime1Result:
+        if os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder":
+            from packages.agent_runtime.runtime import AgentRuntimeDisabled
+            raise AgentRuntimeDisabled("Legacy Operly LLM execution is retired; use DragonZpyder")
         if not self.settings.enabled:
             from packages.agent_runtime.runtime import AgentRuntimeDisabled
             raise AgentRuntimeDisabled("Agent runtime is disabled")
