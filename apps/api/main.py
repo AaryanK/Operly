@@ -29,6 +29,7 @@ from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
 from apps.api.federated_login import router as federated_login_router
+from apps.api.workflow_handoff import router as workflow_handoff_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
 from packages.agent_runtime.evaluation import run_startup_objective_eval_if_enabled
@@ -48,6 +49,7 @@ from packages.plugins.webhook_router import (
     public_router as plugin_webhook_public_router,
 )
 from packages.workflow import workflow_event_dispatcher, workflow_scheduler
+from packages.workflow.dispatch_driver import configured_driver, workflow_dispatch_driver
 from packages.workspace_modules.agent_computer.router import router as agent_computer_router
 from packages.workspace_modules.integrations.discord.lifecycle import discord_bot_lifecycle
 from packages.workspace_modules.integrations.router import router as workspace_integrations_router
@@ -159,11 +161,11 @@ def validate_runtime_configuration() -> None:
 async def lifespan(app: FastAPI):
     del app
     validate_runtime_configuration()
+    configured_driver()  # Fail before starting services on incomplete handoff config.
     await init_db()
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
-    await workflow_scheduler.start()
-    await workflow_event_dispatcher.start()
+    await workflow_dispatch_driver.start()
     objective_eval_task = asyncio.create_task(run_startup_objective_eval_if_enabled())
     try:
         yield
@@ -172,8 +174,7 @@ async def lifespan(app: FastAPI):
             objective_eval_task.cancel()
             with suppress(asyncio.CancelledError):
                 await objective_eval_task
-        await workflow_event_dispatcher.stop()
-        await workflow_scheduler.stop()
+        await workflow_dispatch_driver.stop()
         await discord_bot_lifecycle.stop()
 
 
@@ -226,6 +227,7 @@ app.add_middleware(
 
 app.include_router(session_router)
 app.include_router(federated_login_router)
+app.include_router(workflow_handoff_router)
 app.include_router(admin_router)
 app.include_router(discord_auth_router)
 app.include_router(personal_agent_runtime_router)
@@ -284,6 +286,7 @@ async def health():
         "untrusted_plugin_execution_in_control_plane": False,
         "agent_computer_enabled": True,
         "workflow_engine_enabled": True,
+        "workflow_dispatch_driver": workflow_dispatch_driver.status(),
         "workflow_scheduler": workflow_scheduler.status(),
         "workflow_event_dispatcher": workflow_event_dispatcher.status(),
         "workflow_event_triggers_enabled": True,
@@ -340,6 +343,7 @@ async def rebuild_status():
         "agent_computer_enabled": True,
         "agent_computer_planner": "deterministic",
         "workflow_engine_enabled": True,
+        "workflow_dispatch_driver": workflow_dispatch_driver.status(),
         "workflow_scheduler": workflow_scheduler.status(),
         "workflow_event_dispatcher": workflow_event_dispatcher.status(),
         "workflow_event_triggers": "kernel-semantic-events-same-scope-only",
