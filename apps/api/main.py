@@ -29,6 +29,7 @@ from apps.api.security import hash_password
 from apps.api.security_headers import SecurityHeadersMiddleware, confined_file
 from apps.api.session import router as session_router
 from apps.api.federated_login import router as federated_login_router
+from apps.api.identity_owner_gate import identity_owner_middleware, identity_owned_by_dragonzpyder
 from apps.api.workflow_handoff import router as workflow_handoff_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
@@ -90,6 +91,8 @@ def _site_suffix_hint(host: str | None) -> str:
 
 async def bootstrap_admin() -> None:
     """Keep deterministic account bootstrap without starting the model runtime."""
+    if identity_owned_by_dragonzpyder():
+        return  # No Operly-local account issuance in federated-identity mode.
     email = os.getenv("ADMIN_EMAIL", "admin@operly.local").strip().lower()
     password = os.getenv("ADMIN_PASSWORD")
     tenant_name = os.getenv("DEFAULT_TENANT_NAME", "My Business").strip()
@@ -179,6 +182,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OPERLY API", version="0.11.0-agent-runtime-1", lifespan=lifespan)
+
+# Native identity owns all login and signup; Operly stores only Workspace FKs.
+app.middleware("http")(identity_owner_middleware)
 
 # AI ingress is still deployment-gated. When enabled, every model-proposed capability
 # executes through the same live ExecutionContext + Kernel authority boundary as humans,
