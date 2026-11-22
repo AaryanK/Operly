@@ -440,7 +440,7 @@ async def _validate_challenge(
 @router.get("/api/auth/bootstrap")
 async def auth_bootstrap(response: Response):
     # Lazy import avoids the federation/session module dependency cycle.
-    from apps.api.federated_login import federated_login_available
+    from apps.api.federated_login import federated_login_available, dragonzpyder_web_login_available
 
     csrf = random_token()
     nonce = random_token()
@@ -452,6 +452,7 @@ async def auth_bootstrap(response: Response):
         "google_nonce": nonce,
         "google_client_id": os.getenv("GOOGLE_AUTH_CLIENT_ID", "").strip() or None,
         "dragonzpyder_sso_available": federated_login_available(),
+        "dragonzpyder_web_sso_available": dragonzpyder_web_login_available(),
     }
 
 
