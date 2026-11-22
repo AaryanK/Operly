@@ -108,6 +108,17 @@ class PersonalHarnessCanaryRoutingTests(unittest.TestCase):
             with self.assertRaises(AgentRuntimeDisabled):
                 instance.require_enabled()
 
+    def test_discord_local_ai_and_dryrun_blocked_under_native_owner(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        from packages.workspace_modules.integrations.discord.bot import _runtime_test, _native_intelligence_owner
+        message = SimpleNamespace(reply=AsyncMock())
+        with patch.dict("os.environ", {"OPERLY_AI_EXECUTION_OWNER": "dragonzpyder"}):
+            self.assertTrue(_native_intelligence_owner())
+            asyncio.run(_runtime_test(message, "test query"))
+            message.reply.assert_awaited_once()
+            self.assertIn("DragonZpyder", message.reply.await_args.args[0])
+
     def test_operly_default_owner_does_not_route(self):
         with patch.dict("os.environ", {
             "OPERLY_PERSONAL_HARNESS_OWNER": "operly",
