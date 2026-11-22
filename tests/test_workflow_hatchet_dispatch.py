@@ -99,6 +99,6 @@ class DriverTests(unittest.IsolatedAsyncioTestCase):
             events.tick.assert_not_called()
             response = await driver.workflow_dispatch_pulse(SECRET)
             self.assertEqual(response, {"state": "dispatched", "claimed_runs": 2,
-                                        "events_processed": 3})
+                                        "event_runs_queued": 3})
             scheduler.dispatch_external_batch.assert_awaited_once()
             events.tick.assert_awaited_once()
