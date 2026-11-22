@@ -167,5 +167,98 @@ class WorkflowPackageTests(unittest.TestCase):
             self.assertNotIn(forbidden, engine)
 
 
+
+
+class WorkflowDispatchDriverTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from unittest.mock import AsyncMock, MagicMock
+        from packages.workflow.dispatch_driver import WorkflowDispatchDriver
+        self.scheduler = MagicMock()
+        self.events = MagicMock()
+        for obj in (self.scheduler, self.events):
+            obj.start = AsyncMock()
+            obj.stop = AsyncMock()
+            obj.status.return_value = {"running": False, "active_workers": 0}
+            obj.tick = AsyncMock(return_value=0)
+        self.events.tick.return_value = 2
+        self.driver = WorkflowDispatchDriver(self.scheduler, self.events)
+
+    async def test_default_preserves_existing_local_scheduler(self):
+        from unittest.mock import patch
+        from packages.workflow.dispatch_driver import DriverUnavailable
+        with patch.dict("os.environ", {}, clear=True):
+            await self.driver.start()
+            self.scheduler.start.assert_awaited_once()
+            self.events.start.assert_awaited_once()
+            with self.assertRaises(DriverUnavailable):
+                await self.driver.remote_tick("x" * 48)
+            self.scheduler.tick.assert_not_awaited()
+            await self.driver.stop()
+            self.scheduler.stop.assert_awaited_once()
+
+    async def test_remote_driver_does_not_start_local_pollers(self):
+        from unittest.mock import patch
+        from packages.workflow.dispatch_driver import DriverForbidden, DriverUnavailable
+        proof = "x" * 48
+        with patch.dict("os.environ", {
+            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
+            "OPERLY_WORKFLOW_HANDOFF_SECRET": proof,
+        }, clear=True):
+            await self.driver.start()
+            self.scheduler.start.assert_not_awaited()
+            self.events.start.assert_not_awaited()
+            with self.assertRaises(DriverForbidden):
+                await self.driver.remote_tick("wrong")
+            self.events.tick.assert_not_awaited()
+            self.scheduler.status.return_value = {"running": True, "active_workers": 0}
+            with self.assertRaises(DriverUnavailable):
+                await self.driver.remote_tick(proof)
+            self.scheduler.status.return_value = {"running": False, "active_workers": 1}
+            receipt = await self.driver.remote_tick(proof)
+            self.assertEqual(receipt["dispatch"], "accepted")
+            self.assertEqual(receipt["queued_events"], 2)
+            self.assertEqual(receipt["active_workers"], 1)
+            self.assertFalse(receipt["completion_verified"])
+            self.events.tick.assert_awaited_once()
+            self.scheduler.tick.assert_awaited_once()
+            await self.driver.stop()
+
+    async def test_remote_mode_fails_closed_without_secret(self):
+        from unittest.mock import patch
+        from packages.workflow.dispatch_driver import DriverUnavailable
+        with patch.dict("os.environ", {
+            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
+        }, clear=True):
+            with self.assertRaises(DriverUnavailable):
+                await self.driver.start()
+            self.scheduler.start.assert_not_awaited()
+
+    async def test_overlapping_dispatch_rejected(self):
+        import asyncio
+        from unittest.mock import patch
+        from packages.workflow.dispatch_driver import DriverBusy
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def slow_tick():
+            entered.set()
+            await release.wait()
+        self.scheduler.tick.side_effect = slow_tick
+        proof = "x" * 48
+        with patch.dict("os.environ", {
+            "OPERLY_WORKFLOW_DISPATCH_DRIVER": "dragonzpyder",
+            "OPERLY_WORKFLOW_HANDOFF_SECRET": proof,
+        }, clear=True):
+            await self.driver.start()
+            pending = asyncio.create_task(self.driver.remote_tick(proof))
+            await entered.wait()
+            try:
+                with self.assertRaises(DriverBusy):
+                    await self.driver.remote_tick(proof)
+            finally:
+                release.set()
+                await pending
+            self.scheduler.tick.assert_awaited_once()
+            await self.driver.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
