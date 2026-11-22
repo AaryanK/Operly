@@ -169,22 +169,25 @@ def _artifact_context(items: list[dict]) -> ContextItem | None:
 
 
 def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
-    """Use DragonZpyder only for explicit signed-in Personal canary users.
+    """Select the existing signed DragonZpyder Personal delegate.
 
-    A global owner flag alone must not redirect every Personal account.
-    Workspace contexts are never routed through a Personal delegation.
+    Ordinary callers remain on the legacy path. Full Personal migration is
+    a separate explicit, double-gated operator decision after parity tests.
+    Workspace contexts can never use a Personal capability delegation.
     """
     allowed_users = {
         value.strip()
         for value in os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
         if value.strip()
     }
-    return (
-        context.is_personal
-        and bool(context.user_id)
-        and context.user_id in allowed_users
-        and os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") == "dragonzpyder"
-    )
+    if (not context.is_personal or not context.user_id
+            or os.getenv("OPERLY_PERSONAL_HARNESS_OWNER", "operly") != "dragonzpyder"):
+        return False
+    if os.getenv("OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_ENABLED") == "1":
+        if os.getenv("OPERLY_PERSONAL_DRAGONZPYDER_ALL_USERS_APPROVED") != "1":
+            raise DragonZpyderPersonalUnavailable("Full Personal migration is not approved")
+        return True
+    return context.user_id in allowed_users
 
 
 async def _run(
