@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -33,6 +34,7 @@ from packages.security.federated_identity import FederationDenied, resolve_feder
 from packages.security.federated_token import FederatedTokenDenied, verify_federated_access_token
 
 router = APIRouter(tags=["authentication"])
+_LOG = logging.getLogger("operly.federated_login")
 COOKIE = "__Host-operly_oidc"
 SCOPES = "openid operly:access"
 MAX_AGE = 300
@@ -279,4 +281,6 @@ async def _complete_login(settings, success_path: str, request: Request, db: Asy
     })
     set_session_cookies(response, secret, csrf)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    # Only fixed public audit labels; never log identity, tokens, state or credentials.
+    _LOG.info("oidc_login_success relying_party=%s", "dragonzpyder_web" if success_path == "/app" else "operly")
     return response
