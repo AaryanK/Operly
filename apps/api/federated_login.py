@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from urllib.parse import urlencode, urlsplit
@@ -60,7 +61,8 @@ def _settings():
                  and not p.password and p.path in ("", "/") and not p.query and not p.fragment
                  and b.scheme == "https" and b.hostname and b.path in ("", "/")
                  and not b.query and not b.fragment and not b.username and not b.password
-                 and 3 <= len(client) <= 100 and client.replace("-", "").replace("_", "").isalnum()
+                 and p.port in (None, 443) and b.port in (None, 443)
+                 and re.fullmatch(r"[A-Za-z0-9_-]{3,100}", client) is not None
                  and 1 <= len(resource) <= 150 and bool(kid))
         public = serialization.load_pem_public_key(key_text.encode("utf-8"))
     except (ValueError, TypeError) as exc:
@@ -68,6 +70,15 @@ def _settings():
     if not valid or not isinstance(public, rsa.RSAPublicKey) or public.key_size < 3072:
         raise HTTPException(503, "SSO configuration unavailable")
     return issuer, base + "/api/auth/dragonzpyder/callback", client, resource, kid, public
+
+
+def federated_login_available() -> bool:
+    """Expose only the local readiness gate, never keys, user data or token material."""
+    try:
+        _settings()
+    except HTTPException:
+        return False
+    return True
 
 
 def _oidc_verifier() -> str:
@@ -102,9 +113,10 @@ def verify_callback_tokens(
                 or not 1 <= len(claims["sub"]) <= 160
                 or not isinstance(claims.get("nonce"), str)
                 or not hmac.compare_digest(claims["nonce"], nonce)
-                or not isinstance(claims.get("iat"), int)
-                or not isinstance(claims.get("exp"), int)
-                or claims["exp"] - claims["iat"] > 300):
+                or type(claims.get("iat")) is not int
+                or type(claims.get("exp")) is not int
+                or not 0 < claims["exp"] - claims["iat"] <= 300
+                or claims.get("aud") != client_id):
             raise SSORejected("OIDC identity validation failed")
         expected_at_hash = base64.urlsafe_b64encode(
             hashlib.sha256(access_token.encode("ascii")).digest()[:16]
@@ -188,7 +200,7 @@ async def complete_federated_login(request: Request, db: AsyncSession = Depends(
     # starting a NEW login, never by replaying the callback.
     await db.commit()
     try:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=False, trust_env=False) as client:
             result = await client.post(
                 issuer + "/identity/v1/token",
                 data={"grant_type": "authorization_code", "code": code,

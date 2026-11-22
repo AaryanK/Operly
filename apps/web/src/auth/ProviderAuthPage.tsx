@@ -6,7 +6,7 @@ import { OperlyMark } from "../ui/OperlyMark";
 const AUTH_FLOW_KEY = "operly:minimal-auth-flow";
 const INVITE_FLOW_KEY = "operly:workspace-invite";
 
-type AuthBootstrap = { google_client_id?: string | null; google_nonce?: string | null };
+type AuthBootstrap = { google_client_id?: string | null; google_nonce?: string | null; dragonzpyder_sso_available?: boolean };
 type InviteAccept = { ok: boolean; workspace_id: string; workspace_name: string; role: string; next: string };
 
 declare global {
@@ -75,14 +75,9 @@ function PasswordField({ name, label, autoComplete }: { name: string; label: str
   );
 }
 
-function GoogleButton({ id, onCredential }: { id: string; onCredential: (credential: string) => Promise<void> }) {
-  const [bootstrap, setBootstrap] = useState<AuthBootstrap | null>(null);
+function GoogleButton({ id, onCredential, bootstrap }: { id: string; onCredential: (credential: string) => Promise<void>; bootstrap: AuthBootstrap | null }) {
   const handler = useRef(onCredential);
   handler.current = onCredential;
-
-  useEffect(() => {
-    api<AuthBootstrap>("/auth/bootstrap").then(setBootstrap).catch(() => setBootstrap({}));
-  }, []);
 
   useEffect(() => {
     if (!bootstrap?.google_client_id) return;
@@ -141,12 +136,25 @@ function DiscordButton() {
   );
 }
 
+function DragonZpyderButton({ available }: { available: boolean }) {
+  // Invite acceptance remains on the existing provider flow until its SSO
+  // continuation is implemented. The legacy login option is never removed.
+  if (!available || pendingInvite()) return null;
+  return <a className="operly-discord-provider" href="/api/auth/dragonzpyder/start">Continue with DragonZpyder</a>;
+}
+
 function Divider() {
   return <div className="operly-auth-divider">or continue with email</div>;
 }
 
-function ProviderStack({ googleId, google }: { googleId: string; google: (credential: string) => Promise<void> }) {
-  return <div className="operly-provider-stack"><GoogleButton id={googleId} onCredential={google} /><DiscordButton /></div>;
+function ProviderStack({ googleId, google, allowFederation = false }: { googleId: string; google: (credential: string) => Promise<void>; allowFederation?: boolean }) {
+  const [bootstrap, setBootstrap] = useState<AuthBootstrap | null>(null);
+  useEffect(() => {
+    let active = true;
+    api<AuthBootstrap>("/auth/bootstrap").then((result) => { if (active) setBootstrap(result); }).catch(() => { if (active) setBootstrap({}); });
+    return () => { active = false; };
+  }, []);
+  return <div className="operly-provider-stack"><GoogleButton id={googleId} onCredential={google} bootstrap={bootstrap} /><DiscordButton />{allowFederation && <DragonZpyderButton available={bootstrap?.dragonzpyder_sso_available === true} />}</div>;
 }
 
 function Login() {
@@ -191,7 +199,7 @@ function Login() {
         <span className="minimal-kicker">SIGN IN</span>
         <h1>Welcome back</h1>
         <p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Personal Operly or any workspace you belong to."}</p>
-        <ProviderStack googleId="google-login-current" google={google} />
+        <ProviderStack googleId="google-login-current" google={google} allowFederation />
         <Divider />
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label>
         <PasswordField name="password" label="Password" autoComplete="current-password" />
