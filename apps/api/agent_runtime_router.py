@@ -168,6 +168,11 @@ def _artifact_context(items: list[dict]) -> ContextItem | None:
     )
 
 
+def _strict_dragonzpyder_only() -> bool:
+    """Opt-in migration guard: Operly must not execute its own LLM loop."""
+    return os.getenv("OPERLY_AI_EXECUTION_OWNER", "operly") == "dragonzpyder"
+
+
 def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
     """Select the existing signed DragonZpyder Personal delegate.
 
@@ -175,6 +180,13 @@ def _use_dragonzpyder_personal_harness(context: ExecutionContext) -> bool:
     a separate explicit, double-gated operator decision after parity tests.
     Workspace contexts can never use a Personal capability delegation.
     """
+    if _strict_dragonzpyder_only():
+        if not context.is_personal or not context.user_id:
+            return False  # Workspace requires a separately reviewed delegation.
+        if os.getenv("OPERLY_PERSONAL_HARNESS_OWNER") != "dragonzpyder":
+            raise DragonZpyderPersonalUnavailable(
+                "Personal harness owner is not DragonZpyder")
+        return True
     allowed_users = {
         value.strip()
         for value in os.getenv("OPERLY_DRAGONZPYDER_PERSONAL_CANARY_USER_IDS", "").split(",")
@@ -199,6 +211,15 @@ async def _run(
     extra_context: list[ContextItem] | None = None,
     personal_session_id: str | None = None,
 ):
+    if _strict_dragonzpyder_only() and not context.is_personal:
+        # Workspace membership and MCP scopes must be delegated separately,
+        # never smuggled through the Personal user JWT or service credential.
+        raise HTTPException(
+            503, detail={
+                "code": "DRAGONZPYDER_WORKSPACE_DELEGATION_REQUIRED",
+                "message": "Workspace AI is unavailable until signed DragonZpyder workspace delegation is configured.",
+            },
+        )
     user_row = AgentChatMessage(
         conversation_id=conversation.id,
         role="user",
