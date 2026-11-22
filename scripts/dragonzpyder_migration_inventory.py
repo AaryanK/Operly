@@ -21,7 +21,7 @@ TABLES = {
     "federated_subject_maps": "federated_identity_maps",
     "workspace_memberships": "tenant_members",
     "personal_connectors": "account_connectors",
-    "encrypted_connector_secrets": "account_connector_secrets",
+    "encrypted_connector_secrets": "account_connector_secrets",  # pragma: allowlist secret -- public DB table identifier, not a credential
     "personal_memory_rows": "memories",
     "agent_conversations": "agent_chat_conversations",
     "agent_messages": "agent_chat_messages",
