@@ -112,7 +112,7 @@ class WorkflowScheduler:
             except asyncio.TimeoutError:
                 pass
 
-    async def tick(self) -> None:
+    async def tick(self) -> int:
         self._last_tick_at = datetime.utcnow()
         await self._release_decided_approvals_and_waits()
         await self._mark_orphaned_running_runs()
@@ -121,7 +121,7 @@ class WorkflowScheduler:
         active = sum(1 for task in self._workers if not task.done())
         capacity = max(0, self._max_workers - active)
         if capacity < 1:
-            return
+            return 0
         claims = await self._claim_runs(limit=min(capacity, 25))
         for run_id, lease_token in claims:
             task = asyncio.create_task(
@@ -130,6 +130,7 @@ class WorkflowScheduler:
             )
             self._workers.add(task)
             task.add_done_callback(self._workers.discard)
+        return len(claims)
 
     async def _execute_claimed_run(self, run_id: str, lease_token: str) -> None:
         heartbeat = asyncio.create_task(

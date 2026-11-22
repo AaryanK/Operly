@@ -10,6 +10,7 @@ from packages.kernel.route_traceability import (
     EXPECTED_APPROVED_WORKSPACE_ROUTE,
     EXPECTED_ROUTE_COUNT,
     EXPECTED_FEDERATED_ROUTES,
+    EXPECTED_WORKFLOW_HANDOFF_ROUTE,
     classify_route,
     validate_route_traceability,
 )
@@ -41,9 +42,21 @@ class RouteTraceabilityTests(unittest.TestCase):
             != EXPECTED_FIRST_PARTY_ROUTE
             and (row["operation"], row["endpoint"], row["source"])
             != EXPECTED_APPROVED_WORKSPACE_ROUTE
+            and (row["operation"], row["endpoint"], row["source"])
+            != EXPECTED_WORKFLOW_HANDOFF_ROUTE
         ]
         self.assertEqual(len(base_rows), EXPECTED_BASE_ROUTE_COUNT)
         self.assertEqual(route_inventory_digest(base_rows), EXPECTED_BASE_ROUTE_DIGEST)
+
+    def test_handoff_is_exact_private_control_plane(self):
+        rows = [row for row in self.rows if row["source"] == "workflow_handoff_router"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["operation"], rows[0]["endpoint"], rows[0]["source"]),
+                         EXPECTED_WORKFLOW_HANDOFF_ROUTE)
+        classification = classify_route(rows[0])
+        self.assertEqual(classification.category, "control_plane")
+        self.assertFalse(classification.kernel_governed)
+        self.assertFalse(classification.workflow_trigger_identity)
 
     def test_new_federated_routes_are_pinned_as_non_kernel_auth_transports(self):
         rows = [
