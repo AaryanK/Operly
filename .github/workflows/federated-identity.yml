@@ -7,6 +7,8 @@ on:
       - "apps/api/dependencies.py"
       - "apps/api/discord_auth_router.py"
       - "packages/security/identity_handoff.py"
+      - "packages/security/native_identity_projection.py"
+      - "tests/test_native_identity_projection.py"
       - "tests/test_identity_staged_handoff.py"
       - "packages/security/federated_*.py"
       - "packages/database/federated_*.py"
@@ -25,6 +27,8 @@ on:
       - "apps/api/dependencies.py"
       - "apps/api/discord_auth_router.py"
       - "packages/security/identity_handoff.py"
+      - "packages/security/native_identity_projection.py"
+      - "tests/test_native_identity_projection.py"
       - "tests/test_identity_staged_handoff.py"
       - "packages/security/federated_*.py"
       - "packages/database/federated_*.py"
@@ -48,4 +52,4 @@ jobs:
       - name: Compile federation and run synthetic account/login contracts
         run: |
           python -m compileall -q apps/api/federated_login.py packages/security/federated_identity.py packages/security/federated_token.py packages/database/federated_identity_models.py packages/database/federated_login_models.py
-          python -m pytest -q tests/test_federated_session_status.py tests/test_identity_staged_handoff.py tests/test_dragonzpyder_identity_owner.py tests/test_federated_identity_map.py tests/test_federated_token.py tests/test_federated_browser_sso.py tests/test_dragonzpyder_web_sso.py
+          python -m pytest -q tests/test_native_identity_projection.py tests/test_federated_session_status.py tests/test_identity_staged_handoff.py tests/test_dragonzpyder_identity_owner.py tests/test_federated_identity_map.py tests/test_federated_token.py tests/test_federated_browser_sso.py tests/test_dragonzpyder_web_sso.py
