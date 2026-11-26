@@ -14,7 +14,7 @@ from packages.database.models import AppUser
 from packages.database.federated_identity_models import FederatedIdentityMap
 from packages.security.identity_handoff import handoff_enabled
 from packages.security.federated_identity import FederationDenied,resolve_federated_user
-from packages.security.federated_session_status import ISSUER
+from packages.security.federated_session_status import ISSUER, issuer_client
 
 
 async def resolve_or_provision_native(db,*,verified_issuer,verified_subject):
@@ -43,7 +43,7 @@ async def resolve_or_provision_native(db,*,verified_issuer,verified_subject):
         raise FederationDenied("Existing identity requires review")
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=4,follow_redirects=False,trust_env=False) as client:
+        async with issuer_client() as client:
             response=await client.post(ISSUER+"/identity/v1/relying-party/native-projection",
                 json={"subject":verified_subject},headers={"authorization":"Bearer "+secret})
         if response.status_code!=200 or len(response.content)>4096:
