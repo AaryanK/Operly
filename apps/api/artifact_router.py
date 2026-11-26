@@ -194,7 +194,22 @@ a{{color:#b9a7ff}}
 <script>
 function csrf(){{const m=document.cookie.match(/(?:^|; )__Host-operly_csrf=([^;]+)/)||document.cookie.match(/(?:^|; )operly_csrf=([^;]+)/);return m?decodeURIComponent(m[1]):''}}
 async function api(url,opts={{}}){{opts.credentials='same-origin';opts.headers=Object.assign({{}},opts.headers||{{}},opts.method&&opts.method!=='GET'?{{'X-CSRF-Token':csrf()}}:{{}});const r=await fetch(url,opts);if(!r.ok)throw new Error(await r.text());return r.json()}}
-async function refresh(){{const data=await api('/api/artifacts?limit=100');document.getElementById('recent').innerHTML=data.artifacts.map(a=>`<p><a href="/api/artifacts/${{a.artifact_id}}/download">${{a.filename}}</a> · ${{Math.ceil(a.size_bytes/1024)}} KB · <code>${{a.artifact_id}}</code></p>`).join('')||'<p>No artifacts yet.</p>'}}
+async function refresh(){{
+const data=await api('/api/artifacts?limit=100');
+const recent=document.getElementById('recent');
+recent.replaceChildren();
+if(!data.artifacts.length){{const empty=document.createElement('p');empty.textContent='No artifacts yet.';recent.append(empty);return;}}
+for(const a of data.artifacts){{
+const p=document.createElement('p');
+const link=document.createElement('a');
+link.href='/api/artifacts/'+encodeURIComponent(a.artifact_id)+'/download';
+link.textContent=a.filename;
+const details=document.createTextNode(' · '+Math.ceil(a.size_bytes/1024)+' KB · ');
+const code=document.createElement('code');
+code.textContent=a.artifact_id;
+p.append(link,details,code);recent.append(p);
+}}
+}}
 document.getElementById('refresh').onclick=refresh;
 document.getElementById('upload').onclick=async()=>{{const files=[...document.getElementById('files').files];const ids=[];for(let i=0;i<files.length;i+=20){{const chunk=files.slice(i,i+20),form=new FormData();chunk.forEach(f=>form.append('files',f));document.getElementById('status').textContent=`Uploading ${{i+1}}–${{Math.min(i+chunk.length,files.length)}} of ${{files.length}}…`;const data=await api('/api/artifacts/upload',{{method:'POST',body:form}});ids.push(...data.artifact_ids);document.getElementById('ids').textContent=JSON.stringify(ids,null,2)}}document.getElementById('status').textContent=`Uploaded ${{ids.length}} files.`;await refresh()}};
 refresh();
