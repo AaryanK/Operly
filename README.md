@@ -8,6 +8,8 @@ A human or authorized agent should be able to express an objective and discover 
 
 **[Platform boundary and migration rules](docs/dragonzpyder-platform-boundary.md) · [Repository instructions](AGENTS.md) · [DragonZpyder universal harness](https://github.com/AaryanK/DragonZpyder/blob/develop/docs/universal-harness-v4.md)**
 
+> The web-chat adapter delegates exclusively to DragonZpyder when this change is deployed; Discord and queued legacy work require separate migration. See [web cutover notes](docs/dragonzpyder-web-intelligence-cutover.md).
+
 > The intended target is one DragonZpyder intelligence harness with Operly as a governed business client and capability provider. This does not assert that legacy Operly intelligence routes have been retired or that identity migration is complete. The implementation notes below describe existing and transitional structures; inspect current source, CI, flags and deployed SHAs for actual availability.
 
 ---

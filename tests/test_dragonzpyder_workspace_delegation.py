@@ -31,6 +31,7 @@ class WorkspaceDelegationTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(
                     user_id=values["user_id"], tenant_id=values["tenant_id"],
                     revoked_at=None, expires_at=datetime.utcnow() + timedelta(minutes=5),
+                    authenticated_at=datetime.utcnow() - timedelta(minutes=1),
                 )
             return SimpleNamespace(active=True)
         db = SimpleNamespace(get=getter, scalar=AsyncMock(return_value=SimpleNamespace()))
@@ -59,6 +60,13 @@ class WorkspaceDelegationTests(unittest.IsolatedAsyncioTestCase):
                     db, claims=values, resource=values["resource"],
                     service_proof="wrong" * 15,
                 )
+            with patch("packages.mcp.first_party_workspace.federated_session_status",
+                       new=AsyncMock(return_value=False)) as central_status:
+                with self.assertRaises(WorkspaceDelegationDenied):
+                    await validate_workspace_delegation(
+                        db, claims=values, resource=values["resource"], service_proof=secret,
+                    )
+                central_status.assert_awaited_once()
             db.scalar.return_value = None
             with self.assertRaises(WorkspaceDelegationDenied):
                 await validate_workspace_delegation(

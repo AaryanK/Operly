@@ -20,6 +20,7 @@ from packages.kernel.contracts import CapabilityRisk
 from packages.mcp.oauth import issue_access_token
 from packages.security.execution_context import resolve_personal_execution_context
 from packages.security.surfaces import SurfaceKind
+from packages.security.federated_session_status import federated_session_status
 
 CLIENT_ID = "dragonzpyder_first_party"
 MAX_TOKEN_AGE_SECONDS = 240
@@ -54,6 +55,9 @@ async def validate_personal_session(
             or session.tenant_id is not None
             or user is None or not user.active):
         raise PersonalDelegationDenied("Personal session expired or revoked")
+    if not await federated_session_status(db, user_id=user_id,
+                                          authenticated_at=session.authenticated_at):
+        raise PersonalDelegationDenied("Central identity session revoked")
     return session
 
 
