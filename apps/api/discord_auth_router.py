@@ -24,6 +24,7 @@ from apps.api.session import (
     auth_error,
 )
 from packages.database.models import AppUser, AuthIdentity
+from packages.security.identity_handoff import local_identity_allowed
 
 router = APIRouter(prefix="/api/identities", tags=["authentication"])
 
@@ -171,6 +172,11 @@ async def discord_callback(
     else:
         user = await db.scalar(select(AppUser).where(AppUser.email == email))
         if user:
+            if not await local_identity_allowed(db,user.id):
+                await db.rollback()
+                response = _error("Use DragonZpyder account access.")
+                _clear_state_cookie(response)
+                return response
             if user.email_verified_at is None:
                 _audit(db, "discord_account_link_blocked", "blocked", request, user_id=user.id)
                 await db.commit()
