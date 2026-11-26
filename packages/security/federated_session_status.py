@@ -6,7 +6,6 @@ for the same subject. No status cache hides a revocation on this path.
 """
 import os
 from datetime import datetime,timezone
-import httpx
 from sqlalchemy import select
 
 from packages.database.federated_identity_models import FederatedIdentityMap
@@ -28,6 +27,7 @@ async def federated_session_status(db, *, user_id, authenticated_at):
     secret=os.getenv("OPERLY_FEDERATED_STATUS_SECRET","")
     if len(secret)<43:
         return False
+    import httpx
     try:
         async with httpx.AsyncClient(timeout=4,follow_redirects=False,trust_env=False) as client:
             response=await client.post(ISSUER+"/identity/v1/relying-party/status",
