@@ -19,6 +19,7 @@ from packages.kernel.contracts import CapabilityRisk
 from packages.mcp.oauth import issue_access_token
 from packages.security.execution_context import resolve_execution_context
 from packages.security.surfaces import SurfaceKind
+from packages.security.federated_session_status import federated_session_status
 from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 WORKSPACE_CLIENT_ID = "dragonzpyder_first_party_workspace"
@@ -54,6 +55,9 @@ async def _current_scope(
     )
     if member is None:
         raise WorkspaceDelegationDenied("Workspace membership removed")
+    if not await federated_session_status(db, user_id=user_id,
+                                          authenticated_at=session.authenticated_at):
+        raise WorkspaceDelegationDenied("Central identity session revoked")
     return session
 
 
