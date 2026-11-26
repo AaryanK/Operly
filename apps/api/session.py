@@ -65,6 +65,7 @@ from packages.database.models import (
 )
 from packages.email.service import get_email_service
 from packages.security.identity_handoff import local_identity_allowed
+from packages.security.federated_session_status import federated_session_status
 
 
 router = APIRouter(tags=["authentication"])
@@ -372,6 +373,39 @@ async def _create_session(
     db.add(auth_session)
     await db.flush()
     return auth_session, secret, csrf
+
+
+async def _rotate_authenticated_scope_session(
+    db: AsyncSession, request: Request, auth: AccountAuthContext,
+    tenant_id: str | None,
+) -> tuple[AuthSession, str, str]:
+    """Rotate an already authenticated session; never reissue identity authority."""
+    # Match the operator handoff lock order, and refresh stale ORM objects.
+    with db.no_autoflush:
+        user = await db.scalar(select(AppUser).where(AppUser.id == auth.user.id)
+            .with_for_update().execution_options(populate_existing=True))
+        current = await db.scalar(select(AuthSession).where(
+            AuthSession.id == auth.session.id, AuthSession.user_id == auth.user.id)
+            .with_for_update().execution_options(populate_existing=True))
+    now = datetime.utcnow()
+    if (user is None or not user.active or current is None
+            or current.revoked_at is not None or current.expires_at <= now
+            or not await federated_session_status(db, user_id=user.id,
+                                                authenticated_at=current.authenticated_at)):
+        await db.rollback()
+        raise auth_error(401, "SESSION_INVALID", "Sign in again")
+    # Membership is verified by the caller; recheck it before scope issuance.
+    if tenant_id is not None and not await db.scalar(select(TenantMember.user_id).where(
+        TenantMember.user_id == user.id, TenantMember.tenant_id == tenant_id)):
+        await db.rollback()
+        raise auth_error(403, "WORKSPACE_ACCESS_DENIED", "Workspace access denied")
+    authenticated_at, expires_at = current.authenticated_at, current.expires_at
+    current.revoked_at = now
+    replacement, secret, csrf = await _create_session(
+        db, request, user.id, tenant_id, federated=True)
+    replacement.authenticated_at = authenticated_at
+    replacement.expires_at = min(replacement.expires_at, expires_at)
+    return replacement, secret, csrf
 
 
 async def _challenge_from_proof(
@@ -906,10 +940,7 @@ async def create_workspace(
     db.add(tenant)
     await db.flush()
     db.add(TenantMember(tenant_id=tenant.id, user_id=auth.user.id, role="owner"))
-    current = await db.get(AuthSession, auth.session.id)
-    if current:
-        current.revoked_at = datetime.utcnow()
-    _, session_secret, csrf_secret = await _create_session(db, request, auth.user.id, tenant.id)
+    _, session_secret, csrf_secret = await _rotate_authenticated_scope_session(db, request, auth, tenant.id)
     _audit(db, "workspace_created", "succeeded", request, user_id=auth.user.id, tenant_id=tenant.id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
@@ -923,10 +954,7 @@ async def switch_to_personal_scope(
     auth: AccountAuthContext = Depends(get_account_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    current = await db.get(AuthSession, auth.session.id)
-    if current:
-        current.revoked_at = datetime.utcnow()
-    _, session_secret, csrf_secret = await _create_session(db, request, auth.user.id, None)
+    _, session_secret, csrf_secret = await _rotate_authenticated_scope_session(db, request, auth, None)
     _audit(db, "personal_scope_selected", "succeeded", request, user_id=auth.user.id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
@@ -951,10 +979,7 @@ async def switch_workspace(
     tenant = await db.get(Tenant, payload.tenant_id) if membership else None
     if not membership or not tenant or not auth.user.active:
         raise auth_error(404, "WORKSPACE_NOT_FOUND", "Workspace not found")
-    current = await db.get(AuthSession, auth.session.id)
-    if current:
-        current.revoked_at = datetime.utcnow()
-    _, session_secret, csrf_secret = await _create_session(db, request, auth.user.id, tenant.id)
+    _, session_secret, csrf_secret = await _rotate_authenticated_scope_session(db, request, auth, tenant.id)
     _audit(db, "workspace_switched", "succeeded", request, user_id=auth.user.id, tenant_id=tenant.id)
     await db.commit()
     set_session_cookies(response, session_secret, csrf_secret)
