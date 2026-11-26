@@ -14,6 +14,11 @@ from packages.security.identity_handoff import handoff_enabled
 ISSUER="https://api.dragonzpyder.xyz"
 
 
+def issuer_client():
+    import httpx
+    return httpx.AsyncClient(timeout=4,follow_redirects=False,trust_env=False)
+
+
 async def federated_session_status(db, *, user_id, authenticated_at):
     if not handoff_enabled() and os.getenv("OPERLY_IDENTITY_OWNER")!="dragonzpyder":
         return True
@@ -29,7 +34,7 @@ async def federated_session_status(db, *, user_id, authenticated_at):
         return False
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=4,follow_redirects=False,trust_env=False) as client:
+        async with issuer_client() as client:
             response=await client.post(ISSUER+"/identity/v1/relying-party/status",
                 json={"subject":row.subject},headers={"authorization":"Bearer "+secret})
         if response.status_code!=200 or len(response.content)>1024:
