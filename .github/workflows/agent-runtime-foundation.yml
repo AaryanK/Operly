@@ -12,6 +12,9 @@ on:
       - "packages/mcp/first_party_workspace.py"
       - "tests/test_dragonzpyder_workspace_delegation.py"
       - "tests/test_dragonzpyder_workspace_handoff.py"
+      - "tests/test_dragonzpyder_intelligence_cutover.py"
+      - "tests/test_personal_harness_canary_routing.py"
+      - "packages/agent_runtime/status.py"
       - "packages/kernel/capability_search.py"
       - "packages/kernel/registry.py"
       - "packages/kernel/runtime_availability.py"
@@ -136,6 +139,7 @@ jobs:
           python -m unittest tests.test_dragonzpyder_workspace_delegation -v
           python -m unittest tests.test_dragonzpyder_workspace_handoff -v
           python -m unittest tests.test_personal_harness_canary_routing -v
+          python -m unittest tests.test_dragonzpyder_intelligence_cutover -v
           python -m unittest tests.test_dragonzpyder_identity_owner -v
       - name: Validate clean database migration
         run: |

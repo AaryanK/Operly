@@ -7,36 +7,15 @@ import re
 import discord
 from sqlalchemy import select
 
-from packages.agent_runtime.inference import AgentInferenceError, OpenAICompatibleAgentModel
-from packages.agent_runtime.interactive import Runtime1Agent
-from packages.agent_runtime.runtime import AgentRuntimeDisabled
-from packages.agent_runtime.telemetry import fingerprint, runtime_trace
+from packages.agent_runtime.telemetry import runtime_trace
 from packages.database.channel_models import ChannelInstallation, ExternalIdentity
 from packages.database.db import session_scope
 from packages.database.models import AuthIdentity, Tenant, TenantMember
-from packages.personal_modules.runtime import build_personal_runtime
-from packages.security.execution_context import (
-    ExecutionContextError,
-    resolve_execution_context,
-    resolve_personal_execution_context,
-)
 from packages.security.permissions import resolve_workspace_permissions
-from packages.security.surfaces import SurfaceKind
 from packages.workspace_modules.integrations.discord.client import bot
 from packages.workspace_modules.integrations.discord.runtime_status import discord_ai_runtime_status
-from packages.workspace_modules.integrations.discord.runtime_test import evaluate_discord_request
-from packages.workspace_modules.tools.runtime import build_workspace_runtime
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-
-
-def _native_intelligence_owner() -> bool:
-    return (os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
-            or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1")
-
-
-def _runtime_agent() -> Runtime1Agent:
-    return Runtime1Agent(model=OpenAICompatibleAgentModel())
 
 
 async def _linked_operly_user_id(discord_user_id: int) -> str | None:
@@ -160,137 +139,19 @@ async def _bind_workspace(message: discord.Message, reference: str) -> None:
     )
     await message.reply(
         f"This Discord server is now bound to `{tenant.name}`. "
-        "Operly Runtime 1.0 can discover this workspace's authorized built-in and installed plugin capabilities."
+        "Workspace permissions remain enforced by Operly's business Kernel and MCP gateway."
     )
 
 
 async def _runtime_test(message: discord.Message, prompt: str) -> None:
-    if _native_intelligence_owner():
-        # The dry-run's semantic scorer also belongs to the retired local
-        # agent architecture. Do not execute it in Workspace-only mode.
-        await message.reply(
-            "Discord Agent diagnostics require the DragonZpyder channel bridge."
-        )
-        return
-    clean_prompt = " ".join(str(prompt or "").split()).strip()
-    if not clean_prompt:
-        await message.reply(
-            "Use `!operly test REQUEST`, for example `!operly test what is on my calendar tomorrow`."
-        )
-        return
-
-    ready, detail = discord_ai_runtime_status()
-    if not ready:
-        await message.reply(detail)
-        return
-
-    user_id = await _linked_operly_user_id(message.author.id)
-    run_id = f"discord-test-{message.id}"
-    runtime_trace(
-        "discord.test_received",
-        run_id=run_id,
-        guild_id=str(message.guild.id) if message.guild else None,
-        channel_id=str(message.channel.id),
-        discord_user_id=str(message.author.id),
-        linked_user=bool(user_id),
-        message_chars=len(clean_prompt),
-        message_sha256_16=fingerprint(clean_prompt),
+    # This was previously an independent LLM-backed semantic scorer.
+    # Do not invoke a local model or issue an unscoped Discord impersonation.
+    del prompt
+    await message.reply(
+        "Local Operly agent diagnostics are retired. DragonZpyder's "
+        "signed Discord-channel delegation is not yet available.",
+        mention_author=False,
     )
-
-    try:
-        async with message.channel.typing():
-            async with session_scope() as db:
-                if message.guild is None:
-                    if not user_id:
-                        await _reply_chunks(
-                            message,
-                            "Link your Discord identity to Operly first using `!operly link`.",
-                        )
-                        return
-                    context = await resolve_personal_execution_context(
-                        db,
-                        user_id=user_id,
-                        channel="discord",
-                        surface=SurfaceKind.DISCORD_DM,
-                        conversation_id=f"discord-dm:{message.author.id}",
-                        metadata={"is_direct": True, "dry_run": True},
-                    )
-                    kernel = build_personal_runtime()
-                else:
-                    installation = await db.scalar(
-                        select(ChannelInstallation).where(
-                            ChannelInstallation.provider == "discord",
-                            ChannelInstallation.external_space_id == str(message.guild.id),
-                            ChannelInstallation.status == "connected",
-                        )
-                    )
-                    if installation is None:
-                        await _reply_chunks(
-                            message,
-                            "This server is not bound to an Operly workspace. "
-                            "A server manager can use `!operly bind WORKSPACE`.",
-                        )
-                        return
-                    metadata = {
-                        "external_space_id": str(message.guild.id),
-                        "discord_guild_id": str(message.guild.id),
-                        "_guest_principal_id": f"discord:{message.author.id}",
-                        "is_direct": False,
-                        "dry_run": True,
-                    }
-                    context = await resolve_execution_context(
-                        db,
-                        workspace_id=installation.tenant_id,
-                        user_id=user_id,
-                        channel="discord",
-                        surface=SurfaceKind.DISCORD_GUILD,
-                        conversation_id=f"discord:{message.guild.id}:{message.channel.id}",
-                        metadata=metadata,
-                        require_membership=False,
-                    )
-                    facade = build_workspace_runtime()
-                    kernel = await facade.request_runtime(db, context=context)
-
-                result = await evaluate_discord_request(
-                    db,
-                    context=context,
-                    kernel=kernel,
-                    prompt=clean_prompt,
-                    limit=12,
-                )
-        runtime_trace(
-            "discord.test_completed",
-            run_id=run_id,
-            scope_kind=context.scope_kind.value,
-            result_chars=len(result),
-            capabilities_executed=0,
-        )
-        await _reply_chunks(message, result)
-    except AgentRuntimeDisabled:
-        runtime_trace("discord.test_failed", run_id=run_id, error_code="agent_runtime_disabled")
-        await _reply_chunks(message, "Operly Agent Runtime 1.0 is disabled for this deployment.")
-    except (AgentInferenceError, ExecutionContextError) as error:
-        runtime_trace(
-            "discord.test_failed",
-            run_id=run_id,
-            error_code=getattr(error, "code", type(error).__name__),
-            error_type=type(error).__name__,
-        )
-        await _reply_chunks(
-            message,
-            "The dry-run could not complete safely. The failure is recorded in the Railway runtime trace.",
-        )
-    except Exception as error:
-        runtime_trace(
-            "discord.test_failed",
-            run_id=run_id,
-            error_code="unexpected",
-            error_type=type(error).__name__,
-        )
-        await _reply_chunks(
-            message,
-            "The dry-run hit an unexpected runtime failure. The failure type is recorded in Railway.",
-        )
 
 
 async def _handle_command(message: discord.Message) -> bool:
@@ -302,9 +163,9 @@ async def _handle_command(message: discord.Message) -> bool:
     if command == "help":
         await message.reply(
             "Operly commands: `!operly status`, `!operly test REQUEST`, `!operly link`, "
-            "`!operly bind WORKSPACE`, `!operly help`. `!operly test` is a dry-run: it shows "
-            "semantic routing and authorized capability candidates without executing anything. "
-            "Mention Operly in a bound server, or DM it normally, for the end-to-end Runtime 1.0 path."
+            "`!operly bind WORKSPACE`, `!operly help`. Local AI and dry-run "
+            "execution have been retired. Discord agent chat requires a signed "
+            "DragonZpyder channel bridge; account linking and workspace binding remain available."
         )
         return True
     if command == "status":
@@ -468,123 +329,18 @@ async def on_message(message: discord.Message) -> None:
         return
     if message.attachments:
         await message.reply(
-            "Text chat is enabled through Runtime 1.0. Discord attachment ingestion is not enabled in this test slice yet.",
+            "Discord AI attachment handling requires the signed DragonZpyder channel bridge.",
             mention_author=False,
         )
         return
 
-    if _native_intelligence_owner():
-        # Discord channel identity and guest authority cannot be sent through
-        # a browser-scoped Personal/Workspace token. Never fall back to the
-        # retired local model or fabricate a workspace permission.
-        await _reply_chunks(
-            message,
-            "Operly's intelligence now runs on DragonZpyder. "
-            "Discord AI requires a separately authorized channel connection. "
-            "Use the Operly web workspace until that connection is enabled.",
-        )
-        return
-    user_id = await _linked_operly_user_id(message.author.id)
-    run_id = f"discord-{message.id}"
-    runtime_trace(
-        "discord.ingress",
-        run_id=run_id,
-        guild_id=str(message.guild.id) if message.guild else None,
-        channel_id=str(message.channel.id),
-        discord_user_id=str(message.author.id),
-        linked_user=bool(user_id),
-        message_chars=len(prompt),
-        message_sha256_16=fingerprint(prompt),
+    # Discord sender/guild authority cannot be substituted for a first-party
+    # user session. Preserve !operly link and !operly bind, but do not execute
+    # independent intelligence or fabricate a DragonZpyder MCP grant.
+    await _reply_chunks(
+        message,
+        "Operly AI is powered by DragonZpyder. Discord AI requires an "
+        "authenticated channel bridge that is not enabled yet. "
+        "Use your signed-in Operly workspace for agent requests.",
     )
-
-    try:
-        async with message.channel.typing():
-            async with session_scope() as db:
-                if message.guild is None:
-                    if not user_id:
-                        await _reply_chunks(
-                            message,
-                            "Link your Discord identity to Operly first using `!operly link`.",
-                        )
-                        return
-                    context = await resolve_personal_execution_context(
-                        db,
-                        user_id=user_id,
-                        channel="discord",
-                        surface=SurfaceKind.DISCORD_DM,
-                        conversation_id=f"discord-dm:{message.author.id}",
-                        metadata={"is_direct": True},
-                    )
-                    kernel = build_personal_runtime()
-                else:
-                    installation = await db.scalar(
-                        select(ChannelInstallation).where(
-                            ChannelInstallation.provider == "discord",
-                            ChannelInstallation.external_space_id == str(message.guild.id),
-                            ChannelInstallation.status == "connected",
-                        )
-                    )
-                    if installation is None:
-                        await _reply_chunks(
-                            message,
-                            "This server is not bound to an Operly workspace. "
-                            "A server manager can use `!operly bind WORKSPACE`.",
-                        )
-                        return
-                    metadata = {
-                        "external_space_id": str(message.guild.id),
-                        "discord_guild_id": str(message.guild.id),
-                        "_guest_principal_id": f"discord:{message.author.id}",
-                        "is_direct": False,
-                    }
-                    context = await resolve_execution_context(
-                        db,
-                        workspace_id=installation.tenant_id,
-                        user_id=user_id,
-                        channel="discord",
-                        surface=SurfaceKind.DISCORD_GUILD,
-                        conversation_id=f"discord:{message.guild.id}:{message.channel.id}",
-                        metadata=metadata,
-                        require_membership=False,
-                    )
-                    facade = build_workspace_runtime()
-                    kernel = await facade.request_runtime(db, context=context)
-
-                result = await _runtime_agent().run(
-                    db,
-                    context=context,
-                    message=prompt,
-                    kernel=kernel,
-                    context_items=(),
-                    run_id=run_id,
-                )
-                await db.commit()
-        await _reply_chunks(message, result.message)
-    except AgentRuntimeDisabled:
-        runtime_trace("discord.request_failed", run_id=run_id, error_code="agent_runtime_disabled")
-        await _reply_chunks(
-            message,
-            "Operly Agent Runtime 1.0 is disabled for this deployment.",
-        )
-    except (AgentInferenceError, ExecutionContextError) as error:
-        runtime_trace(
-            "discord.request_failed",
-            run_id=run_id,
-            error_code=getattr(error, "code", type(error).__name__),
-            error_type=type(error).__name__,
-        )
-        await _reply_chunks(
-            message,
-            "Operly could not safely complete that request. The failure is recorded in the Railway runtime trace.",
-        )
-    except Exception as error:
-        runtime_trace(
-            "discord.request_failed",
-            run_id=run_id,
-            error_code="unexpected",
-            error_type=type(error).__name__,
-        )
-        await _reply_chunks(
-            message,
-            "Operly hit an unexpected runtime failure. The failure type is recorded in the Railway runtime trace.",
-        )
+    return

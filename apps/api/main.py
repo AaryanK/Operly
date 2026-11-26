@@ -1,6 +1,5 @@
-import asyncio
 import os
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -33,7 +32,6 @@ from apps.api.identity_owner_gate import identity_owner_middleware, identity_own
 from apps.api.workflow_handoff import router as workflow_handoff_router
 from apps.api.workspace_os_router import router as workspace_os_router
 from apps.api.workspace_simple_router import router as workspace_simple_router
-from packages.agent_runtime.evaluation import run_startup_objective_eval_if_enabled
 from packages.agent_runtime.status import agent_runtime_status as _agent_runtime_status
 from packages.database.db import init_db, session_scope
 from packages.database.models import AppUser, AuthIdentity, Tenant, TenantMember
@@ -169,21 +167,9 @@ async def lifespan(app: FastAPI):
     await bootstrap_admin()
     await discord_bot_lifecycle.start()
     await workflow_dispatch_driver.start()
-    # No independent objective/model-evaluation work is allowed to start
-    # inside Operly after the native DragonZpyder cutover.
-    local_agent_retired = (
-        os.getenv("OPERLY_AI_EXECUTION_OWNER") == "dragonzpyder"
-        or os.getenv("OPERLY_RETIRE_LOCAL_AGENT_EXECUTION") == "1"
-    )
-    objective_eval_task = (None if local_agent_retired else
-        asyncio.create_task(run_startup_objective_eval_if_enabled()))
     try:
         yield
     finally:
-        if objective_eval_task is not None and not objective_eval_task.done():
-            objective_eval_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await objective_eval_task
         await workflow_dispatch_driver.stop()
         await discord_bot_lifecycle.stop()
 
