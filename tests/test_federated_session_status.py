@@ -27,7 +27,7 @@ async def test_revalidate_mapped_session(monkeypatch):
             assert kwargs["json"]=={"subject":"synthetic-user"}
             if state.get("unavailable"): raise httpx.ConnectError("synthetic outage")
             return httpx.Response(200,json=state)
-    monkeypatch.setattr(mod.httpx,"AsyncClient",Client)
+    monkeypatch.setattr(httpx,"AsyncClient",Client)
     async def check():
         return await mod.federated_session_status(DB(),user_id="synthetic-user",
             authenticated_at=datetime(2026,1,1,tzinfo=timezone.utc))
