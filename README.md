@@ -12,6 +12,19 @@ A human or authorized agent should be able to express an objective and discover 
 
 ---
 
+## Start here — contributors and coding agents
+
+This README explains Operly's purpose and implementation. Before changing the repository, understand the shared product vision and the business authority boundary.
+
+| Read in this order | What you will learn |
+| --- | --- |
+| 1. [AGENTS.md](AGENTS.md) | Mandatory repository-level development instructions and guardrails. |
+| 2. [Platform boundary](docs/dragonzpyder-platform-boundary.md) | Operly's business responsibilities, DragonZpyder's intelligence responsibilities and safe migration rules. |
+| 3. [DragonZpyder Universal Harness V4](https://github.com/AaryanK/DragonZpyder/blob/develop/docs/universal-harness-v4.md) | Shared product vision, target intelligence architecture, roadmap and acceptance criteria. |
+| 4. [Kernel](packages/kernel/), [security](packages/security/), [API entry point](apps/api/main.py) | Current implementation and authority enforcement. |
+
+Inspect the relevant code, tests and current pull requests before making changes. Consult current upstream documentation and relevant open-source implementations when changing foundational infrastructure. Reuse shared DragonZpyder intelligence rather than introduce competing agent runtimes; preserve Operly's business authority. Distinguish planned, implemented, tested and deployed capabilities, and update the documentation when verified behavior or architectural decisions change.
+
 ## Current snapshot
 
 The FastAPI application identifies itself as:
