@@ -10,6 +10,7 @@ from apps.api.auth_cookies import session_secret_from_request
 from apps.api.security import hash_token
 from packages.database.db import SessionFactory
 from packages.database.models import AppUser, AuthSession, Tenant, TenantMember
+from packages.security.federated_session_status import federated_session_status
 
 
 async def get_db():
@@ -68,6 +69,9 @@ async def get_account_auth_context(
     user = await db.get(AppUser, auth_session.user_id)
     if not user or not user.active:
         raise HTTPException(status_code=401, detail="Access denied")
+
+    if not await federated_session_status(db, user_id=user.id, authenticated_at=auth_session.authenticated_at):
+        raise HTTPException(status_code=401, detail="Identity session is no longer valid")
 
     if auth_session.last_activity_at < now - timedelta(minutes=5):
         auth_session.last_activity_at = now
