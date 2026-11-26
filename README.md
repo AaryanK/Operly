@@ -1,14 +1,29 @@
-# OPERLY
+# Operly
 
-**OPERLY is a governed execution platform for people, workspaces, plugins, durable workflows, integrations, MCP clients, and AI agents.**
+**Governed business execution, powered by DragonZpyder intelligence.**
 
-The current repository is intentionally centered on a deterministic Kernel and capability runtime. Models are not the authority boundary. Personal and Workspace agent routes are mounted, while model execution depends on environment configuration. The platform underneath it—identity, scope, permissions, capability discovery, approvals, idempotency, plugin execution, workflows, events, connectors, artifacts, audit, and runtime isolation—is the product foundation.
+Operly is the business application and workspace capability platform: it owns business tenants, memberships, data, integrations, application-specific workflows, policies, approvals, idempotency, audit and deterministic execution through its Kernel. DragonZpyder is the intended shared intelligence layer for agent reasoning, model routing, native computing, Personal identity and general-purpose agent objectives.
 
-> **The long-term goal is simple: any authorized model or client should be able to understand the current person or workspace, discover only the capabilities available to it, and safely use those capabilities through the same governed runtime.**
+A human or authorized agent should be able to express an objective and discover only the business capabilities permitted in the current workspace. The model does not grant itself authority; Operly independently enforces live scope, schema, approval and execution policy. Web, Discord, MCP and workflow entry points should converge on these same contracts rather than create separate AI engines.
 
-This README describes the repository **as it exists on `main` today**. Older subsystem names still appear in migrations and database models because Operly has gone through several architecture generations; those names should not be mistaken for currently booted runtime packages.
+**[Platform boundary and migration rules](docs/dragonzpyder-platform-boundary.md) · [Repository instructions](AGENTS.md) · [DragonZpyder universal harness](https://github.com/AaryanK/DragonZpyder/blob/develop/docs/universal-harness-v4.md)**
+
+> The intended target is one DragonZpyder intelligence harness with Operly as a governed business client and capability provider. This does not assert that legacy Operly intelligence routes have been retired or that identity migration is complete. The implementation notes below describe existing and transitional structures; inspect current source, CI, flags and deployed SHAs for actual availability.
 
 ---
+
+## Start here — contributors and coding agents
+
+This README explains Operly's purpose and implementation. Before changing the repository, understand the shared product vision and the business authority boundary.
+
+| Read in this order | What you will learn |
+| --- | --- |
+| 1. [AGENTS.md](AGENTS.md) | Mandatory repository-level development instructions and guardrails. |
+| 2. [Platform boundary](docs/dragonzpyder-platform-boundary.md) | Operly's business responsibilities, DragonZpyder's intelligence responsibilities and safe migration rules. |
+| 3. [DragonZpyder Universal Harness V4](https://github.com/AaryanK/DragonZpyder/blob/develop/docs/universal-harness-v4.md) | Shared product vision, target intelligence architecture, roadmap and acceptance criteria. |
+| 4. [Kernel](packages/kernel/), [security](packages/security/), [API entry point](apps/api/main.py) | Current implementation and authority enforcement. |
+
+Inspect the relevant code, tests and current pull requests before making changes. Consult current upstream documentation and relevant open-source implementations when changing foundational infrastructure. Reuse shared DragonZpyder intelligence rather than introduce competing agent runtimes; preserve Operly's business authority. Distinguish planned, implemented, tested and deployed capabilities, and update the documentation when verified behavior or architectural decisions change.
 
 ## Current snapshot
 
@@ -532,215 +547,7 @@ The manifest parser retains all historical modes, including reserved `platform_n
 
 # Future directions
 
-The following directions preserve the strongest ideas from earlier Operly architecture generations without restoring their old parallel implementations.
-
-## 1. Model-driven Operly agent on top of the Kernel
-
-Extend the existing provider-neutral agent runtime while preserving its role as a Kernel client.
-
-Agent development should preserve this flow:
-
-```text
-user request
-  -> authenticated scope
-  -> bounded context
-  -> capability search
-  -> capability describe
-  -> model reasoning
-  -> Kernel invocation
-  -> approval / execution / verification
-  -> trace + durable output
-```
-
-The model must never own permission, credentials, approval or completion truth.
-
-## 2. Persistent Personal AI identity
-
-Build Personal AI as a durable identity layer rather than a stateless chatbot session.
-
-Future work should include:
-
-- stable Personal AI identity across surfaces;
-- human-controlled preferences;
-- durable private conversations;
-- persistent memory with provenance;
-- explicit forget/retain controls;
-- separation between private Personal context and Workspace context;
-- cross-workspace reasoning only under the human's own authorization.
-
-## 3. Memory and context architecture
-
-Bring back the earlier strong distinction between short-term working context and durable memory, but implement it over the current Kernel/security model.
-
-The target architecture should support:
-
-- bounded recent conversation context;
-- long-term memory retrieval instead of prompt replay;
-- semantic and structured retrieval;
-- reference-first context materialization;
-- reauthorization when materializing a stored reference;
-- memory compression and summarization;
-- token-efficient context packing;
-- provenance, confidence and staleness;
-- explicit user deletion/forgetting.
-
-The goal is to avoid gigantic prompts while still giving the agent continuity.
-
-## 4. Long-horizon agent orchestration
-
-Reintroduce the useful ideas from the previous Agent Controller / Agent Factory work as a Kernel-native orchestration layer:
-
-- objective and acceptance contracts;
-- planning only when complexity justifies it;
-- stage/DAG execution;
-- specialist workers;
-- resumable checkpoints;
-- minimum stage-specific context;
-- evidence promotion;
-- deterministic validators;
-- bounded repair;
-- waiting/approval state;
-- exact-stage resume;
-- no replay of already-resolved external effects.
-
-This should be implemented as orchestration over the current capability runtime, not as a second capability system.
-
-## 5. Dynamic tool discovery at scale
-
-Expand the current search-then-describe direction into a universal capability discovery protocol.
-
-A model should not receive every installed tool schema. It should receive a tiny permanent kernel and discover relevant capabilities on demand.
-
-Future discovery should span:
-
-- Personal tools;
-- workspace tools;
-- installed plugins;
-- external MCP capabilities;
-- generated-runtime service bindings;
-- future third-party providers.
-
-## 6. Richer Personal-to-Workspace orchestration
-
-Personal Operly should eventually operate naturally across all scopes the human is authorized to use:
-
-```text
-"From ANHITRA, email the supplier."
-"Now compare that with NaySchool."
-"Use my personal calendar for availability."
-```
-
-The resolver should preserve which scope owns each resource and capability and ask for disambiguation when necessary.
-
-The reverse direction must remain denied by default: a workspace does not inherit a member's Personal memory, connectors or other workspaces.
-
-## 7. Software construction and Studio
-
-The current repository retains Studio surfaces and historical software-generation data, but the earlier multi-package software stack is no longer the active architecture.
-
-Future Studio should be rebuilt as a workspace module/plugin family over the same Kernel contracts:
-
-- persistent software project identity;
-- source versions;
-- planning and coding sessions;
-- build/test/repair loops;
-- visual editing;
-- artifact generation;
-- deployment contracts;
-- generated-app identity;
-- project-scoped data bindings;
-- verified preview/production lifecycle;
-- genuine isolated execution.
-
-Generated code must not receive Operly database, connector or model credentials directly.
-
-## 8. Third-party plugin ecosystem
-
-Grow `operly.plugin/v1` into a stable developer ecosystem with:
-
-- versioned manifests;
-- typed capability contracts;
-- install/uninstall lifecycle;
-- configuration schemas;
-- secret/credential bindings;
-- permissions and risk metadata;
-- webhook/event declarations;
-- runtime health;
-- isolated execution profiles;
-- compatibility negotiation;
-- plugin publishing/distribution.
-
-A future marketplace should remain a discovery/distribution layer, not a security bypass.
-
-## 9. Agent and system interoperability
-
-MCP is already a first interoperability boundary. Future work should extend that philosophy toward:
-
-- agent-to-agent communication;
-- A2A-style task exchange;
-- capability negotiation;
-- delegated credentials without raw secret transfer;
-- workload identity;
-- scoped callbacks/events;
-- resumable cross-agent tasks;
-- provenance across agent boundaries.
-
-## 10. More channels and external surfaces
-
-Add new channels as thin adapters into the same runtime:
-
-- Slack;
-- WhatsApp Business;
-- SMS/voice;
-- email-native workflows;
-- mobile clients;
-- additional social/business surfaces.
-
-No channel should implement its own business-agent security model.
-
-## 11. Workflow platform maturity
-
-Continue hardening the newly consolidated Workflow runtime with:
-
-- larger multi-worker HA testing;
-- contention/failover testing;
-- event-storm backpressure;
-- dead-worker recovery;
-- concurrency queues and cancellation semantics;
-- richer branching/fan-out/fan-in;
-- workflow observability and replay diagnostics;
-- workflow templates;
-- human-in-the-loop tasks;
-- distributed execution where needed.
-
-## 12. Runtime observability and AI Debug
-
-Build one explainable trace across:
-
-```text
-request
--> scope resolution
--> capability discovery
--> policy
--> approval
--> provider/plugin call
--> workflow continuation
--> delivery
--> verification
-```
-
-Model/provider calls should fit into that same trace rather than create a separate debugging system.
-
-## 13. Repository and release governance
-
-Continue tightening the non-runtime side of reliability:
-
-- required regression CI before merge;
-- protected `main`;
-- dependency/security update discipline;
-- migration verification;
-- deployment evidence separated from test evidence;
-- explicit break-glass procedures.
+The accepted direction is documented in [the platform boundary](docs/dragonzpyder-platform-boundary.md) and [DragonZpyder V4](https://github.com/AaryanK/DragonZpyder/blob/develop/docs/universal-harness-v4.md). Operly should deepen governed business capabilities, plugin interoperability, workspace workflows and auditability while migrating general agent reasoning, model routing, Personal intelligence and native computer execution to DragonZpyder. Preserve business policy and compatibility during migration. Do not revive a competing agent runtime.
 
 ---
 
@@ -792,4 +599,4 @@ When documentation disagrees with the current tree, inspect:
 
 ## One-sentence architecture
 
-**OPERLY resolves a human and scope, exposes only governed capabilities, executes them through a deterministic Kernel with policy, approvals, idempotency and audit, coordinates durable workflows and plugins around that boundary, and leaves model-driven intelligence as a replaceable layer that can be added without weakening the system underneath it.**
+**Operly provides governed business capabilities and durable application workflows through a deterministic Kernel; DragonZpyder supplies the shared agent intelligence, and Operly independently enforces business authority for every effect.**
