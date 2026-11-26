@@ -140,7 +140,7 @@ function DragonZpyderButton({ available }: { available: boolean }) {
   // Invite acceptance remains on the existing provider flow until its SSO
   // continuation is implemented. The legacy login option is never removed.
   if (!available || pendingInvite()) return null;
-  return <a className="operly-discord-provider" href="/api/auth/dragonzpyder/start">Continue with DragonZpyder</a>;
+  return <a className="minimal-button minimal-button-primary minimal-full" href="/api/auth/dragonzpyder/start">Sign in with DragonZpyder</a>;
 }
 
 function Divider() {
@@ -157,6 +157,23 @@ function ProviderStack({ googleId, google, allowFederation = false }: { googleId
   return <div className="operly-provider-stack"><GoogleButton id={googleId} onCredential={google} bootstrap={bootstrap} /><DiscordButton />{allowFederation && <DragonZpyderButton available={bootstrap?.dragonzpyder_sso_available === true} />}</div>;
 }
 
+function CentralLoginEntry() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    api<AuthBootstrap>("/auth/bootstrap").then(result => {
+      if (active) setAvailable(result.dragonzpyder_sso_available === true);
+    }).catch(() => { if (active) setAvailable(false); });
+    return () => { active = false; };
+  }, []);
+  if (pendingInvite()) return null;
+  return <div className="operly-provider-stack">
+    <DragonZpyderButton available={available === true} />
+    {available === true && <p>Use your DragonZpyder email and password or Google account. You will return to Operly with your existing workspace permissions.</p>}
+    {available === false && <p role="status">DragonZpyder sign-in is temporarily unavailable. Existing unmigrated Operly accounts may still sign in below.</p>}
+  </div>;
+}
+
 function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(() => discordError());
@@ -169,7 +186,7 @@ function Login() {
       await api("/auth/google", { method: "POST", body: JSON.stringify({ credential }) });
       await finishAuthentication();
     } catch (caught) {
-      setError(errorMessage(caught, "Google sign-in failed"));
+      setError(errorMessage(caught, "Google sign-in failed") + (pendingInvite() ? "" : " If your account has migrated, use Sign in with DragonZpyder above."));
       setBusy(false);
     }
   };
@@ -188,7 +205,7 @@ function Login() {
         go("/verify-email");
         return;
       }
-      setError(errorMessage(caught, "Sign in failed"));
+      setError(errorMessage(caught, "Sign in failed") + (pendingInvite() ? "" : " If your account has migrated, use Sign in with DragonZpyder above."));
       setBusy(false);
     }
   };
@@ -199,7 +216,9 @@ function Login() {
         <span className="minimal-kicker">SIGN IN</span>
         <h1>Welcome back</h1>
         <p>{pendingInvite() ? "Sign in to accept your workspace invitation." : "Sign in to your Personal Operly or any workspace you belong to."}</p>
-        <ProviderStack googleId="google-login-current" google={google} allowFederation />
+        <CentralLoginEntry />
+        <p className="minimal-card-links">If your account has not been migrated, use your existing Operly sign-in below.</p>
+        <ProviderStack googleId="google-login-current" google={google} />
         <Divider />
         <label className="minimal-field"><span>Email</span><input name="email" type="email" autoComplete="username" required /></label>
         <PasswordField name="password" label="Password" autoComplete="current-password" />
