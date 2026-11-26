@@ -274,6 +274,7 @@ async def _complete_login(settings, success_path: str, request: Request, db: Asy
     membership = await _first_membership(db, user.id)
     _, secret, csrf = await _create_session(
         db, request, user.id, membership.tenant_id if membership else None,
+        federated=True,
     )
     await db.commit()
     response = RedirectResponse(success_path, status_code=303, headers={
