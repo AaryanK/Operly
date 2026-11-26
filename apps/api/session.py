@@ -64,6 +64,7 @@ from packages.database.models import (
     TenantMember,
 )
 from packages.email.service import get_email_service
+from packages.security.identity_handoff import local_identity_allowed
 
 
 router = APIRouter(tags=["authentication"])
@@ -338,12 +339,21 @@ async def _send_password_changed(db: AsyncSession, user: AppUser, request: Reque
         await db.commit()
 
 
+async def _require_local_identity(db: AsyncSession, user_id: str) -> None:
+    if not await local_identity_allowed(db, user_id):
+        await db.rollback()
+        raise auth_error(403, "LOCAL_IDENTITY_HANDOFF", "Use DragonZpyder account access")
+
+
 async def _create_session(
     db: AsyncSession,
     request: Request,
     user_id: str,
     tenant_id: str | None,
+    *, federated: bool = False,
 ) -> tuple[AuthSession, str, str]:
+    if not federated:
+        await _require_local_identity(db, user_id)
     now = datetime.utcnow()
     secret = random_token()
     csrf = random_token()
@@ -504,7 +514,7 @@ async def resend_verification(payload: ResendVerificationInput, request: Request
     email = _normalized_email(payload.email)
     await _rate_limit(db, "resend_verification", request, account=email, combined_limit=3, ip_limit=20, account_limit=6, window_seconds=600)
     user = await db.scalar(select(AppUser).where(AppUser.email == email))
-    if not user or user.email_verified_at is not None or not user.active:
+    if not user or user.email_verified_at is not None or not user.active or not await local_identity_allowed(db,user.id):
         return {"ok": True, "message": "If verification is still needed, a new message will arrive shortly."}
     challenge, token, code = await _new_challenge(db, user, "email_verification", VERIFY_MINUTES)
     await db.commit()
@@ -528,6 +538,7 @@ async def verify_email(payload: ChallengeInput, request: Request, response: Resp
         raise auth_error(400, "INVALID_CHALLENGE", "That code or link is not valid")
     membership = await _first_membership(db, user.id)
     tenant_id = membership.tenant_id if membership else None
+    await _require_local_identity(db,user.id)
     now = datetime.utcnow()
     user.email_verified_at = user.email_verified_at or now
     user.updated_at = now
@@ -560,6 +571,7 @@ async def login(payload: LoginInput, request: Request, response: Response, db: A
         _audit(db, "login_failure", "failed", request, user_id=user.id if user else None)
         await db.commit()
         raise auth_error(401, "INVALID_CREDENTIALS", "Invalid email or password")
+    await _require_local_identity(db,user.id)
     if user.email_verified_at is None:
         _audit(db, "login_failure", "blocked", request, user_id=user.id, metadata={"reason": "unverified"})
         await db.commit()
@@ -605,6 +617,7 @@ async def google_login(payload: GoogleCredentialInput, request: Request, respons
     else:
         user = await db.scalar(select(AppUser).where(AppUser.email == claims.email))
         if user:
+            await _require_local_identity(db,user.id)
             if user.email_verified_at is None:
                 _audit(db, "google_account_link_blocked", "blocked", request, user_id=user.id)
                 await db.commit()
@@ -678,7 +691,7 @@ async def forgot_password(payload: ForgotPasswordInput, request: Request, backgr
         email = "invalid@invalid.example"
     await _rate_limit(db, "forgot_password", request, account=email, combined_limit=4, ip_limit=30, account_limit=30, window_seconds=600)
     user = await db.scalar(select(AppUser).where(AppUser.email == email))
-    if user and user.active and user.email_verified_at is not None:
+    if user and user.active and user.email_verified_at is not None and await local_identity_allowed(db,user.id):
         challenge, token, code = await _new_challenge(db, user, "password_reset", RESET_MINUTES)
         _audit(db, "password_reset_requested", "succeeded", request, user_id=user.id)
         await db.commit()
@@ -704,6 +717,7 @@ async def reset_password(payload: ResetPasswordInput, request: Request, response
     if not user or not user.active:
         await db.rollback()
         raise auth_error(400, "INVALID_CHALLENGE", "That code or link is not valid")
+    await _require_local_identity(db,user.id)
     try:
         validate_password(payload.password, email=user.email)
     except PasswordPolicyError as error:
@@ -744,6 +758,7 @@ async def change_password(
     user = await db.get(AppUser, auth.user.id)
     if not user:
         raise auth_error(401, "SESSION_INVALID", "Your session is no longer valid")
+    await _require_local_identity(db,user.id)
     if user.password_hash:
         verification = verify_and_update_password(payload.current_password or "", user.password_hash)
         if not verification.valid:
