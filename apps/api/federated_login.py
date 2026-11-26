@@ -31,6 +31,8 @@ from apps.api.security import hash_token
 from apps.api.session import _create_session, _first_membership
 from packages.database.federated_login_models import FederatedLoginAttempt
 from packages.security.federated_identity import FederationDenied, resolve_federated_user
+from packages.security.native_identity_projection import resolve_or_provision_native
+from packages.security.federated_session_status import federated_session_status
 from packages.security.federated_token import FederatedTokenDenied, verify_federated_access_token
 
 router = APIRouter(tags=["authentication"])
@@ -266,16 +268,22 @@ async def _complete_login(settings, success_path: str, request: Request, db: Asy
     except (httpx.HTTPError, ValueError, TypeError, SSORejected):
         raise HTTPException(403, "SSO authentication rejected") from None
     try:
-        user = await resolve_federated_user(
-            db, verified_issuer=issuer, verified_subject=subject,
-        )
+        resolver = resolve_or_provision_native if success_path == "/" else resolve_federated_user
+        user = await resolver(db, verified_issuer=issuer, verified_subject=subject)
     except FederationDenied:
         raise HTTPException(403, "SSO identity not linked") from None
+    # Use signed token issuance time, never the later callback clock, for
+    # revocation checks. The token has already been signature validated.
+    issued_at = datetime.utcfromtimestamp(jwt.decode(body["id_token"], options={"verify_signature":False})["iat"])
+    if not await federated_session_status(db,user_id=user.id,authenticated_at=issued_at):
+        await db.rollback()
+        raise HTTPException(403,"SSO identity unavailable")
     membership = await _first_membership(db, user.id)
-    _, secret, csrf = await _create_session(
+    auth_session, secret, csrf = await _create_session(
         db, request, user.id, membership.tenant_id if membership else None,
         federated=True,
     )
+    auth_session.authenticated_at = issued_at
     await db.commit()
     response = RedirectResponse(success_path, status_code=303, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
